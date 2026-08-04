@@ -1,0 +1,12 @@
+import axios from 'axios';
+const api = axios.create({ baseURL: '/api', timeout: 30000 });
+export const getOverview = p => api.get('/dashboard/overview', { params: p });
+export const getChart    = p => api.get('/dashboard/chart', { params: p });
+export const getStocks   = p => api.get('/dashboard/stocks', { params: p });
+export const getProducts = p => api.get('/dashboard/products', { params: p });
+export const getLog      = () => api.get('/dashboard/collection-log');
+export const getCosts    = p => api.get('/settings/costs', { params: p });
+export const saveCosts   = c => api.post('/settings/costs', { costs: c });
+export const deleteCost  = id => api.delete(`/settings/costs/${id}`);
+export const collect     = d => api.post('/settings/collect', d);
+export const getStatus   = () => api.get('/settings/status');

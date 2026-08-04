@@ -1,0 +1,13 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f1117; --surface: #181c27; --surface2: #1e2433; --border: #2a3147;
+  --accent-wb: #9061f9; --accent-oz: #005bff;
+  --ok: #10b981; --warn: #f59e0b; --danger: #ef4444;
+  --text: #e2e8f0; --text2: #8892a4; --text3: #4a5568;
+  --radius: 10px;
+}
+body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; -webkit-font-smoothing: antialiased; }
+::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+input, select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; font-size: 13px; outline: none; font-family: inherit; }
+input:focus, select:focus { border-color: var(--accent-wb); }
+button { font-family: inherit; cursor: pointer; }

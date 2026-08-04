@@ -1,0 +1,9 @@
+{
+  "name": "mp-analytics",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd dashboard && npm install && npm run build",
+    "start": "node backend/src/index.js",
+    "install-deps": "npm install --prefix backend && npm install --prefix dashboard"
+  }
+}
