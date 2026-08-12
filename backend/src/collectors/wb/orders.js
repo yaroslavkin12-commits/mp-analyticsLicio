@@ -9,6 +9,9 @@ async function collectOrders(dateFrom) {
   const from = dateFrom || dayjs().subtract(7, 'day').format('YYYY-MM-DD');
   console.log(`[WB] Заказы с ${from}...`);
 
+  // Пауза чтобы не словить 429
+  await new Promise(r => setTimeout(r, 2000));
+
   const { data } = await axios.get(
     'https://statistics-api.wildberries.ru/api/v1/supplier/orders',
     {
