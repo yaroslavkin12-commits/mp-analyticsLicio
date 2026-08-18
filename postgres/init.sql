@@ -1,7 +1,3 @@
--- =============================================
--- WILDBERRIES
--- =============================================
-
 CREATE TABLE IF NOT EXISTS wb_orders (
   id BIGSERIAL PRIMARY KEY,
   collected_at TIMESTAMP DEFAULT NOW(),
@@ -26,7 +22,6 @@ CREATE TABLE IF NOT EXISTS wb_orders (
 );
 CREATE INDEX IF NOT EXISTS idx_wb_orders_date ON wb_orders(date);
 CREATE INDEX IF NOT EXISTS idx_wb_orders_nm ON wb_orders(nm_id);
-CREATE INDEX IF NOT EXISTS idx_wb_orders_article ON wb_orders(article);
 
 CREATE TABLE IF NOT EXISTS wb_sales (
   id BIGSERIAL PRIMARY KEY,
@@ -69,7 +64,6 @@ CREATE TABLE IF NOT EXISTS wb_stocks (
   warehouse_name VARCHAR(256)
 );
 CREATE INDEX IF NOT EXISTS idx_wb_stocks_snap ON wb_stocks(snapshot_date);
-CREATE INDEX IF NOT EXISTS idx_wb_stocks_nm ON wb_stocks(nm_id);
 
 CREATE TABLE IF NOT EXISTS wb_ads (
   id BIGSERIAL PRIMARY KEY,
@@ -79,7 +73,6 @@ CREATE TABLE IF NOT EXISTS wb_ads (
   campaign_name VARCHAR(512),
   campaign_type INT,
   nm_id BIGINT,
-  article VARCHAR(128),
   views BIGINT DEFAULT 0,
   clicks BIGINT DEFAULT 0,
   ctr DECIMAL(8,4) DEFAULT 0,
@@ -87,14 +80,9 @@ CREATE TABLE IF NOT EXISTS wb_ads (
   spend DECIMAL(12,2) DEFAULT 0,
   orders INT DEFAULT 0,
   revenue DECIMAL(12,2) DEFAULT 0,
-  UNIQUE(date, campaign_id, nm_id)
+  UNIQUE(date, campaign_id, COALESCE(nm_id, -1))
 );
 CREATE INDEX IF NOT EXISTS idx_wb_ads_date ON wb_ads(date);
-CREATE INDEX IF NOT EXISTS idx_wb_ads_nm ON wb_ads(nm_id);
-
--- =============================================
--- OZON
--- =============================================
 
 CREATE TABLE IF NOT EXISTS ozon_orders (
   id BIGSERIAL PRIMARY KEY,
@@ -153,9 +141,32 @@ CREATE TABLE IF NOT EXISTS ozon_ads (
 );
 CREATE INDEX IF NOT EXISTS idx_oz_ads_date ON ozon_ads(date);
 
--- =============================================
--- ОБЩИЕ ТАБЛИЦЫ
--- =============================================
+CREATE TABLE IF NOT EXISTS ozon_analytics (
+  id BIGSERIAL PRIMARY KEY,
+  collected_at TIMESTAMP DEFAULT NOW(),
+  date DATE NOT NULL,
+  sku BIGINT NOT NULL,
+  offer_id VARCHAR(128),
+  product_name VARCHAR(512),
+  hits_view BIGINT DEFAULT 0,
+  hits_view_search BIGINT DEFAULT 0,
+  hits_view_pdp BIGINT DEFAULT 0,
+  hits_tocart BIGINT DEFAULT 0,
+  hits_tocart_search BIGINT DEFAULT 0,
+  hits_tocart_pdp BIGINT DEFAULT 0,
+  orders_item BIGINT DEFAULT 0,
+  revenue DECIMAL(12,2) DEFAULT 0,
+  delivered_units BIGINT DEFAULT 0,
+  returns BIGINT DEFAULT 0,
+  cancellations BIGINT DEFAULT 0,
+  ctr DECIMAL(8,6) DEFAULT 0,
+  cr_to_cart DECIMAL(8,6) DEFAULT 0,
+  cr_to_order DECIMAL(8,6) DEFAULT 0,
+  redemption_rate DECIMAL(8,4) DEFAULT 0,
+  UNIQUE(date, sku)
+);
+CREATE INDEX IF NOT EXISTS idx_oz_analytics_date ON ozon_analytics(date);
+CREATE INDEX IF NOT EXISTS idx_oz_analytics_sku ON ozon_analytics(sku);
 
 CREATE TABLE IF NOT EXISTS product_costs (
   id BIGSERIAL PRIMARY KEY,
