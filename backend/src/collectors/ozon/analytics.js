@@ -12,52 +12,99 @@ async function collectAnalytics(dateFrom) {
   const to   = dayjs().format('YYYY-MM-DD');
   console.log(`[Ozon Analytics] ${from} → ${to}...`);
 
-  const METRICS = ['hits_view','hits_view_search','hits_view_pdp','hits_tocart','hits_tocart_search','hits_tocart_pdp','orders_item','revenue','delivered_units','returns','cancellations'];
+  const METRICS = [
+    'hits_view','hits_view_search','hits_view_pdp',
+    'hits_tocart','hits_tocart_search','hits_tocart_pdp',
+    'orders_item','revenue','delivered_units','returns','cancellations',
+  ];
 
   let offset = 0, total = 0;
+
   while (true) {
     let resp;
     try {
       resp = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
         date_from: from, date_to: to,
         metrics: METRICS,
-        dimension: ['sku','day'],
+        dimension: ['sku', 'day'],
         sort: [{ key: 'revenue', order: 'DESC' }],
         limit: 1000, offset,
       }, { headers: headers(), timeout: 90000 });
-    } catch(e) { console.error('[Ozon Analytics]', e.response?.data || e.message); break; }
+    } catch(e) {
+      console.error('[Ozon Analytics] API error:', e.response?.data || e.message);
+      break;
+    }
 
     const rows = resp.data?.result?.data || [];
+    console.log(`[Ozon Analytics] Получено строк: ${rows.length}, offset: ${offset}`);
     if (!rows.length) break;
 
+    // Логируем первую строку для диагностики
+    if (offset === 0 && rows[0]) {
+      console.log('[Ozon Analytics] Пример строки:', JSON.stringify(rows[0]).slice(0, 200));
+    }
+
     for (const row of rows) {
-      const sku  = row.dimensions?.[0]?.id;
-      const date = row.dimensions?.[1]?.id;
-      if (!sku || !date) continue;
+      const dims = row.dimensions || [];
+
+      // Ozon может возвращать dimensions в любом порядке — определяем по формату
+      const skuDim  = dims.find(d => d.id && /^\d{5,}$/.test(String(d.id)));
+      const dateDim = dims.find(d => d.id && /^\d{4}-\d{2}-\d{2}$/.test(String(d.id)));
+
+      // Запасной вариант — по позиции (sku первый, day второй)
+      const sku  = skuDim?.id  || dims[0]?.id;
+      const date = dateDim?.id || dims[1]?.id;
+
+      if (!sku || !date) {
+        console.warn('[Ozon Analytics] Нет sku или date:', JSON.stringify(dims));
+        continue;
+      }
 
       const m = (row.metrics || []).map(v => Number(v) || 0);
-      const [hits_view,hits_view_search,hits_view_pdp,hits_tocart,hits_tocart_search,hits_tocart_pdp,orders_item,revenue,delivered_units,returns,cancellations] = m;
+      const [
+        hits_view, hits_view_search, hits_view_pdp,
+        hits_tocart, hits_tocart_search, hits_tocart_pdp,
+        orders_item, revenue, delivered_units, returns, cancellations,
+      ] = m;
 
-      const ctr             = hits_view > 0 ? hits_view_pdp / hits_view : 0;
-      const cr_to_cart      = hits_view > 0 ? hits_tocart   / hits_view : 0;
-      const cr_to_order     = hits_view > 0 ? orders_item   / hits_view : 0;
+      const ctr             = hits_view > 0 ? hits_view_pdp   / hits_view   : 0;
+      const cr_to_cart      = hits_view > 0 ? hits_tocart      / hits_view   : 0;
+      const cr_to_order     = hits_view > 0 ? orders_item      / hits_view   : 0;
       const redemption_rate = orders_item > 0 ? delivered_units / orders_item : 0;
 
       try {
         await query(
-          `INSERT INTO ozon_analytics (date,sku,hits_view,hits_view_search,hits_view_pdp,hits_tocart,hits_tocart_search,hits_tocart_pdp,orders_item,revenue,delivered_units,returns,cancellations,ctr,cr_to_cart,cr_to_order,redemption_rate)
+          `INSERT INTO ozon_analytics
+            (date, sku, hits_view, hits_view_search, hits_view_pdp,
+             hits_tocart, hits_tocart_search, hits_tocart_pdp,
+             orders_item, revenue, delivered_units, returns, cancellations,
+             ctr, cr_to_cart, cr_to_order, redemption_rate)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT (date,sku) DO UPDATE SET
-             hits_view=EXCLUDED.hits_view,hits_view_pdp=EXCLUDED.hits_view_pdp,
-             hits_tocart=EXCLUDED.hits_tocart,orders_item=EXCLUDED.orders_item,
-             revenue=EXCLUDED.revenue,delivered_units=EXCLUDED.delivered_units,
-             returns=EXCLUDED.returns,cancellations=EXCLUDED.cancellations,
-             ctr=EXCLUDED.ctr,cr_to_cart=EXCLUDED.cr_to_cart,
-             cr_to_order=EXCLUDED.cr_to_order,redemption_rate=EXCLUDED.redemption_rate`,
-          [date,sku,hits_view,hits_view_search,hits_view_pdp,hits_tocart,hits_tocart_search,hits_tocart_pdp,orders_item,revenue,delivered_units,returns,cancellations,ctr,cr_to_cart,cr_to_order,redemption_rate]
+           ON CONFLICT (date, sku) DO UPDATE SET
+             hits_view=EXCLUDED.hits_view,
+             hits_view_pdp=EXCLUDED.hits_view_pdp,
+             hits_tocart=EXCLUDED.hits_tocart,
+             orders_item=EXCLUDED.orders_item,
+             revenue=EXCLUDED.revenue,
+             delivered_units=EXCLUDED.delivered_units,
+             returns=EXCLUDED.returns,
+             cancellations=EXCLUDED.cancellations,
+             ctr=EXCLUDED.ctr,
+             cr_to_cart=EXCLUDED.cr_to_cart,
+             cr_to_order=EXCLUDED.cr_to_order,
+             redemption_rate=EXCLUDED.redemption_rate`,
+          [
+            date, sku,
+            hits_view, hits_view_search, hits_view_pdp,
+            hits_tocart, hits_tocart_search, hits_tocart_pdp,
+            orders_item, revenue, delivered_units, returns, cancellations,
+            ctr, cr_to_cart, cr_to_order, redemption_rate,
+          ]
         );
         total++;
-      } catch(e) {}
+      } catch(e) {
+        // skip duplicates
+      }
     }
 
     if (rows.length < 1000) break;
@@ -65,16 +112,25 @@ async function collectAnalytics(dateFrom) {
     await new Promise(r => setTimeout(r, 500));
   }
 
-  // Подтягиваем названия из заказов
+  // Подтягиваем названия товаров из таблицы заказов
   try {
     await query(`
-      UPDATE ozon_analytics oa SET offer_id=oo.offer_id, product_name=oo.product_name
-      FROM (SELECT DISTINCT ON (sku) sku,offer_id,product_name FROM ozon_orders WHERE offer_id IS NOT NULL ORDER BY sku,date DESC) oo
-      WHERE oa.sku=oo.sku AND oa.offer_id IS NULL
+      UPDATE ozon_analytics oa
+      SET offer_id = oo.offer_id, product_name = oo.product_name
+      FROM (
+        SELECT DISTINCT ON (sku) sku, offer_id, product_name
+        FROM ozon_orders
+        WHERE offer_id IS NOT NULL
+        ORDER BY sku, date DESC
+      ) oo
+      WHERE oa.sku = oo.sku AND oa.offer_id IS NULL
     `);
-  } catch(e) {}
+  } catch(e) {
+    console.warn('[Ozon Analytics] Обновление названий:', e.message);
+  }
 
-  console.log(`[Ozon Analytics] Сохранено: ${total}`);
+  console.log(`[Ozon Analytics] Итого сохранено: ${total}`);
   return total;
 }
+
 module.exports = { collectAnalytics };
