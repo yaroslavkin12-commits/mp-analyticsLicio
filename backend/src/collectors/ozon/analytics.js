@@ -12,49 +12,51 @@ function headers() {
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
-// Один запрос — возвращает Map: "sku|date" -> { sku, date, values: {} }
-async function fetchMetrics(dateFrom, dateTo, metrics) {
+// Запрашиваем одну метрику — возвращает Map("sku|date" -> value) или null
+async function fetchOne(dateFrom, dateTo, metricName) {
   const result = new Map();
   let offset = 0;
 
   while (true) {
+    await delay(600);
     let resp;
     try {
-      await delay(600); // rate limit: max 2 req/sec
       resp = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
         date_from: dateFrom,
         date_to:   dateTo,
-        metrics,
+        metrics:   [metricName],
         dimension: ['sku', 'day'],
-        sort: [{ key: metrics[0], order: 'DESC' }],
-        limit: 1000,
+        sort:      [{ key: metricName, order: 'DESC' }],
+        limit:     1000,
         offset,
-      }, { headers: headers(), timeout: 90000 });
+      }, { headers: headers(), timeout: 60000 });
     } catch(e) {
-      console.error('[Ozon Analytics] Ошибка запроса:', e.response?.data || e.message);
-      break;
+      const code = e.response?.data?.code;
+      const msg  = e.response?.data?.message || e.message;
+      if (code === 3) {
+        console.log(`[Ozon] Метрика "${metricName}" устарела — пропускаем`);
+      } else if (code === 8) {
+        console.log(`[Ozon] Rate limit — ждём 5 сек...`);
+        await delay(5000);
+        continue; // повтор
+      } else {
+        console.warn(`[Ozon] Ошибка "${metricName}": ${msg}`);
+      }
+      return null;
     }
 
     const rows = resp.data?.result?.data || [];
-    console.log(`[Ozon Analytics] [${metrics[0]}...] получено ${rows.length} строк`);
-
     for (const row of rows) {
       const dims    = row.dimensions || [];
       const skuDim  = dims.find(d => d.id && /^\d{5,}$/.test(String(d.id)));
       const dateDim = dims.find(d => d.id && /^\d{4}-\d{2}-\d{2}$/.test(String(d.id)));
-      const sku     = skuDim?.id  || dims[0]?.id;
-      const date    = dateDim?.id || dims[1]?.id;
+      const sku  = skuDim?.id  || dims[0]?.id;
+      const date = dateDim?.id || dims[1]?.id;
       if (!sku || !date) continue;
-
-      const key     = `${sku}|${date}`;
-      const vals    = (row.metrics || []).map(v => Number(v) || 0);
-      const entry   = result.get(key) || { sku, date, values: {} };
-
-      // Сохраняем по имени метрики
-      metrics.forEach((name, i) => { entry.values[name] = vals[i] || 0; });
-      result.set(key, entry);
+      result.set(`${sku}|${date}`, { sku, date, value: Number(row.metrics?.[0]) || 0 });
     }
 
+    console.log(`[Ozon] "${metricName}": ${rows.length} строк (offset ${offset})`);
     if (rows.length < 1000) break;
     offset += 1000;
   }
@@ -67,46 +69,66 @@ async function collectAnalytics(dateFrom) {
 
   const from = dateFrom || dayjs().subtract(30, 'day').format('YYYY-MM-DD');
   const to   = dayjs().format('YYYY-MM-DD');
-  console.log(`[Ozon Analytics] Сбор ${from} -> ${to}...`);
+  console.log(`[Ozon Analytics] Сбор ${from} -> ${to}`);
 
-  // Запрос 1: метрики показов (только актуальные, без deprecated)
-  const g1 = await fetchMetrics(from, to, ['hits_view', 'hits_view_pdp', 'hits_tocart']);
+  // Список метрик которые пробуем
+  const METRICS = [
+    'hits_view',
+    'hits_view_pdp',
+    'hits_tocart',
+    'orders_item',
+    'revenue',
+    'delivered_units',
+    'returns',
+    'cancellations',
+  ];
 
-  await delay(1000);
+  // Собираем данные по каждой метрике отдельно
+  const data = {}; // metricName -> Map(key -> {sku, date, value})
+  for (const m of METRICS) {
+    const result = await fetchOne(from, to, m);
+    if (result !== null && result.size > 0) {
+      data[m] = result;
+      console.log(`[Ozon] "${m}" — получено ${result.size} записей ✅`);
+    }
+  }
 
-  // Запрос 2: метрики продаж
-  const g2 = await fetchMetrics(from, to, ['orders_item', 'revenue', 'delivered_units', 'returns', 'cancellations']);
+  // Собираем все уникальные ключи sku|date
+  const allKeys = new Set();
+  for (const map of Object.values(data)) {
+    for (const k of map.keys()) allKeys.add(k);
+  }
 
-  const allKeys = new Set([...g1.keys(), ...g2.keys()]);
-  console.log(`[Ozon Analytics] Уникальных записей sku+день: ${allKeys.size}`);
+  console.log(`[Ozon Analytics] Уникальных sku+день: ${allKeys.size}`);
+  if (allKeys.size === 0) {
+    console.log('[Ozon Analytics] Нет данных');
+    return 0;
+  }
 
-  // Сбрасываем старые данные за этот период перед записью
+  // Очищаем СТАРЫЕ данные за период (включая некорректные)
   try {
-    await query(`DELETE FROM ozon_analytics WHERE date BETWEEN ? AND ?`, [from, to]);
-    console.log(`[Ozon Analytics] Старые данные очищены`);
+    await query(`DELETE FROM ozon_analytics WHERE date >= $1 AND date <= $2`, [from, to]);
+    console.log('[Ozon Analytics] Старые данные очищены');
   } catch(e) {
     console.warn('[Ozon Analytics] Очистка:', e.message);
   }
 
+  const get = (metric, key) => data[metric]?.get(key)?.value || 0;
+
   let total = 0;
-
   for (const key of allKeys) {
-    const e1 = g1.get(key);
-    const e2 = g2.get(key);
-    const sku  = (e1 || e2).sku;
-    const date = (e1 || e2).date;
+    const parts = key.split('|');
+    const sku   = parts[0];
+    const date  = parts[1];
 
-    const v1 = e1?.values || {};
-    const v2 = e2?.values || {};
-
-    const hits_view       = v1.hits_view       || 0;
-    const hits_view_pdp   = v1.hits_view_pdp   || 0;
-    const hits_tocart     = v1.hits_tocart      || 0;
-    const orders_item     = v2.orders_item      || 0;
-    const revenue         = v2.revenue          || 0;
-    const delivered_units = v2.delivered_units  || 0;
-    const returns         = v2.returns          || 0;
-    const cancellations   = v2.cancellations    || 0;
+    const hits_view       = get('hits_view',       key);
+    const hits_view_pdp   = get('hits_view_pdp',   key);
+    const hits_tocart     = get('hits_tocart',      key);
+    const orders_item     = get('orders_item',      key);
+    const revenue         = get('revenue',          key);
+    const delivered_units = get('delivered_units',  key);
+    const returns         = get('returns',          key);
+    const cancellations   = get('cancellations',    key);
 
     const ctr             = hits_view   > 0 ? hits_view_pdp  / hits_view   : 0;
     const cr_to_cart      = hits_view   > 0 ? hits_tocart    / hits_view   : 0;
@@ -120,7 +142,7 @@ async function collectAnalytics(dateFrom) {
            hits_tocart, hits_tocart_search, hits_tocart_pdp,
            orders_item, revenue, delivered_units, returns, cancellations,
            ctr, cr_to_cart, cr_to_order, redemption_rate)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (date, sku) DO UPDATE SET
            hits_view=EXCLUDED.hits_view,
            hits_view_pdp=EXCLUDED.hits_view_pdp,
@@ -130,8 +152,7 @@ async function collectAnalytics(dateFrom) {
            delivered_units=EXCLUDED.delivered_units,
            returns=EXCLUDED.returns,
            cancellations=EXCLUDED.cancellations,
-           ctr=EXCLUDED.ctr,
-           cr_to_cart=EXCLUDED.cr_to_cart,
+           ctr=EXCLUDED.ctr, cr_to_cart=EXCLUDED.cr_to_cart,
            cr_to_order=EXCLUDED.cr_to_order,
            redemption_rate=EXCLUDED.redemption_rate`,
         [date, sku,
@@ -141,10 +162,10 @@ async function collectAnalytics(dateFrom) {
          ctr, cr_to_cart, cr_to_order, redemption_rate]
       );
       total++;
-    } catch(e) {}
+    } catch(e) { /* skip */ }
   }
 
-  // Подтягиваем названия товаров
+  // Подтягиваем названия товаров из заказов
   try {
     await query(`
       UPDATE ozon_analytics oa
