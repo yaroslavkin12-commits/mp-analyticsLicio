@@ -12,20 +12,19 @@ router.get('/overview', async (req, res) => {
     const result = {};
 
     if (platform === 'all' || platform === 'wb') {
-      // Сумма заказов = все заказы (price_with_disc) из wb_orders
+      // Сумма заказов = ВСЕ заказы (total_price до скидки продавца — как в WB аналитике)
       const [wbO] = await query(`
         SELECT
-          COUNT(*) FILTER (WHERE is_cancel = false)            as orders_qty,
-          SUM(price_with_disc) FILTER (WHERE is_cancel = false) as orders_sum
+          COUNT(*) FILTER (WHERE is_cancel = false)              as orders_qty,
+          SUM(total_price) FILTER (WHERE is_cancel = false)      as orders_sum
         FROM wb_orders WHERE date BETWEEN $1 AND $2
       `, [from, to]);
 
-      // Выручка = фактические продажи (for_pay) из wb_sales
+      // Выручка = фактические продажи (for_pay) из wb_sales (что выкупили и оплатили)
       const [wbS] = await query(`
         SELECT
-          COUNT(*)          as sales_qty,
-          SUM(for_pay)      as revenue,
-          SUM(price_with_disc) as sales_sum
+          COUNT(*)     as sales_qty,
+          SUM(for_pay) as revenue
         FROM wb_sales WHERE date BETWEEN $1 AND $2
       `, [from, to]);
 
@@ -33,62 +32,61 @@ router.get('/overview', async (req, res) => {
         SELECT SUM(spend) as spend FROM wb_ads WHERE date BETWEEN $1 AND $2
       `, [from, to]);
 
-      const ordersQty  = Number(wbO?.orders_qty  || 0);
-      const ordersSum  = Number(wbO?.orders_sum  || 0);
-      const salesQty   = Number(wbS?.sales_qty   || 0);
-      const revenue    = Number(wbS?.revenue     || 0);
-      const adSpend    = Number(wbA?.spend       || 0);
+      const ordersQty = Number(wbO?.orders_qty || 0);
+      const ordersSum = Number(wbO?.orders_sum || 0);
+      const salesQty  = Number(wbS?.sales_qty  || 0);
+      const revenue   = Number(wbS?.revenue    || 0);
+      const adSpend   = Number(wbA?.spend      || 0);
 
       result.wb = {
-        orders_sum:       ordersSum,
-        orders_qty:       ordersQty,
-        revenue:          revenue,
-        sales_qty:        salesQty,
-        redemption_rate:  ordersQty > 0 ? (salesQty / ordersQty * 100).toFixed(1) : 0,
-        ad_spend:         adSpend,
-        drr:              ordersSum > 0 ? (adSpend / ordersSum * 100).toFixed(1) : 0,
+        orders_sum:      ordersSum,
+        orders_qty:      ordersQty,
+        revenue:         revenue,
+        sales_qty:       salesQty,
+        redemption_rate: ordersQty > 0 ? (salesQty / ordersQty * 100).toFixed(1) : 0,
+        ad_spend:        adSpend,
+        drr:             ordersSum > 0 ? (adSpend / ordersSum * 100).toFixed(1) : 0,
       };
     }
 
     if (platform === 'all' || platform === 'ozon') {
-      // Сумма заказов = все не отменённые заказы
-      const [ozO] = await query(`
+      // Сумма заказов = ВСЕ заказы включая отменённые (как в Ozon аналитике "Заказано на сумму")
+      const [ozAll] = await query(`
         SELECT
-          SUM(quantity)           as orders_qty,
-          SUM(price * quantity)   as orders_sum
+          SUM(quantity)         as orders_qty,
+          SUM(price * quantity) as orders_sum
         FROM ozon_orders
         WHERE date BETWEEN $1 AND $2
-          AND status NOT IN ('cancelled','cancelled_from_split_order','not_accepted')
       `, [from, to]);
 
-      // Выручка = доставленные (payout)
-      const [ozD] = await query(`
+      // Выручка / Продажи = выкуплено покупателем (статус delivered)
+      const [ozDel] = await query(`
         SELECT
           SUM(quantity)   as sales_qty,
           SUM(payout)     as revenue
         FROM ozon_orders
         WHERE date BETWEEN $1 AND $2
-          AND status IN ('delivered','awaiting_deliver','arbitration','client_arbitration')
+          AND status = 'delivered'
       `, [from, to]);
 
       const [ozA] = await query(`
         SELECT SUM(spend) as spend FROM ozon_ads WHERE date BETWEEN $1 AND $2
       `, [from, to]);
 
-      const ordersQty  = Number(ozO?.orders_qty || 0);
-      const ordersSum  = Number(ozO?.orders_sum || 0);
-      const salesQty   = Number(ozD?.sales_qty  || 0);
-      const revenue    = Number(ozD?.revenue    || 0);
-      const adSpend    = Number(ozA?.spend      || 0);
+      const ordersQty = Number(ozAll?.orders_qty || 0);
+      const ordersSum = Number(ozAll?.orders_sum || 0);
+      const salesQty  = Number(ozDel?.sales_qty  || 0);
+      const revenue   = Number(ozDel?.revenue    || 0);
+      const adSpend   = Number(ozA?.spend        || 0);
 
       result.ozon = {
-        orders_sum:       ordersSum,
-        orders_qty:       ordersQty,
-        revenue:          revenue,
-        sales_qty:        salesQty,
-        redemption_rate:  ordersQty > 0 ? (salesQty / ordersQty * 100).toFixed(1) : 0,
-        ad_spend:         adSpend,
-        drr:              ordersSum > 0 ? (adSpend / ordersSum * 100).toFixed(1) : 0,
+        orders_sum:      ordersSum,
+        orders_qty:      ordersQty,
+        revenue:         revenue,
+        sales_qty:       salesQty,
+        redemption_rate: ordersQty > 0 ? (salesQty / ordersQty * 100).toFixed(1) : 0,
+        ad_spend:        adSpend,
+        drr:             ordersSum > 0 ? (adSpend / ordersSum * 100).toFixed(1) : 0,
       };
     }
 
@@ -99,7 +97,7 @@ router.get('/overview', async (req, res) => {
   }
 });
 
-// GET /api/dashboard/chart?platform=all&dateFrom=&dateTo=
+// GET /api/dashboard/chart
 router.get('/chart', async (req, res) => {
   try {
     const { platform = 'all', dateFrom, dateTo } = req.query;
@@ -108,10 +106,11 @@ router.get('/chart', async (req, res) => {
     const result = {};
 
     if (platform === 'all' || platform === 'wb') {
+      // WB: total_price (как в WB аналитике "Заказали на сумму")
       result.wb = await query(`
         SELECT
           date::text as date,
-          SUM(price_with_disc) FILTER (WHERE is_cancel=false) as orders_sum,
+          SUM(total_price) FILTER (WHERE is_cancel=false) as orders_sum,
           COUNT(*) FILTER (WHERE is_cancel=false) as orders_qty
         FROM wb_orders WHERE date BETWEEN $1 AND $2
         GROUP BY date ORDER BY date
@@ -119,6 +118,7 @@ router.get('/chart', async (req, res) => {
     }
 
     if (platform === 'all' || platform === 'ozon') {
+      // Ozon: ВСЕ заказы (как в Ozon аналитике)
       result.ozon = await query(`
         SELECT
           date::text as date,
@@ -126,7 +126,6 @@ router.get('/chart', async (req, res) => {
           SUM(quantity) as orders_qty
         FROM ozon_orders
         WHERE date BETWEEN $1 AND $2
-          AND status NOT IN ('cancelled','cancelled_from_split_order','not_accepted')
         GROUP BY date ORDER BY date
       `, [from, to]);
     }
