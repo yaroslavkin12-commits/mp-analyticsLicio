@@ -1,6 +1,6 @@
-const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('../../db');
+const { statsGet } = require('./statsClient');
 
 async function collectOrders(dateFrom) {
   const token = process.env.WB_TOKEN;
@@ -8,23 +8,12 @@ async function collectOrders(dateFrom) {
   const from = dateFrom || dayjs().subtract(7,'day').format('YYYY-MM-DD');
   console.log(`[WB] Заказы с ${from}...`);
 
-  // Пауза перед запросом чтобы избежать 429
-  await new Promise(r => setTimeout(r, 5000));
-
-  let data;
-  try {
-    const resp = await axios.get('https://statistics-api.wildberries.ru/api/v1/supplier/orders', {
-      headers: { Authorization: token },
-      params: { dateFrom: `${from}T00:00:00`, flag: 0 },
-      timeout: 90000,
-    });
-    data = resp.data;
-  } catch(e) {
-    const status = e.response?.status;
-    if (status === 429) throw new Error('WB rate limit (429) — повторите позже');
-    if (status === 401) throw new Error('WB токен недействителен (401)');
-    throw new Error(`WB orders error: ${e.message}`);
-  }
+  // Троттлинг и повтор при 429 — общие для orders/sales/stocks, см. statsClient.js
+  const data = await statsGet(
+    'https://statistics-api.wildberries.ru/api/v1/supplier/orders',
+    token,
+    { dateFrom: `${from}T00:00:00`, flag: 0 }
+  );
 
   if (!Array.isArray(data)) {
     console.warn('[WB] Заказы: неожиданный формат ответа');

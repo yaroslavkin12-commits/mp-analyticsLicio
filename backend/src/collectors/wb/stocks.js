@@ -1,6 +1,6 @@
-const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('../../db');
+const { statsGet } = require('./statsClient');
 
 async function collectStocks() {
   const token = process.env.WB_TOKEN;
@@ -9,26 +9,22 @@ async function collectStocks() {
 
   let data;
   try {
-    // Пробуем основной endpoint со вчерашней датой
+    // Троттлинг и повтор при 429 — общие для orders/sales/stocks, см. statsClient.js.
+    // Раньше 429 здесь тихо превращался в "0 записей, success" — неотличимо от честного
+    // "остатков и правда нет". Теперь statsGet сам делает повтор, а если лимит всё равно
+    // не отпустил — бросает ошибку, и это видно в логе сборов как реальный сбой.
     const dateFrom = dayjs().subtract(1,'day').format('YYYY-MM-DD') + 'T00:00:00';
-    const resp = await axios.get('https://statistics-api.wildberries.ru/api/v1/supplier/stocks', {
-      headers: { Authorization: token },
-      params: { dateFrom },
-      timeout: 60000,
-    });
-    data = resp.data;
+    data = await statsGet(
+      'https://statistics-api.wildberries.ru/api/v1/supplier/stocks',
+      token,
+      { dateFrom }
+    );
   } catch(e) {
-    const status = e.response?.status;
-    if (status === 404) {
+    if (e.response?.status === 404 || /404/.test(e.message)) {
       console.log('[WB] Остатки: endpoint недоступен (404) — нужны права "Статистика" в токене WB');
       return 0;
     }
-    if (status === 429) {
-      console.log('[WB] Остатки: rate limit (429)');
-      return 0;
-    }
-    console.warn('[WB] Остатки error:', e.message);
-    return 0;
+    throw e;
   }
 
   if (!Array.isArray(data)) {

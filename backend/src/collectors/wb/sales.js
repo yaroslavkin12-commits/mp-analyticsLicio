@@ -1,6 +1,6 @@
-const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('../../db');
+const { statsGet } = require('./statsClient');
 
 async function collectSales(dateFrom) {
   const token = process.env.WB_TOKEN;
@@ -8,22 +8,12 @@ async function collectSales(dateFrom) {
   const from = dateFrom || dayjs().subtract(7,'day').format('YYYY-MM-DD');
   console.log(`[WB] Продажи с ${from}...`);
 
-  // Пауза 7 сек — после orders который уже подождал 5
-  await new Promise(r => setTimeout(r, 7000));
-
-  let data;
-  try {
-    const resp = await axios.get('https://statistics-api.wildberries.ru/api/v1/supplier/sales', {
-      headers: { Authorization: token },
-      params: { dateFrom: `${from}T00:00:00`, flag: 0 },
-      timeout: 90000,
-    });
-    data = resp.data;
-  } catch(e) {
-    const status = e.response?.status;
-    if (status === 429) throw new Error('WB rate limit (429)');
-    throw new Error(`WB sales error: ${e.message}`);
-  }
+  // Троттлинг и повтор при 429 — общие для orders/sales/stocks, см. statsClient.js
+  const data = await statsGet(
+    'https://statistics-api.wildberries.ru/api/v1/supplier/sales',
+    token,
+    { dateFrom: `${from}T00:00:00`, flag: 0 }
+  );
 
   if (!Array.isArray(data)) return 0;
 
