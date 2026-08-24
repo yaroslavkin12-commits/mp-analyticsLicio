@@ -59,11 +59,16 @@ router.get('/overview', async (req, res) => {
         WHERE date BETWEEN $1 AND $2
       `, [from, to]);
 
-      // Выручка / Продажи = выкуплено покупателем (статус delivered)
+      // Выручка / Продажи = фактическая продажа — статус "delivered" (= "Доставлено" в кабинете Ozon,
+      // товар получен и оплачен покупателем). "Выкуплено" в отчётах Ozon — это НЕ то же самое: туда
+      // попадают заказы ещё в пути / ожидающие клиента в ПВЗ, которые ещё не факт продажи.
+      // Выручку считаем по price*quantity (сумма, которую заплатил покупатель), а не по payout —
+      // payout (нетто-выплата после комиссии) заполняется Ozon с задержкой и первое время после
+      // доставки часто равен 0, из-за чего "Выручка" на дашборде обнулялась.
       const [ozDel] = await query(`
         SELECT
-          SUM(quantity)   as sales_qty,
-          SUM(payout)     as revenue
+          SUM(quantity)         as sales_qty,
+          SUM(price * quantity) as revenue
         FROM ozon_orders
         WHERE date BETWEEN $1 AND $2
           AND status = 'delivered'

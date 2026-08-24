@@ -13,7 +13,7 @@ function extractCategory(productName) {
   if (n.includes('свитшот') || n.includes('свитер'))
     return n.includes('женск') || n.includes(' w ') || n.includes('w,') ? 'Свитшот женский' : 'Свитшот мужской';
   if (n.includes('лонгслив') || n.includes('long'))
-    return n.includes('женск') || n.includes(' w ') || n.includes('w,') ? 'Лонгслив женский' : 'Лонгслив мужской';
+    return n.includes('женск') || n.includes(' w ') || n.includes('w,') ? 'Лонгслив женский' : 'Лонгслив мужский';
   if (n.includes('футболк'))
     return n.includes('женск') || n.includes(' w ') || n.includes('w,') ? 'Футболка женская' : 'Футболка мужская';
   if (n.includes('брюк') || n.includes('штан'))
@@ -96,7 +96,8 @@ router.get('/ozon', async (req, res) => {
           -- Сумма заказов = ВСЕ заказы (как в Ozon аналитике)
           COALESCE(o_all.orders_sum, 0) as orders_sum,
           COALESCE(o_all.orders_qty, 0) as orders_qty,
-          -- Продажи = выкуплено (delivered)
+          -- Продажи = фактически доставлено покупателю (статус delivered = "Доставлено" у Ozon,
+          -- НЕ "Выкуплено" — тот статус включает заказы ещё в пути/ожидающие клиента)
           COALESCE(o_del.sales_qty, 0)  as delivered_qty,
           COALESCE(o_del.revenue, 0)    as revenue,
           CASE WHEN COALESCE(a.hits_view,0)>0
@@ -120,7 +121,9 @@ router.get('/ozon', async (req, res) => {
           GROUP BY date
         ) o_all ON o_all.date = d.date
         LEFT JOIN (
-          SELECT date, SUM(quantity) as sales_qty, SUM(payout) as revenue
+          -- revenue = price*quantity (сколько заплатил покупатель), не payout — payout (нетто после
+          -- комиссии) приходит от Ozon с задержкой и часто = 0 сразу после доставки
+          SELECT date, SUM(quantity) as sales_qty, SUM(price * quantity) as revenue
           FROM ozon_orders WHERE date BETWEEN $1 AND $2 AND status = 'delivered'
           GROUP BY date
         ) o_del ON o_del.date = d.date
@@ -142,7 +145,7 @@ router.get('/ozon', async (req, res) => {
         -- Заказы = ВСЕ
         COALESCE(o_all.orders_qty, 0) as orders_item,
         COALESCE(o_all.orders_sum, 0) as orders_sum,
-        -- Продажи = выкуплено
+        -- Продажи = доставлено (delivered), фактическая продажа
         COALESCE(o_del.sales_qty, 0)  as delivered_units,
         COALESCE(o_del.revenue, 0)    as revenue,
         COALESCE(o_ret.returns_qty, 0) as returns,
@@ -183,7 +186,7 @@ router.get('/ozon', async (req, res) => {
         GROUP BY sku, offer_id, product_name
       ) o_all ON o_all.sku = a.sku
       LEFT JOIN (
-        SELECT sku, SUM(quantity) as sales_qty, SUM(payout) as revenue
+        SELECT sku, SUM(quantity) as sales_qty, SUM(price * quantity) as revenue
         FROM ozon_orders WHERE date BETWEEN $1 AND $2 AND status = 'delivered'
         GROUP BY sku
       ) o_del ON o_del.sku = COALESCE(a.sku, o_all.sku)
@@ -226,7 +229,7 @@ router.get('/ozon', async (req, res) => {
         FROM ozon_orders WHERE date BETWEEN $1 AND $2 GROUP BY sku
       ) o_all ON o_all.sku = a.sku
       LEFT JOIN (
-        SELECT sku, SUM(quantity) as sales_qty, SUM(payout) as revenue
+        SELECT sku, SUM(quantity) as sales_qty, SUM(price * quantity) as revenue
         FROM ozon_orders WHERE date BETWEEN $1 AND $2 AND status='delivered' GROUP BY sku
       ) o_del ON o_del.sku = COALESCE(a.sku, o_all.sku)
     `, [from, to]);
@@ -273,7 +276,7 @@ router.get('/ozon/funnel', async (req, res) => {
         FROM ozon_orders WHERE date BETWEEN $1 AND $2 GROUP BY sku
       ) o_all ON o_all.sku = a.sku
       LEFT JOIN (
-        SELECT sku, SUM(quantity) as sales_qty, SUM(payout) as revenue
+        SELECT sku, SUM(quantity) as sales_qty, SUM(price * quantity) as revenue
         FROM ozon_orders WHERE date BETWEEN $1 AND $2 AND status='delivered' GROUP BY sku
       ) o_del ON o_del.sku = COALESCE(a.sku, o_all.sku)
     `, [from, to]);
