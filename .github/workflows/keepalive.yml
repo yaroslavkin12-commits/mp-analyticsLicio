@@ -1,0 +1,19 @@
+name: Keep dashboard awake
+
+# Render (бесплатный тариф) усыпляет сервис без трафика ~через 15 минут простоя.
+# Пока сервис спит, встроенный планировщик сборов (node-cron) внутри него не
+# работает вообще — соответственно сбор данных с Ozon/WB останавливается.
+# Этот workflow просто периодически стучится в /health, чтобы сервис не засыпал
+# и планировщик собирал данные по расписанию, а не только когда кто-то
+# случайно откроет дашборд.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping dashboard health endpoint
+        run: curl -fsS --max-time 25 https://mp-analyticslicio-1.onrender.com/health || true
