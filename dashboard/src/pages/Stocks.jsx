@@ -3,11 +3,28 @@ import { getStocksV2 } from '../api';
 
 const PLATFORMS = [['all','Все'],['wb','WB'],['ozon','Ozon']];
 const FULFILLMENTS = [['all','FBO+FBS'],['fbo','FBO'],['fbs','FBS']];
+const GENDERS = [['all','Все'],['Мужское','Мужское'],['Женское','Женское']];
 
+// FBS — это один физический остаток на общем фулфилменте, который просто
+// выгружается сразу на обе площадки (а не два независимых остатка, как
+// FBO). Поэтому при platform === 'all' его нельзя складывать как
+// wb_fbs + ozon_fbs — это задвоит цифру. Берём максимум из двух значений
+// (площадки синкают выгрузку с небольшой задержкой друг относительно друга).
+// При выборе конкретной площадки показываем то, что реально видно на ней.
 function qtyOf(size, platform, fulfillment) {
+  const wantFbo = fulfillment === 'all' || fulfillment === 'fbo';
+  const wantFbs = fulfillment === 'all' || fulfillment === 'fbs';
   let v = 0;
-  if (platform === 'all' || platform === 'wb')   { if (fulfillment === 'all' || fulfillment === 'fbo') v += size.wb_fbo;   if (fulfillment === 'all' || fulfillment === 'fbs') v += size.wb_fbs; }
-  if (platform === 'all' || platform === 'ozon') { if (fulfillment === 'all' || fulfillment === 'fbo') v += size.ozon_fbo; if (fulfillment === 'all' || fulfillment === 'fbs') v += size.ozon_fbs; }
+  if (platform === 'all') {
+    if (wantFbo) v += size.wb_fbo + size.ozon_fbo;
+    if (wantFbs) v += Math.max(size.wb_fbs, size.ozon_fbs);
+  } else if (platform === 'wb') {
+    if (wantFbo) v += size.wb_fbo;
+    if (wantFbs) v += size.wb_fbs;
+  } else if (platform === 'ozon') {
+    if (wantFbo) v += size.ozon_fbo;
+    if (wantFbs) v += size.ozon_fbs;
+  }
   return v;
 }
 
@@ -32,6 +49,7 @@ export default function Stocks({ platform: platformProp }) {
   const [category, setCategory] = useState('all');
   const [platform, setPlatform] = useState(platformProp || 'all');
   const [fulfillment, setFulfillment] = useState('all');
+  const [gender, setGender] = useState('all');
   const [expanded, setExpanded] = useState(() => new Set());
 
   // Общий переключатель площадки в шапке дашборда тоже должен управлять этой
@@ -48,13 +66,14 @@ export default function Stocks({ platform: platformProp }) {
     const s = search.trim().toLowerCase();
     return raw.products
       .filter(p => category === 'all' || p.category === category)
+      .filter(p => gender === 'all' || p.gender === gender)
       .filter(p => !s || p.baseArticle.toLowerCase().includes(s) || (p.subject || '').toLowerCase().includes(s))
       .map(p => {
         const sizes = [...p.sizes].sort((a, b) => sizeRank(a.size) - sizeRank(b.size));
         const total = sizes.reduce((sum, sz) => sum + qtyOf(sz, platform, fulfillment), 0);
         return { ...p, sizes, total };
       });
-  }, [raw, search, category, platform, fulfillment]);
+  }, [raw, search, category, gender, platform, fulfillment]);
 
   const toggle = article => setExpanded(prev => {
     const next = new Set(prev);
@@ -82,6 +101,11 @@ export default function Stocks({ platform: platformProp }) {
         <div style={{ display: 'flex', gap: 3, background: 'var(--surface2)', borderRadius: 8, padding: 3 }}>
           {FULFILLMENTS.map(([v, l]) => (
             <button key={v} onClick={() => setFulfillment(v)} style={{ padding: '5px 14px', borderRadius: 6, border: 'none', fontSize: 13, fontWeight: 500, background: fulfillment === v ? 'var(--accent-wb)' : 'transparent', color: fulfillment === v ? '#fff' : 'var(--text2)' }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 3, background: 'var(--surface2)', borderRadius: 8, padding: 3 }}>
+          {GENDERS.map(([v, l]) => (
+            <button key={v} onClick={() => setGender(v)} style={{ padding: '5px 14px', borderRadius: 6, border: 'none', fontSize: 13, fontWeight: 500, background: gender === v ? 'var(--accent-wb)' : 'transparent', color: gender === v ? '#fff' : 'var(--text2)' }}>{l}</button>
           ))}
         </div>
       </div>
@@ -113,7 +137,7 @@ export default function Stocks({ platform: platformProp }) {
                       </td>
                       <td style={{ padding: '8px 12px', fontWeight: 600 }}>
                         {p.baseArticle}
-                        <div style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 400, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.subject || '—'}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text2)', fontWeight: 400, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.subject || '—'}{p.gender ? ` · ${p.gender}` : ''}</div>
                       </td>
                       <td style={{ padding: '8px 12px', color: 'var(--text2)' }}>{p.category || '—'}</td>
                       <td style={{ padding: '8px 12px', color: 'var(--text2)' }}>{p.sizes.length} размер(ов)</td>
@@ -140,9 +164,15 @@ export default function Stocks({ platform: platformProp }) {
                                 <tr key={sz.size}>
                                   <td style={{ padding: '3px 8px', fontWeight: 600 }}>{sz.size}</td>
                                   <td style={{ padding: '3px 8px', textAlign: 'right' }}>{sz.wb_fbo}</td>
-                                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>{sz.wb_fbs}</td>
+                                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>
+                                    {sz.wb_fbs}
+                                    {sz.fbs_mismatch && <span title={`Расхождение с Ozon FBS: ${sz.ozon_fbs}`} style={{ color: 'var(--warn)' }}> ⚠</span>}
+                                  </td>
                                   <td style={{ padding: '3px 8px', textAlign: 'right' }}>{sz.ozon_fbo}</td>
-                                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>{sz.ozon_fbs}</td>
+                                  <td style={{ padding: '3px 8px', textAlign: 'right' }}>
+                                    {sz.ozon_fbs}
+                                    {sz.fbs_mismatch && <span title={`Расхождение с WB FBS: ${sz.wb_fbs}`} style={{ color: 'var(--warn)' }}> ⚠</span>}
+                                  </td>
                                   <td style={{ padding: '3px 8px', textAlign: 'right', fontWeight: 700 }}>{qtyOf(sz, 'all', 'all')}</td>
                                 </tr>
                               ))}
@@ -150,7 +180,7 @@ export default function Stocks({ platform: platformProp }) {
                           </table>
                           {p.wbFbsWarehouses.length > 0 && (
                             <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text2)' }}>
-                              FBS (WB) по складам: {p.wbFbsWarehouses.map(w => `${w.warehouse} — ${w.qty}`).join(', ')}
+                              FBS (общий остаток на фулфилменте) по складам: {p.wbFbsWarehouses.map(w => `${w.warehouse} — ${w.qty}`).join(', ')}
                             </div>
                           )}
                         </td>

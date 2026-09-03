@@ -179,10 +179,14 @@ router.get('/stocks', async (req, res) => {
 // размеру, площадке (WB/Ozon) и типу фулфилмента (FBO/FBS). Фото и категория
 // подтягиваются откуда есть: фото WB — вычисляется по nmId (без похода в API),
 // фото Ozon — из справочника ozon_catalog (см. collectors/ozon/catalog.js).
+// Категория и пол определяются по префиксу/токенам базового артикула
+// (lib/productTaxonomy.js), а не по «сырым» категориям WB/Ozon — те слишком
+// разнородны между площадками для нормального фильтра.
 router.get('/stocks-v2', async (req, res) => {
   try {
     const { parseArticle } = require('../lib/articleGrouping');
     const { wbPhotoUrl } = require('../lib/wbPhoto');
+    const { detectCategory, detectGender, ALL_CATEGORY_LABELS } = require('../lib/productTaxonomy');
 
     const [wbRows, ozonRows, ozonCatalog] = await Promise.all([
       query(`
@@ -206,7 +210,10 @@ router.get('/stocks-v2', async (req, res) => {
     function getProduct(baseArticle) {
       if (!products.has(baseArticle)) {
         products.set(baseArticle, {
-          baseArticle, category: null, subject: null, photoUrl: null,
+          baseArticle,
+          category: detectCategory(baseArticle),
+          gender: detectGender(baseArticle),
+          subject: null, photoUrl: null,
           sizes: new Map(), // size -> {wb_fbo, wb_fbs, ozon_fbo, ozon_fbs}
           wbFbsWarehouses: new Map(), // склад FBS (WB) -> кол-во, для разбивки по складам
         });
@@ -224,7 +231,6 @@ router.get('/stocks-v2', async (req, res) => {
     for (const r of wbRows) {
       const p = getProduct(r.supplier_article);
       if (!p.photoUrl && r.nm_id) p.photoUrl = wbPhotoUrl(r.nm_id);
-      if (!p.category && r.category) p.category = r.category;
       if (!p.subject && r.subject) p.subject = r.subject;
       const s = getSize(p, r.tech_size);
       const field = r.stock_type === 'fbs' ? 'wb_fbs' : 'wb_fbo';
@@ -247,19 +253,31 @@ router.get('/stocks-v2', async (req, res) => {
       s.ozon_fbs += Number(r.fbs_present) || 0;
     }
 
+    // FBS — это один и тот же физический остаток, который просто выгружается
+    // сразу на обе площадки, а не два независимых остатка. Поэтому при
+    // подсчёте «итого по обеим площадкам» его нельзя складывать (wb_fbs +
+    // ozon_fbs) — берём максимум из двух значений как наиболее свежую оценку
+    // (площадки синкают выгрузку с небольшой задержкой относительно друг
+    // друга), и отмечаем факт расхождения, если оно есть.
     const result = [...products.values()].map(p => {
-      const sizes = [...p.sizes.entries()].map(([size, q]) => ({
-        size,
-        wb_fbo: q.wb_fbo, wb_fbs: q.wb_fbs, ozon_fbo: q.ozon_fbo, ozon_fbs: q.ozon_fbs,
-        wb_total: q.wb_fbo + q.wb_fbs,
-        ozon_total: q.ozon_fbo + q.ozon_fbs,
-        total: q.wb_fbo + q.wb_fbs + q.ozon_fbo + q.ozon_fbs,
-      }));
+      const sizes = [...p.sizes.entries()].map(([size, q]) => {
+        const fbsShared = Math.max(q.wb_fbs, q.ozon_fbs);
+        return {
+          size,
+          wb_fbo: q.wb_fbo, wb_fbs: q.wb_fbs, ozon_fbo: q.ozon_fbo, ozon_fbs: q.ozon_fbs,
+          fbs_shared: fbsShared,
+          fbs_mismatch: q.wb_fbs !== q.ozon_fbs,
+          wb_total: q.wb_fbo + q.wb_fbs,
+          ozon_total: q.ozon_fbo + q.ozon_fbs,
+          total: q.wb_fbo + q.ozon_fbo + fbsShared,
+        };
+      });
       const totals = sizes.reduce((a, s) => ({
         wb_fbo: a.wb_fbo + s.wb_fbo, wb_fbs: a.wb_fbs + s.wb_fbs,
         ozon_fbo: a.ozon_fbo + s.ozon_fbo, ozon_fbs: a.ozon_fbs + s.ozon_fbs,
+        fbs_shared: a.fbs_shared + s.fbs_shared,
         total: a.total + s.total,
-      }), { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0, total: 0 });
+      }), { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0, fbs_shared: 0, total: 0 });
       const wbFbsWarehouses = [...p.wbFbsWarehouses.entries()]
         .map(([warehouse, qty]) => ({ warehouse, qty }))
         .sort((a, b) => b.qty - a.qty);
@@ -267,7 +285,8 @@ router.get('/stocks-v2', async (req, res) => {
       return { ...rest, sizes, totals, wbFbsWarehouses };
     }).sort((a, b) => a.baseArticle.localeCompare(b.baseArticle));
 
-    const categories = [...new Set(result.map(p => p.category).filter(Boolean))].sort();
+    const categories = [...ALL_CATEGORY_LABELS];
+    if (result.some(p => p.category === 'Другое')) categories.push('Другое');
 
     res.json({ success: true, data: { products: result, categories } });
   } catch(e) {
