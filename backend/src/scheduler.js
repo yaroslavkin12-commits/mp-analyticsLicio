@@ -14,6 +14,10 @@ const { collectAds: ozAds }             = require('./collectors/ozon/ads');
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
+// Через сколько повторить WB-сбор, если он упал (например по 429) — не ждать
+// следующего случайного захода на сайт, а самим попробовать ещё раз чуть позже.
+const WB_RETRY_DELAY_MS = 6 * 60 * 1000;
+
 async function log(platform, type, status, records = 0, error = null) {
   try {
     await query(
@@ -24,30 +28,70 @@ async function log(platform, type, status, records = 0, error = null) {
   } catch(e) { /* non-critical */ }
 }
 
+// Возвращает { ok, count } — раньше run() ничего не возвращал, из-за чего
+// вызывающий код не мог узнать, что сбор упал, и никак на это не реагировал.
 async function run(name, platform, type, fn, dateFrom) {
   console.log(`▶ ${name}...`);
   try {
     const count = await fn(dateFrom);
     await log(platform, type, 'success', count);
     console.log(`✅ ${name}: ${count} записей`);
+    return { ok: true, count };
   } catch(e) {
     console.error(`❌ ${name}:`, e.message);
     await log(platform, type, 'error', 0, e.message);
+    return { ok: false, count: 0 };
   }
 }
 
-async function runWB(dateFrom) {
+// Дата последнего УСПЕШНОГО сбора по площадке (по любому из её коллекторов).
+// Нужна, чтобы при рестарте (Render "просыпается" после сна) не гнать заново
+// слепой 30-дневный бэкфилл, а докатить только реально пропущенный период —
+// это и быстрее, и не долбит WB лишними запросами, провоцируя 429.
+async function lastSuccessDate(platform) {
+  try {
+    const [row] = await query(
+      `SELECT MAX(finished_at) as t FROM collection_log WHERE platform = $1 AND status = 'success'`,
+      [platform]
+    );
+    return row?.t ? dayjs(row.t) : null;
+  } catch(e) { return null; }
+}
+
+// dateFrom для докатки: от даты последнего успеха (с запасом в 1 день на случай
+// частично собранных суток), но не больше MAX_BACKFILL_DAYS назад и не позже
+// сегодняшнего дня минус минимум, если данных вообще никогда не было.
+async function catchUpFrom(platform, maxBackfillDays) {
+  const last = await lastSuccessDate(platform);
+  const floor = dayjs().subtract(maxBackfillDays, 'day');
+  if (!last || last.isBefore(floor)) return floor.format('YYYY-MM-DD');
+  return last.subtract(1, 'day').format('YYYY-MM-DD');
+}
+
+async function runWB(dateFrom, { isRetry = false } = {}) {
   if (process.env.WB_ENABLED === 'false' || !process.env.WB_TOKEN) {
     console.log('[WB] Отключён'); return;
   }
-  console.log('\n=== WB ===');
-  await run('WB Заказы',  'wb', 'orders', wbOrders, dateFrom);
+  console.log(`\n=== WB${isRetry ? ' (повтор после сбоя)' : ''} ===`);
+  const results = [];
+  results.push(await run('WB Заказы',  'wb', 'orders', wbOrders, dateFrom));
   await delay(3000); // пауза между запросами WB
-  await run('WB Продажи', 'wb', 'sales',  wbSales,  dateFrom);
+  results.push(await run('WB Продажи', 'wb', 'sales',  wbSales,  dateFrom));
   await delay(3000);
-  await run('WB Остатки', 'wb', 'stocks', wbStocks);
+  results.push(await run('WB Остатки', 'wb', 'stocks', wbStocks));
   await delay(2000);
-  await run('WB Реклама', 'wb', 'ads',    wbAds,    dateFrom);
+  await run('WB Реклама', 'wb', 'ads', wbAds, dateFrom);
+
+  // Если что-то упало (обычно 429 после долгого простоя сервиса) — не оставляем
+  // эти дни несобранными до следующего случайного захода на сайт, а сами
+  // пробуем ещё раз через паузу. Повторяем только один раз, чтобы не зациклиться.
+  const hadFailure = results.some(r => !r.ok);
+  if (hadFailure && !isRetry) {
+    console.log(`[WB] Часть сборов не удалась — повтор через ${WB_RETRY_DELAY_MS / 60000} мин.`);
+    setTimeout(() => {
+      runWB(dateFrom, { isRetry: true }).catch(e => console.error('[WB] Повтор не удался:', e.message));
+    }, WB_RETRY_DELAY_MS);
+  }
 }
 
 async function runOzon(dateFrom) {
@@ -74,10 +118,21 @@ function startScheduler() {
     runAll(dayjs().subtract(3,'day').format('YYYY-MM-DD')).catch(console.error);
   });
   console.log(`⏰ Сбор каждые ${hours} ч.`);
-  // Первый запуск — последние 30 дней
-  setTimeout(() => {
-    console.log('🔄 Первый запуск: данные за 30 дней');
-    runAll(dayjs().subtract(30,'day').format('YYYY-MM-DD')).catch(console.error);
+
+  // Запуск вскоре после старта процесса. Render (бесплатный тариф) "усыпляет"
+  // сервис без трафика и процесс перезапускается заново при каждом заходе —
+  // раньше это всегда гнало слепой 30-дневный бэкфилл по всем площадкам сразу,
+  // что и было одной из причин 429 у WB. Теперь докатываем только реально
+  // пропущенный период (по факту последнего успешного сбора в collection_log),
+  // а не жёстко 30 дней каждый раз.
+  setTimeout(async () => {
+    const [wbFrom, ozFrom] = await Promise.all([
+      catchUpFrom('wb', 30),
+      catchUpFrom('ozon', 30),
+    ]);
+    console.log(`🔄 Первый запуск: WB с ${wbFrom}, Ozon с ${ozFrom}`);
+    await runWB(wbFrom);
+    await runOzon(ozFrom);
   }, 8000);
 }
 
