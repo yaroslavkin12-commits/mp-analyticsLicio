@@ -200,3 +200,13 @@ INSERT INTO app_settings (key, value) VALUES
   ('ozon_enabled', 'true'),
   ('collect_interval_hours', '2')
 ON CONFLICT (key) DO NOTHING;
+
+ALTER TABLE wb_stocks ADD COLUMN IF NOT EXISTS stock_type VARCHAR(10) NOT NULL DEFAULT 'fbo';
+CREATE INDEX IF NOT EXISTS idx_wb_stocks_type ON wb_stocks(stock_type);
+
+CREATE TABLE IF NOT EXISTS ozon_catalog (
+  offer_id VARCHAR(128) PRIMARY KEY,
+  product_name VARCHAR(512),
+  photo_url TEXT,
+  updated_at TIMESTAMP DEFAULT NOW()
+);

@@ -174,6 +174,107 @@ router.get('/stocks', async (req, res) => {
   }
 });
 
+// GET /api/dashboard/stocks-v2
+// Остатки, сгруппированные по базовому артикулу (модель+цвет), с разбивкой по
+// размеру, площадке (WB/Ozon) и типу фулфилмента (FBO/FBS). Фото и категория
+// подтягиваются откуда есть: фото WB — вычисляется по nmId (без похода в API),
+// фото Ozon — из справочника ozon_catalog (см. collectors/ozon/catalog.js).
+router.get('/stocks-v2', async (req, res) => {
+  try {
+    const { parseArticle } = require('../lib/articleGrouping');
+    const { wbPhotoUrl } = require('../lib/wbPhoto');
+
+    const [wbRows, ozonRows, ozonCatalog] = await Promise.all([
+      query(`
+        SELECT nm_id, supplier_article, subject, category, tech_size, warehouse_name, stock_type, quantity
+        FROM wb_stocks w
+        WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM wb_stocks w2 WHERE w2.stock_type = w.stock_type)
+          AND supplier_article IS NOT NULL
+      `),
+      query(`
+        SELECT offer_id, sku, fbo_present, fbs_present
+        FROM ozon_stocks
+        WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM ozon_stocks)
+          AND offer_id IS NOT NULL
+      `),
+      query(`SELECT offer_id, product_name, photo_url FROM ozon_catalog`),
+    ]);
+
+    const catalogByOffer = new Map(ozonCatalog.map(c => [c.offer_id, c]));
+    const products = new Map(); // baseArticle -> product
+
+    function getProduct(baseArticle) {
+      if (!products.has(baseArticle)) {
+        products.set(baseArticle, {
+          baseArticle, category: null, subject: null, photoUrl: null,
+          sizes: new Map(), // size -> {wb_fbo, wb_fbs, ozon_fbo, ozon_fbs}
+          wbFbsWarehouses: new Map(), // склад FBS (WB) -> кол-во, для разбивки по складам
+        });
+      }
+      return products.get(baseArticle);
+    }
+    function getSize(product, size) {
+      const key = size || '—';
+      if (!product.sizes.has(key)) {
+        product.sizes.set(key, { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0 });
+      }
+      return product.sizes.get(key);
+    }
+
+    for (const r of wbRows) {
+      const p = getProduct(r.supplier_article);
+      if (!p.photoUrl && r.nm_id) p.photoUrl = wbPhotoUrl(r.nm_id);
+      if (!p.category && r.category) p.category = r.category;
+      if (!p.subject && r.subject) p.subject = r.subject;
+      const s = getSize(p, r.tech_size);
+      const field = r.stock_type === 'fbs' ? 'wb_fbs' : 'wb_fbo';
+      const qty = Number(r.quantity) || 0;
+      s[field] += qty;
+      if (r.stock_type === 'fbs') {
+        const wh = r.warehouse_name || 'Без названия';
+        p.wbFbsWarehouses.set(wh, (p.wbFbsWarehouses.get(wh) || 0) + qty);
+      }
+    }
+
+    for (const r of ozonRows) {
+      const { baseArticle, size } = parseArticle(r.offer_id);
+      const p = getProduct(baseArticle);
+      const cat = catalogByOffer.get(r.offer_id);
+      if (!p.photoUrl && cat?.photo_url) p.photoUrl = cat.photo_url;
+      if (!p.subject && cat?.product_name) p.subject = cat.product_name;
+      const s = getSize(p, size);
+      s.ozon_fbo += Number(r.fbo_present) || 0;
+      s.ozon_fbs += Number(r.fbs_present) || 0;
+    }
+
+    const result = [...products.values()].map(p => {
+      const sizes = [...p.sizes.entries()].map(([size, q]) => ({
+        size,
+        wb_fbo: q.wb_fbo, wb_fbs: q.wb_fbs, ozon_fbo: q.ozon_fbo, ozon_fbs: q.ozon_fbs,
+        wb_total: q.wb_fbo + q.wb_fbs,
+        ozon_total: q.ozon_fbo + q.ozon_fbs,
+        total: q.wb_fbo + q.wb_fbs + q.ozon_fbo + q.ozon_fbs,
+      }));
+      const totals = sizes.reduce((a, s) => ({
+        wb_fbo: a.wb_fbo + s.wb_fbo, wb_fbs: a.wb_fbs + s.wb_fbs,
+        ozon_fbo: a.ozon_fbo + s.ozon_fbo, ozon_fbs: a.ozon_fbs + s.ozon_fbs,
+        total: a.total + s.total,
+      }), { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0, total: 0 });
+      const wbFbsWarehouses = [...p.wbFbsWarehouses.entries()]
+        .map(([warehouse, qty]) => ({ warehouse, qty }))
+        .sort((a, b) => b.qty - a.qty);
+      const { wbFbsWarehouses: _drop, ...rest } = p;
+      return { ...rest, sizes, totals, wbFbsWarehouses };
+    }).sort((a, b) => a.baseArticle.localeCompare(b.baseArticle));
+
+    const categories = [...new Set(result.map(p => p.category).filter(Boolean))].sort();
+
+    res.json({ success: true, data: { products: result, categories } });
+  } catch(e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // GET /api/dashboard/collection-log
 router.get('/collection-log', async (req, res) => {
   try {

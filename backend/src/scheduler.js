@@ -2,14 +2,16 @@ const cron = require('node-cron');
 const dayjs = require('dayjs');
 const { query } = require('./db');
 
-const { collectOrders: wbOrders } = require('./collectors/wb/orders');
-const { collectSales: wbSales }   = require('./collectors/wb/sales');
-const { collectStocks: wbStocks } = require('./collectors/wb/stocks');
-const { collectAds: wbAds }       = require('./collectors/wb/ads');
+const { collectOrders: wbOrders }       = require('./collectors/wb/orders');
+const { collectSales: wbSales }         = require('./collectors/wb/sales');
+const { collectStocks: wbStocks }       = require('./collectors/wb/stocks');
+const { collectFbsStocks: wbFbsStocks } = require('./collectors/wb/fbsStocks');
+const { collectAds: wbAds }             = require('./collectors/wb/ads');
 
 const { collectOrders: ozOrders }       = require('./collectors/ozon/orders');
 const { collectAnalytics: ozAnalytics } = require('./collectors/ozon/analytics');
 const { collectStocks: ozStocks }       = require('./collectors/ozon/stocks');
+const { collectCatalog: ozCatalog }     = require('./collectors/ozon/catalog');
 const { collectAds: ozAds }             = require('./collectors/ozon/ads');
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -80,6 +82,10 @@ async function runWB(dateFrom, { isRetry = false } = {}) {
   await delay(3000);
   results.push(await run('WB Остатки', 'wb', 'stocks', wbStocks));
   await delay(2000);
+  // FBS-остатки идут через Marketplace API (другой домен, свой лимит) — не
+  // делим общий троттлинг statistics-api, но паузу перед ним всё равно держим.
+  results.push(await run('WB Остатки FBS', 'wb', 'stocks_fbs', wbFbsStocks));
+  await delay(2000);
   await run('WB Реклама', 'wb', 'ads', wbAds, dateFrom);
 
   // Если что-то упало (обычно 429 после долгого простоя сервиса) — не оставляем
@@ -102,6 +108,9 @@ async function runOzon(dateFrom) {
   await run('Ozon Заказы',    'ozon', 'orders',    ozOrders,    dateFrom);
   await run('Ozon Аналитика', 'ozon', 'analytics', ozAnalytics, dateFrom);
   await run('Ozon Остатки',   'ozon', 'stocks',    ozStocks);
+  // Каталог (фото/названия) читает список offer_id из только что собранных
+  // остатков — поэтому запускаем сразу после ozStocks, а не параллельно.
+  await run('Ozon Каталог',   'ozon', 'catalog',   ozCatalog);
   await run('Ozon Реклама',   'ozon', 'ads',       ozAds,       dateFrom);
 }
 
@@ -119,7 +128,7 @@ function startScheduler() {
   });
   console.log(`⏰ Сбор каждые ${hours} ч.`);
 
-  // Запуск вскоре после старта процесса. Render (бесплатный тариф) "усыпляет"
+  // Запуск всегда после старта процесса. Render (бесплатный тариф) "усыпляет"
   // сервис без трафика и процесс перезапускается заново при каждом заходе —
   // раньше это всегда гнало слепой 30-дневный бэкфилл по всем площадкам сразу,
   // что и было одной из причин 429 у WB. Теперь докатываем только реально
