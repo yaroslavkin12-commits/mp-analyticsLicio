@@ -54,7 +54,7 @@ async function collectOrders(dateFrom) {
 
   // Собираем и FBO и FBS
   const [fbo, fbs] = await Promise.all([
-    fetchPostings('https://api-seller.ozon.ru/v3/posting/fbo/list', from, 'fbo'),
+    fetchPostings('https://api-seller.ozon.ru/v2/posting/fbo/list', from, 'fbo'),
     fetchPostings('https://api-seller.ozon.ru/v3/posting/fbs/list', from, 'fbs'),
   ]);
   const fboPostings = fbo.postings;
