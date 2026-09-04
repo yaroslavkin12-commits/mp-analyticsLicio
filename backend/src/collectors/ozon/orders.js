@@ -10,17 +10,19 @@ function headers() {
   };
 }
 
-// Собирает заказы из одного источника (FBO или FBS)
-async function fetchPostings(url, dateFrom, label) {
+// Собирает заказы из одного источника (FBO или FBS).
+// ВАЖНО: список отправлений FBO у Ozon — это v2/posting/fbo/list, а не v3
+// (v3 существует только для FBS) — раньше здесь ошибочно стоял v3 и для FBO,
+// из-за чего запрос тихо возвращал 0 отправлений без ошибки, и в подсчёт
+// заказов попадала только половина (FBS).
+async function fetchPostings(url, dateFrom) {
   const since = dayjs(dateFrom).toISOString();
   let offset = 0;
   let allPostings = [];
-  let lastError = null;
-  let rawShape = null;
 
   while (true) {
     try {
-      const resp = await axios.post(
+      const { data } = await axios.post(
         url,
         {
           dir: 'ASC',
@@ -31,26 +33,21 @@ async function fetchPostings(url, dateFrom, label) {
         },
         { headers: headers(), timeout: 60000 }
       );
-      const data = resp.data;
 
       let postings = data?.result?.postings;
       if (!Array.isArray(postings) && Array.isArray(data?.result)) postings = data.result;
       postings = postings || [];
-      if (offset === 0 && allPostings.length === 0) {
-        rawShape = JSON.stringify(data).slice(0, 500);
-      }
       allPostings = allPostings.concat(postings);
       if (postings.length < 100) break;
       offset += 100;
       await new Promise(r => setTimeout(r, 300));
     } catch (e) {
-      lastError = e.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : e.message;
       console.warn(`[Ozon] Ошибка ${url}:`, e.message);
       break;
     }
   }
 
-  return { postings: allPostings, error: lastError, label, rawShape };
+  return allPostings;
 }
 
 async function collectOrders(dateFrom) {
@@ -60,53 +57,31 @@ async function collectOrders(dateFrom) {
   console.log(`[Ozon] Заказы с ${from}...`);
 
   // Собираем и FBO и FBS
-  const [fbo, fbs] = await Promise.all([
-    fetchPostings('https://api-seller.ozon.ru/v2/posting/fbo/list', from, 'fbo'),
-    fetchPostings('https://api-seller.ozon.ru/v3/posting/fbs/list', from, 'fbs'),
+  const [fboPostings, fbsPostings] = await Promise.all([
+    fetchPostings('https://api-seller.ozon.ru/v2/posting/fbo/list', from),
+    fetchPostings('https://api-seller.ozon.ru/v3/posting/fbs/list', from),
   ]);
-  const fboPostings = fbo.postings;
-  const fbsPostings = fbs.postings;
 
   const allPostings = [...fboPostings, ...fbsPostings];
   console.log(`[Ozon] FBO: ${fboPostings.length}, FBS: ${fbsPostings.length}`);
-
-  // ВРЕМЕННАЯ ДИАГНОСТИКА — пишем разбивку FBO/FBS, ошибки и сэмпл сырых полей
-  // одного посылки в collection_log, чтобы понять расхождение с кабинетом Ozon.
-  // Убрать после того, как найдём причину недосчёта заказов.
-  try {
-    const sampleP = allPostings[0];
-    const sampleProd = sampleP?.products?.[0];
-    const sampleFin = sampleP?.financial_data?.products?.find(f => f.sku === sampleProd?.sku) || sampleP?.financial_data?.products?.[0];
-    const debugMsg = JSON.stringify({
-      since: from,
-      fbo_postings: fboPostings.length,
-      fbs_postings: fbsPostings.length,
-      fbo_error: fbo.error,
-      fbs_error: fbs.error,
-      fbo_raw: fbo.postings.length === 0 ? fbo.rawShape : undefined,
-      sample_product: sampleProd ? { sku: sampleProd.sku, offer_id: sampleProd.offer_id, price: sampleProd.price, quantity: sampleProd.quantity } : null,
-      sample_financial: sampleFin || null,
-      sample_posting_status: sampleP?.status,
-    }).slice(0, 1900);
-    await query(
-      `INSERT INTO collection_log (platform, collector_type, status, records_collected, error_message, finished_at)
-       VALUES (?,?,?,?,?,NOW())`,
-      ['ozon', 'orders_debug', 'success', allPostings.length, debugMsg]
-    );
-  } catch (e) { console.warn('[Ozon] debug log:', e.message); }
 
   let total = 0;
   for (const p of allPostings) {
     for (const prod of p.products || []) {
       try {
-        const fin = p.financial_data?.products?.find(f => f.sku === prod.sku) || {};
+        // financial_data.products матчится по product_id, а не по sku (это
+        // разные поля в ответе Ozon) — раньше матчинг шёл по sku, поэтому
+        // find() никогда не находил строку и commission/payout всегда
+        // писались нулями.
+        const fin = p.financial_data?.products?.find(f => f.product_id === prod.sku) || {};
         await query(
           `INSERT INTO ozon_orders
             (date, posting_number, order_id, sku, offer_id, product_name,
              price, quantity, commission_amount, commission_percent, payout, status, warehouse_name)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT (posting_number, sku) DO UPDATE SET
-             status=EXCLUDED.status, payout=EXCLUDED.payout`,
+             status=EXCLUDED.status, payout=EXCLUDED.payout,
+             commission_amount=EXCLUDED.commission_amount, commission_percent=EXCLUDED.commission_percent`,
           [
             dayjs(p.in_process_at || p.created_at).format('YYYY-MM-DD'),
             p.posting_number,
