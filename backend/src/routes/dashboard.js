@@ -473,4 +473,30 @@ router.get('/collection-log', async (req, res) => {
   }
 });
 
+
+// ВРЕМЕННЫЙ диагностический роут — сравнить разные варианты суммы заказов
+// Ozon (гросс по цене, гросс по old_price, нетто по payout) с кабинетом.
+// Убрать после того, как определимся с формулой "Заказано на сумму".
+router.get('/debug-ozon-sums', async (req, res) => {
+  try {
+    const { dateFrom, dateTo } = req.query;
+    const [row] = await query(`
+      SELECT
+        COUNT(*) as lines,
+        SUM(quantity) as qty,
+        SUM(price*quantity) as sum_price,
+        SUM(payout) as sum_payout,
+        SUM(commission_amount) as sum_commission,
+        SUM(CASE WHEN payout > 0 THEN payout ELSE price*quantity - commission_amount END) as sum_payout_or_calc,
+        AVG(commission_percent) as avg_commission_pct,
+        COUNT(*) FILTER (WHERE status = 'cancelled') as cancelled_lines,
+        COUNT(*) FILTER (WHERE payout = 0) as zero_payout_lines
+      FROM ozon_orders WHERE date BETWEEN $1 AND $2
+    `, [dateFrom, dateTo]);
+    res.json({ success: true, data: row });
+  } catch(e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
