@@ -4,6 +4,7 @@ import { getStocksV2 } from '../api';
 const PLATFORMS = [['all','Все'],['wb','WB'],['ozon','Ozon']];
 const FULFILLMENTS = [['all','FBO+FBS'],['fbo','FBO'],['fbs','FBS']];
 const GENDERS = [['all','Все'],['Мужское','Мужское'],['Женское','Женское']];
+const SORTS = [['article','По артикулу'],['qty_desc','Остаток: сначала больше'],['qty_asc','Остаток: сначала меньше']];
 
 // FBS — это один физический остаток на общем фулфилменте, который просто
 // выгружается сразу на обе площадки (а не два независимых остатка, как
@@ -68,6 +69,7 @@ export default function Stocks({ platform: platformProp }) {
   const [platform, setPlatform] = useState(platformProp || 'all');
   const [fulfillment, setFulfillment] = useState('all');
   const [gender, setGender] = useState('all');
+  const [sort, setSort] = useState('article');
   const [expanded, setExpanded] = useState(() => new Set());
   const [showBreakdown, setShowBreakdown] = useState(false);
 
@@ -83,7 +85,7 @@ export default function Stocks({ platform: platformProp }) {
 
   const rows = useMemo(() => {
     const s = search.trim().toLowerCase();
-    return raw.products
+    const filtered = raw.products
       .filter(p => category === 'all' || p.category === category)
       .filter(p => gender === 'all' || p.gender === gender)
       .filter(p => !s || p.baseArticle.toLowerCase().includes(s) || (p.subject || '').toLowerCase().includes(s))
@@ -92,7 +94,11 @@ export default function Stocks({ platform: platformProp }) {
         const total = sizes.reduce((sum, sz) => sum + qtyOf(sz, platform, fulfillment), 0);
         return { ...p, sizes, total };
       });
-  }, [raw, search, category, gender, platform, fulfillment]);
+    if (sort === 'qty_desc') filtered.sort((a, b) => b.total - a.total);
+    else if (sort === 'qty_asc') filtered.sort((a, b) => a.total - b.total);
+    else filtered.sort((a, b) => a.baseArticle.localeCompare(b.baseArticle));
+    return filtered;
+  }, [raw, search, category, gender, platform, fulfillment, sort]);
 
   // Сводка по текущему набору строк (учитывает поиск/категорию/пол/площадку,
   // но ФБО и ФБС считаются независимо от переключателя ФБО/ФБС — чтобы всегда
@@ -136,6 +142,9 @@ export default function Stocks({ platform: platformProp }) {
         <select value={category} onChange={e => setCategory(e.target.value)} style={{ padding: '5px 8px', borderRadius: 6 }}>
           <option value="all">Все категории</option>
           {raw.categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={sort} onChange={e => setSort(e.target.value)} style={{ padding: '5px 8px', borderRadius: 6 }}>
+          {SORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
       </div>
 

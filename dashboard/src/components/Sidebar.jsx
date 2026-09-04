@@ -1,11 +1,19 @@
 import React from 'react';
 const NAV = [['stocks','🏪','Остатки'],['settings','⚙️','Настройки']];
-export default function Sidebar({ page, setPage }) {
+export default function Sidebar({ page, setPage, theme }) {
   return (
     <div style={{ width:210, background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
-      <div style={{ padding:'18px 16px 10px' }}>
-        <div style={{ fontSize:15, fontWeight:700 }}>MP Analytics</div>
-        <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>WB + Ozon</div>
+      <div style={{ padding:'18px 16px 10px', display:'flex', alignItems:'center', gap:10 }}>
+        <img
+          src="/logo.png"
+          alt="Licio"
+          style={{ height:26, width:'auto', flexShrink:0, filter: theme === 'dark' ? 'invert(1)' : 'none' }}
+        />
+        <div>
+          {/* Позже сюда добавим выпадающий список магазинов (Licio, Defly, ...) */}
+          <div style={{ fontSize:15, fontWeight:700 }}>Licio</div>
+          <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>WB + Ozon</div>
+        </div>
       </div>
       <nav style={{ flex:1, padding:'4px 8px' }}>
         {NAV.map(([id,icon,label]) => (
@@ -19,7 +27,7 @@ export default function Sidebar({ page, setPage }) {
           </button>
         ))}
       </nav>
-      <div style={{ padding:12, fontSize:11, color:'var(--text3)', borderTop:'1px solid var(--border)' }}>v1.2</div>
+      <div style={{ padding:12, fontSize:11, color:'var(--text3)', borderTop:'1px solid var(--border)' }}>v1.3</div>
     </div>
   );
 }

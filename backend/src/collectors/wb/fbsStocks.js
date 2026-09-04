@@ -66,6 +66,15 @@ async function collectFbsStocks() {
 
   const allBarcodes = [...barcodeMeta.keys()];
   const today = dayjs().format('YYYY-MM-DD');
+
+  // См. комментарий в других коллекторах остатков — без очистки старого
+  // снепшота остатки на дашборде складывались по всем прогонам сборщика за
+  // день. FBO-остатки (stock_type='fbo') собирает отдельный коллектор
+  // (stocks.js) — их не трогаем, чистим только свою часть (FBS).
+  try {
+    await query(`DELETE FROM wb_stocks WHERE snapshot_date = ? AND stock_type = 'fbs'`, [today]);
+  } catch(e) { console.warn('[WB] Остатки FBS: очистка старого снепшота не удалась:', e.message); }
+
   let total = 0;
 
   for (const wh of warehouses) {

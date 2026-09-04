@@ -33,6 +33,16 @@ async function collectStocks() {
   }
 
   const today = dayjs().format('YYYY-MM-DD');
+
+  // См. комментарий в ozon/stocks.js: сборщик может отработать несколько раз
+  // за день (расписание + рестарты Render), а без очистки старого снепшота
+  // остатки на дашборде складывались по всем прогонам подряд. FBS-остатки
+  // (stock_type='fbs') собирает отдельный коллектор (fbsStocks.js) — их не
+  // трогаем, чистим только свою часть (FBO, stock_type по умолчанию 'fbo').
+  try {
+    await query(`DELETE FROM wb_stocks WHERE snapshot_date = ? AND stock_type = 'fbo'`, [today]);
+  } catch(e) { console.warn('[WB] Остатки: очистка старого снепшота не удалась:', e.message); }
+
   let count = 0;
   for (const s of data) {
     try {

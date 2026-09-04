@@ -23,7 +23,7 @@ export default function App() {
 
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
-      <Sidebar page={page} setPage={setPage}/>
+      <Sidebar page={page} setPage={setPage} theme={theme}/>
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         {/* Топ-бар */}
         <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 18px',

@@ -30,7 +30,13 @@ async function collectCatalog() {
     );
     const items = data?.items || [];
     for (const item of items) {
-      const photo = (item.images && item.images[0]) || item.primary_image || null;
+      // primary_image — это фото, которое продавец выставил как главное/обложку
+      // карточки. images — вся галерея, порядок в ней не гарантированно
+      // совпадает с обложкой (отсюда была жалоба, что тянется "какое-то другое"
+      // фото, а не первое/главное) — поэтому используем images[0] только как
+      // запасной вариант, если primary_image не задан.
+      const primary = Array.isArray(item.primary_image) ? item.primary_image[0] : item.primary_image;
+      const photo = primary || (item.images && item.images[0]) || null;
       try {
         await query(
           `INSERT INTO ozon_catalog (offer_id,product_name,photo_url,updated_at)
