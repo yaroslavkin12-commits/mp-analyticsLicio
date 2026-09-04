@@ -16,10 +16,11 @@ async function fetchPostings(url, dateFrom, label) {
   let offset = 0;
   let allPostings = [];
   let lastError = null;
+  let rawShape = null;
 
   while (true) {
     try {
-      const { data } = await axios.post(
+      const resp = await axios.post(
         url,
         {
           dir: 'ASC',
@@ -30,8 +31,14 @@ async function fetchPostings(url, dateFrom, label) {
         },
         { headers: headers(), timeout: 60000 }
       );
+      const data = resp.data;
 
-      const postings = data?.result?.postings || [];
+      let postings = data?.result?.postings;
+      if (!Array.isArray(postings) && Array.isArray(data?.result)) postings = data.result;
+      postings = postings || [];
+      if (offset === 0 && allPostings.length === 0) {
+        rawShape = JSON.stringify(data).slice(0, 500);
+      }
       allPostings = allPostings.concat(postings);
       if (postings.length < 100) break;
       offset += 100;
@@ -43,7 +50,7 @@ async function fetchPostings(url, dateFrom, label) {
     }
   }
 
-  return { postings: allPostings, error: lastError, label };
+  return { postings: allPostings, error: lastError, label, rawShape };
 }
 
 async function collectOrders(dateFrom) {
@@ -76,6 +83,7 @@ async function collectOrders(dateFrom) {
       fbs_postings: fbsPostings.length,
       fbo_error: fbo.error,
       fbs_error: fbs.error,
+      fbo_raw: fbo.postings.length === 0 ? fbo.rawShape : undefined,
       sample_product: sampleProd ? { sku: sampleProd.sku, offer_id: sampleProd.offer_id, price: sampleProd.price, quantity: sampleProd.quantity } : null,
       sample_financial: sampleFin || null,
       sample_posting_status: sampleP?.status,
