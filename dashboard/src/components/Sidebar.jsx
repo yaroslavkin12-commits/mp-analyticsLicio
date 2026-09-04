@@ -1,5 +1,5 @@
 import React from 'react';
-const NAV = [['stocks','🏪','Остатки'],['settings','⚙️','Настройки']];
+const NAV = [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['settings','⚙️','Настройки']];
 export default function Sidebar({ page, setPage, theme }) {
   return (
     <div style={{ width:210, background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>

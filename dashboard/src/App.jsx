@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
+import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
 import Settings from './pages/Settings';
 
-const PAGES = { stocks: Stocks, settings: Settings };
+const PAGES = { dashboard: Dashboard, stocks: Stocks, settings: Settings };
 
 const THEME_KEY = 'mp-theme';
 
 export default function App() {
-  const [page, setPage]     = useState('stocks');
+  const [page, setPage]     = useState('dashboard');
   const [platform, setPlatform] = useState('all');
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch(e) { return 'dark'; }
@@ -19,7 +20,7 @@ export default function App() {
     try { localStorage.setItem(THEME_KEY, theme); } catch(e) { /* ignore */ }
   }, [theme]);
 
-  const Page = PAGES[page] || Stocks;
+  const Page = PAGES[page] || Dashboard;
 
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
