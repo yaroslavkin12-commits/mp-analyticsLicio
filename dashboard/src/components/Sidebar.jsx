@@ -1,5 +1,5 @@
 import React from 'react';
-const NAV = [['overview','📊','Обзор'],['analytics','📈','Аналитика продаж'],['stocks','🏪','Остатки'],['ads','📢','Реклама'],['settings','⚙️','Настройки']];
+const NAV = [['stocks','🏪','Остатки'],['settings','⚙️','Настройки']];
 export default function Sidebar({ page, setPage }) {
   return (
     <div style={{ width:210, background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
@@ -19,7 +19,7 @@ export default function Sidebar({ page, setPage }) {
           </button>
         ))}
       </nav>
-      <div style={{ padding:12, fontSize:11, color:'var(--text3)', borderTop:'1px solid var(--border)' }}>v1.1</div>
+      <div style={{ padding:12, fontSize:11, color:'var(--text3)', borderTop:'1px solid var(--border)' }}>v1.2</div>
     </div>
   );
 }

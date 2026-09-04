@@ -176,12 +176,18 @@ router.get('/stocks', async (req, res) => {
 
 // GET /api/dashboard/stocks-v2
 // Остатки, сгруппированные по базовому артикулу (модель+цвет), с разбивкой по
-// размеру, площадке (WB/Ozon) и типу фулфилмента (FBO/FBS). Фото и категория
-// подтягиваются откуда есть: фото WB — вычисляется по nmId (без похода в API),
-// фото Ozon — из справочника ozon_catalog (см. collectors/ozon/catalog.js).
-// Категория и пол определяются по префиксу/токенам базового артикула
-// (lib/productTaxonomy.js), а не по «сырым» категориям WB/Ozon — те слишком
-// разнородны между площадками для нормального фильтра.
+// размеру, площадке (WB/Ozon) и типу фулфилмента (FBO/FBS). Категория и пол
+// определяются по префиксу/токенам базового артикула (lib/productTaxonomy.js),
+// а не по «сырым» категориям WB/Ozon — те слишком разнородны между площадками
+// для нормального фильтра.
+//
+// Фото: основной источник — каталог Ozon (ozon_catalog, реальные картинки,
+// полученные через API карточки товара — см. collectors/ozon/catalog.js).
+// Формула по nmId для WB (wbPhoto.js) используется только как запасной вариант,
+// когда для товара нет карточки на Ozon — таблица диапазонов "корзин" WB
+// периодически устаревает по мере роста nmId, поэтому не все WB-фото по ней
+// открываются. Отдаём фронту оба вариант (photoUrl — основной, photoUrlAlt —
+// запасной), чтобы при ошибке загрузки картинки можно было попробовать второй.
 router.get('/stocks-v2', async (req, res) => {
   try {
     const { parseArticle } = require('../lib/articleGrouping');
@@ -213,7 +219,9 @@ router.get('/stocks-v2', async (req, res) => {
           baseArticle,
           category: detectCategory(baseArticle),
           gender: detectGender(baseArticle),
-          subject: null, photoUrl: null,
+          subject: null,
+          photoUrlOzon: null, // из каталога Ozon — приоритетный источнии
+          photoUrlWb: null,   // по формуле nmId — запасной вариант
           sizes: new Map(), // size -> {wb_fbo, wb_fbs, ozon_fbo, ozon_fbs}
           wbFbsWarehouses: new Map(), // склад FBS (WB) -> кол-во, для разбивки по складам
         });
@@ -230,7 +238,7 @@ router.get('/stocks-v2', async (req, res) => {
 
     for (const r of wbRows) {
       const p = getProduct(r.supplier_article);
-      if (!p.photoUrl && r.nm_id) p.photoUrl = wbPhotoUrl(r.nm_id);
+      if (!p.photoUrlWb && r.nm_id) p.photoUrlWb = wbPhotoUrl(r.nm_id);
       if (!p.subject && r.subject) p.subject = r.subject;
       const s = getSize(p, r.tech_size);
       const field = r.stock_type === 'fbs' ? 'wb_fbs' : 'wb_fbo';
@@ -246,7 +254,7 @@ router.get('/stocks-v2', async (req, res) => {
       const { baseArticle, size } = parseArticle(r.offer_id);
       const p = getProduct(baseArticle);
       const cat = catalogByOffer.get(r.offer_id);
-      if (!p.photoUrl && cat?.photo_url) p.photoUrl = cat.photo_url;
+      if (!p.photoUrlOzon && cat?.photo_url) p.photoUrlOzon = cat.photo_url;
       if (!p.subject && cat?.product_name) p.subject = cat.product_name;
       const s = getSize(p, size);
       s.ozon_fbo += Number(r.fbo_present) || 0;
@@ -281,8 +289,13 @@ router.get('/stocks-v2', async (req, res) => {
       const wbFbsWarehouses = [...p.wbFbsWarehouses.entries()]
         .map(([warehouse, qty]) => ({ warehouse, qty }))
         .sort((a, b) => b.qty - a.qty);
-      const { wbFbsWarehouses: _drop, ...rest } = p;
-      return { ...rest, sizes, totals, wbFbsWarehouses };
+      // Ozon-фото приоритетнее (реальная картинка из НPI), WB-формула — запасной
+      // вариант, plus отдаём его отдельно как photoUrlAlt для фронта на случай,
+      // если основная картинка не откроется (404/сеть).
+      const photoUrl = p.photoUrlOzon || p.photoUrlWb || null;
+      const photoUrlAlt = (p.photoUrlOzon && p.photoUrlWb && p.photoUrlWb !== p.photoUrlOzon) ? p.photoUrlWb : null;
+      const { wbFbsWarehouses: _drop, photoUrlOzon: _po, photoUrlWb: _pw, ...rest } = p;
+      return { ...rest, photoUrl, photoUrlAlt, sizes, totals, wbFbsWarehouses };
     }).sort((a, b) => a.baseArticle.localeCompare(b.baseArticle));
 
     const categories = [...ALL_CATEGORY_LABELS];

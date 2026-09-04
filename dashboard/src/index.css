@@ -6,7 +6,13 @@
   --text:#e2e8f0;--text2:#8892a4;--text3:#4a5568;
   --radius:10px;
 }
-body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);font-size:14px;-webkit-font-smoothing:antialiased}
+[data-theme="light"]{
+  --bg:#f4f5f8;--surface:#ffffff;--surface2:#eef0f4;--border:#e0e3ea;
+  --accent-wb:#7c3aed;--accent-oz:#005bff;
+  --ok:#059669;--warn:#d97706;--danger:#dc2626;
+  --text:#1a2130;--text2:#5c6474;--text3:#9aa2b2;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);font-size:14px;-webkit-font-smoothing:antialiased;transition:background .15s,color .15s}
 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 input,select{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:13px;outline:none;font-family:inherit}
 input:focus,select:focus{border-color:var(--accent-wb)}

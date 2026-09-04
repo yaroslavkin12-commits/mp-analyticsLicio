@@ -42,6 +42,24 @@ function sizeRank(s) {
   return Number.isFinite(n) ? 1000 + n : 2000;
 }
 
+function StatTile({ label, value }) {
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 16px', minWidth: 120 }}>
+      <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700 }}>{value.toLocaleString('ru')}</div>
+    </div>
+  );
+}
+
+function Chip({ label, value }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--surface2)', borderRadius: 7, padding: '5px 10px', fontSize: 12 }}>
+      <span style={{ color: 'var(--text2)' }}>{label}</span>
+      <span style={{ fontWeight: 700 }}>{value.toLocaleString('ru')}</span>
+    </div>
+  );
+}
+
 export default function Stocks({ platform: platformProp }) {
   const [raw, setRaw] = useState({ products: [], categories: [] });
   const [loading, setLoading] = useState(true);
@@ -51,6 +69,7 @@ export default function Stocks({ platform: platformProp }) {
   const [fulfillment, setFulfillment] = useState('all');
   const [gender, setGender] = useState('all');
   const [expanded, setExpanded] = useState(() => new Set());
+  const [showBreakdown, setShowBreakdown] = useState(false);
 
   // Общий переключатель площадки в шапке дашборда тоже должен управлять этой
   // страницей — но локальные кнопки ниже позволяют переопределить его здесь же.
@@ -74,6 +93,34 @@ export default function Stocks({ platform: platformProp }) {
         return { ...p, sizes, total };
       });
   }, [raw, search, category, gender, platform, fulfillment]);
+
+  // Сводка по текущему набору строк (учитывает поиск/категорию/пол/площадку,
+  // но ФБО и ФБС считаются независимо от переключателя ФБО/ФБС — чтобы всегда
+  // было видно соотношение, а не только то, что выбрано в фильтре).
+  const stats = useMemo(() => {
+    let fbo = 0, fbs = 0;
+    const byCategory = new Map();
+    const byWarehouse = new Map();
+    for (const p of rows) {
+      let pFbo = 0, pFbs = 0;
+      for (const sz of p.sizes) {
+        pFbo += qtyOf(sz, platform, 'fbo');
+        pFbs += qtyOf(sz, platform, 'fbs');
+      }
+      fbo += pFbo; fbs += pFbs;
+      byCategory.set(p.category, (byCategory.get(p.category) || 0) + pFbo + pFbs);
+      for (const w of p.wbFbsWarehouses) {
+        byWarehouse.set(w.warehouse, (byWarehouse.get(w.warehouse) || 0) + w.qty);
+      }
+    }
+    return {
+      fbo, fbs, total: fbo + fbs, count: rows.length,
+      categories: [...byCategory.entries()].sort((a, b) => b[1] - a[1]),
+      warehouses: [...byWarehouse.entries()].sort((a, b) => b[1] - a[1]),
+    };
+  }, [rows, platform]);
+
+  const footerTotal = useMemo(() => rows.reduce((sum, p) => sum + p.total, 0), [rows]);
 
   const toggle = article => setExpanded(prev => {
     const next = new Set(prev);
@@ -110,6 +157,40 @@ export default function Stocks({ platform: platformProp }) {
         </div>
       </div>
 
+      {!loading && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <StatTile label="Товаров" value={stats.count} />
+            <StatTile label="Итого (ФБО+ФБС)" value={stats.total} />
+            <StatTile label="ФБО" value={stats.fbo} />
+            <StatTile label="ФБС" value={stats.fbs} />
+          </div>
+
+          <button
+            onClick={() => setShowBreakdown(v => !v)}
+            style={{ alignSelf: 'flex-start', border: 'none', background: 'transparent', color: 'var(--text2)', fontSize: 12, padding: '2px 0' }}
+          >
+            {showBreakdown ? '▾' : '▸'} Разбивка по категориям и складам ФБС
+          </button>
+
+          {showBreakdown && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {stats.categories.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {stats.categories.map(([cat, qty]) => <Chip key={cat} label={cat} value={qty} />)}
+                </div>
+              )}
+              {stats.warehouses.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>ФБС по складам:</span>
+                  {stats.warehouses.map(([wh, qty]) => <Chip key={wh} label={wh} value={qty} />)}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
         {loading ? <div style={{ padding: 32, textAlign: 'center', color: 'var(--text2)' }}>Загрузка...</div>
           : rows.length === 0 ? <div style={{ padding: 40, textAlign: 'center', color: 'var(--text2)' }}>Ничего не найдено</div>
@@ -132,7 +213,18 @@ export default function Stocks({ platform: platformProp }) {
                       <td style={{ padding: '8px 12px', width: 20, color: 'var(--text2)' }}>{isOpen ? '▾' : '▸'}</td>
                       <td style={{ padding: '8px 12px' }}>
                         {p.photoUrl
-                          ? <img src={p.photoUrl} alt="" style={{ width: 40, height: 52, objectFit: 'cover', borderRadius: 6, background: 'var(--surface2)' }} onError={e => { e.target.style.visibility = 'hidden'; }} />
+                          ? <img
+                              src={p.photoUrl}
+                              alt=""
+                              style={{ width: 40, height: 52, objectFit: 'cover', borderRadius: 6, background: 'var(--surface2)' }}
+                              onError={e => {
+                                if (p.photoUrlAlt && e.target.src !== p.photoUrlAlt) {
+                                  e.target.src = p.photoUrlAlt;
+                                } else {
+                                  e.target.style.visibility = 'hidden';
+                                }
+                              }}
+                            />
                           : <div style={{ width: 40, height: 52, borderRadius: 6, background: 'var(--surface2)' }} />}
                       </td>
                       <td style={{ padding: '8px 12px', fontWeight: 600 }}>
@@ -190,6 +282,13 @@ export default function Stocks({ platform: platformProp }) {
                 );
               })}
             </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={5} style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--text2)', borderTop: '1px solid var(--border)' }}>Итого по фильтру:</td>
+                <td style={{ padding: '10px 12px', fontWeight: 700, borderTop: '1px solid var(--border)' }}>{footerTotal.toLocaleString('ru')}</td>
+                <td style={{ borderTop: '1px solid var(--border)' }}></td>
+              </tr>
+            </tfoot>
           </table>
         )}
       </div>

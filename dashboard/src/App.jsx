@@ -1,26 +1,25 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
-import Overview from './pages/Overview';
-import SalesAnalytics from './pages/SalesAnalytics';
 import Stocks from './pages/Stocks';
-import Ads from './pages/Ads';
 import Settings from './pages/Settings';
-import DateRangePicker from './components/DateRangePicker';
-import dayjs from 'dayjs';
 
-const PAGES = { overview: Overview, analytics: SalesAnalytics, stocks: Stocks, ads: Ads, settings: Settings };
+const PAGES = { stocks: Stocks, settings: Settings };
 
-// Страницы у которых свой датпикер
-const SELF_DATE = ['analytics'];
+const THEME_KEY = 'mp-theme';
 
 export default function App() {
-  const [page, setPage]     = useState('overview');
+  const [page, setPage]     = useState('stocks');
   const [platform, setPlatform] = useState('all');
-  const [dateFrom, setDateFrom] = useState(dayjs().subtract(30,'day').format('YYYY-MM-DD'));
-  const [dateTo,   setDateTo]   = useState(dayjs().format('YYYY-MM-DD'));
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch(e) { return 'dark'; }
+  });
 
-  const Page = PAGES[page] || Overview;
-  const showTopDate = !SELF_DATE.includes(page);
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch(e) { /* ignore */ }
+  }, [theme]);
+
+  const Page = PAGES[page] || Stocks;
 
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
@@ -40,19 +39,18 @@ export default function App() {
             ))}
           </div>
 
-          {/* Датпикер только для страниц без своего */}
-          {showTopDate && (
-            <div style={{ marginLeft:'auto' }}>
-              <DateRangePicker
-                from={dateFrom} to={dateTo}
-                onChange={(f,t) => { setDateFrom(f); setDateTo(t); }}
-              />
-            </div>
-          )}
+          <button
+            onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+            title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+            style={{ marginLeft:'auto', display:'flex', alignItems:'center', justifyContent:'center',
+              width:32, height:32, borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', fontSize:15 }}
+          >
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
         </div>
 
         <div style={{ flex:1, overflow:'auto', padding:18 }}>
-          <Page platform={platform} dateFrom={dateFrom} dateTo={dateTo}/>
+          <Page platform={platform}/>
         </div>
       </div>
     </div>
