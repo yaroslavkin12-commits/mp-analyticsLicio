@@ -474,26 +474,50 @@ router.get('/collection-log', async (req, res) => {
 });
 
 
-// ВРЕМЕННЫЙ диагностический роут — смотрим сырые заказы Ozon у границы суток,
-// чтобы понять причину расхождения "Заказано на сумму" за один день с кабинетом.
-router.get('/debug-ozon-day', async (req, res) => {
+// ВРЕМЕННЫЙ диагностический роут — сырые тайминги заказов Ozon у границы суток,
+// напрямую из API Ozon (не из нашей БД), чтобы понять, по какой временной
+// зоне группирует дни кабинет Ozon (подозрение на UTC vs МСК).
+router.get('/debug-ozon-raw-times', async (req, res) => {
   try {
-    const rows = await query(`
-      SELECT date, posting_number, sku, price, quantity, status,
-             price*quantity as line_sum
-      FROM ozon_orders
-      WHERE date IN ('2026-09-06','2026-09-07','2026-09-08')
-      ORDER BY date, posting_number
-    `);
-    const byDate = {};
-    for (const r of rows) {
-      byDate[r.date] = byDate[r.date] || { count: 0, qty: 0, sum: 0, rows: [] };
-      byDate[r.date].count++;
-      byDate[r.date].qty += Number(r.quantity);
-      byDate[r.date].sum += Number(r.line_sum);
-      byDate[r.date].rows.push(r);
+    const axios = require('axios');
+    const dayjs = require('dayjs');
+    const headers = {
+      'Client-Id': process.env.OZON_CLIENT_ID,
+      'Api-Key': process.env.OZON_API_KEY,
+      'Content-Type': 'application/json',
+    };
+    const since = '2026-09-06T00:00:00.000Z';
+    const to = '2026-09-09T00:00:00.000Z';
+    async function fetchAll(url) {
+      let offset = 0, all = [];
+      while (true) {
+        const { data } = await axios.post(url, {
+          dir: 'ASC', filter: { since, to, status: '' }, limit: 100, offset,
+        }, { headers, timeout: 60000 });
+        let postings = data?.result?.postings;
+        if (!Array.isArray(postings) && Array.isArray(data?.result)) postings = data.result;
+        postings = postings || [];
+        all = all.concat(postings);
+        if (postings.length < 100) break;
+        offset += 100;
+      }
+      return all;
     }
-    res.json({ success: true, data: byDate });
+    const [fbo, fbs] = await Promise.all([
+      fetchAll('https://api-seller.ozon.ru/v2/posting/fbo/list'),
+      fetchAll('https://api-seller.ozon.ru/v3/posting/fbs/list'),
+    ]);
+    const all = [...fbo, ...fbs];
+    const rows = all.map(p => ({
+      posting_number: p.posting_number,
+      created_at: p.created_at,
+      in_process_at: p.in_process_at,
+      status: p.status,
+      utc_date: dayjs(p.in_process_at || p.created_at).format('YYYY-MM-DD'),
+      msk_date: dayjs(p.in_process_at || p.created_at).utcOffset(180).format('YYYY-MM-DD'),
+      products: (p.products||[]).map(pr => ({ price: pr.price, quantity: pr.quantity })),
+    })).filter(r => r.utc_date !== r.msk_date || ['2026-09-06','2026-09-07','2026-09-08'].includes(r.utc_date) || ['2026-09-06','2026-09-07','2026-09-08'].includes(r.msk_date));
+    res.json({ success: true, total: all.length, mismatches: rows.filter(r=>r.utc_date!==r.msk_date).length, data: rows });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
   }
