@@ -473,4 +473,30 @@ router.get('/collection-log', async (req, res) => {
   }
 });
 
+
+// ВРЕМЕННЫЙ диагностический роут — смотрим сырые заказы Ozon у границы суток,
+// чтобы понять причину расхождения "Заказано на сумму" за один день с кабинетом.
+router.get('/debug-ozon-day', async (req, res) => {
+  try {
+    const rows = await query(`
+      SELECT date, posting_number, sku, price, quantity, status,
+             price*quantity as line_sum
+      FROM ozon_orders
+      WHERE date IN ('2026-09-06','2026-09-07','2026-09-08')
+      ORDER BY date, posting_number
+    `);
+    const byDate = {};
+    for (const r of rows) {
+      byDate[r.date] = byDate[r.date] || { count: 0, qty: 0, sum: 0, rows: [] };
+      byDate[r.date].count++;
+      byDate[r.date].qty += Number(r.quantity);
+      byDate[r.date].sum += Number(r.line_sum);
+      byDate[r.date].rows.push(r);
+    }
+    res.json({ success: true, data: byDate });
+  } catch(e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
