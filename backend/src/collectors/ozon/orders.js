@@ -10,11 +10,18 @@ function headers() {
   };
 }
 
+// Ozon отдаёт created_at/in_process_at в UTC, но кабинет Ozon (и сам продавец)
+// считает "день заказа" по московскому времени — без этой поправки заказы,
+// оформленные в последние ~3 часа суток по МСК, попадали в предыдущий
+// UTC-день и портили дневные суммы (например, за 07.09 расходилось на
+// 3 113 ₽/1 шт — ровно на заказы у границы полуночи МСК).
+function mskDate(isoString) {
+  return new Date(new Date(isoString).getTime() + 3 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 // Собирает заказы из одного источника (FBO или FBS).
 // ВАЖНО: список отправлений FBO у Ozon — это v2/posting/fbo/list, а не v3
-// (v3 существует только для FBS) — раньше здесь ошибочно стоял v3 и для FBO,
-// из-за чего запрос тихо возвращал 0 отправлений без ошибки, и в подсчёт
-// заказов попадала только половина (FBS).
+// (v3 существует только для FBS).
 async function fetchPostings(url, dateFrom) {
   const since = dayjs(dateFrom).toISOString();
   let offset = 0;
@@ -69,10 +76,7 @@ async function collectOrders(dateFrom) {
   for (const p of allPostings) {
     for (const prod of p.products || []) {
       try {
-        // financial_data.products матчится по product_id, а не по sku (это
-        // разные поля в ответе Ozon) — раньше матчинг шёл по sku, поэтому
-        // find() никогда не находил строку и commission/payout всегда
-        // писались нулями.
+        // financial_data.products матчится по product_id, а не по sku.
         const fin = p.financial_data?.products?.find(f => f.product_id === prod.sku) || {};
         await query(
           `INSERT INTO ozon_orders
@@ -80,10 +84,10 @@ async function collectOrders(dateFrom) {
              price, quantity, commission_amount, commission_percent, payout, status, warehouse_name)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT (posting_number, sku) DO UPDATE SET
-             status=EXCLUDED.status, payout=EXCLUDED.payout,
+             date=EXCLUDED.date, status=EXCLUDED.status, payout=EXCLUDED.payout,
              commission_amount=EXCLUDED.commission_amount, commission_percent=EXCLUDED.commission_percent`,
           [
-            dayjs(p.in_process_at || p.created_at).format('YYYY-MM-DD'),
+            mskDate(p.in_process_at || p.created_at),
             p.posting_number,
             p.order_id || null,
             prod.sku,
