@@ -514,7 +514,7 @@ router.get('/debug-ozon-raw-times', async (req, res) => {
       in_process_at: p.in_process_at,
       status: p.status,
       utc_date: dayjs(p.in_process_at || p.created_at).format('YYYY-MM-DD'),
-      msk_date: dayjs(p.in_process_at || p.created_at).utcOffset(180).format('YYYY-MM-DD'),
+      msk_date: new Date(new Date(p.in_process_at || p.created_at).getTime() + 3*3600*1000).toISOString().slice(0,10),
       products: (p.products||[]).map(pr => ({ price: pr.price, quantity: pr.quantity })),
     })).filter(r => r.utc_date !== r.msk_date || ['2026-09-06','2026-09-07','2026-09-08'].includes(r.utc_date) || ['2026-09-06','2026-09-07','2026-09-08'].includes(r.msk_date));
     res.json({ success: true, total: all.length, mismatches: rows.filter(r=>r.utc_date!==r.msk_date).length, data: rows });
