@@ -2,6 +2,8 @@ import axios from 'axios';
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
 export const getOverview    = p => api.get('/dashboard/overview', { params: p });
 export const getChart       = p => api.get('/dashboard/chart',    { params: p });
+
+export const getCategories  = () => api.get('/dashboard/categories');
 export const getStocks      = p => api.get('/dashboard/stocks',   { params: p });
 export const getStocksV2    = () => api.get('/dashboard/stocks-v2');
 export const getLog         = () => api.get('/dashboard/collection-log');

@@ -2,6 +2,8 @@ const express = require('express');
 const router  = express.Router();
 const { query } = require('../db');
 const dayjs = require('dayjs');
+const { parseArticle } = require('../lib/articleGrouping');
+const { detectCategory, ALL_CATEGORY_LABELS } = require('../lib/productTaxonomy');
 
 // Себестоимость (product_costs, вводится вручную в Настройках) даёт нам
 // возможность прикинуть чистую прибыль и маржинальность. Важная оговорка,
@@ -15,122 +17,133 @@ const dayjs = require('dayjs');
 // маркетплейса пока не вычитается. Когда payout стабилизируется, стоит
 // переключить на него.
 
-// GET /api/dashboard/overview?platform=all&dateFrom=&dateTo=
+// ---- категоризация и загрузка "сырых" строк ----
+//
+// Категория определяется по базовому артикулу через ту же таксономию, что
+// и на странице Остатки (lib/productTaxonomy), а не по "родным" категориям
+// WB/Ozon — те слишком разнородны между площадками для общего фильтра.
+// Артикул WB (supplier_article) уже является базовым; артикул Ozon
+// (offer_id) содержит ещё и размер в конце — его сначала разбираем через
+// parseArticle (lib/articleGrouping), как и на Остатках.
+//
+// Фильтрация по категории считается в JS (не в SQL), поэтому тянем сырые
+// строки за период без группировки и агрегируем сами — и для /overview
+// (итог за период), и для /chart (по дням). Объёмы данных у отдельного
+// продавца небольшие (сотни-тысячи строк в месяц), так что это не проблема
+// производительности.
+
+function ozonCategoryOf(offerId) {
+  return detectCategory(parseArticle(offerId).baseArticle);
+}
+function wbCategoryOf(supplierArticle) {
+  return detectCategory(supplierArticle);
+}
+
+async function loadWbRaw(from, to) {
+  const [orders, sales, ads, costs] = await Promise.all([
+    query(`SELECT date::text as date, nm_id, supplier_article, total_price, is_cancel FROM wb_orders WHERE date BETWEEN $1 AND $2`, [from, to]),
+    query(`SELECT date::text as date, nm_id, supplier_article, for_pay FROM wb_sales WHERE date BETWEEN $1 AND $2`, [from, to]),
+    query(`SELECT date::text as date, nm_id, spend FROM wb_ads WHERE date BETWEEN $1 AND $2`, [from, to]),
+    query(`SELECT article, cost_price FROM product_costs WHERE platform='wb'`),
+  ]);
+
+  // wb_ads даёт nm_id, а не supplier_article — строим карту соответствия
+  // по уже загруженным заказам/продажам, чтобы можно было фильтровать
+  // расходы на рекламу по той же категории.
+  const nmToArticle = new Map();
+  for (const r of orders) if (r.nm_id != null && r.supplier_article) nmToArticle.set(String(r.nm_id), r.supplier_article);
+  for (const r of sales)  if (r.nm_id != null && r.supplier_article) nmToArticle.set(String(r.nm_id), r.supplier_article);
+
+  const costByArticle = new Map(costs.map(c => [c.article, Number(c.cost_price) || 0]));
+
+  for (const r of orders) r.category = wbCategoryOf(r.supplier_article);
+  for (const r of sales)  { r.category = wbCategoryOf(r.supplier_article); r.cost = costByArticle.get(r.supplier_article) || 0; }
+  for (const r of ads)    r.category = wbCategoryOf(nmToArticle.get(String(r.nm_id)) || '');
+
+  return { orders, sales, ads };
+}
+
+async function loadOzonRaw(from, to) {
+  const [orders, ads, costs, analytics] = await Promise.all([
+    query(`SELECT date::text as date, offer_id, price, quantity, status FROM ozon_orders WHERE date BETWEEN $1 AND $2`, [from, to]),
+    query(`SELECT date::text as date, offer_id, spend FROM ozon_ads WHERE date BETWEEN $1 AND $2`, [from, to]),
+    query(`SELECT article, cost_price FROM product_costs WHERE platform='ozon'`),
+    query(`SELECT date::text as date, offer_id, hits_view, hits_view_pdp, hits_tocart FROM ozon_analytics WHERE date BETWEEN $1 AND $2`, [from, to]),
+  ]);
+
+  const costByArticle = new Map(costs.map(c => [c.article, Number(c.cost_price) || 0]));
+
+  for (const r of orders)    { r.category = ozonCategoryOf(r.offer_id); r.cost = (costByArticle.get(r.offer_id) || 0) * (Number(r.quantity) || 1); }
+  for (const r of ads)       r.category = ozonCategoryOf(r.offer_id);
+  for (const r of analytics) r.category = ozonCategoryOf(r.offer_id);
+
+  return { orders, ads, analytics };
+}
+
+function byCat(rows, category) {
+  return category ? rows.filter(r => r.category === category) : rows;
+}
+function num(v) { return Number(v || 0); }
+function pct1(a, b) { return b > 0 ? +((a / b) * 100).toFixed(1) : 0; }
+
+// GET /api/dashboard/categories — список категорий для фильтра (тот же
+// справочник, что и на Остатках).
+router.get('/categories', (req, res) => {
+  res.json({ success: true, data: ALL_CATEGORY_LABELS.concat('Другое') });
+});
+
+// GET /api/dashboard/overview?platform=all&dateFrom=&dateTo=&category=
 router.get('/overview', async (req, res) => {
   try {
-    const { platform = 'all', dateFrom, dateTo } = req.query;
+    const { platform = 'all', dateFrom, dateTo, category } = req.query;
     const from = dateFrom || dayjs().subtract(30,'day').format('YYYY-MM-DD');
     const to   = dateTo   || dayjs().format('YYYY-MM-DD');
+    const cat = category && category !== 'all' ? category : null;
     const result = {};
 
     if (platform === 'all' || platform === 'wb') {
-      // Сумма заказов = ВСЕ заказы (total_price до скидки продавца — как в WB аналитике)
-      const [wbO] = await query(`
-        SELECT
-          COUNT(*) FILTER (WHERE is_cancel = false)              as orders_qty,
-          SUM(total_price) FILTER (WHERE is_cancel = false)      as orders_sum
-        FROM wb_orders WHERE date BETWEEN $1 AND $2
-      `, [from, to]);
+      const { orders, sales, ads } = await loadWbRaw(from, to);
+      const o = byCat(orders, cat).filter(r => !r.is_cancel);
+      const s = byCat(sales, cat);
+      const a = byCat(ads, cat);
 
-      // Выручка = фактические продажи (for_pay) из wb_sales (что выкупили и оплатили)
-      const [wbS] = await query(`
-        SELECT
-          COUNT(*)     as sales_qty,
-          SUM(for_pay) as revenue
-        FROM wb_sales WHERE date BETWEEN $1 AND $2
-      `, [from, to]);
-
-      const [wbA] = await query(`
-        SELECT SUM(spend) as spend FROM wb_ads WHERE date BETWEEN $1 AND $2
-      `, [from, to]);
-
-      // Себестоимость проданного — джойним каждую строку продажи (1 шт. на
-      // строку в wb_sales) с себестоимостью по артикулу из Настроек.
-      const [wbC] = await query(`
-        SELECT COALESCE(SUM(pc.cost_price), 0) as cost_sum
-        FROM wb_sales s
-        JOIN product_costs pc ON pc.platform = 'wb' AND pc.article = s.supplier_article
-        WHERE s.date BETWEEN $1 AND $2
-      `, [from, to]);
-
-      const ordersQty = Number(wbO?.orders_qty || 0);
-      const ordersSum = Number(wbO?.orders_sum || 0);
-      const salesQty  = Number(wbS?.sales_qty  || 0);
-      const revenue   = Number(wbS?.revenue    || 0);
-      const adSpend   = Number(wbA?.spend      || 0);
-      const costSum   = Number(wbC?.cost_sum   || 0);
+      const ordersQty = o.length;
+      const ordersSum = o.reduce((sum, r) => sum + num(r.total_price), 0);
+      const salesQty  = s.length;
+      const revenue   = s.reduce((sum, r) => sum + num(r.for_pay), 0);
+      const adSpend   = a.reduce((sum, r) => sum + num(r.spend), 0);
+      const costSum   = s.reduce((sum, r) => sum + num(r.cost), 0);
       const netProfit = revenue - costSum - adSpend;
 
       result.wb = {
-        orders_sum:      ordersSum,
-        orders_qty:      ordersQty,
-        revenue:         revenue,
-        sales_qty:       salesQty,
-        redemption_rate: ordersQty > 0 ? (salesQty / ordersQty * 100).toFixed(1) : 0,
-        ad_spend:        adSpend,
-        drr:             ordersSum > 0 ? (adSpend / ordersSum * 100).toFixed(1) : 0,
-        cost_sum:        costSum,
-        net_profit:      netProfit,
-        margin_pct:      revenue > 0 ? (netProfit / revenue * 100).toFixed(1) : 0,
+        orders_sum: ordersSum, orders_qty: ordersQty, revenue, sales_qty: salesQty,
+        redemption_rate: pct1(salesQty, ordersQty).toFixed(1),
+        ad_spend: adSpend, drr: pct1(adSpend, ordersSum).toFixed(1),
+        cost_sum: costSum, net_profit: netProfit,
+        margin_pct: pct1(netProfit, revenue).toFixed(1),
       };
     }
 
     if (platform === 'all' || platform === 'ozon') {
-      // Сумма заказов = ВСЕ заказы включая отменённые (как в Ozon аналитике "Заказано на сумму")
-      const [ozAll] = await query(`
-        SELECT
-          SUM(quantity)         as orders_qty,
-          SUM(price * quantity) as orders_sum
-        FROM ozon_orders
-        WHERE date BETWEEN $1 AND $2
-      `, [from, to]);
+      const { orders, ads } = await loadOzonRaw(from, to);
+      const oAll = byCat(orders, cat);
+      const oDel = oAll.filter(r => r.status === 'delivered');
+      const a = byCat(ads, cat);
 
-      // Выручка / Продажи = фактическая продажа — статус "delivered" (= "Доставлено" в кабинете Ozon,
-      // товар получен и оплачен покупателем). "Выкуплено" в отчётах Ozon — это НЕ то же самое: туда
-      // попадают заказы ещё в пути / ожидающие клиента в ПВЗ, которые ещё не факт продажи.
-      // Выручку считаем по price*quantity (сумма, которую заплатил покупатель), а не по payout —
-      // payout (нетто-выплата после комиссии) заполняется Ozon с задержкой и первое время после
-      // доставки часто равен 0, из-за чего "Выручка" на дашборде обнулялась.
-      const [ozDel] = await query(`
-        SELECT
-          SUM(quantity)         as sales_qty,
-          SUM(price * quantity) as revenue
-        FROM ozon_orders
-        WHERE date BETWEEN $1 AND $2
-          AND status = 'delivered'
-      `, [from, to]);
-
-      const [ozA] = await query(`
-        SELECT SUM(spend) as spend FROM ozon_ads WHERE date BETWEEN $1 AND $2
-      `, [from, to]);
-
-      // Себестоимость проданного (delivered) — cost_price за штуку * количество.
-      const [ozC] = await query(`
-        SELECT COALESCE(SUM(pc.cost_price * o.quantity), 0) as cost_sum
-        FROM ozon_orders o
-        JOIN product_costs pc ON pc.platform = 'ozon' AND pc.article = o.offer_id
-        WHERE o.date BETWEEN $1 AND $2 AND o.status = 'delivered'
-      `, [from, to]);
-
-      const ordersQty = Number(ozAll?.orders_qty || 0);
-      const ordersSum = Number(ozAll?.orders_sum || 0);
-      const salesQty  = Number(ozDel?.sales_qty  || 0);
-      const revenue   = Number(ozDel?.revenue    || 0);
-      const adSpend   = Number(ozA?.spend        || 0);
-      const costSum   = Number(ozC?.cost_sum     || 0);
+      const ordersQty = oAll.reduce((sum, r) => sum + num(r.quantity || 1), 0);
+      const ordersSum = oAll.reduce((sum, r) => sum + num(r.price) * num(r.quantity || 1), 0);
+      const salesQty  = oDel.reduce((sum, r) => sum + num(r.quantity || 1), 0);
+      const revenue   = oDel.reduce((sum, r) => sum + num(r.price) * num(r.quantity || 1), 0);
+      const adSpend   = a.reduce((sum, r) => sum + num(r.spend), 0);
+      const costSum   = oDel.reduce((sum, r) => sum + num(r.cost), 0);
       const netProfit = revenue - costSum - adSpend;
 
       result.ozon = {
-        orders_sum:      ordersSum,
-        orders_qty:      ordersQty,
-        revenue:         revenue,
-        sales_qty:       salesQty,
-        redemption_rate: ordersQty > 0 ? (salesQty / ordersQty * 100).toFixed(1) : 0,
-        ad_spend:        adSpend,
-        drr:             ordersSum > 0 ? (adSpend / ordersSum * 100).toFixed(1) : 0,
-        cost_sum:        costSum,
-        net_profit:      netProfit,
-        margin_pct:      revenue > 0 ? (netProfit / revenue * 100).toFixed(1) : 0,
+        orders_sum: ordersSum, orders_qty: ordersQty, revenue, sales_qty: salesQty,
+        redemption_rate: pct1(salesQty, ordersQty).toFixed(1),
+        ad_spend: adSpend, drr: pct1(adSpend, ordersSum).toFixed(1),
+        cost_sum: costSum, net_profit: netProfit,
+        margin_pct: pct1(netProfit, revenue).toFixed(1),
       };
     }
 
@@ -145,16 +158,11 @@ router.get('/overview', async (req, res) => {
       const netProfit = result.wb.net_profit + result.ozon.net_profit;
 
       result.all = {
-        orders_sum:      ordersSum,
-        orders_qty:      ordersQty,
-        revenue:         revenue,
-        sales_qty:       salesQty,
-        redemption_rate: ordersQty > 0 ? (salesQty / ordersQty * 100).toFixed(1) : 0,
-        ad_spend:        adSpend,
-        drr:             ordersSum > 0 ? (adSpend / ordersSum * 100).toFixed(1) : 0,
-        cost_sum:        result.wb.cost_sum + result.ozon.cost_sum,
-        net_profit:      netProfit,
-        margin_pct:      revenue > 0 ? (netProfit / revenue * 100).toFixed(1) : 0,
+        orders_sum: ordersSum, orders_qty: ordersQty, revenue, sales_qty: salesQty,
+        redemption_rate: pct1(salesQty, ordersQty).toFixed(1),
+        ad_spend: adSpend, drr: pct1(adSpend, ordersSum).toFixed(1),
+        cost_sum: result.wb.cost_sum + result.ozon.cost_sum, net_profit: netProfit,
+        margin_pct: pct1(netProfit, revenue).toFixed(1),
       };
     }
 
@@ -165,129 +173,128 @@ router.get('/overview', async (req, res) => {
   }
 });
 
-// Объединяет несколько массивов вида [{date, ...поля}] в один по датам —
-// чтобы не писать один гигантский SQL-джойн на несколько независимых
-// источников (заказы/продажи/себестоимость/реклама лежат в разных таблицах).
-function mergeByDate(...parts) {
-  const map = new Map();
-  for (const part of parts) {
-    for (const row of part) {
-      const rec = map.get(row.date) || { date: row.date };
-      Object.assign(rec, row);
-      map.delete(row.date);
-      map.set(row.date, rec);
-    }
+function groupByDate(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    if (!m.has(r.date)) m.set(r.date, []);
+    m.get(r.date).push(r);
   }
-  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+  return m;
+}
+function allDatesOf(...maps) {
+  const s = new Set();
+  for (const m of maps) for (const d of m.keys()) s.add(d);
+  return [...s].sort();
 }
 
-function num(v) { return Number(v || 0); }
-
-// Достраивает производные метрики (% выкупа, прибыль, % маржинальности) поверх
-// уже слитых по датам "сырых" сумм — общая логика для WB и Ozon.
-function withDerived(rows) {
-  return rows.map(r => {
-    const ordersQty = num(r.orders_qty);
-    const salesQty  = num(r.sales_qty);
-    const salesSum  = num(r.sales_sum);
-    const costSum   = num(r.cost_sum);
-    const adSpend   = num(r.ad_spend);
-    const netProfit = salesSum - costSum - adSpend;
-    return {
-      date: r.date,
-      orders_sum:     num(r.orders_sum),
-      orders_qty:     ordersQty,
-      sales_sum:      salesSum,
-      sales_qty:      salesQty,
-      redemption_pct: ordersQty > 0 ? +(salesQty / ordersQty * 100).toFixed(1) : 0,
-      net_profit:     netProfit,
-      margin_pct:     salesSum > 0 ? +(netProfit / salesSum * 100).toFixed(1) : 0,
-    };
-  });
-}
-
-// GET /api/dashboard/chart?platform=all&dateFrom=&dateTo=
+// GET /api/dashboard/chart?platform=all&dateFrom=&dateTo=&category=
 // По дням: заказы (₽/шт), продажи-выкуп (₽/шт), % выкупа, чистая прибыль,
-// % маржинальность — для гибкого графика на Дашборде (метрики выбирает
-// фронт, здесь отдаём все посчитанные разом, чтобы не дёргать API на
-// каждое переключение метрики).
+// % маржинальности, ДРР, расходы на рекламу, а для Ozon ещё и воронка
+// (показы/переходы в карточку/добавления в корзину) — для гибкого графика
+// на Дашборде. Опциональный `category` фильтрует все метрики по одной
+// товарной категории (см. loadWbRaw/loadOzonRaw выше).
 router.get('/chart', async (req, res) => {
   try {
-    const { platform = 'all', dateFrom, dateTo } = req.query;
+    const { platform = 'all', dateFrom, dateTo, category } = req.query;
     const from = dateFrom || dayjs().subtract(30,'day').format('YYYY-MM-DD');
     const to   = dateTo   || dayjs().format('YYYY-MM-DD');
+    const cat = category && category !== 'all' ? category : null;
     const result = {};
 
+    let wbByDate = null, ozonByDate = null;
+
     if (platform === 'all' || platform === 'wb') {
-      const [orders, sales, cost, ads] = await Promise.all([
-        query(`
-          SELECT date::text as date,
-            SUM(total_price) FILTER (WHERE is_cancel=false) as orders_sum,
-            COUNT(*) FILTER (WHERE is_cancel=false) as orders_qty
-          FROM wb_orders WHERE date BETWEEN $1 AND $2 GROUP BY date
-        `, [from, to]),
-        query(`
-          SELECT date::text as date, COUNT(*) as sales_qty, SUM(for_pay) as sales_sum
-          FROM wb_sales WHERE date BETWEEN $1 AND $2 GROUP BY date
-        `, [from, to]),
-        query(`
-          SELECT s.date::text as date, COALESCE(SUM(pc.cost_price), 0) as cost_sum
-          FROM wb_sales s
-          JOIN product_costs pc ON pc.platform = 'wb' AND pc.article = s.supplier_article
-          WHERE s.date BETWEEN $1 AND $2 GROUP BY s.date
-        `, [from, to]),
-        query(`
-          SELECT date::text as date, SUM(spend) as ad_spend
-          FROM wb_ads WHERE date BETWEEN $1 AND $2 GROUP BY date
-        `, [from, to]),
-      ]);
-      result.wb = withDerived(mergeByDate(orders, sales, cost, ads));
+      const { orders, sales, ads } = await loadWbRaw(from, to);
+      const oByDate = groupByDate(byCat(orders, cat).filter(r => !r.is_cancel));
+      const sByDate = groupByDate(byCat(sales, cat));
+      const aByDate = groupByDate(byCat(ads, cat));
+      const dates = allDatesOf(oByDate, sByDate, aByDate);
+
+      wbByDate = new Map();
+      for (const date of dates) {
+        const o = oByDate.get(date) || [];
+        const s = sByDate.get(date) || [];
+        const a = aByDate.get(date) || [];
+        const ordersQty = o.length;
+        const ordersSum = o.reduce((sum, r) => sum + num(r.total_price), 0);
+        const salesQty  = s.length;
+        const salesSum  = s.reduce((sum, r) => sum + num(r.for_pay), 0);
+        const costSum   = s.reduce((sum, r) => sum + num(r.cost), 0);
+        const adSpend   = a.reduce((sum, r) => sum + num(r.spend), 0);
+        const netProfit = salesSum - costSum - adSpend;
+        wbByDate.set(date, {
+          date, orders_sum: ordersSum, orders_qty: ordersQty,
+          sales_sum: salesSum, sales_qty: salesQty, ad_spend: adSpend,
+          redemption_pct: pct1(salesQty, ordersQty),
+          drr_pct: pct1(adSpend, ordersSum),
+          net_profit: netProfit,
+          margin_pct: pct1(netProfit, salesSum),
+          impressions: 0, pdp_views: 0, add_to_cart: 0,
+        });
+      }
+      result.wb = dates.map(d => wbByDate.get(d));
     }
 
     if (platform === 'all' || platform === 'ozon') {
-      const [orders, sales, cost, ads] = await Promise.all([
-        query(`
-          SELECT date::text as date, SUM(price*quantity) as orders_sum, SUM(quantity) as orders_qty
-          FROM ozon_orders WHERE date BETWEEN $1 AND $2 GROUP BY date
-        `, [from, to]),
-        query(`
-          SELECT date::text as date, SUM(quantity) as sales_qty, SUM(price*quantity) as sales_sum
-          FROM ozon_orders WHERE date BETWEEN $1 AND $2 AND status = 'delivered' GROUP BY date
-        `, [from, to]),
-        query(`
-          SELECT o.date::text as date, COALESCE(SUM(pc.cost_price * o.quantity), 0) as cost_sum
-          FROM ozon_orders o
-          JOIN product_costs pc ON pc.platform = 'ozon' AND pc.article = o.offer_id
-          WHERE o.date BETWEEN $1 AND $2 AND o.status = 'delivered' GROUP BY o.date
-        `, [from, to]),
-        query(`
-          SELECT date::text as date, SUM(spend) as ad_spend
-          FROM ozon_ads WHERE date BETWEEN $1 AND $2 GROUP BY date
-        `, [from, to]),
-      ]);
-      result.ozon = withDerived(mergeByDate(orders, sales, cost, ads));
+      const { orders, ads, analytics } = await loadOzonRaw(from, to);
+      const allByDate = groupByDate(byCat(orders, cat));
+      const aByDate   = groupByDate(byCat(ads, cat));
+      const anByDate  = groupByDate(byCat(analytics, cat));
+      const dates = allDatesOf(allByDate, aByDate, anByDate);
+
+      ozonByDate = new Map();
+      for (const date of dates) {
+        const oAll = allByDate.get(date) || [];
+        const oDel = oAll.filter(r => r.status === 'delivered');
+        const a  = aByDate.get(date) || [];
+        const an = anByDate.get(date) || [];
+        const ordersQty = oAll.reduce((sum, r) => sum + num(r.quantity || 1), 0);
+        const ordersSum = oAll.reduce((sum, r) => sum + num(r.price) * num(r.quantity || 1), 0);
+        const salesQty  = oDel.reduce((sum, r) => sum + num(r.quantity || 1), 0);
+        const salesSum  = oDel.reduce((sum, r) => sum + num(r.price) * num(r.quantity || 1), 0);
+        const costSum   = oDel.reduce((sum, r) => sum + num(r.cost), 0);
+        const adSpend   = a.reduce((sum, r) => sum + num(r.spend), 0);
+        const netProfit = salesSum - costSum - adSpend;
+        const impressions = an.reduce((sum, r) => sum + num(r.hits_view), 0);
+        const pdpViews     = an.reduce((sum, r) => sum + num(r.hits_view_pdp), 0);
+        const addToCart    = an.reduce((sum, r) => sum + num(r.hits_tocart), 0);
+        ozonByDate.set(date, {
+          date, orders_sum: ordersSum, orders_qty: ordersQty,
+          sales_sum: salesSum, sales_qty: salesQty, ad_spend: adSpend,
+          redemption_pct: pct1(salesQty, ordersQty),
+          drr_pct: pct1(adSpend, ordersSum),
+          net_profit: netProfit,
+          margin_pct: pct1(netProfit, salesSum),
+          impressions, pdp_views: pdpViews, add_to_cart: addToCart,
+        });
+      }
+      result.ozon = dates.map(d => ozonByDate.get(d));
     }
 
-    // "Все площадки" — те же даты, суммируем денежные/количественные поля,
+    // "Все площадки" — те же даты, суммируем денежные/количественные поля
+    // (включая показы Ozon — WB просто не участвует в этой метрике),
     // проценты пересчитываем от суммы, а не усредняем.
-    if (result.wb && result.ozon) {
-      const byDate = new Map();
-      for (const r of [...result.wb, ...result.ozon]) {
-        const acc = byDate.get(r.date) || {
-          date: r.date, orders_sum: 0, orders_qty: 0, sales_sum: 0, sales_qty: 0, net_profit: 0,
+    if (wbByDate && ozonByDate) {
+      const dates = allDatesOf(wbByDate, ozonByDate);
+      result.all = dates.map(date => {
+        const w = wbByDate.get(date) || {};
+        const o = ozonByDate.get(date) || {};
+        const ordersSum = num(w.orders_sum) + num(o.orders_sum);
+        const ordersQty = num(w.orders_qty) + num(o.orders_qty);
+        const salesSum  = num(w.sales_sum)  + num(o.sales_sum);
+        const salesQty  = num(w.sales_qty)  + num(o.sales_qty);
+        const adSpend   = num(w.ad_spend)   + num(o.ad_spend);
+        const netProfit = num(w.net_profit) + num(o.net_profit);
+        return {
+          date, orders_sum: ordersSum, orders_qty: ordersQty,
+          sales_sum: salesSum, sales_qty: salesQty, ad_spend: adSpend,
+          redemption_pct: pct1(salesQty, ordersQty),
+          drr_pct: pct1(adSpend, ordersSum),
+          net_profit: netProfit,
+          margin_pct: pct1(netProfit, salesSum),
+          impressions: num(o.impressions), pdp_views: num(o.pdp_views), add_to_cart: num(o.add_to_cart),
         };
-        acc.orders_sum += r.orders_sum;
-        acc.orders_qty += r.orders_qty;
-        acc.sales_sum  += r.sales_sum;
-        acc.sales_qty  += r.sales_qty;
-        acc.net_profit += r.net_profit;
-        byDate.set(r.date, acc);
-      }
-      result.all = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).map(r => ({
-        ...r,
-        redemption_pct: r.orders_qty > 0 ? +(r.sales_qty / r.orders_qty * 100).toFixed(1) : 0,
-        margin_pct:     r.sales_sum > 0 ? +(r.net_profit / r.sales_sum * 100).toFixed(1) : 0,
-      }));
+      });
     }
 
     res.json({ success: true, data: result });
