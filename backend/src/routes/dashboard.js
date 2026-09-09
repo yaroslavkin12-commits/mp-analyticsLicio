@@ -3,7 +3,7 @@ const router  = express.Router();
 const { query } = require('../db');
 const dayjs = require('dayjs');
 const { parseArticle } = require('../lib/articleGrouping');
-const { detectCategory, ALL_CATEGORY_LABELS } = require('../lib/productTaxonomy');
+const { detectCategory, detectGender, ALL_CATEGORY_LABELS } = require('../lib/productTaxonomy');
 
 // Себестоимость (product_costs, вводится вручную в Настройках) даёт нам
 // возможность прикинуть чистую прибыль и маржинальность. Важная оговорка,
@@ -466,6 +466,81 @@ router.get('/stocks-v2', async (req, res) => {
 
     res.json({ success: true, data: { products: result, categories } });
   } catch(e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /api/dashboard/stocks-history?days=30
+// История остатков по дням. Снимок остатков хранится ровно один на
+// календарную дату (см. collectors/wb/stocks.js и collectors/ozon/stocks.js —
+// там DELETE+INSERT по snapshot_date перед каждой записью), поэтому история
+// по датам уже накоплена и ничего досчитывать заново не нужно. Отдаём по
+// каждому базовому артикулу сумму по размерам на каждую дату — этого
+// достаточно и для мини-графика в таблице на Остатках, и чтобы на фронте
+// посчитать агрегат по любой комбинации категория/пол/площадка через ту же
+// функцию qtyOf(), что уже используется для текущего (последнего) снимка.
+router.get('/stocks-history', async (req, res) => {
+  try {
+    const days = Math.min(60, Math.max(7, parseInt(req.query.days, 10) || 30));
+
+    const [wbRows, ozonRows] = await Promise.all([
+      query(`
+        SELECT snapshot_date::text as date, supplier_article, stock_type, quantity
+        FROM wb_stocks
+        WHERE snapshot_date >= CURRENT_DATE - $1::int AND supplier_article IS NOT NULL
+      `, [days]),
+      query(`
+        SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
+        FROM ozon_stocks
+        WHERE snapshot_date >= CURRENT_DATE - $1::int AND offer_id IS NOT NULL
+      `, [days]),
+    ]);
+
+    const products = new Map(); // baseArticle -> { category, gender, byDate: Map }
+    const dateSet = new Set();
+
+    function getProduct(baseArticle) {
+      if (!products.has(baseArticle)) {
+        products.set(baseArticle, {
+          category: detectCategory(baseArticle),
+          gender: detectGender(baseArticle),
+          byDate: new Map(),
+        });
+      }
+      return products.get(baseArticle);
+    }
+    function getDay(product, date) {
+      if (!product.byDate.has(date)) product.byDate.set(date, { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0 });
+      return product.byDate.get(date);
+    }
+
+    for (const r of wbRows) {
+      dateSet.add(r.date);
+      const p = getProduct(r.supplier_article);
+      const d = getDay(p, r.date);
+      const field = r.stock_type === 'fbs' ? 'wb_fbs' : 'wb_fbo';
+      d[field] += Number(r.quantity) || 0;
+    }
+    for (const r of ozonRows) {
+      dateSet.add(r.date);
+      const { baseArticle } = parseArticle(r.offer_id);
+      const p = getProduct(baseArticle);
+      const d = getDay(p, r.date);
+      d.ozon_fbo += Number(r.fbo_present) || 0;
+      d.ozon_fbs += Number(r.fbs_present) || 0;
+    }
+
+    const dates = [...dateSet].sort();
+    const productsOut = {};
+    for (const [baseArticle, p] of products) {
+      const byDate = {};
+      for (const [date, v] of p.byDate) byDate[date] = v;
+      productsOut[baseArticle] = { category: p.category, gender: p.gender, byDate };
+    }
+
+    res.json({ success: true, data: { dates, products: productsOut } });
+  } catch (e) {
+    console.error(e);
     res.status(500).json({ success: false, error: e.message });
   }
 });

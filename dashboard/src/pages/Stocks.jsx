@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getStocksV2 } from '../api';
+import { getStocksV2, getStocksHistory } from '../api';
 
 const PLATFORMS = [['all','Все'],['wb','WB'],['ozon','Ozon']];
 const FULFILLMENTS = [['all','FBO+FBS'],['fbo','FBO'],['fbs','FBS']];
@@ -12,6 +12,10 @@ const SORTS = [['article','По артикулу'],['qty_desc','Остаток: 
 // wb_fbs + ozon_fbs — это задвоит цифру. Берём максимум из двух значений
 // (площадки синкают выгрузку с небольшой задержкой друг относительно друга).
 // При выборе конкретной площадки показываем то, что реально видно на ней.
+//
+// Эта же функция используется и для истории по дням (см. ниже) — объект
+// {wb_fbo, wb_fbs, ozon_fbo, ozon_fbs} на дату имеет ту же форму, что и
+// текущий размер, поэтомуqtyOf() переиспользуется без изменений.
 function qtyOf(size, platform, fulfillment) {
   const wantFbo = fulfillment === 'all' || fulfillment === 'fbo';
   const wantFbs = fulfillment === 'all' || fulfillment === 'fbs';
@@ -102,11 +106,75 @@ async function exportStocksToExcel(rows, category) {
   XLSX.writeFile(wb, filename);
 }
 
-function StatTile({ label, value }) {
+// ---- история остатков (тренд) ----
+//
+// EMPTY_DAY подставляется, когда для товара нет записи на конкретную дату
+// (например его ещё не было в каталоге) — qtyOf() тогда просто вернёт 0.
+const EMPTY_DAY = Object.freeze({ wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0 });
+const HISTORY_WINDOW = 14;
+
+// Простой столбчатый спарклайн — остаток это ступенчатый уровень между
+// поставками и распродажами, столбики читаются под него естественнее, чем
+// сглаженная линия. Ноль всегда рисуется нулевой высотой (это тоже значимая
+// информация — товара нет), а маленькие ненулевые значения слегка
+// поднимаются, чтобы не терялись визуально рядом с большими.
+function BarSpark({ values, height = 26, width = 104, color = 'var(--series-1)', gap = 2 }) {
+  const max = Math.max(1, ...values);
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 16px', minWidth: 120 }}>
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap, height, width }}>
+      {values.map((v, i) => (
+        <div key={i} title={String(v)} style={{
+          flex: 1, minWidth: 1,
+          height: v === 0 ? 0 : `${Math.max(6, (v / max) * 100)}%`,
+          background: color, borderRadius: '1.5px 1.5px 0 0',
+        }} />
+      ))}
+    </div>
+  );
+}
+
+// Парный столбчатый график WB/Ozon по дням — для разворота строки.
+function DualBarSpark({ dates, wbValues, ozonValues, height = 60 }) {
+  const max = Math.max(1, ...wbValues, ...ozonValues);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height, width: '100%' }}>
+      {dates.map((d, i) => (
+        <div key={d} style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 1, minWidth: 0 }}>
+          <div title={`WB: ${wbValues[i]}`} style={{
+            flex: 1, height: wbValues[i] === 0 ? 0 : `${Math.max(4, (wbValues[i] / max) * 100)}%`,
+            background: 'var(--accent-wb)', borderRadius: '1.5px 1.5px 0 0',
+          }} />
+          <div title={`Ozon: ${ozonValues[i]}`} style={{
+            flex: 1, height: ozonValues[i] === 0 ? 0 : `${Math.max(4, (ozonValues[i] / max) * 100)}%`,
+            background: 'var(--accent-oz)', borderRadius: '1.5px 1.5px 0 0',
+          }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const HISTORY_MODES = {
+  total: { label: 'Итого (ФБО+ФБС)', color: 'var(--series-1)' },
+  fbo:   { label: 'ФБО',             color: 'var(--series-3)' },
+  fbs:   { label: 'ФБС',             color: 'var(--series-5)' },
+};
+
+function StatTile({ label, value, sparkValues, sparkColor, onClick, active }) {
+  const clickable = typeof onClick === 'function';
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        background: 'var(--surface)', border: `1px solid ${active ? sparkColor : 'var(--border)'}`, borderRadius: 'var(--radius)',
+        padding: '12px 16px', minWidth: 120, cursor: clickable ? 'pointer' : 'default', position: 'relative',
+      }}
+      title={clickable ? 'Показать тренд за 14 дней по текущему фильтру' : undefined}
+    >
+      {clickable && <span style={{ position: 'absolute', top: 8, right: 10, fontSize: 11, opacity: 0.55 }}>📈</span>}
       <div style={{ fontSize: 11, color: 'var(--text2)', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700 }}>{value.toLocaleString('ru')}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, marginBottom: sparkValues ? 6 : 0 }}>{value.toLocaleString('ru')}</div>
+      {sparkValues && <BarSpark values={sparkValues} height={16} width="100%" color={sparkColor} gap={1.5} />}
     </div>
   );
 }
@@ -123,6 +191,7 @@ function Chip({ label, value }) {
 export default function Stocks({ platform: platformProp }) {
   const [raw, setRaw] = useState({ products: [], categories: [] });
   const [loading, setLoading] = useState(true);
+  const [history, setHistory] = useState({ dates: [], products: {} });
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [platform, setPlatform] = useState(platformProp || 'all');
@@ -132,6 +201,7 @@ export default function Stocks({ platform: platformProp }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [historyMode, setHistoryMode] = useState(null); // null | 'total' | 'fbo' | 'fbs'
 
   // Общий переключатель площадки в шапке дашборда тоже должен управлять этой
   // страницей — но локальные кнопки ниже позволяют переопределить его здесь же.
@@ -141,6 +211,8 @@ export default function Stocks({ platform: platformProp }) {
     setLoading(true);
     getStocksV2().then(r => setRaw(r.data.data || { products: [], categories: [] }))
       .catch(console.error).finally(() => setLoading(false));
+    getStocksHistory(30).then(r => setHistory(r.data.data || { dates: [], products: {} }))
+      .catch(console.error);
   }, []);
 
   const rows = useMemo(() => {
@@ -187,6 +259,25 @@ export default function Stocks({ platform: platformProp }) {
   }, [rows, platform]);
 
   const footerTotal = useMemo(() => rows.reduce((sum, p) => sum + p.total, 0), [rows]);
+
+  // Последние HISTORY_WINDOW дат, за которые реально есть снимки остатков.
+  const historyDates = useMemo(() => history.dates.slice(-HISTORY_WINDOW), [history]);
+
+  // Тренд по сумме ТЕКУЩЕГО набора строк (тот же фильтр, что и в таблице и
+  // в Excel-экспорте) — отдельно fbo/fbs по дням, чтобы плитки могли
+  // показывать любой из трёх режимов без пересчёта.
+  const aggHistory = useMemo(() => {
+    if (!historyDates.length) return [];
+    return historyDates.map(date => {
+      let fbo = 0, fbs = 0;
+      for (const p of rows) {
+        const day = history.products[p.baseArticle]?.byDate?.[date] || EMPTY_DAY;
+        fbo += qtyOf(day, platform, 'fbo');
+        fbs += qtyOf(day, platform, 'fbs');
+      }
+      return { date, fbo, fbs, total: fbo + fbs };
+    });
+  }, [rows, history, historyDates, platform]);
 
   const toggle = article => setExpanded(prev => {
     const next = new Set(prev);
@@ -255,10 +346,42 @@ export default function Stocks({ platform: platformProp }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <StatTile label="Товаров" value={stats.count} />
-            <StatTile label="Итого (ФБО+ФБС)" value={stats.total} />
-            <StatTile label="ФБО" value={stats.fbo} />
-            <StatTile label="ФБС" value={stats.fbs} />
+            <StatTile
+              label="Итого (ФБО+ФБС)" value={stats.total}
+              sparkValues={aggHistory.length ? aggHistory.map(d => d.total) : null}
+              sparkColor={HISTORY_MODES.total.color}
+              active={historyMode === 'total'}
+              onClick={aggHistory.length ? () => setHistoryMode(m => m === 'total' ? null : 'total') : undefined}
+            />
+            <StatTile
+              label="ФБО" value={stats.fbo}
+              sparkValues={aggHistory.length ? aggHistory.map(d => d.fbo) : null}
+              sparkColor={HISTORY_MODES.fbo.color}
+              active={historyMode === 'fbo'}
+              onClick={aggHistory.length ? () => setHistoryMode(m => m === 'fbo' ? null : 'fbo') : undefined}
+            />
+            <StatTile
+              label="ФБС" value={stats.fbs}
+              sparkValues={aggHistory.length ? aggHistory.map(d => d.fbs) : null}
+              sparkColor={HISTORY_MODES.fbs.color}
+              active={historyMode === 'fbs'}
+              onClick={aggHistory.length ? () => setHistoryMode(m => m === 'fbs' ? null : 'fbs') : undefined}
+            />
           </div>
+
+          {historyMode && aggHistory.length > 0 && (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 12, color: 'var(--text2)' }}>
+                <span>Тренд «{HISTORY_MODES[historyMode].label}» по текущему фильтру — {historyDates[0]} — {historyDates[historyDates.length - 1]}</span>
+                <button onClick={() => setHistoryMode(null)} style={{ border: 'none', background: 'transparent', color: 'var(--text3)', fontSize: 13 }}>✕</button>
+              </div>
+              <BarSpark
+                values={aggHistory.map(d => d[historyMode])}
+                height={90} width="100%" gap={3}
+                color={HISTORY_MODES[historyMode].color}
+              />
+            </div>
+          )}
 
           <button
             onClick={() => setShowBreakdown(v => !v)}
@@ -292,7 +415,7 @@ export default function Stocks({ platform: platformProp }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr>
-                {['', 'Фото', 'Артикул', 'Категория', 'Размеры', 'Итого', ''].map(h =>
+                {['', 'Фото', 'Артикул', 'Категория', 'Размеры', `Тренд, ${HISTORY_WINDOW} дн.`, 'Итого', ''].map(h =>
                   <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: 'var(--text2)', fontWeight: 500, fontSize: 12, borderBottom: '1px solid var(--border)' }}>{h}</th>
                 )}
               </tr>
@@ -301,6 +424,16 @@ export default function Stocks({ platform: platformProp }) {
               {rows.map(p => {
                 const b = badge(p.total);
                 const isOpen = expanded.has(p.baseArticle);
+                const hist = history.products[p.baseArticle];
+                const trendValues = historyDates.map(d => qtyOf(hist?.byDate?.[d] || EMPTY_DAY, platform, fulfillment));
+                const wbSeries = historyDates.map(d => {
+                  const day = hist?.byDate?.[d] || EMPTY_DAY;
+                  return day.wb_fbo + day.wb_fbs;
+                });
+                const ozonSeries = historyDates.map(d => {
+                  const day = hist?.byDate?.[d] || EMPTY_DAY;
+                  return day.ozon_fbo + day.ozon_fbs;
+                });
                 return (
                   <React.Fragment key={p.baseArticle}>
                     <tr style={{ borderBottom: isOpen ? 'none' : '1px solid var(--border)', cursor: 'pointer' }} onClick={() => toggle(p.baseArticle)}>
@@ -327,13 +460,28 @@ export default function Stocks({ platform: platformProp }) {
                       </td>
                       <td style={{ padding: '8px 12px', color: 'var(--text2)' }}>{p.category || '—'}</td>
                       <td style={{ padding: '8px 12px', color: 'var(--text2)' }}>{p.sizes.length} размер(ов)</td>
+                      <td style={{ padding: '8px 12px' }}>
+                        {historyDates.length > 0 && <BarSpark values={trendValues} color={b.color} />}
+                      </td>
                       <td style={{ padding: '8px 12px', fontWeight: 700 }}>{p.total}</td>
                       <td style={{ padding: '8px 12px' }}><span style={{ padding: '2px 8px', borderRadius: 5, fontSize: 11, fontWeight: 600, background: b.bg, color: b.color }}>{b.label}</span></td>
                     </tr>
                     {isOpen && (
                       <tr style={{ borderBottom: '1px solid var(--border)' }}>
                         <td></td>
-                        <td colSpan={6} style={{ padding: '4px 12px 14px' }}>
+                        <td colSpan={7} style={{ padding: '4px 12px 14px' }}>
+                          {historyDates.length > 0 && (
+                            <div style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--text2)', marginBottom: 6 }}>
+                                <span>шт., последние {HISTORY_WINDOW} дней</span>
+                                <span style={{ display: 'flex', gap: 12 }}>
+                                  <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: 'var(--accent-wb)', marginRight: 5 }} />WB</span>
+                                  <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: 'var(--accent-oz)', marginRight: 5 }} />Ozon</span>
+                                </span>
+                              </div>
+                              <DualBarSpark dates={historyDates} wbValues={wbSeries} ozonValues={ozonSeries} />
+                            </div>
+                          )}
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                             <thead>
                               <tr style={{ color: 'var(--text2)' }}>
@@ -378,7 +526,7 @@ export default function Stocks({ platform: platformProp }) {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={5} style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--text2)', borderTop: '1px solid var(--border)' }}>Итого по фильтру:</td>
+                <td colSpan={6} style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: 'var(--text2)', borderTop: '1px solid var(--border)' }}>Итого по фильтру:</td>
                 <td style={{ padding: '10px 12px', fontWeight: 700, borderTop: '1px solid var(--border)' }}>{footerTotal.toLocaleString('ru')}</td>
                 <td style={{ borderTop: '1px solid var(--border)' }}></td>
               </tr>
