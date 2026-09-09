@@ -43,6 +43,65 @@ function sizeRank(s) {
   return Number.isFinite(n) ? 1000 + n : 2000;
 }
 
+// ---- экспорт в Excel ----
+//
+// Выгружаем ровно тот набор товаров, что сейчас виден на экране (с учётом
+// поиска/категории/пола), в двух листах: "По товару" — сводка как в
+// свёрнутой таблице, и "По размерам" — детализация как в развёрнутой
+// строке. Библиотека грузится динамически (import()), чтобы не раздувать
+// основной бандл — она нужна только в момент нажатия на кнопку.
+function buildSummaryAOA(rows) {
+  const header = ['Артикул', 'Категория', 'Пол', 'Название', 'Размеров', 'WB FBO', 'WB FBS', 'Ozon FBO', 'Ozon FBS', 'Итого'];
+  const body = rows.map(p => [
+    p.baseArticle, p.category || '—', p.gender || '—', p.subject || '—', p.sizes.length,
+    p.totals.wb_fbo, p.totals.wb_fbs, p.totals.ozon_fbo, p.totals.ozon_fbs, p.totals.total,
+  ]);
+  const t = rows.reduce((a, p) => ({
+    wb_fbo: a.wb_fbo + p.totals.wb_fbo, wb_fbs: a.wb_fbs + p.totals.wb_fbs,
+    ozon_fbo: a.ozon_fbo + p.totals.ozon_fbo, ozon_fbs: a.ozon_fbs + p.totals.ozon_fbs,
+    total: a.total + p.totals.total,
+  }), { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0, total: 0 });
+  const totalsRow = ['ИТОГО', '', '', '', '', t.wb_fbo, t.wb_fbs, t.ozon_fbo, t.ozon_fbs, t.total];
+  return [header, ...body, totalsRow];
+}
+
+function buildDetailAOA(rows) {
+  const header = ['Артикул', 'Категория', 'Пол', 'Название', 'Размер', 'WB FBO', 'WB FBS', 'Ozon FBO', 'Ozon FBS', 'Итого'];
+  const body = [];
+  const t = { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0, total: 0 };
+  for (const p of rows) {
+    for (const sz of p.sizes) {
+      const total = qtyOf(sz, 'all', 'all');
+      body.push([p.baseArticle, p.category || '—', p.gender || '—', p.subject || '—', sz.size, sz.wb_fbo, sz.wb_fbs, sz.ozon_fbo, sz.ozon_fbs, total]);
+      t.wb_fbo += sz.wb_fbo; t.wb_fbs += sz.wb_fbs; t.ozon_fbo += sz.ozon_fbo; t.ozon_fbs += sz.ozon_fbs; t.total += total;
+    }
+  }
+  const totalsRow = ['ИТОГО', '', '', '', '', t.wb_fbo, t.wb_fbs, t.ozon_fbo, t.ozon_fbs, t.total];
+  return [header, ...body, totalsRow];
+}
+
+const SUMMARY_COLS = [{ wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 36 }, { wch: 10 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 9 }];
+const DETAIL_COLS  = [{ wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 36 }, { wch: 8 },  { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 9 }];
+
+async function exportStocksToExcel(rows, category) {
+  const XLSX = await import('xlsx');
+
+  const wb = XLSX.utils.book_new();
+  const wsSummary = XLSX.utils.aoa_to_sheet(buildSummaryAOA(rows));
+  wsSummary['!cols'] = SUMMARY_COLS;
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'По товару');
+
+  const wsDetail = XLSX.utils.aoa_to_sheet(buildDetailAOA(rows));
+  wsDetail['!cols'] = DETAIL_COLS;
+  XLSX.utils.book_append_sheet(wb, wsDetail, 'По размерам');
+
+  const d = new Date();
+  const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const catPart = category !== 'all' ? `_${category}` : '';
+  const filename = `Остатки_${dateStr}${catPart}.xlsx`.replace(/\s+/g, '_');
+  XLSX.writeFile(wb, filename);
+}
+
 function StatTile({ label, value }) {
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '12px 16px', minWidth: 120 }}>
@@ -72,6 +131,7 @@ export default function Stocks({ platform: platformProp }) {
   const [sort, setSort] = useState('article');
   const [expanded, setExpanded] = useState(() => new Set());
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // Общий переключатель площадки в шапке дашборда тоже должен управлять этой
   // страницей — но локальные кнопки ниже позволяют переопределить его здесь же.
@@ -134,6 +194,18 @@ export default function Stocks({ platform: platformProp }) {
     return next;
   });
 
+  async function handleExport() {
+    if (exporting || rows.length === 0) return;
+    setExporting(true);
+    try {
+      await exportStocksToExcel(rows, category);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -146,6 +218,19 @@ export default function Stocks({ platform: platformProp }) {
         <select value={sort} onChange={e => setSort(e.target.value)} style={{ padding: '5px 8px', borderRadius: 6 }}>
           {SORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
+        <button
+          onClick={handleExport}
+          disabled={exporting || loading || rows.length === 0}
+          title="Скачать текущий список остатков в Excel (сводка по товару и разбивка по размерам)"
+          style={{
+            marginLeft: 'auto', padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border)',
+            background: 'var(--surface2)', color: 'var(--text)', fontSize: 13, fontWeight: 500,
+            cursor: exporting || loading || rows.length === 0 ? 'default' : 'pointer',
+            opacity: exporting || loading || rows.length === 0 ? 0.6 : 1,
+          }}
+        >
+          {exporting ? 'Готовим файл...' : '⬇ Скачать в Excel'}
+        </button>
       </div>
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
