@@ -479,6 +479,32 @@ router.get('/stocks-v2', async (req, res) => {
 // достаточно и для мини-графика в таблице на Остатках, и чтобы на фронте
 // посчитать агрегат по любой комбинации категория/пол/площадка через ту же
 // функцию qtyOf(), что уже используется для текущего (последнего) снимка.
+// ВРЕМЕННЫЙ диагностический роут — проверить, нет ли задвоенных снимков по датам
+// (снимок должен быть ровно один на дату, если коллектор один раз в день делает
+// DELETE+INSERT; задвоение объясняло бы аномальный скачок в истории 03.09).
+router.get('/debug-stock-dupes', async (req, res) => {
+  try {
+    const [wb, ozon] = await Promise.all([
+      query(`
+        SELECT snapshot_date::text as date, COUNT(*) as rows, COUNT(DISTINCT (supplier_article, stock_type)) as distinct_keys
+        FROM wb_stocks
+        WHERE snapshot_date >= CURRENT_DATE - 14
+        GROUP BY snapshot_date ORDER BY snapshot_date
+      `),
+      query(`
+        SELECT snapshot_date::text as date, COUNT(*) as rows, COUNT(DISTINCT offer_id) as distinct_keys
+        FROM ozon_stocks
+        WHERE snapshot_date >= CURRENT_DATE - 14
+        GROUP BY snapshot_date ORDER BY snapshot_date
+      `),
+    ]);
+    res.json({ success: true, wb, ozon });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 router.get('/stocks-history', async (req, res) => {
   try {
     const days = Math.min(60, Math.max(7, parseInt(req.query.days, 10) || 30));
