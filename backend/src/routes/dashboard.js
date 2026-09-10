@@ -503,6 +503,40 @@ router.get('/debug-stock-dupes', async (req, res) => {
     console.error(e);
     res.status(500).json({ success: false, error: e.message });
   }
+router.get('/debug-stock-dupes-detail', async (req, res) => {
+  try {
+    const [wbSample, ozonSample, wbCollectedAt, ozonCollectedAt] = await Promise.all([
+      query(`
+        SELECT supplier_article, tech_size, warehouse_name, quantity, collected_at::text
+        FROM wb_stocks
+        WHERE snapshot_date = '2026-09-03' AND stock_type = 'fbo' AND supplier_article = 'HoodMen-1'
+        ORDER BY collected_at
+      `),
+      query(`
+        SELECT offer_id, fbo_present, fbs_present, warehouse_id, collected_at::text
+        FROM ozon_stocks
+        WHERE snapshot_date = '2026-09-03' AND offer_id LIKE 'HoodMen-1-%'
+        ORDER BY collected_at
+        LIMIT 30
+      `),
+      query(`
+        SELECT collected_at::text, COUNT(*) as cnt
+        FROM wb_stocks WHERE snapshot_date = '2026-09-03' AND stock_type = 'fbo'
+        GROUP BY collected_at ORDER BY collected_at
+      `),
+      query(`
+        SELECT collected_at::text, COUNT(*) as cnt
+        FROM ozon_stocks WHERE snapshot_date = '2026-09-03'
+        GROUP BY collected_at ORDER BY collected_at
+      `),
+    ]);
+    res.json({ success: true, wbSample, ozonSample, wbCollectedAt, ozonCollectedAt });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 });
 
 router.get('/stocks-history', async (req, res) => {
