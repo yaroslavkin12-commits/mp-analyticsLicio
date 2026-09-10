@@ -143,14 +143,30 @@ router.get('/debug-raw', async (req, res) => {
     ).catch(e => ({ error: e.response?.data || e.message }));
     out.campaigns = campResp.error ? campResp : campResp.data;
 
-    const firstCampaign = campResp.data?.list?.[0];
+    const skuCampaigns = (campResp.data?.list || []).filter(c => c.advObjectType === 'SKU');
+    const firstCampaign = skuCampaigns[0] || campResp.data?.list?.[0];
     if (firstCampaign) {
       const from = dayjs().subtract(14, 'day').format('YYYY-MM-DD');
       const to = dayjs().format('YYYY-MM-DD');
-      const statsResp = await axios.get('https://api-performance.ozon.ru/api/client/statistics',
-        { headers, params: { campaigns: [firstCampaign.id], dateFrom: from, dateTo: to, groupBy: 'DATE' }, timeout: 30000 }
+
+      // Пробуем несколько вариантов, т.к. по вторичным источникам не удалось
+      // однозначно подтвердить, GET это или POST и на каком домене.
+      const attempts = [];
+
+      const postJson = await axios.post('https://api-performance.ozon.ru/api/client/statistics/json',
+        { campaigns: [String(firstCampaign.id)], dateFrom: from, dateTo: to, groupBy: 'DATE' },
+        { headers, timeout: 30000 }
       ).catch(e => ({ error: e.response?.data || e.message, status: e.response?.status }));
-      out.statistics = statsResp.error ? statsResp : statsResp.data;
+      attempts.push({ name: 'POST /statistics/json', result: postJson.error ? postJson : postJson.data });
+
+      const expenseResp = await axios.get('https://api-performance.ozon.ru/api/client/statistics/expense/json',
+        { headers, params: { campaigns: [firstCampaign.id], dateFrom: from, dateTo: to }, timeout: 30000 }
+      ).catch(e => ({ error: e.response?.data || e.message, status: e.response?.status }));
+      attempts.push({ name: 'GET /statistics/expense/json', result: expenseResp.error ? expenseResp : expenseResp.data });
+
+      out.statisticsAttempts = attempts;
+      out.testedCampaignId = firstCampaign.id;
+      out.testedCampaignTitle = firstCampaign.title;
     }
 
     res.json({ success: true, data: out });
