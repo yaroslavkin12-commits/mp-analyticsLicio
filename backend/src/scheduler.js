@@ -14,6 +14,11 @@ const { collectStocks: ozStocks }       = require('./collectors/ozon/stocks');
 const { collectCatalog: ozCatalog }     = require('./collectors/ozon/catalog');
 const { collectAds: ozAds }             = require('./collectors/ozon/ads');
 
+const { CABINETS }                          = require('./config/cabinets');
+const { collectCatalog: adsCatalog }         = require('./collectors/ads/ozonCatalog');
+const { collectAdStats: adsStats }           = require('./collectors/ads/ozonPerf');
+const { collectProductAnalytics: adsAnalytics } = require('./collectors/ads/ozonProductAnalytics');
+
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 // Через сколько повторить WB-сбор, если он упал (например по 429) — не ждать
@@ -114,10 +119,28 @@ async function runOzon(dateFrom) {
   await run('Ozon Реклама',   'ozon', 'ads',       ozAds,       dateFrom);
 }
 
+// Реклама по дополнительным кабинетам (Defly и т.д.) — отдельно от основного
+// runOzon/runWB, потому что у "родного" кабинета (Licio) свои переменные
+// окружения без префикса, а у остальных кабинетов — токены в config/cabinets.
+// Кабинет без настроенных токенов просто пропускается.
+async function runAdsCabinets(days = 3) {
+  for (const [id, cfg] of Object.entries(CABINETS)) {
+    if (id === 'licio') continue; // у Licio реклама уже идёт через runOzon/ozAds
+    if (!cfg.ozonClientId && !cfg.ozonPerfClientId) continue;
+    console.log(`\n=== Реклама: ${id} ===`);
+    try {
+      await run(`${id} Каталог`, id, 'ads_catalog', () => adsCatalog(id));
+      await run(`${id} Реклама (Performance)`, id, 'ads_perf', () => adsStats(id, days));
+      await run(`${id} Аналитика товаров`, id, 'ads_analytics', () => adsAnalytics(id, days));
+    } catch(e) { console.error(`[Ads:${id}]`, e.message); }
+  }
+}
+
 async function runAll(dateFrom) {
   console.log(`\n🚀 Сбор данных ${dayjs().format('DD.MM.YYYY HH:mm')}`);
   await runWB(dateFrom);
   await runOzon(dateFrom);
+  await runAdsCabinets();
   console.log(`✅ Готово ${dayjs().format('HH:mm')}\n`);
 }
 
@@ -142,7 +165,8 @@ function startScheduler() {
     console.log(`🔄 Первый запуск: WB с ${wbFrom}, Ozon с ${ozFrom}`);
     await runWB(wbFrom);
     await runOzon(ozFrom);
+    await runAdsCabinets(30);
   }, 8000);
 }
 
-module.exports = { startScheduler, runAll, runWB, runOzon };
+module.exports = { startScheduler, runAll, runWB, runOzon, runAdsCabinets };

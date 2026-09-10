@@ -2,15 +2,20 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
+import AdsStats from './pages/AdsStats';
 import Settings from './pages/Settings';
 
-const PAGES = { dashboard: Dashboard, stocks: Stocks, settings: Settings };
+const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, settings: Settings };
 
 const THEME_KEY = 'mp-theme';
+const CABINET_KEY = 'mp-cabinet';
 
 export default function App() {
   const [page, setPage]     = useState('dashboard');
   const [platform, setPlatform] = useState('all');
+  const [cabinet, setCabinet] = useState(() => {
+    try { return localStorage.getItem(CABINET_KEY) || 'licio'; } catch(e) { return 'licio'; }
+  });
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch(e) { return 'dark'; }
   });
@@ -20,11 +25,15 @@ export default function App() {
     try { localStorage.setItem(THEME_KEY, theme); } catch(e) { /* ignore */ }
   }, [theme]);
 
+  useEffect(() => {
+    try { localStorage.setItem(CABINET_KEY, cabinet); } catch(e) { /* ignore */ }
+  }, [cabinet]);
+
   const Page = PAGES[page] || Dashboard;
 
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
-      <Sidebar page={page} setPage={setPage} theme={theme}/>
+      <Sidebar page={page} setPage={setPage} theme={theme} cabinet={cabinet} setCabinet={setCabinet}/>
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         {/* Топ-бар */}
         <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 18px',
@@ -51,7 +60,7 @@ export default function App() {
         </div>
 
         <div style={{ flex:1, overflow:'auto', padding:18 }}>
-          <Page platform={platform}/>
+          <Page platform={platform} cabinet={cabinet}/>
         </div>
       </div>
     </div>

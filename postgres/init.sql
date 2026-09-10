@@ -210,3 +210,73 @@ CREATE TABLE IF NOT EXISTS ozon_catalog (
   photo_url TEXT,
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- === Мультикабинетная реклама (Licio/Defly/...) ===============================
+-- Новые таблицы с полем cabinet с самого начала — задел на то, чтобы позже
+-- развести по кабинетам весь дашборд, а не только рекламу (см. Sidebar.jsx).
+-- Существующие ozon_ads/ozon_analytics (только Licio, без cabinet) не трогаем,
+-- чтобы не рисковать уже работающим сбором — параллельно копим новые данные
+-- сюда для любого кабинета через collectors/ads/*.
+
+CREATE TABLE IF NOT EXISTS ad_product_catalog (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  offer_id VARCHAR(128) NOT NULL,
+  sku BIGINT,
+  product_name VARCHAR(512),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(cabinet, platform, offer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ad_catalog_sku ON ad_product_catalog(cabinet, sku);
+
+CREATE TABLE IF NOT EXISTS ad_campaigns (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  campaign_id VARCHAR(64) NOT NULL,
+  title VARCHAR(512),
+  state VARCHAR(64),
+  adv_object_type VARCHAR(64),
+  matched_offer_id VARCHAR(128),
+  matched_sku BIGINT,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(cabinet, platform, campaign_id)
+);
+
+CREATE TABLE IF NOT EXISTS ad_stats_daily (
+  id BIGSERIAL PRIMARY KEY,
+  collected_at TIMESTAMP DEFAULT NOW(),
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  date DATE NOT NULL,
+  campaign_id VARCHAR(64) NOT NULL,
+  views BIGINT DEFAULT 0,
+  clicks BIGINT DEFAULT 0,
+  ctr DECIMAL(8,4) DEFAULT 0,
+  spend DECIMAL(12,2) DEFAULT 0,
+  avg_bid DECIMAL(12,2) DEFAULT 0,
+  orders INT DEFAULT 0,
+  orders_money DECIMAL(12,2) DEFAULT 0,
+  UNIQUE(cabinet, platform, date, campaign_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ad_stats_daily_date ON ad_stats_daily(cabinet, date);
+
+CREATE TABLE IF NOT EXISTS product_analytics_daily (
+  id BIGSERIAL PRIMARY KEY,
+  collected_at TIMESTAMP DEFAULT NOW(),
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  date DATE NOT NULL,
+  sku BIGINT NOT NULL,
+  offer_id VARCHAR(128),
+  hits_view BIGINT DEFAULT 0,
+  hits_view_search BIGINT DEFAULT 0,
+  hits_view_pdp BIGINT DEFAULT 0,
+  hits_tocart BIGINT DEFAULT 0,
+  orders_item BIGINT DEFAULT 0,
+  revenue DECIMAL(12,2) DEFAULT 0,
+  position_category DECIMAL(8,2),
+  UNIQUE(cabinet, platform, date, sku)
+);
+CREATE INDEX IF NOT EXISTS idx_prod_analytics_daily_date ON product_analytics_daily(cabinet, date);

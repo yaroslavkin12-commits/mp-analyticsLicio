@@ -16,3 +16,7 @@ export const getStatus      = () => api.get('/settings/status');
 export const getOzonAnalytics   = p => api.get('/analytics/ozon',         { params: p });
 export const getOzonFunnel      = p => api.get('/analytics/ozon/funnel',  { params: p });
 export const getOzonCategories  = p => api.get('/analytics/ozon/categories', { params: p });
+
+export const getAdsCabinets = () => api.get('/ads/cabinets');
+export const collectAds     = (cabinet, days) => api.post('/ads/collect', {}, { params: { cabinet, days } });
+export const getAdsStats    = (cabinet, days) => api.get('/ads/stats', { params: { cabinet, days } });

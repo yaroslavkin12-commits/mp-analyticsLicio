@@ -16,6 +16,8 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/settings',  require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));
 
+app.use('/api/ads', require('./routes/ads'));
+
 const distPath = path.join(__dirname, '../../dashboard/dist');
 app.use(express.static(distPath));
 app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
