@@ -471,167 +471,17 @@ router.get('/stocks-v2', async (req, res) => {
 });
 
 // GET /api/dashboard/stocks-history?days=30
-// История остатков по дням. Снимок остатков хранится ровно один на
-// календарную дату (см. collectors/wb/stocks.js и collectors/ozon/stocks.js —
-// там DELETE+INSERT по snapshot_date перед каждой записью), поэтому история
-// по датам уже накоплена и ничего досчитывать заново не нужно. Отдаём по
-// каждому базовому артикулу сумму по размерам на каждую дату — этого
-// достаточно и для мини-графика в таблице на Остатках, и чтобы на фронте
-// посчитать агрегат по любой комбинации категория/пол/площадка через ту же
-// функцию qtyOf(), что уже используется для текущего (последнего) снимка.
-// ВРЕМЕННЫЙ диагностический роут — проверить, нет ли задвоенных снимков по датам
-// (снимок должен быть ровно один на дату, если коллектор один раз в день делает
-// DELETE+INSERT; задвоение объясняло бы аномальный скачок в истории 03.09).
-router.get('/debug-stock-dupes-v2', async (req, res) => {
-  try {
-    const [wbByType, wbKeyCounts, ozonKeyCounts, wbBatches] = await Promise.all([
-      query(`
-        SELECT stock_type, COUNT(*) as rows, COUNT(DISTINCT supplier_article) as distinct_articles
-        FROM wb_stocks WHERE snapshot_date = '2026-09-03'
-        GROUP BY stock_type
-      `),
-      query(`
-        SELECT supplier_article, tech_size, warehouse_name, stock_type, COUNT(*) as cnt
-        FROM wb_stocks WHERE snapshot_date = '2026-09-03' AND supplier_article = 'HoodMen-1'
-        GROUP BY supplier_article, tech_size, warehouse_name, stock_type
-        ORDER BY cnt DESC LIMIT 20
-      `),
-      query(`
-        SELECT offer_id, COUNT(*) as cnt, array_agg(DISTINCT fbo_present) as fbo_vals, array_agg(DISTINCT fbs_present) as fbs_vals
-        FROM ozon_stocks WHERE snapshot_date = '2026-09-03'
-        GROUP BY offer_id
-        ORDER BY cnt DESC LIMIT 10
-      `),
-      query(`
-        SELECT date_trunc('minute', collected_at) as minute, COUNT(*) as cnt
-        FROM wb_stocks WHERE snapshot_date = '2026-09-03'
-        GROUP BY minute ORDER BY minute
-      `),
-    ]);
-    res.json({ success: true, wbByType, wbKeyCounts, ozonKeyCounts, wbBatches });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ВРЕМЕННЫЙ маршрут: убрать задвоение снимков остатков за конкретную дату.
-// Раньше сборщики остатков (WB FBS и Ozon) могли отработать несколько раз за
-// один день без удаления предыдущего прогона (см. комментарии в
-// collectors/wb/fbsStocks.js и collectors/ozon/stocks.js — баг там уже
-// починен). За даты ДО фикса в базе остались задвоенные строки за один день,
-// и они складывались все вместе. Оставляем по каждому товару/складу только
-// САМУЮ ПОЗДНЮЮ по collected_at запись за дату — это и есть финальное
-// состояние остатков на конец дня, а не сумма всех прогонов сборщика.
-router.get('/maintenance/dedup-stock-snapshot', async (req, res) => {
-  try {
-    const date = req.query.date;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
-      return res.status(400).json({ success: false, error: 'Нужен параметр date=YYYY-MM-DD' });
-    }
-
-    const before = await Promise.all([
-      query(`SELECT COUNT(*) as c FROM wb_stocks WHERE snapshot_date = $1`, [date]),
-      query(`SELECT COUNT(*) as c FROM ozon_stocks WHERE snapshot_date = $1`, [date]),
-    ]);
-
-    const wbDeleted = await query(`
-      DELETE FROM wb_stocks a
-      USING wb_stocks b
-      WHERE a.snapshot_date = $1
-        AND b.snapshot_date = $1
-        AND a.supplier_article IS NOT DISTINCT FROM b.supplier_article
-        AND a.tech_size IS NOT DISTINCT FROM b.tech_size
-        AND COALESCE(a.warehouse_name,'') = COALESCE(b.warehouse_name,'')
-        AND COALESCE(a.stock_type,'') = COALESCE(b.stock_type,'')
-        AND a.collected_at < b.collected_at
-      RETURNING a.id
-    `, [date]);
-
-    const ozonDeleted = await query(`
-      DELETE FROM ozon_stocks a
-      USING ozon_stocks b
-      WHERE a.snapshot_date = $1
-        AND b.snapshot_date = $1
-        AND a.offer_id IS NOT DISTINCT FROM b.offer_id
-        AND a.collected_at < b.collected_at
-      RETURNING a.id
-    `, [date]);
-
-    const after = await Promise.all([
-      query(`SELECT COUNT(*) as c FROM wb_stocks WHERE snapshot_date = $1`, [date]),
-      query(`SELECT COUNT(*) as c FROM ozon_stocks WHERE snapshot_date = $1`, [date]),
-    ]);
-
-    res.json({
-      success: true,
-      date,
-      wb: { before: before[0][0].c, deleted: wbDeleted.length, after: after[0][0].c },
-      ozon: { before: before[1][0].c, deleted: ozonDeleted.length, after: after[1][0].c },
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-router.get('/debug-stock-dupes', async (req, res) => {
-  try {
-    const [wb, ozon] = await Promise.all([
-      query(`
-        SELECT snapshot_date::text as date, COUNT(*) as rows, COUNT(DISTINCT (supplier_article, stock_type)) as distinct_keys
-        FROM wb_stocks
-        WHERE snapshot_date >= CURRENT_DATE - 14
-        GROUP BY snapshot_date ORDER BY snapshot_date
-      `),
-      query(`
-        SELECT snapshot_date::text as date, COUNT(*) as rows, COUNT(DISTINCT offer_id) as distinct_keys
-        FROM ozon_stocks
-        WHERE snapshot_date >= CURRENT_DATE - 14
-        GROUP BY snapshot_date ORDER BY snapshot_date
-      `),
-    ]);
-    res.json({ success: true, wb, ozon });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, error: e.message });
-  }
-router.get('/debug-stock-dupes-detail', async (req, res) => {
-  try {
-    const [wbSample, ozonSample, wbCollectedAt, ozonCollectedAt] = await Promise.all([
-      query(`
-        SELECT supplier_article, tech_size, warehouse_name, quantity, collected_at::text
-        FROM wb_stocks
-        WHERE snapshot_date = '2026-09-03' AND stock_type = 'fbo' AND supplier_article = 'HoodMen-1'
-        ORDER BY collected_at
-      `),
-      query(`
-        SELECT offer_id, fbo_present, fbs_present, warehouse_id, collected_at::text
-        FROM ozon_stocks
-        WHERE snapshot_date = '2026-09-03' AND offer_id LIKE 'HoodMen-1-%'
-        ORDER BY collected_at
-        LIMIT 30
-      `),
-      query(`
-        SELECT collected_at::text, COUNT(*) as cnt
-        FROM wb_stocks WHERE snapshot_date = '2026-09-03' AND stock_type = 'fbo'
-        GROUP BY collected_at ORDER BY collected_at
-      `),
-      query(`
-        SELECT collected_at::text, COUNT(*) as cnt
-        FROM ozon_stocks WHERE snapshot_date = '2026-09-03'
-        GROUP BY collected_at ORDER BY collected_at
-      `),
-    ]);
-    res.json({ success: true, wbSample, ozonSample, wbCollectedAt, ozonCollectedAt });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-});
-
+// История остатков по дням. В норме снимок остатков — один на календарную
+// дату (см. collectors/wb/stocks.js, collectors/wb/fbsStocks.js и
+// collectors/ozon/stocks.js — там DELETE+INSERT по snapshot_date перед каждой
+// записью), но за некоторые даты в прошлом в базе остались задвоенные снимки
+// (коллектор гонялся по нескольку раз за день ещё до того, как там появился
+// DELETE) — поэтому ниже берём DISTINCT ON по последней collected_at на
+// каждый ключ за дату, а не просто суммируем все строки. Отдаём по каждому
+// базовому артикулу сумму по размерам на каждую дату — этого достаточно и
+// для мини-графика в таблице на Остатках, и чтобы на фронте посчитать
+// агрегат по любой комбинации категория/пол/площадка через ту же функцию
+// qtyOf(), что уже используется для текущего (последнего) снимка.
 router.get('/stocks-history', async (req, res) => {
   try {
     const days = Math.min(60, Math.max(7, parseInt(req.query.days, 10) || 30));
@@ -644,15 +494,28 @@ router.get('/stocks-history', async (req, res) => {
     const lookback = days + 14;
 
     const [wbRows, ozonRows] = await Promise.all([
+      // DISTINCT ON — на случай если коллектор в какой-то день отработал несколько
+      // раз подряд (см. комментарии в collectors/wb/fbsStocks.js и
+      // collectors/ozon/stocks.js): берём по каждому товару/размеру/складу
+      // только САМУЮ ПОЗДНЮЮ по collected_at запись за дату, а не суммируем
+      // все прогоны сборщика вместе — иначе задвоенный день даёт ложный скачок.
       query(`
-        SELECT snapshot_date::text as date, supplier_article, stock_type, quantity
-        FROM wb_stocks
-        WHERE snapshot_date >= CURRENT_DATE - $1::int AND supplier_article IS NOT NULL
+        SELECT date, supplier_article, stock_type, quantity FROM (
+          SELECT DISTINCT ON (snapshot_date, supplier_article, tech_size, warehouse_name, stock_type)
+            snapshot_date::text as date, supplier_article, stock_type, quantity
+          FROM wb_stocks
+          WHERE snapshot_date >= CURRENT_DATE - $1::int AND supplier_article IS NOT NULL
+          ORDER BY snapshot_date, supplier_article, tech_size, warehouse_name, stock_type, collected_at DESC
+        ) t
       `, [lookback]),
       query(`
-        SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
-        FROM ozon_stocks
-        WHERE snapshot_date >= CURRENT_DATE - $1::int AND offer_id IS NOT NULL
+        SELECT date, offer_id, fbo_present, fbs_present FROM (
+          SELECT DISTINCT ON (snapshot_date, offer_id)
+            snapshot_date::text as date, offer_id, fbo_present, fbs_present
+          FROM ozon_stocks
+          WHERE snapshot_date >= CURRENT_DATE - $1::int AND offer_id IS NOT NULL
+          ORDER BY snapshot_date, offer_id, collected_at DESC
+        ) t
       `, [lookback]),
     ]);
 
