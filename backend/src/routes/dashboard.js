@@ -482,6 +482,39 @@ router.get('/stocks-v2', async (req, res) => {
 // ВРЕМЕННЫЙ диагностический роут — проверить, нет ли задвоенных снимков по датам
 // (снимок должен быть ровно один на дату, если коллектор один раз в день делает
 // DELETE+INSERT; задвоение объясняло бы аномальный скачок в истории 03.09).
+router.get('/debug-stock-dupes-v2', async (req, res) => {
+  try {
+    const [wbByType, wbKeyCounts, ozonKeyCounts, wbBatches] = await Promise.all([
+      query(`
+        SELECT stock_type, COUNT(*) as rows, COUNT(DISTINCT supplier_article) as distinct_articles
+        FROM wb_stocks WHERE snapshot_date = '2026-09-03'
+        GROUP BY stock_type
+      `),
+      query(`
+        SELECT supplier_article, tech_size, warehouse_name, stock_type, COUNT(*) as cnt
+        FROM wb_stocks WHERE snapshot_date = '2026-09-03' AND supplier_article = 'HoodMen-1'
+        GROUP BY supplier_article, tech_size, warehouse_name, stock_type
+        ORDER BY cnt DESC LIMIT 20
+      `),
+      query(`
+        SELECT offer_id, COUNT(*) as cnt, array_agg(DISTINCT fbo_present) as fbo_vals, array_agg(DISTINCT fbs_present) as fbs_vals
+        FROM ozon_stocks WHERE snapshot_date = '2026-09-03'
+        GROUP BY offer_id
+        ORDER BY cnt DESC LIMIT 10
+      `),
+      query(`
+        SELECT date_trunc('minute', collected_at) as minute, COUNT(*) as cnt
+        FROM wb_stocks WHERE snapshot_date = '2026-09-03'
+        GROUP BY minute ORDER BY minute
+      `),
+    ]);
+    res.json({ success: true, wbByType, wbKeyCounts, ozonKeyCounts, wbBatches });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 router.get('/debug-stock-dupes', async (req, res) => {
   try {
     const [wb, ozon] = await Promise.all([
