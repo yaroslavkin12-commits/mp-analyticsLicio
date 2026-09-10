@@ -115,4 +115,48 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ debug-роут: сырые ответы Performance API без записи в базу —
+// нужен, чтобы свериться с реальными именами полей (документация Ozon
+// закрыта для автоматического доступа, поэтому часть парсинга — по best
+// effort из вторичных источников).
+router.get('/debug-raw', async (req, res) => {
+  const axios = require('axios');
+  const dayjs = require('dayjs');
+  const { getCabinet } = require('../config/cabinets');
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const cfg = getCabinet(cabinet);
+    const out = {};
+
+    const tokenResp = await axios.post('https://api-performance.ozon.ru/api/client/token',
+      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
+      { timeout: 15000 }
+    ).catch(e => ({ error: e.response?.data || e.message }));
+    out.token = tokenResp.error ? tokenResp : { ok: true, expires_in: tokenResp.data?.expires_in };
+    const token = tokenResp.data?.access_token;
+    if (!token) { return res.json({ success: true, data: out }); }
+
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+    const campResp = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
+      { headers, timeout: 30000 }
+    ).catch(e => ({ error: e.response?.data || e.message }));
+    out.campaigns = campResp.error ? campResp : campResp.data;
+
+    const firstCampaign = campResp.data?.list?.[0];
+    if (firstCampaign) {
+      const from = dayjs().subtract(14, 'day').format('YYYY-MM-DD');
+      const to = dayjs().format('YYYY-MM-DD');
+      const statsResp = await axios.get('https://api-performance.ozon.ru/api/client/statistics',
+        { headers, params: { campaigns: [firstCampaign.id], dateFrom: from, dateTo: to, groupBy: 'DATE' }, timeout: 30000 }
+      ).catch(e => ({ error: e.response?.data || e.message, status: e.response?.status }));
+      out.statistics = statsResp.error ? statsResp : statsResp.data;
+    }
+
+    res.json({ success: true, data: out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
