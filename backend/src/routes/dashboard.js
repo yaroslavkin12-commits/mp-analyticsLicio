@@ -515,6 +515,66 @@ router.get('/debug-stock-dupes-v2', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ маршрут: убрать задвоение снимков остатков за конкретную дату.
+// Раньше сборщики остатков (WB FBS и Ozon) могли отработать несколько раз за
+// один день без удаления предыдущего прогона (см. комментарии в
+// collectors/wb/fbsStocks.js и collectors/ozon/stocks.js — баг там уже
+// починен). За даты ДО фикса в базе остались задвоенные строки за один день,
+// и они складывались все вместе. Оставляем по каждому товару/складу только
+// САМУЮ ПОЗДНЮЮ по collected_at запись за дату — это и есть финальное
+// состояние остатков на конец дня, а не сумма всех прогонов сборщика.
+router.get('/maintenance/dedup-stock-snapshot', async (req, res) => {
+  try {
+    const date = req.query.date;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
+      return res.status(400).json({ success: false, error: 'Нужен параметр date=YYYY-MM-DD' });
+    }
+
+    const before = await Promise.all([
+      query(`SELECT COUNT(*) as c FROM wb_stocks WHERE snapshot_date = $1`, [date]),
+      query(`SELECT COUNT(*) as c FROM ozon_stocks WHERE snapshot_date = $1`, [date]),
+    ]);
+
+    const wbDeleted = await query(`
+      DELETE FROM wb_stocks a
+      USING wb_stocks b
+      WHERE a.snapshot_date = $1
+        AND b.snapshot_date = $1
+        AND a.supplier_article IS NOT DISTINCT FROM b.supplier_article
+        AND a.tech_size IS NOT DISTINCT FROM b.tech_size
+        AND COALESCE(a.warehouse_name,'') = COALESCE(b.warehouse_name,'')
+        AND COALESCE(a.stock_type,'') = COALESCE(b.stock_type,'')
+        AND a.collected_at < b.collected_at
+      RETURNING a.id
+    `, [date]);
+
+    const ozonDeleted = await query(`
+      DELETE FROM ozon_stocks a
+      USING ozon_stocks b
+      WHERE a.snapshot_date = $1
+        AND b.snapshot_date = $1
+        AND a.offer_id IS NOT DISTINCT FROM b.offer_id
+        AND a.collected_at < b.collected_at
+      RETURNING a.id
+    `, [date]);
+
+    const after = await Promise.all([
+      query(`SELECT COUNT(*) as c FROM wb_stocks WHERE snapshot_date = $1`, [date]),
+      query(`SELECT COUNT(*) as c FROM ozon_stocks WHERE snapshot_date = $1`, [date]),
+    ]);
+
+    res.json({
+      success: true,
+      date,
+      wb: { before: before[0][0].c, deleted: wbDeleted.length, after: after[0][0].c },
+      ozon: { before: before[1][0].c, deleted: ozonDeleted.length, after: after[1][0].c },
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 router.get('/debug-stock-dupes', async (req, res) => {
   try {
     const [wb, ozon] = await Promise.all([
