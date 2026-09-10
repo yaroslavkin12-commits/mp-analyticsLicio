@@ -482,22 +482,28 @@ router.get('/stocks-v2', async (req, res) => {
 router.get('/stocks-history', async (req, res) => {
   try {
     const days = Math.min(60, Math.max(7, parseInt(req.query.days, 10) || 30));
+    // Снимки остатков сохраняются не каждый календарный день (сборщик исторически
+    // запускался нерегулярно), поэтому для дат без своего снимка нужно брать
+    // последнее известное значение (forward-fill), а не 0 — иначе на графике
+    // возникают ложные "свечки" (0 -> резкий скачок -> 0). Берём лишний буфер
+    // в прошлое (+14 дней), чтобы у forward-fill был сид уже на первой дате
+    // отдаваемого окна.
+    const lookback = days + 14;
 
     const [wbRows, ozonRows] = await Promise.all([
       query(`
         SELECT snapshot_date::text as date, supplier_article, stock_type, quantity
         FROM wb_stocks
         WHERE snapshot_date >= CURRENT_DATE - $1::int AND supplier_article IS NOT NULL
-      `, [days]),
+      `, [lookback]),
       query(`
         SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
         FROM ozon_stocks
         WHERE snapshot_date >= CURRENT_DATE - $1::int AND offer_id IS NOT NULL
-      `, [days]),
+      `, [lookback]),
     ]);
 
     const products = new Map(); // baseArticle -> { category, gender, byDate: Map }
-    const dateSet = new Set();
 
     function getProduct(baseArticle) {
       if (!products.has(baseArticle)) {
@@ -515,14 +521,12 @@ router.get('/stocks-history', async (req, res) => {
     }
 
     for (const r of wbRows) {
-      dateSet.add(r.date);
       const p = getProduct(r.supplier_article);
       const d = getDay(p, r.date);
       const field = r.stock_type === 'fbs' ? 'wb_fbs' : 'wb_fbo';
       d[field] += Number(r.quantity) || 0;
     }
     for (const r of ozonRows) {
-      dateSet.add(r.date);
       const { baseArticle } = parseArticle(r.offer_id);
       const p = getProduct(baseArticle);
       const d = getDay(p, r.date);
@@ -530,15 +534,36 @@ router.get('/stocks-history', async (req, res) => {
       d.ozon_fbs += Number(r.fbs_present) || 0;
     }
 
-    const dates = [...dateSet].sort();
+    // Непрерывный список календарных дат за окно [сегодня - lookback, сегодня],
+    // из которого клиенту отдаём только последние `days` — остальное было нужно
+    // лишь чтобы получить сид для forward-fill.
+    const allDates = [];
+    for (let i = lookback; i >= 0; i--) {
+      allDates.push(dayjs().subtract(i, 'day').format('YYYY-MM-DD'));
+    }
+    const outDates = allDates.slice(-days);
+    const outDateSet = new Set(outDates);
+
     const productsOut = {};
     for (const [baseArticle, p] of products) {
       const byDate = {};
-      for (const [date, v] of p.byDate) byDate[date] = v;
-      productsOut[baseArticle] = { category: p.category, gender: p.gender, byDate };
+      let last = null; // последнее известное значение по мере движения по датам вперёд
+      let hasAny = false;
+      for (const date of allDates) {
+        if (p.byDate.has(date)) {
+          last = p.byDate.get(date);
+          hasAny = true;
+        }
+        if (outDateSet.has(date)) {
+          byDate[date] = last || { wb_fbo: 0, wb_fbs: 0, ozon_fbo: 0, ozon_fbs: 0 };
+        }
+      }
+      if (hasAny) {
+        productsOut[baseArticle] = { category: p.category, gender: p.gender, byDate };
+      }
     }
 
-    res.json({ success: true, data: { dates, products: productsOut } });
+    res.json({ success: true, data: { dates: outDates, products: productsOut } });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, error: e.message });

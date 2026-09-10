@@ -139,7 +139,7 @@ function DualBarSpark({ dates, wbValues, ozonValues, height = 60 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height, width: '100%' }}>
       {dates.map((d, i) => (
-        <div key={d} style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 1, minWidth: 0 }}>
+        <div key={d} style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 1, minWidth: 0, height: '100%' }}>
           <div title={`WB: ${wbValues[i]}`} style={{
             flex: 1, height: wbValues[i] === 0 ? 0 : `${Math.max(4, (wbValues[i] / max) * 100)}%`,
             background: 'var(--accent-wb)', borderRadius: '1.5px 1.5px 0 0',
