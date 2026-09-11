@@ -259,4 +259,44 @@ router.get('/debug-analytics', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ debug-роут: пробуем разные эндпоинты Performance API, чтобы
+// понять, можно ли получить список SKU/товаров конкретной РК напрямую
+// (вместо угадывания артикула по названию кампании, которое не работает,
+// если в названии нет кода товара — например "Тест Женя Haval M6 ПОИСК").
+router.get('/debug-campaign-objects', async (req, res) => {
+  const axios = require('axios');
+  const { getCabinet } = require('../config/cabinets');
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const campaignId = req.query.campaignId;
+    if (!campaignId) return res.status(400).json({ success: false, error: 'Нужен campaignId' });
+    const cfg = getCabinet(cabinet);
+    const { data: tokenData } = await axios.post('https://api-performance.ozon.ru/api/client/token',
+      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
+      { timeout: 15000 });
+    const headers = { Authorization: `Bearer ${tokenData.access_token}`, 'Content-Type': 'application/json' };
+
+    const candidates = [
+      { method: 'get', url: `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/objects` },
+      { method: 'get', url: `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/products` },
+      { method: 'get', url: `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/v2/products` },
+      { method: 'get', url: `https://api-performance.ozon.ru/api/client/campaign/${campaignId}` },
+      { method: 'get', url: `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/skus` },
+    ];
+    const out = [];
+    for (const c of candidates) {
+      try {
+        const { data, status } = await axios({ ...c, headers, timeout: 15000, validateStatus: () => true });
+        out.push({ url: c.url, ok: status < 400, status, data });
+      } catch (e) {
+        out.push({ url: c.url, ok: false, error: e.response?.data || e.message });
+      }
+      await new Promise(r => setTimeout(r, 400));
+    }
+    res.json({ success: true, data: out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.response?.data || e.message });
+  }
+});
+
 module.exports = router;
