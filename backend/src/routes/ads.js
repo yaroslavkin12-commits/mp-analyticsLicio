@@ -181,4 +181,37 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ диагностический роут — понять, почему у Defly почти всё "без
+// привязки к артикулу" и все метрики нулевые. Удалить после диагностики.
+router.get('/debug-raw', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const [catalogCount, campCount, campSample, statsCount, statsSample, analyticsCount, analyticsSample, campTitles] = await Promise.all([
+      query(`SELECT COUNT(*)::int as n FROM ad_product_catalog WHERE cabinet = $1`, [cabinet]),
+      query(`SELECT COUNT(*)::int as n FROM ad_campaigns WHERE cabinet = $1`, [cabinet]),
+      query(`SELECT campaign_id, title, state, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 ORDER BY updated_at DESC LIMIT 10`, [cabinet]),
+      query(`SELECT COUNT(*)::int as n FROM ad_stats_daily WHERE cabinet = $1`, [cabinet]),
+      query(`SELECT * FROM ad_stats_daily WHERE cabinet = $1 ORDER BY collected_at DESC LIMIT 10`, [cabinet]),
+      query(`SELECT COUNT(*)::int as n FROM product_analytics_daily WHERE cabinet = $1`, [cabinet]),
+      query(`SELECT * FROM product_analytics_daily WHERE cabinet = $1 ORDER BY collected_at DESC LIMIT 10`, [cabinet]),
+      query(`SELECT title FROM ad_campaigns WHERE cabinet = $1 AND matched_offer_id IS NULL AND title IS NOT NULL LIMIT 30`, [cabinet]),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        catalogRows: catalogCount[0]?.n,
+        campaignsTotal: campCount[0]?.n,
+        campaignSample: campSample,
+        adStatsDailyTotal: statsCount[0]?.n,
+        adStatsDailySample: statsSample,
+        productAnalyticsDailyTotal: analyticsCount[0]?.n,
+        productAnalyticsDailySample: analyticsSample,
+        unmatchedTitlesSample: campTitles.map(r => r.title),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
