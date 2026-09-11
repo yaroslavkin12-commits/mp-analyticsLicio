@@ -214,4 +214,35 @@ router.get('/debug-raw', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ debug-роут: сырой ответ Ozon Seller Analytics API для Defly —
+// понять, почему product_analytics_daily пустая (0 строк).
+router.get('/debug-analytics', async (req, res) => {
+  const axios = require('axios');
+  const dayjs = require('dayjs');
+  const { getCabinet } = require('../config/cabinets');
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const cfg = getCabinet(cabinet);
+    const headers = { 'Client-Id': cfg.ozonClientId, 'Api-Key': cfg.ozonApiKey, 'Content-Type': 'application/json' };
+    const from = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+    const to = dayjs().format('YYYY-MM-DD');
+
+    const out = { clientIdSet: !!cfg.ozonClientId, apiKeySet: !!cfg.ozonApiKey, from, to, attempts: [] };
+
+    for (const metric of ['hits_view', 'revenue', 'ordered_units']) {
+      try {
+        const { data } = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
+          date_from: from, date_to: to, metrics: [metric], dimension: ['sku', 'day'], limit: 20, offset: 0,
+        }, { headers, timeout: 30000 });
+        out.attempts.push({ metric, ok: true, rowCount: data?.result?.data?.length, sample: data?.result?.data?.slice(0, 3) });
+      } catch (e) {
+        out.attempts.push({ metric, ok: false, status: e.response?.status, body: e.response?.data || e.message });
+      }
+    }
+    res.json({ success: true, data: out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 module.exports = router;
