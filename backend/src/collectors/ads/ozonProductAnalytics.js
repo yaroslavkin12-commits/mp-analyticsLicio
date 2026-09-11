@@ -18,20 +18,40 @@ async function fetchMetric(headers, dateFrom, dateTo, metricName) {
   while (true) {
     await delay(700);
     let resp;
-    try {
-      resp = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
-        date_from: dateFrom,
-        date_to: dateTo,
-        metrics: [metricName],
-        dimension: ['sku', 'day'],
-        limit: 1000,
-        offset,
-      }, { headers, timeout: 60000 });
-    } catch(e) {
-      const code = e.response?.data?.code;
-      if (code === 3) console.log(`[Ads Analytics] Метрика "${metricName}" недоступна — пропускаем`);
-      else console.warn(`[Ads Analytics] "${metricName}":`, e.response?.data?.message || e.message);
-      return null;
+    let rateLimitRetries = 0;
+    while (true) {
+      try {
+        resp = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
+          date_from: dateFrom,
+          date_to: dateTo,
+          metrics: [metricName],
+          dimension: ['sku', 'day'],
+          limit: 1000,
+          offset,
+        }, { headers, timeout: 60000 });
+        break;
+      } catch(e) {
+        const code = e.response?.data?.code;
+        const status = e.response?.status;
+        // code 3 = метрика больше не поддерживается Ozon — пропускаем сразу,
+        // без ретраев, это не временная ошибка.
+        if (code === 3) {
+          console.log(`[Ads Analytics] Метрика "${metricName}" недоступна — пропускаем`);
+          return null;
+        }
+        // code 8 / HTTP 429 = превышен лимит запросов в секунду — это
+        // временно, поэтому ждём и повторяем (с нарастающей паузой), а не
+        // сдаёмся сразу, как раньше (из-за чего вся метрика молча терялась).
+        if ((code === 8 || status === 429) && rateLimitRetries < 5) {
+          rateLimitRetries++;
+          const wait = 1500 * rateLimitRetries;
+          console.warn(`[Ads Analytics] "${metricName}": лимит запросов (429), retry ${rateLimitRetries}/5 через ${wait}мс`);
+          await delay(wait);
+          continue;
+        }
+        console.warn(`[Ads Analytics] "${metricName}":`, e.response?.data?.message || e.message);
+        return null;
+      }
     }
     const rows = resp.data?.result?.data || [];
     for (const row of rows) {

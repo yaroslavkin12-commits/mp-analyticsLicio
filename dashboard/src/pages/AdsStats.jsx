@@ -1,10 +1,14 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import dayjs from 'dayjs';
+import {
+  ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
+} from 'recharts';
 import { getAdsStats, getAdsCabinets, collectAds } from '../api';
 
 const DAY_OPTIONS = [14, 30, 60];
 
-// Блок 1 — сырые показатели воронки (общие для артикула, берутся из общей
-// аналитики по товару, как на Дашборде).
+// Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
+// по товару, как на Дашборде).
 const FUNNEL_ROWS = [
   { key: 'revenue',   label: 'Заказы, ₽',            fmt: 'money', good: 'up' },
   { key: 'orders',    label: 'Заказы, шт',            fmt: 'int',   good: 'up' },
@@ -14,24 +18,30 @@ const FUNNEL_ROWS = [
   { key: 'cart',      label: 'Корзины',                fmt: 'int',   good: 'up' },
 ];
 
-// Блок 2 — конверсии, отдельным визуальным блоком (СТР и СР).
+// Блок 2 — конверсии, отдельным визуальным блоком.
 const CONVERSION_ROWS = [
   { key: 'ctr',        label: 'СТР (карточка/показ)', fmt: 'pct', good: 'up' },
   { key: 'crToCart',   label: 'СР в корзину',          fmt: 'pct', good: 'up' },
   { key: 'crToOrder',  label: 'СР в заказ',            fmt: 'pct', good: 'up' },
 ];
 
+// Блок 3 — расход и ДРР внизу таблицы (просили не мешать со сводкой выше).
+const SPEND_ROWS = [
+  { key: 'spend', label: 'Расход, ₽', fmt: 'money0', good: 'neutral' },
+  { key: 'drr',   label: 'ДРР',       fmt: 'pct',    good: 'down' },
+];
+
+// Метрики для графика сравнения — фиксированный порядок цветов (как на
+// Дашборде: --series-1..8), максимум 8 штук под 8 доступных цветов.
 const METRIC_OPTIONS = [
-  { key: 'views',    label: 'Показы' },
-  { key: 'pdpViews', label: 'Переходы на карточку' },
-  { key: 'ctr',      label: 'СТР' },
-  { key: 'cart',     label: 'Корзины' },
-  { key: 'crToCart', label: 'СР в корзину' },
-  { key: 'orders',   label: 'Заказы, шт' },
-  { key: 'crToOrder',label: 'СР в заказ' },
-  { key: 'revenue',  label: 'Заказы, ₽' },
-  { key: 'spend',    label: 'Расход, ₽' },
-  { key: 'drr',      label: 'ДРР' },
+  { key: 'views',    label: 'Показы',               series: 'series-1' },
+  { key: 'pdpViews', label: 'Переходы на карточку', series: 'series-2' },
+  { key: 'cart',     label: 'Корзины',               series: 'series-3' },
+  { key: 'orders',   label: 'Заказы, шт',            series: 'series-4' },
+  { key: 'revenue',  label: 'Заказы, ₽',             series: 'series-5' },
+  { key: 'ctr',      label: 'СТР',                   series: 'series-6' },
+  { key: 'spend',    label: 'Расход, ₽',             series: 'series-7' },
+  { key: 'drr',      label: 'ДРР',                   series: 'series-8' },
 ];
 
 const PLACEMENT_OPTIONS = [
@@ -42,8 +52,14 @@ const PLACEMENT_OPTIONS = [
 
 const PAYMENT_OPTIONS = [
   { value: '', label: 'Все типы РК' },
-  { value: 'cpc', label: 'Средняя стоимость клика' },
+  { value: 'cpc', label: 'Ср. стоимость клика' },
   { value: 'target', label: 'Целевой расход' },
+];
+
+const SORT_OPTIONS = [
+  { value: 'spend', label: 'По расходу' },
+  { value: 'drr', label: 'По ДРР' },
+  { value: 'name', label: 'По названию' },
 ];
 
 function placementBucket(placement) {
@@ -60,6 +76,23 @@ function paymentBucket(paymentType) {
   return 'target';
 }
 
+// "Естественная" сортировка строк с числами — чтобы "2.Тест..." шёл перед
+// "10.Тест...", как в самом Ozon, а не по алфавиту.
+function naturalCompare(a, b) {
+  const re = /(\d+)|(\D+)/g;
+  const pa = String(a || '').match(re) || [];
+  const pb = String(b || '').match(re) || [];
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || '', y = pb[i] || '';
+    if (x !== y) {
+      const nx = parseInt(x, 10), ny = parseInt(y, 10);
+      if (!isNaN(nx) && !isNaN(ny)) return nx - ny;
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 function fmtValue(v, fmt) {
   if (v === null || v === undefined) return '—';
   switch (fmt) {
@@ -68,13 +101,10 @@ function fmtValue(v, fmt) {
     case 'int':    return Math.round(v).toLocaleString('ru-RU');
     case 'pct':    return `${v.toFixed(1)}%`;
     case 'pos':    return v.toFixed(1);
-    case 'raw':    return Number.isInteger(v) ? v.toLocaleString('ru-RU') : v.toFixed(2);
     default:       return String(v);
   }
 }
 
-// Тепловая заливка ячейки: нормализуем значение в строке к [0..1] по
-// диапазону min..max этой же строки.
 function heatColor(v, min, max, direction) {
   if (v === null || v === undefined || max === min || direction === 'neutral') return 'transparent';
   let t = (v - min) / (max - min);
@@ -125,162 +155,227 @@ function BlockLabel({ children }) {
   );
 }
 
-// График сравнения двух метрик во времени, индексированных к первому дню =
-// 100 (чтобы разномасштабные метрики можно было сравнивать на одной оси).
-// Цвета — уже существующая в приложении пара accent-wb/accent-oz.
-function CompareChart({ dates, byDate, metricA, metricB, rawA, rawB }) {
-  const ref = useRef(null);
-  const [hover, setHover] = useState(null);
-  const W = 640, H = 220, padL = 8, padR = 8, padT = 14, padB = 22;
+// Сегментированный переключатель — тот же стиль, что у переключателя
+// площадок (Все/WB/Ozon) в шапке приложения, вместо нативных <select>.
+function Segmented({ options, value, onChange, getKey, getLabel, getActive }) {
+  return (
+    <div style={{ display:'flex', gap:3, background:'var(--surface2)', borderRadius:8, padding:3, flexWrap:'wrap' }}>
+      {options.map(opt => {
+        const key = getKey ? getKey(opt) : opt.value;
+        const active = getActive ? getActive(opt) : value === opt.value;
+        return (
+          <button key={key} onClick={() => onChange(opt.value)} style={{
+            padding:'5px 12px', borderRadius:6, border:'none', fontSize:12.5, fontWeight:500,
+            background: active ? '#334155' : 'transparent',
+            color: active ? '#fff' : 'var(--text2)', whiteSpace:'nowrap',
+          }}>{getLabel ? getLabel(opt) : opt.label}</button>
+        );
+      })}
+    </div>
+  );
+}
 
-  const seriesA = useMemo(() => indexSeries(dates.map(d => byDate[d]?.[metricA])), [dates, byDate, metricA]);
-  const seriesB = useMemo(() => indexSeries(dates.map(d => byDate[d]?.[metricB])), [dates, byDate, metricB]);
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, padding:'8px 10px', fontSize:12 }}>
+      <div style={{ color:'var(--text2)', marginBottom:4 }}>{dayjs(label).format('DD.MM.YYYY')}</div>
+      {payload.map(p => {
+        const opt = METRIC_OPTIONS.find(m => m.key === p.dataKey.replace('_idx', ''));
+        const raw = p.payload[`${p.dataKey.replace('_idx', '')}_raw`];
+        return (
+          <div key={p.dataKey} style={{ display:'flex', gap:6, alignItems:'center' }}>
+            <span style={{ width:8, height:8, borderRadius:4, background:p.stroke, flexShrink:0 }} />
+            <span style={{ color:'var(--text2)' }}>{opt?.label || p.dataKey}:</span>
+            <span style={{ fontWeight:600 }}>{fmtValue(raw, opt?.key === 'ctr' || opt?.key === 'drr' ? 'pct' : 'int')}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
-  function indexSeries(vals) {
-    const base = vals.find(v => v !== null && v !== undefined && v !== 0);
-    if (base === undefined || base === null || base === 0) return vals.map(() => null);
-    return vals.map(v => (v === null || v === undefined) ? null : (v / base) * 100);
+// График сравнения — метрики включаются/выключаются кликом по кнопке (как
+// на Дашборде), значения индексируются к первому дню = 100, чтобы разные по
+// масштабу метрики (показы vs ДРР) можно было сравнивать на одной оси.
+function ArticleCompareChart({ dates, byDate, storageKey }) {
+  const [selected, setSelected] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(storageKey)) || ['views', 'orders']; }
+    catch(e) { return ['views', 'orders']; }
+  });
+  useEffect(() => { try { localStorage.setItem(storageKey, JSON.stringify(selected)); } catch(e) {} }, [selected, storageKey]);
+
+  function toggle(key) {
+    setSelected(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   }
 
-  const all = [...seriesA, ...seriesB].filter(v => v !== null);
-  const min = all.length ? Math.min(0, ...all) : 0;
-  const max = all.length ? Math.max(100, ...all) : 100;
-  const range = (max - min) || 1;
-
-  const x = i => padL + (i / Math.max(1, dates.length - 1)) * (W - padL - padR);
-  const y = v => padT + (1 - (v - min) / range) * (H - padT - padB);
-
-  function pathFor(series) {
-    let d = '';
-    series.forEach((v, i) => {
-      if (v === null) return;
-      d += (d ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1) + ' ';
+  const chartData = useMemo(() => {
+    const bases = {};
+    for (const m of selected) {
+      const firstNonZero = dates.map(d => byDate[d]?.[m]).find(v => v !== null && v !== undefined && v !== 0);
+      bases[m] = firstNonZero || null;
+    }
+    return dates.map(d => {
+      const row = { date: d };
+      for (const m of selected) {
+        const raw = byDate[d]?.[m] ?? null;
+        row[`${m}_raw`] = raw;
+        row[`${m}_idx`] = (raw !== null && bases[m]) ? (raw / bases[m]) * 100 : null;
+      }
+      return row;
     });
-    return d.trim();
-  }
-
-  function handleMove(e) {
-    const rect = ref.current.getBoundingClientRect();
-    const px = (e.clientX - rect.left) / rect.width * W;
-    let idx = Math.round(((px - padL) / (W - padL - padR)) * (dates.length - 1));
-    idx = Math.max(0, Math.min(dates.length - 1, idx));
-    setHover(idx);
-  }
-
-  const labelA = METRIC_OPTIONS.find(m => m.key === metricA)?.label || metricA;
-  const labelB = METRIC_OPTIONS.find(m => m.key === metricB)?.label || metricB;
+  }, [dates, byDate, selected]);
 
   return (
-    <div style={{ position:'relative' }}>
-      <svg
-        ref={ref}
-        viewBox={`0 0 ${W} ${H}`}
-        style={{ width:'100%', height:220, display:'block', cursor:'crosshair' }}
-        onMouseMove={handleMove}
-        onMouseLeave={() => setHover(null)}
-      >
-        {/* сетка */}
-        {[0,0.25,0.5,0.75,1].map(f => (
-          <line key={f} x1={padL} x2={W-padR} y1={padT+f*(H-padT-padB)} y2={padT+f*(H-padT-padB)}
-                stroke="var(--border)" strokeWidth={1} opacity={0.5}/>
-        ))}
-        <path d={pathFor(seriesA)} fill="none" stroke="var(--accent-wb)" strokeWidth={2}/>
-        <path d={pathFor(seriesB)} fill="none" stroke="var(--accent-oz)" strokeWidth={2}/>
-        {hover !== null && (
-          <line x1={x(hover)} x2={x(hover)} y1={padT} y2={H-padB} stroke="var(--text3)" strokeWidth={1} strokeDasharray="3,3"/>
-        )}
-        {hover !== null && seriesA[hover] !== null && (
-          <circle cx={x(hover)} cy={y(seriesA[hover])} r={3.5} fill="var(--accent-wb)"/>
-        )}
-        {hover !== null && seriesB[hover] !== null && (
-          <circle cx={x(hover)} cy={y(seriesB[hover])} r={3.5} fill="var(--accent-oz)"/>
-        )}
-      </svg>
-      <div style={{ display:'flex', gap:16, fontSize:12, color:'var(--text2)', padding:'2px 8px 0' }}>
-        <span><span style={{ display:'inline-block', width:10, height:2, background:'var(--accent-wb)', marginRight:6, verticalAlign:'middle' }}/>{labelA} (индекс, день 1 = 100)</span>
-        <span><span style={{ display:'inline-block', width:10, height:2, background:'var(--accent-oz)', marginRight:6, verticalAlign:'middle' }}/>{labelB} (индекс, день 1 = 100)</span>
+    <div style={{ padding:14, background:'var(--surface)', borderTop:'1px solid var(--border)' }}>
+      <div style={{ fontSize:12, fontWeight:600, color:'var(--text2)', marginBottom:8 }}>Сравнение метрик во времени (индекс, день 1 = 100)</div>
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:12 }}>
+        {METRIC_OPTIONS.map(m => {
+          const active = selected.includes(m.key);
+          return (
+            <button key={m.key} onClick={() => toggle(m.key)} style={{
+              padding:'4px 10px', borderRadius:6, border:'1px solid var(--border)',
+              background: active ? `var(--${m.series})` : 'var(--surface2)',
+              color: active ? '#fff' : 'var(--text2)', fontSize:12, fontWeight:500,
+            }}>{m.label}</button>
+          );
+        })}
       </div>
-      {hover !== null && (
-        <div style={{
-          position:'absolute', top:6, right:8, background:'var(--surface)', border:'1px solid var(--border)',
-          borderRadius:8, padding:'6px 10px', fontSize:12, boxShadow:'0 4px 12px rgba(0,0,0,.2)',
-        }}>
-          <div style={{ color:'var(--text3)', marginBottom:3 }}>{dates[hover]}</div>
-          <div style={{ color:'var(--accent-wb)' }}>{labelA}: {fmtValue(rawA[hover], 'raw')}</div>
-          <div style={{ color:'var(--accent-oz)' }}>{labelB}: {fmtValue(rawB[hover], 'raw')}</div>
-        </div>
+      {!selected.length ? (
+        <div style={{ padding:32, textAlign:'center', color:'var(--text2)' }}>Выберите хотя бы одну метрику</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={240}>
+          <LineChart data={chartData} margin={{ top:4, right:8, left:0, bottom:0 }}>
+            <CartesianGrid stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="date" tickFormatter={d => dayjs(d).format('DD.MM')}
+              stroke="var(--text3)" fontSize={11} tickLine={false} axisLine={{ stroke:'var(--border)' }} />
+            <YAxis stroke="var(--text3)" fontSize={11} tickLine={false} axisLine={false} width={40} />
+            <Tooltip content={<ChartTooltip />} />
+            {selected.length > 1 && <Legend wrapperStyle={{ fontSize:12 }}
+              formatter={(value) => METRIC_OPTIONS.find(m => `${m.key}_idx` === value)?.label || value} />}
+            {selected.map(key => {
+              const opt = METRIC_OPTIONS.find(m => m.key === key);
+              return (
+                <Line key={key} type="monotone" dataKey={`${key}_idx`} name={`${key}_idx`}
+                  stroke={`var(--${opt.series})`} strokeWidth={2} dot={{ r:3 }} activeDot={{ r:4 }} connectNulls />
+              );
+            })}
+          </LineChart>
+        </ResponsiveContainer>
       )}
     </div>
   );
 }
 
-function ArticleCompareChart({ dates, byDate }) {
-  const [metricA, setMetricA] = useState('views');
-  const [metricB, setMetricB] = useState('orders');
-  const rawA = dates.map(d => byDate[d]?.[metricA] ?? null);
-  const rawB = dates.map(d => byDate[d]?.[metricB] ?? null);
-  const selectStyle = { padding:'5px 8px', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:12 };
+// Компактный, НЕ раскрывающийся список кампаний артикула — раньше каждую РК
+// нужно было ещё раз раскрывать отдельно, что было запутанно. Теперь всё
+// видно сразу одним списком: полное название (как в самом Ozon), статус,
+// тип, зона показа, расход и ДРР по каждой конкретной РК.
+function CampaignsList({ campaigns }) {
   return (
-    <div style={{ padding:14, background:'var(--surface)', borderTop:'1px solid var(--border)' }}>
-      <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:8, flexWrap:'wrap' }}>
-        <span style={{ fontSize:12, color:'var(--text3)', fontWeight:600 }}>Сравнить:</span>
-        <select value={metricA} onChange={e => setMetricA(e.target.value)} style={selectStyle}>
-          {METRIC_OPTIONS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-        </select>
-        <span style={{ color:'var(--text3)' }}>vs</span>
-        <select value={metricB} onChange={e => setMetricB(e.target.value)} style={selectStyle}>
-          {METRIC_OPTIONS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-        </select>
-      </div>
-      <CompareChart dates={dates} byDate={byDate} metricA={metricA} metricB={metricB} rawA={rawA} rawB={rawB}/>
+    <div style={{ maxHeight: 420, overflowY:'auto', border:'1px solid var(--border)', borderRadius:8, margin:'0 10px 10px' }}>
+      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12.5 }}>
+        <thead>
+          <tr style={{ position:'sticky', top:0, background:'var(--surface2)', zIndex:1 }}>
+            <th style={{ textAlign:'left', padding:'7px 10px', fontWeight:600, color:'var(--text3)' }}>Название</th>
+            <th style={{ textAlign:'left', padding:'7px 8px', fontWeight:600, color:'var(--text3)' }}>Статус</th>
+            <th style={{ textAlign:'left', padding:'7px 8px', fontWeight:600, color:'var(--text3)' }}>Тип</th>
+            <th style={{ textAlign:'left', padding:'7px 8px', fontWeight:600, color:'var(--text3)' }}>Зона</th>
+            <th style={{ textAlign:'right', padding:'7px 10px', fontWeight:600, color:'var(--text3)' }}>Расход, ₽</th>
+            <th style={{ textAlign:'right', padding:'7px 10px', fontWeight:600, color:'var(--text3)' }}>ДРР</th>
+          </tr>
+        </thead>
+        <tbody>
+          {campaigns.map(camp => (
+            <tr key={camp.campaignId} style={{ borderTop:'1px solid var(--border)' }}>
+              <td style={{ padding:'7px 10px', color:'var(--text)', whiteSpace:'normal', wordBreak:'break-word' }}>{camp.title || camp.campaignId}</td>
+              <td style={{ padding:'7px 8px' }}>
+                <span style={{
+                  fontSize:11, padding:'2px 8px', borderRadius:999, whiteSpace:'nowrap',
+                  background: camp.state === 'CAMPAIGN_STATE_RUNNING' ? 'rgba(34,197,94,.18)' : 'rgba(148,163,184,.18)',
+                  color: camp.state === 'CAMPAIGN_STATE_RUNNING' ? 'var(--ok, #22c55e)' : 'var(--text3)',
+                }}>{camp.state === 'CAMPAIGN_STATE_RUNNING' ? 'активна' : 'выключена'}</span>
+              </td>
+              <td style={{ padding:'7px 8px', color:'var(--text2)', whiteSpace:'nowrap' }}>
+                {camp.paymentType ? (paymentBucket(camp.paymentType) === 'cpc' ? 'CPC' : 'Цел. расход') : '—'}
+              </td>
+              <td style={{ padding:'7px 8px', color:'var(--text2)', whiteSpace:'nowrap' }}>
+                {placementBucket(camp.placement) === 'search' ? 'Поиск' : placementBucket(camp.placement) ? 'Поиск+рек.' : '—'}
+              </td>
+              <td style={{ padding:'7px 10px', textAlign:'right', whiteSpace:'nowrap' }}>{fmtValue(camp.totalSpend, 'money0')}</td>
+              <td style={{ padding:'7px 10px', textAlign:'right', whiteSpace:'nowrap', fontWeight:600 }}>{fmtValue(camp.drr, 'pct')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function CampaignBlock({ camp, article, dates }) {
-  const [open, setOpen] = useState(false);
-  const spendValues = dates.map(d => camp.byDate[d]?.spend ?? 0);
-  const min = 0, max = Math.max(...spendValues, 0);
+// Карточка одного артикула — вынесена отдельным компонентом, чтобы хук
+// useMemo (расход/ДРР по дням) вызывался безусловно на верхнем уровне
+// компонента, а не внутри .map() у родителя (это нарушало Rules of Hooks).
+function ArticleCard({ article, dates, cabinet, isOpen, onToggle }) {
+  const mergedByDate = useMemo(() => {
+    const out = {};
+    for (const d of dates) {
+      const spend = article.campaigns.reduce((s, c) => s + (c.byDate[d]?.spend || 0), 0);
+      const revenue = article.byDate[d]?.revenue || 0;
+      out[d] = { ...article.byDate[d], spend, drr: revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0) };
+    }
+    return out;
+  }, [article, dates]);
+
   return (
-    <div style={{ border:'1px solid var(--border)', borderRadius:8, margin:'8px 10px', overflow:'hidden' }}>
-      <div onClick={() => setOpen(o => !o)} style={{
-        display:'flex', alignItems:'center', gap:8, padding:'8px 10px', cursor:'pointer',
+    <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
+      <div onClick={onToggle} style={{
+        display:'flex', alignItems:'center', gap:10, padding:'12px 16px', cursor:'pointer',
         background:'var(--surface2)', flexWrap:'wrap',
       }}>
-        <span>{open ? '▾' : '▸'}</span>
-        <span style={{ fontWeight:600, fontSize:13 }}>{camp.title || camp.campaignId}</span>
-        <span style={{
-          fontSize:11, padding:'2px 8px', borderRadius:999,
-          background: camp.state === 'CAMPAIGN_STATE_RUNNING' ? 'rgba(34,197,94,.18)' : 'rgba(148,163,184,.18)',
-          color: camp.state === 'CAMPAIGN_STATE_RUNNING' ? 'var(--ok, #22c55e)' : 'var(--text3)',
-        }}>{camp.state === 'CAMPAIGN_STATE_RUNNING' ? 'активна' : 'выключена'}</span>
-        {camp.paymentType && <span style={{ fontSize:11, color:'var(--text3)' }}>{paymentBucket(camp.paymentType) === 'cpc' ? 'CPC' : 'Целевой расход'}</span>}
-        <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text2)' }}>
-          Расход: {fmtValue(camp.totalSpend, 'money0')} ₽ · ДРР: {fmtValue(camp.drr, 'pct')}
+        <span>{isOpen ? '▾' : '▸'}</span>
+        <span style={{ fontSize:15, fontWeight:700 }}>{article.offerId || 'Без привязки к артикулу'}</span>
+        {article.productName && <span style={{ color:'var(--text3)', fontSize:12 }}>{article.productName}</span>}
+        <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text2)', display:'flex', gap:14 }}>
+          <span>РК: {article.campaigns.length}</span>
+          <span>Расход: {fmtValue(article.totals.spend, 'money0')} ₽</span>
+          <span style={{ fontWeight:700 }}>ДРР: {fmtValue(article.totals.drr, 'pct')}</span>
         </span>
       </div>
-      {open && (
-        <div style={{ padding:'10px' }}>
-          {article.offerId && (
-            <div style={{ fontSize:15, fontWeight:700, marginBottom:8 }}>
-              Артикул: <span style={{ color:'var(--accent-oz)' }}>{article.offerId}</span>
+
+      {isOpen && (
+        <>
+          <div style={{ padding:'10px 0 0' }}>
+            <div style={{ padding:'0 16px 8px', fontSize:11, color:'var(--text3)', fontWeight:700, textTransform:'uppercase', letterSpacing:.4 }}>
+              Кампании ({article.campaigns.length})
             </div>
-          )}
+            <CampaignsList campaigns={article.campaigns} />
+          </div>
+
           <div style={{ overflowX:'auto' }}>
-            <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: 160 + dates.length * 62 }}>
-              <tbody>
+            <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: 260 + dates.length * 62, width:'100%' }}>
+              <thead>
                 <tr>
-                  <td style={{ position:'sticky', left:0, background:'var(--surface)', color:'var(--text2)', padding:'5px 10px', borderRight:'1px solid var(--border)', whiteSpace:'nowrap' }}>Расход, ₽</td>
+                  <th style={{ position:'sticky', left:0, zIndex:2, background:'var(--surface)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'left', minWidth:220 }}>Метрика</th>
                   {dates.map(d => (
-                    <td key={d} style={{ padding:'5px 6px', textAlign:'center', background: heatColor(camp.byDate[d]?.spend, min, max, 'neutral'), whiteSpace:'nowrap' }}>
-                      {fmtValue(camp.byDate[d]?.spend, 'money0')}
-                    </td>
+                    <th key={d} style={{ borderBottom:'2px solid var(--border)', padding:'8px 6px', fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap' }}>
+                      {d.slice(8,10)}.{d.slice(5,7)}
+                    </th>
                   ))}
                 </tr>
+              </thead>
+              <tbody>
+                <BlockLabel>Показатели</BlockLabel>
+                <MetricTable rows={FUNNEL_ROWS} dates={dates} byDate={mergedByDate} />
+                <BlockLabel>Конверсии</BlockLabel>
+                <MetricTable rows={CONVERSION_ROWS} dates={dates} byDate={mergedByDate} />
+                <BlockLabel>Расход и ДРР</BlockLabel>
+                <MetricTable rows={SPEND_ROWS} dates={dates} byDate={mergedByDate} />
               </tbody>
             </table>
           </div>
-        </div>
+
+          <ArticleCompareChart dates={dates} byDate={mergedByDate} storageKey={`mp-ads-chart-${cabinet}`} />
+        </>
       )}
     </div>
   );
@@ -298,6 +393,7 @@ export default function AdsStats({ cabinet }) {
   const [search, setSearch] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('');
   const [placementFilter, setPlacementFilter] = useState('');
+  const [sortBy, setSortBy] = useState('spend');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -336,41 +432,48 @@ export default function AdsStats({ cabinet }) {
   const dates = data?.dates || [];
   const articlesRaw = data?.articles || [];
 
-  // Все фильтры применяются к кампаниям (AND), артикул скрывается только
-  // если после фильтрации у него не осталось ни одной кампании.
+  // Фильтры применяются к кампаниям (все параллельно, через И), артикул
+  // скрывается только если после фильтрации у него не осталось РК.
+  // Кампании внутри артикула сортируются "естественно" по названию — так
+  // же, как их нумерует сам Ozon (1., 2., ... 10., а не 1,10,2 по алфавиту).
   const articles = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return articlesRaw
+    const filtered = articlesRaw
       .map(article => {
-        const campaigns = article.campaigns.filter(c => {
-          if (onlyActive && c.state !== 'CAMPAIGN_STATE_RUNNING') return false;
-          if (q && !(c.title || '').toLowerCase().includes(q) && !(c.campaignId || '').includes(q)) return false;
-          if (paymentFilter && paymentBucket(c.paymentType) !== paymentFilter) return false;
-          if (placementFilter && placementBucket(c.placement) !== placementFilter) return false;
-          return true;
-        });
+        const campaigns = article.campaigns
+          .filter(c => {
+            if (onlyActive && c.state !== 'CAMPAIGN_STATE_RUNNING') return false;
+            if (q && !(c.title || '').toLowerCase().includes(q) && !(c.campaignId || '').includes(q)) return false;
+            if (paymentFilter && paymentBucket(c.paymentType) !== paymentFilter) return false;
+            if (placementFilter && placementBucket(c.placement) !== placementFilter) return false;
+            return true;
+          })
+          .sort((a, b) => naturalCompare(a.title, b.title));
         return { ...article, campaigns };
       })
       .filter(a => a.campaigns.length > 0);
-  }, [articlesRaw, onlyActive, search, paymentFilter, placementFilter]);
+
+    const matched = filtered.filter(a => a.offerId);
+    const unmatched = filtered.filter(a => !a.offerId);
+
+    const cmp = sortBy === 'name'
+      ? (a, b) => naturalCompare(a.campaigns[0]?.title, b.campaigns[0]?.title)
+      : sortBy === 'drr'
+      ? (a, b) => (b.totals.drr || 0) - (a.totals.drr || 0)
+      : (a, b) => (b.totals.spend || 0) - (a.totals.spend || 0);
+
+    matched.sort(cmp);
+    unmatched.sort(cmp);
+    return [...matched, ...unmatched];
+  }, [articlesRaw, onlyActive, search, paymentFilter, placementFilter, sortBy]);
 
   if (loading && !data) return <div style={{ padding:60, textAlign:'center', color:'var(--text2)' }}>Загрузка...</div>;
-
-  const selectStyle = { padding:'6px 10px', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:13 };
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
         <h1 style={{ fontSize:17, fontWeight:700, margin:0 }}>Реклама</h1>
-        <div style={{ display:'flex', gap:3, background:'var(--surface2)', borderRadius:8, padding:3 }}>
-          {DAY_OPTIONS.map(d => (
-            <button key={d} onClick={() => setDays(d)} style={{
-              padding:'5px 14px', borderRadius:6, border:'none', fontSize:13, fontWeight:500,
-              background: days===d ? '#334155' : 'transparent',
-              color: days===d ? '#fff' : 'var(--text2)',
-            }}>{d} дн.</button>
-          ))}
-        </div>
+        <Segmented options={DAY_OPTIONS.map(d => ({ value:d, label:`${d} дн.` }))} value={days} onChange={setDays} getKey={o=>o.value} />
         <button onClick={handleCollect} disabled={collecting} style={{
           marginLeft:'auto', padding:'7px 14px', borderRadius:8, border:'1px solid var(--border)',
           background:'var(--surface2)', color:'var(--text)', fontSize:13, fontWeight:500,
@@ -380,7 +483,7 @@ export default function AdsStats({ cabinet }) {
         </button>
       </div>
 
-      {/* Фильтры — все работают параллельно (AND) */}
+      {/* Фильтры и сортировка — всё работает параллельно (И) */}
       <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:10 }}>
         <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, color:'var(--text2)', cursor:'pointer' }}>
           <input type="checkbox" checked={onlyActive} onChange={e => setOnlyActive(e.target.checked)} />
@@ -390,21 +493,17 @@ export default function AdsStats({ cabinet }) {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Поиск по названию РК…"
-          style={{ ...selectStyle, minWidth:180 }}
+          style={{ padding:'6px 10px', borderRadius:8, minWidth:180 }}
         />
-        <select value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)} style={selectStyle}>
-          {PAYMENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <select value={placementFilter} onChange={e => setPlacementFilter(e.target.value)} style={selectStyle}>
-          {PLACEMENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <Segmented options={PAYMENT_OPTIONS} value={paymentFilter} onChange={setPaymentFilter} />
+        <Segmented options={PLACEMENT_OPTIONS} value={placementFilter} onChange={setPlacementFilter} />
+        <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text3)' }}>Сортировка:</span>
+        <Segmented options={SORT_OPTIONS} value={sortBy} onChange={setSortBy} />
       </div>
 
       {notConfigured && (
         <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:16, color:'var(--text2)', fontSize:13 }}>
           Для кабинета «{cabInfo?.label || cabinet}» ещё не добавлены токены Ozon в настройках сервера — реклама пока не собирается.
-          Нужны переменные окружения <code>{cabinet.toUpperCase()}_OZON_CLIENT_ID</code>, <code>{cabinet.toUpperCase()}_OZON_API_KEY</code>,{' '}
-          <code>{cabinet.toUpperCase()}_OZON_PERF_CLIENT_ID</code>, <code>{cabinet.toUpperCase()}_OZON_PERF_SECRET</code>.
         </div>
       )}
 
@@ -422,71 +521,15 @@ export default function AdsStats({ cabinet }) {
 
       {articles.map(article => {
         const key = article.offerId || '__unmatched__';
-        const isOpen = expandedArticles.has(key) || articles.length <= 2;
         return (
-          <div key={key} style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
-            <div onClick={() => toggleArticle(key)} style={{
-              display:'flex', alignItems:'center', gap:10, padding:'12px 16px', cursor:'pointer',
-              background:'var(--surface2)', flexWrap:'wrap',
-            }}>
-              <span>{isOpen ? '▾' : '▸'}</span>
-              <span style={{ fontSize:15, fontWeight:700 }}>{article.offerId || 'Без привязки к артикулу'}</span>
-              {article.productName && <span style={{ color:'var(--text3)', fontSize:12 }}>{article.productName}</span>}
-              <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text2)', display:'flex', gap:14 }}>
-                <span>РК: {article.campaigns.length}</span>
-                <span>Расход: {fmtValue(article.totals.spend, 'money0')} ₽</span>
-                <span style={{ fontWeight:700 }}>Общий ДРР: {fmtValue(article.totals.drr, 'pct')}</span>
-              </span>
-            </div>
-
-            {isOpen && (
-              <>
-                <div style={{ overflowX:'auto' }}>
-                  <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: 260 + dates.length * 62, width:'100%' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ position:'sticky', left:0, zIndex:2, background:'var(--surface)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'left', minWidth:220 }}>Метрика</th>
-                        {dates.map(d => (
-                          <th key={d} style={{ borderBottom:'2px solid var(--border)', padding:'8px 6px', fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap' }}>
-                            {d.slice(8,10)}.{d.slice(5,7)}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <BlockLabel>Показатели</BlockLabel>
-                      <MetricTable rows={FUNNEL_ROWS} dates={dates} byDate={article.byDate} />
-                      <BlockLabel>Конверсии</BlockLabel>
-                      <MetricTable rows={CONVERSION_ROWS} dates={dates} byDate={article.byDate} />
-                    </tbody>
-                  </table>
-                </div>
-
-                <ArticleCompareChart dates={dates} byDate={{
-                  ...Object.fromEntries(dates.map(d => [d, {
-                    ...article.byDate[d],
-                    spend: dates.includes(d) ? article.campaigns.reduce((s,c) => s + (c.byDate[d]?.spend || 0), 0) : 0,
-                    drr: article.byDate[d]?.revenue > 0
-                      ? (article.campaigns.reduce((s,c) => s + (c.byDate[d]?.spend || 0), 0) / article.byDate[d].revenue * 100)
-                      : 0,
-                  }]))
-                }} />
-
-                <div style={{ padding:'4px 0 12px' }}>
-                  <div style={{ padding:'8px 16px 0', fontSize:11, color:'var(--text3)', fontWeight:700, textTransform:'uppercase', letterSpacing:.4 }}>
-                    Рекламные кампании
-                  </div>
-                  {article.campaigns.map(camp => (
-                    <CampaignBlock key={camp.campaignId} camp={camp} article={article} dates={dates} />
-                  ))}
-                  <div style={{ display:'flex', justifyContent:'space-between', padding:'10px 20px 0', fontSize:13, fontWeight:700, color:'var(--text)' }}>
-                    <span>Общий ДРР по артикулу ({article.campaigns.length} РК)</span>
-                    <span>{fmtValue(article.totals.drr, 'pct')}</span>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+          <ArticleCard
+            key={key}
+            article={article}
+            dates={dates}
+            cabinet={cabinet}
+            isOpen={expandedArticles.has(key)}
+            onToggle={() => toggleArticle(key)}
+          />
         );
       })}
     </div>
