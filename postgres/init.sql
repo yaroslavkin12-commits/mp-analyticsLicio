@@ -280,3 +280,11 @@ CREATE TABLE IF NOT EXISTS product_analytics_daily (
   UNIQUE(cabinet, platform, date, sku)
 );
 CREATE INDEX IF NOT EXISTS idx_prod_analytics_daily_date ON product_analytics_daily(cabinet, date);
+
+-- Доп. поля кампании — нужны для фильтров на вкладке "Реклама" (тип РК,
+-- зона показов, тип бюджета). Добавляются отдельными ALTER, т.к. таблица
+-- ad_campaigns уже могла существовать без них на проде.
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS payment_type VARCHAR(64);
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS autopilot_strategy VARCHAR(64);
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS placement VARCHAR(128);
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS expense_strategy VARCHAR(64);

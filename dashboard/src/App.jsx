@@ -7,6 +7,14 @@ import Settings from './pages/Settings';
 
 const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, settings: Settings };
 
+// Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
+// страницы вообще доступны в каждом кабинете (Defly пока видит только
+// вкладку "Реклама").
+const PAGES_BY_CABINET = {
+  licio: ['dashboard', 'stocks', 'settings'],
+  defly: ['ads'],
+};
+
 const THEME_KEY = 'mp-theme';
 const CABINET_KEY = 'mp-cabinet';
 
@@ -27,7 +35,9 @@ export default function App() {
 
   useEffect(() => {
     try { localStorage.setItem(CABINET_KEY, cabinet); } catch(e) { /* ignore */ }
-  }, [cabinet]);
+    const allowed = PAGES_BY_CABINET[cabinet] || PAGES_BY_CABINET.licio;
+    if (!allowed.includes(page)) setPage(allowed[0]);
+  }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const Page = PAGES[page] || Dashboard;
 

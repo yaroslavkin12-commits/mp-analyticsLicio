@@ -36,9 +36,13 @@ router.post('/collect', async (req, res) => {
   }, 100);
 });
 
-// GET /api/ads/stats?cabinet=defly&days=30 — сводная таблица по дням для
-// вкладки "Реклама": строка = кампания (обычно = артикул, если кампания
-// названа как товар), колонки = метрики по каждому дню.
+// GET /api/ads/stats?cabinet=defly&days=30 — сводка для вкладки "Реклама",
+// сгруппированная по артикулу (а не по кампании), т.к. на один артикул может
+// быть запущено сразу несколько РК. Внутри каждого артикула — список его
+// кампаний (метаданные + расход по дням) и метрики воронки, общие для всех
+// его кампаний, взятые из общей аналитики по товару (product_analytics_daily,
+// та же логика, что и на Дашборде), а НЕ из статистики самой РК — так как
+// поштучная статистика по кампаниям в Performance API не работает.
 router.get('/stats', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';
@@ -46,131 +50,133 @@ router.get('/stats', async (req, res) => {
     const from = dayjs().subtract(days, 'day').format('YYYY-MM-DD');
     const to = dayjs().format('YYYY-MM-DD');
 
-    const [campaigns, adRows, analyticsRows] = await Promise.all([
-      query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku
+    const [campaigns, adRows, analyticsRows, catalogRows] = await Promise.all([
+      query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
+                    payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT date::text as date, campaign_id, views, clicks, ctr, spend, avg_bid, orders, orders_money
+      query(`SELECT date::text as date, campaign_id, spend
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
       query(`SELECT date::text as date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
                     hits_tocart, orders_item, revenue, position_category
              FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
+      query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`,
+             [cabinet]),
     ]);
 
     const dates = [];
     for (let i = days; i >= 0; i--) dates.push(dayjs().subtract(i, 'day').format('YYYY-MM-DD'));
 
-    // Аналитика по товару, индексированная по sku|date — джойним к кампаниям
-    // через matched_sku (см. комментарий в ozonPerf.js про сопоставление по
-    // названию кампании).
-    const analyticsByKey = new Map();
+    const analyticsByKey = new Map(); // sku|date -> row
     for (const r of analyticsRows) analyticsByKey.set(`${r.sku}|${r.date}`, r);
 
-    const adByKey = new Map();
-    for (const r of adRows) adByKey.set(`${r.campaign_id}|${r.date}`, r);
+    const spendByKey = new Map(); // campaignId|date -> spend
+    for (const r of adRows) spendByKey.set(`${r.campaign_id}|${r.date}`, Number(r.spend) || 0);
 
-    const campaignsOut = campaigns.map(camp => {
-      const byDate = {};
-      for (const date of dates) {
-        const ad = adByKey.get(`${camp.campaign_id}|${date}`);
-        const an = camp.matched_sku ? analyticsByKey.get(`${camp.matched_sku}|${date}`) : null;
+    const nameByOfferId = new Map(catalogRows.map(r => [r.offer_id, r.product_name]));
 
-        const views = an ? Number(an.hits_view) : 0;
-        const clicks = ad ? Number(ad.clicks) : 0;
-        const cart = an ? Number(an.hits_tocart) : 0;
-        const orders = an ? Number(an.orders_item) : (ad ? Number(ad.orders) : 0);
-        const revenue = an ? Number(an.revenue) : (ad ? Number(ad.orders_money) : 0);
-        const spend = ad ? Number(ad.spend) : 0;
-
-        byDate[date] = {
-          orders_money: revenue,
-          orders_units: orders,
-          position: an?.position_category != null ? Number(an.position_category) : null,
-          views: an ? views : (ad ? Number(ad.views) : 0),
-          clicks: ad ? Number(ad.clicks) : 0,
-          ctr: ad ? Number(ad.ctr) : (views > 0 ? clicks / views * 100 : 0),
-          cart,
-          cr_to_cart: views > 0 ? cart / views * 100 : 0,
-          cr_to_order: cart > 0 ? orders / cart * 100 : (views > 0 ? orders / views * 100 : 0),
-          bid: ad ? Number(ad.avg_bid) : null,
-          spend,
-          drr: revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0),
-          adOn: ad ? true : null, // была ли в этот день статистика по кампании — прокси для "ОЗЗ вкл"
-        };
+    // Группируем кампании по matched_offer_id — так на один артикул попадают
+    // все его РК. Кампании без привязки к артикулу идут в отдельную группу
+    // "unmatched", видимую по названию кампании.
+    const byArticle = new Map();
+    function getArticle(offerId, sku) {
+      const key = offerId || '__unmatched__';
+      if (!byArticle.has(key)) {
+        byArticle.set(key, {
+          offerId: offerId || null,
+          sku: sku || null,
+          productName: offerId ? (nameByOfferId.get(offerId) || null) : null,
+          campaigns: [],
+        });
       }
-      return {
+      return byArticle.get(key);
+    }
+
+    for (const camp of campaigns) {
+      const article = getArticle(camp.matched_offer_id, camp.matched_sku);
+      const byDate = {};
+      let totalSpend = 0;
+      for (const date of dates) {
+        const spend = spendByKey.get(`${camp.campaign_id}|${date}`) || 0;
+        totalSpend += spend;
+        byDate[date] = { spend };
+      }
+      article.campaigns.push({
         campaignId: camp.campaign_id,
         title: camp.title,
         state: camp.state,
-        offerId: camp.matched_offer_id,
+        advObjectType: camp.adv_object_type,
+        paymentType: camp.payment_type,
+        autopilotStrategy: camp.autopilot_strategy,
+        placement: camp.placement,
+        expenseStrategy: camp.expense_strategy,
+        totalSpend,
         byDate,
-      };
-    });
-
-    res.json({ success: true, data: { dates, campaigns: campaignsOut } });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ВРЕМЕННЫЙ debug-роут: сырые ответы Performance API без записи в базу —
-// нужен, чтобы свериться с реальными именами полей (документация Ozon
-// закрыта для автоматического доступа, поэтому часть парсинга — по best
-// effort из вторичных источников).
-router.get('/debug-raw', async (req, res) => {
-  const axios = require('axios');
-  const dayjs = require('dayjs');
-  const { getCabinet } = require('../config/cabinets');
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const cfg = getCabinet(cabinet);
-    const out = {};
-
-    const tokenResp = await axios.post('https://api-performance.ozon.ru/api/client/token',
-      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
-      { timeout: 15000 }
-    ).catch(e => ({ error: e.response?.data || e.message }));
-    out.token = tokenResp.error ? tokenResp : { ok: true, expires_in: tokenResp.data?.expires_in };
-    const token = tokenResp.data?.access_token;
-    if (!token) { return res.json({ success: true, data: out }); }
-
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-
-    const campResp = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
-      { headers, timeout: 30000 }
-    ).catch(e => ({ error: e.response?.data || e.message }));
-    out.campaigns = campResp.error ? campResp : campResp.data;
-
-    const skuCampaigns = (campResp.data?.list || []).filter(c => c.advObjectType === 'SKU');
-    const firstCampaign = skuCampaigns[0] || campResp.data?.list?.[0];
-    if (firstCampaign) {
-      const from = dayjs().subtract(14, 'day').format('YYYY-MM-DD');
-      const to = dayjs().format('YYYY-MM-DD');
-
-      // Пробуем несколько вариантов, т.к. по вторичным источникам не удалось
-      // однозначно подтвердить, GET это или POST и на каком домене.
-      const attempts = [];
-
-      const postJson = await axios.post('https://api-performance.ozon.ru/api/client/statistics/json',
-        { campaigns: [String(firstCampaign.id)], dateFrom: from, dateTo: to, groupBy: 'DATE' },
-        { headers, timeout: 30000 }
-      ).catch(e => ({ error: e.response?.data || e.message, status: e.response?.status }));
-      attempts.push({ name: 'POST /statistics/json', result: postJson.error ? postJson : postJson.data });
-
-      const expenseResp = await axios.get('https://api-performance.ozon.ru/api/client/statistics/expense/json',
-        { headers, params: { campaigns: [firstCampaign.id], dateFrom: from, dateTo: to }, timeout: 30000 }
-      ).catch(e => ({ error: e.response?.data || e.message, status: e.response?.status }));
-      attempts.push({ name: 'GET /statistics/expense/json', result: expenseResp.error ? expenseResp : expenseResp.data });
-
-      out.statisticsAttempts = attempts;
-      out.testedCampaignId = firstCampaign.id;
-      out.testedCampaignTitle = firstCampaign.title;
+      });
     }
 
-    res.json({ success: true, data: out });
+    // Метрики воронки по артикулу — общие для всех его кампаний, из
+    // product_analytics_daily по matched_sku. Считаем по дням и суммарно за
+    // весь выбранный период (для ДРР).
+    const articlesOut = [];
+    for (const [, article] of byArticle) {
+      const byDate = {};
+      let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0;
+      for (const date of dates) {
+        const an = article.sku ? analyticsByKey.get(`${article.sku}|${date}`) : null;
+        const views = an ? Number(an.hits_view) || 0 : 0;
+        const pdpViews = an ? Number(an.hits_view_pdp) || 0 : 0;
+        const cart = an ? Number(an.hits_tocart) || 0 : 0;
+        const orders = an ? Number(an.orders_item) || 0 : 0;
+        const revenue = an ? Number(an.revenue) || 0 : 0;
+        const position = an?.position_category != null ? Number(an.position_category) : null;
+
+        totalRevenue += revenue; totalOrders += orders; totalViews += views; totalPdpViews += pdpViews; totalCart += cart;
+
+        byDate[date] = {
+          views,
+          pdpViews,
+          ctr: views > 0 ? pdpViews / views * 100 : 0,
+          cart,
+          crToCart: views > 0 ? cart / views * 100 : 0,
+          crToOrder: cart > 0 ? orders / cart * 100 : 0,
+          orders,
+          revenue,
+          position,
+        };
+      }
+
+      // ДРР по каждой РК: расход этой РК за период / выручка артикула за
+      // период * 100. Общий ДРР артикула: сумма расходов ВСЕХ его РК за
+      // период / выручка артикула за период * 100.
+      let totalSpendAllCampaigns = 0;
+      for (const camp of article.campaigns) {
+        camp.drr = totalRevenue > 0 ? camp.totalSpend / totalRevenue * 100 : (camp.totalSpend > 0 ? 100 : 0);
+        totalSpendAllCampaigns += camp.totalSpend;
+      }
+      const totalDrr = totalRevenue > 0 ? totalSpendAllCampaigns / totalRevenue * 100 : (totalSpendAllCampaigns > 0 ? 100 : 0);
+
+      articlesOut.push({
+        offerId: article.offerId,
+        productName: article.productName,
+        byDate,
+        totals: { revenue: totalRevenue, orders: totalOrders, views: totalViews, pdpViews: totalPdpViews, cart: totalCart, spend: totalSpendAllCampaigns, drr: totalDrr },
+        campaigns: article.campaigns,
+      });
+    }
+
+    // Сначала артикулы с реальной привязкой (сортировка по расходу за
+    // период — самые активные сверху), затем несматченные кампании.
+    articlesOut.sort((a, b) => {
+      if (!a.offerId && b.offerId) return 1;
+      if (a.offerId && !b.offerId) return -1;
+      return (b.totals.spend || 0) - (a.totals.spend || 0);
+    });
+
+    res.json({ success: true, data: { dates, articles: articlesOut } });
   } catch (e) {
+    console.error(e);
     res.status(500).json({ success: false, error: e.message });
   }
 });

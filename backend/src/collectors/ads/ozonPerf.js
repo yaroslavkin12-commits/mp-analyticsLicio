@@ -5,8 +5,7 @@ const { getCabinet } = require('../../config/cabinets');
 
 // Performance API Ozon — отдельный OAuth-токен (Client-Id + Client-Secret),
 // не тот же Api-Key, что используется для остатков/заказов. Живёт на домене
-// api-performance.ozon.ru (старый performance.ozon.ru — прежний домен, Ozon
-// сам объявлял переезд). Токен живёт ~30 минут, поэтому получаем заново
+// api-performance.ozon.ru. Токен живёт ~30 минут, поэтому получаем заново
 // на каждый прогон сборщика, а не кэшируем между вызовами.
 async function getToken(cfg) {
   if (!cfg.ozonPerfClientId || !cfg.ozonPerfSecret) return null;
@@ -22,24 +21,36 @@ async function getToken(cfg) {
   }
 }
 
-// Пытаемся угадать, какому товару соответствует кампания — многие продавцы
-// называют рекламную кампанию именем артикула (как в примере пользователя:
-// кампания "Hv4-2KR" == артикул "Hv4-2KR"). Это эвристика: точного метода
-// "кампания -> список SKU" в Performance API мы не нашли/не смогли
-// подтвердить по документации (сайт закрыт для автоматического доступа),
-// поэтому связываем по совпадению названия с offer_id из каталога, а если
-// совпадения нет — строка просто остаётся без привязки к артикулу и видна
-// в таблице по названию кампании.
+// Пытаемся угадать, какому товару соответствует кампания — продавец называет
+// рекламную кампанию с упоминанием артикула в названии (подтверждено на
+// реальных данных Defly, например кампания "5.Тест Женя Гранта V020-2 ПОИСК"
+// соответствует артикулу "V020-2"). Точного метода "кампания -> список SKU"
+// в Performance API не нашли/не смогли подтвердить по документации, поэтому
+// связываем по вхождению offer_id в название кампании.
 function matchOfferByTitle(title, catalogByOfferId) {
   if (!title) return null;
   const t = title.trim().toLowerCase();
   if (catalogByOfferId.has(t)) return catalogByOfferId.get(t);
   for (const [offerId, row] of catalogByOfferId) {
-    if (t.includes(offerId)) return row;
+    if (offerId && t.includes(offerId)) return row;
   }
   return null;
 }
 
+// moneySpent у Ozon приходит строкой в русском формате с запятой как
+// десятичным разделителем, например "4847,71".
+function parseRuNumber(v) {
+  if (v == null) return 0;
+  if (typeof v === 'number') return v;
+  return Number(String(v).replace(',', '.')) || 0;
+}
+
+// Эта функция теперь отвечает ТОЛЬКО за метаданные кампаний и расход
+// (GET .../statistics/expense/json — единственный синхронный эндпоинт,
+// подтверждённый рабочим live-тестом). Воронка (показы/клики/корзины/заказы)
+// берётся из общей аналитики по товару (ozonProductAnalytics.js), т.к.
+// поштучная статистика по кампаниям (.../api/client/statistics) отдаёт 405 и
+// не работает на этом аккаунте.
 async function collectAdStats(cabinet, days) {
   const cfg = getCabinet(cabinet);
   const token = await getToken(cfg);
@@ -54,7 +65,7 @@ async function collectAdStats(cabinet, days) {
   let campaigns = [];
   try {
     // Без фильтра по state — нужны и остановленные кампании тоже (видеть,
-    // когда рекламу выключили — колонка "ОЗЗ вкл/выкл" в требуемой таблице).
+    // когда рекламу выключили).
     const { data } = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
       { headers, timeout: 30000 });
     campaigns = data?.list || [];
@@ -70,53 +81,59 @@ async function collectAdStats(cabinet, days) {
   );
   const catalogByOfferId = new Map(catalogRows.map(r => [String(r.offer_id).toLowerCase(), r]));
 
-  let total = 0;
   for (const camp of campaigns) {
     const match = matchOfferByTitle(camp.title, catalogByOfferId);
     try {
       await query(
-        `INSERT INTO ad_campaigns (cabinet, platform, campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku, updated_at)
-         VALUES ($1,'ozon',$2,$3,$4,$5,$6,$7,NOW())
+        `INSERT INTO ad_campaigns (cabinet, platform, campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
+                                    payment_type, autopilot_strategy, placement, expense_strategy, updated_at)
+         VALUES ($1,'ozon',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
          ON CONFLICT (cabinet, platform, campaign_id) DO UPDATE SET
            title = EXCLUDED.title, state = EXCLUDED.state, adv_object_type = EXCLUDED.adv_object_type,
-           matched_offer_id = EXCLUDED.matched_offer_id, matched_sku = EXCLUDED.matched_sku, updated_at = NOW()`,
+           matched_offer_id = EXCLUDED.matched_offer_id, matched_sku = EXCLUDED.matched_sku,
+           payment_type = EXCLUDED.payment_type, autopilot_strategy = EXCLUDED.autopilot_strategy,
+           placement = EXCLUDED.placement, expense_strategy = EXCLUDED.expense_strategy, updated_at = NOW()`,
         [cabinet, String(camp.id), camp.title || null, camp.state || null, camp.advObjectType || null,
-         match?.offer_id || null, match?.sku || null]
+         match?.offer_id || null, match?.sku || null,
+         camp.PaymentType || camp.paymentType || null,
+         camp.productAutopilotStrategy || null,
+         Array.isArray(camp.placement) ? camp.placement.join(',') : (camp.placement || null),
+         camp.expenseStrategy || null]
       );
     } catch(e) { console.warn(`[Ads Perf:${cabinet}] Кампания ${camp.id}:`, e.message); }
-
-    let rows = [];
-    try {
-      const { data } = await axios.get('https://api-performance.ozon.ru/api/client/statistics',
-        { headers, params: { campaigns: [camp.id], dateFrom: from, dateTo: to, groupBy: 'DATE' }, timeout: 30000 });
-      rows = data?.list || data?.rows || [];
-    } catch(e) {
-      console.warn(`[Ads Perf:${cabinet}] Статистика ${camp.id}:`, e.response?.data || e.message);
-      await new Promise(r => setTimeout(r, 200));
-      continue;
-    }
-
-    for (const row of rows) {
-      const views = Number(row.views) || 0;
-      const clicks = Number(row.clicks) || 0;
-      try {
-        await query(
-          `INSERT INTO ad_stats_daily (cabinet, platform, date, campaign_id, views, clicks, ctr, spend, avg_bid, orders, orders_money)
-           VALUES ($1,'ozon',$2,$3,$4,$5,$6,$7,$8,$9,$10)
-           ON CONFLICT (cabinet, platform, date, campaign_id) DO UPDATE SET
-             views=EXCLUDED.views, clicks=EXCLUDED.clicks, ctr=EXCLUDED.ctr, spend=EXCLUDED.spend,
-             avg_bid=EXCLUDED.avg_bid, orders=EXCLUDED.orders, orders_money=EXCLUDED.orders_money`,
-          [cabinet, row.date, String(camp.id), views, clicks,
-           row.ctr != null ? Number(row.ctr) : (views > 0 ? clicks / views * 100 : 0),
-           Number(row.moneySpent) || 0, Number(row.avgBid) || 0,
-           Number(row.orders) || 0, Number(row.ordersMoney) || 0]
-        );
-        total++;
-      } catch(e) { /* skip */ }
-    }
-    await new Promise(r => setTimeout(r, 200));
   }
-  console.log(`[Ads Perf:${cabinet}] Кампаний: ${campaigns.length}, строк статистики: ${total}`);
+
+  // Расход — одним вызовом на весь период; параметр campaigns на этом
+  // эндпоинте на практике не фильтрует (Ozon отдаёт все кампании в любом
+  // случае), поэтому запрашиваем сразу все и раскладываем по campaign_id
+  // локально — так надёжнее и не требует N вызовов на N кампаний.
+  let expenseRows = [];
+  try {
+    const { data } = await axios.get('https://api-performance.ozon.ru/api/client/statistics/expense/json',
+      { headers, params: { dateFrom: from, dateTo: to }, timeout: 30000 });
+    expenseRows = data?.rows || data?.list || (Array.isArray(data) ? data : []);
+  } catch(e) {
+    console.warn(`[Ads Perf:${cabinet}] Расход:`, e.response?.data || e.message);
+  }
+
+  let total = 0;
+  for (const row of expenseRows) {
+    const campaignId = String(row.id ?? row.campaignId ?? row.campaign_id ?? '');
+    const date = row.date;
+    if (!campaignId || !date) continue;
+    const spend = parseRuNumber(row.moneySpent);
+    try {
+      await query(
+        `INSERT INTO ad_stats_daily (cabinet, platform, date, campaign_id, spend)
+         VALUES ($1,'ozon',$2,$3,$4)
+         ON CONFLICT (cabinet, platform, date, campaign_id) DO UPDATE SET spend = EXCLUDED.spend`,
+        [cabinet, date, campaignId, spend]
+      );
+      total++;
+    } catch(e) { console.warn(`[Ads Perf:${cabinet}] Расход ${campaignId}/${date}:`, e.message); }
+  }
+
+  console.log(`[Ads Perf:${cabinet}] Кампаний: ${campaigns.length}, строк расхода: ${total}`);
   return total;
 }
 

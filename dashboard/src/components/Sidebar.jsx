@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-const NAV = [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['ads','📣','Реклама'],['settings','⚙️','Настройки']];
+const NAV_BY_CABINET = {
+  licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['settings','⚙️','Настройки']],
+  defly: [['ads','📣','Реклама']],
+};
 const CABINETS = [['licio','Licio'],['defly','Defly']];
 
 export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
@@ -14,6 +17,7 @@ export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
   }, []);
 
   const cabinetLabel = CABINETS.find(([id]) => id === cabinet)?.[1] || cabinet;
+  const nav = NAV_BY_CABINET[cabinet] || NAV_BY_CABINET.licio;
 
   return (
     <div style={{ width:210, background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
@@ -56,7 +60,7 @@ export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
         )}
       </div>
       <nav style={{ flex:1, padding:'4px 8px' }}>
-        {NAV.map(([id,icon,label]) => (
+        {nav.map(([id,icon,label]) => (
           <button key={id} onClick={() => setPage(id)} style={{
             display:'flex', alignItems:'center', gap:9, width:'100%', padding:'9px 12px', borderRadius:8,
             border:'none', marginBottom:2, background:page===id?'var(--surface2)':'transparent',
