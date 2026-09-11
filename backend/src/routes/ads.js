@@ -15,23 +15,36 @@ router.get('/cabinets', (req, res) => {
 
 // POST /api/ads/collect?cabinet=defly&days=30 — ручной запуск сбора рекламной
 // статистики для кабинета. Нужен, пока Defly не в общем расписании сборщиков.
+// Статус последнего фонового сбора — только в памяти процесса (сбрасывается
+// при рестарте), нужен для диагностики через /debug-raw, т.к. логи сервера
+// снаружи не видны.
+const lastCollectRun = {};
+
 router.post('/collect', async (req, res) => {
   const cabinet = req.query.cabinet || req.body?.cabinet;
   const days = parseInt(req.query.days || req.body?.days, 10) || 30;
   if (!cabinet) return res.status(400).json({ success: false, error: 'Нужен параметр cabinet' });
 
   res.json({ success: true, message: `Сбор запущен для кабинета ${cabinet}` });
+  const run = { startedAt: new Date().toISOString(), step: 'catalog', error: null, finishedAt: null };
+  lastCollectRun[cabinet] = run;
   setTimeout(async () => {
     try {
       console.log(`[Ads] Сбор для ${cabinet}: каталог...`);
       await collectCatalog(cabinet);
+      run.step = 'ad_stats';
       console.log(`[Ads] Сбор для ${cabinet}: реклама (Performance API)...`);
       await collectAdStats(cabinet, days);
+      run.step = 'product_analytics';
       console.log(`[Ads] Сбор для ${cabinet}: аналитика по товарам...`);
       await collectProductAnalytics(cabinet, days);
+      run.step = 'done';
+      run.finishedAt = new Date().toISOString();
       console.log(`[Ads] Сбор для ${cabinet}: готово`);
     } catch(e) {
-      console.error(`[Ads] Сбор для ${cabinet} упал:`, e.message);
+      run.error = e.response?.data || e.message;
+      run.finishedAt = new Date().toISOString();
+      console.error(`[Ads] Сбор для ${cabinet} упал на шаге ${run.step}:`, e.response?.data || e.message);
     }
   }, 100);
 });
@@ -207,6 +220,7 @@ router.get('/debug-raw', async (req, res) => {
         productAnalyticsDailyTotal: analyticsCount[0]?.n,
         productAnalyticsDailySample: analyticsSample,
         unmatchedTitlesSample: campTitles.map(r => r.title),
+        lastCollectRun: lastCollectRun[cabinet] || null,
       },
     });
   } catch (e) {

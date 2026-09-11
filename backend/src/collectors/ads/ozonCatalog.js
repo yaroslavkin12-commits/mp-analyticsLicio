@@ -2,6 +2,32 @@ const axios = require('axios');
 const { query } = require('../../db');
 const { getCabinet } = require('../../config/cabinets');
 
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// Обёртка с retry для вызовов api-seller.ozon.ru — этот API периодически
+// отдаёт HTTP 429 / code:8 "request rate limit per second" (подтверждено
+// живым тестом), причём это временная ошибка, а не постоянный сбой.
+// Раньше здесь не было retry вообще — один 429 на /v3/product/list ронял
+// ВЕСЬ сборщик целиком (каталог -> реклама -> аналитика), даже те шаги,
+// которые сами по себе работали нормально. Теперь ждём и повторяем.
+async function withRetry(fn, label) {
+  for (let attempt = 0; attempt <= 5; attempt++) {
+    try {
+      return await fn();
+    } catch(e) {
+      const code = e.response?.data?.code;
+      const status = e.response?.status;
+      if ((code === 8 || status === 429) && attempt < 5) {
+        const wait = 1500 * (attempt + 1);
+        console.warn(`[Ads] ${label}: лимит запросов (429), retry ${attempt + 1}/5 через ${wait}мс`);
+        await delay(wait);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 // Справочник товаров кабинета (offer_id -> sku, название) — нужен, чтобы
 // связать рекламные кампании и аналитику по SKU с конкретным артикулом.
 // В отличие от collectors/ozon/catalog.js (который берёт offer_id из уже
@@ -19,15 +45,15 @@ async function collectCatalog(cabinet) {
   const offerIds = [];
   let lastId = '';
   while (true) {
-    const { data } = await axios.post('https://api-seller.ozon.ru/v3/product/list',
+    const data = await withRetry(() => axios.post('https://api-seller.ozon.ru/v3/product/list',
       { filter: {}, last_id: lastId, limit: 1000 },
       { headers, timeout: 60000 }
-    );
+    ).then(r => r.data), 'Каталог: список товаров');
     const items = data?.result?.items || [];
     for (const it of items) if (it.offer_id) offerIds.push(it.offer_id);
     lastId = data?.result?.last_id || '';
     if (!lastId || !items.length) break;
-    await new Promise(r => setTimeout(r, 250));
+    await delay(700);
   }
 
   if (!offerIds.length) { console.log(`[Ads:${cabinet}] Каталог: товаров не найдено`); return 0; }
@@ -38,11 +64,11 @@ async function collectCatalog(cabinet) {
     const chunk = offerIds.slice(i, i + CHUNK);
     let data;
     try {
-      ({ data } = await axios.post('https://api-seller.ozon.ru/v3/product/info/list',
+      data = await withRetry(() => axios.post('https://api-seller.ozon.ru/v3/product/info/list',
         { offer_id: chunk },
         { headers, timeout: 60000 }
-      ));
-    } catch(e) { console.warn(`[Ads:${cabinet}] Каталог инфо:`, e.message); continue; }
+      ).then(r => r.data), 'Каталог: инфо о товарах');
+    } catch(e) { console.warn(`[Ads:${cabinet}] Каталог инфо:`, e.response?.data || e.message); continue; }
 
     for (const item of (data?.items || [])) {
       const sku = item.sku || item.fbo_sku || item.fbs_sku || null;
@@ -57,7 +83,7 @@ async function collectCatalog(cabinet) {
         total++;
       } catch(e) { /* skip */ }
     }
-    await new Promise(r => setTimeout(r, 250));
+    await delay(700);
   }
   console.log(`[Ads:${cabinet}] Каталог: ${total}`);
   return total;
