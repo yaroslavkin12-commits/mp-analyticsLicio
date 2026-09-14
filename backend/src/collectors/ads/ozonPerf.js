@@ -3,6 +3,8 @@ const dayjs = require('dayjs');
 const { query } = require('../../db');
 const { getCabinet } = require('../../config/cabinets');
 
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
 // Performance API Ozon — отдельный OAuth-токен (Client-Id + Client-Secret),
 // не тот же Api-Key, что используется для остатков/заказов. Живёт на домене
 // api-performance.ozon.ru. Токен живёт ~30 минут, поэтому получаем заново
@@ -21,12 +23,47 @@ async function getToken(cfg) {
   }
 }
 
-// Пытаемся угадать, какому товару соответствует кампания — продавец называет
-// рекламную кампанию с упоминанием артикула в названии (подтверждено на
-// реальных данных Defly, например кампания "5.Тест Женя Гранта V020-2 ПОИСК"
-// соответствует артикулу "V020-2"). Точного метода "кампания -> список SKU"
-// в Performance API не нашли/не смогли подтвердить по документации, поэтому
-// связываем по вхождению offer_id в название кампании.
+// Запрос с retry на 429 (лимит запросов в секунду — та же проблема, что и
+// у Seller API) — без этого один rate-limit на середине списка кампаний
+// рвал бы привязку для всех оставшихся.
+async function withRetry(fn, label) {
+  for (let attempt = 0; attempt <= 4; attempt++) {
+    try {
+      return await fn();
+    } catch(e) {
+      const status = e.response?.status;
+      if (status === 429 && attempt < 4) {
+        const wait = 1200 * (attempt + 1);
+        console.warn(`[Ads Perf] ${label}: лимит запросов (429), retry ${attempt + 1}/4 через ${wait}мс`);
+        await delay(wait);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+// Настоящая привязка кампании к товару — Ozon отдаёт список SKU, добавленных
+// в конкретную РК (только для кампаний с оплатой за клик/охват по товарам;
+// для остальных типов список пуст или эндпоинт недоступен). Это надёжнее,
+// чем угадывать товар по названию кампании — угадывание не срабатывает,
+// когда продавец называет кампанию по модели авто, а не по коду товара
+// (например "1.Тест Женя Haval M6 ПОИСК" вместо "Hv4-2KR").
+async function getCampaignSkus(campaignId, headers) {
+  try {
+    const data = await withRetry(() => axios.get(
+      `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/v2/products`,
+      { headers, timeout: 15000 }
+    ).then(r => r.data), `Товары РК ${campaignId}`);
+    return (data?.products || []).map(p => String(p.sku)).filter(Boolean);
+  } catch(e) {
+    return [];
+  }
+}
+
+// Резервный вариант для кампаний, где Ozon не отдал список товаров (баннеры,
+// автопилот по всему магазину и т.п.) — угадываем по вхождению offer_id в
+// название кампании, как раньше.
 function matchOfferByTitle(title, catalogByOfferId) {
   if (!title) return null;
   const t = title.trim().toLowerCase();
@@ -74,15 +111,28 @@ async function collectAdStats(cabinet, days) {
     return 0;
   }
 
-  // Каталог для попытки сматчить кампанию с артикулом.
+  // Каталог для сопоставления кампании с артикулом — по SKU (надёжно) и как
+  // запасной вариант по вхождению offer_id в название (угадывание).
   const catalogRows = await query(
     `SELECT offer_id, sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`,
     [cabinet]
   );
   const catalogByOfferId = new Map(catalogRows.map(r => [String(r.offer_id).toLowerCase(), r]));
+  const catalogBySku = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r]));
 
   for (const camp of campaigns) {
-    const match = matchOfferByTitle(camp.title, catalogByOfferId);
+    let match = null;
+    // Настоящая привязка через API — только для активных/недавних кампаний
+    // с оплатой за клик, чтобы не тратить сотни запросов на старые
+    // архивные/выключенные кампании без шанса на успех.
+    if (camp.state !== 'CAMPAIGN_STATE_ARCHIVED' && camp.state !== 'CAMPAIGN_STATE_FINISHED') {
+      const skus = await getCampaignSkus(camp.id, headers);
+      for (const sku of skus) {
+        if (catalogBySku.has(sku)) { match = catalogBySku.get(sku); break; }
+      }
+      await delay(350);
+    }
+    if (!match) match = matchOfferByTitle(camp.title, catalogByOfferId);
     try {
       await query(
         `INSERT INTO ad_campaigns (cabinet, platform, campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
