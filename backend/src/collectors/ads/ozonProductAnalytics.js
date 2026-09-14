@@ -19,8 +19,17 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 // пауза между страницами увеличена и ретраи стали намного настойчивее:
 // 10 попыток на страницу с паузой до 20 секунд на последней. Это делает один
 // вызов дольше, но гарантированно не даёт метрике "потеряться" молча.
-const MAX_RATE_LIMIT_RETRIES = 10;
-const RATE_LIMIT_BASE_WAIT = 2000;
+// Живые наблюдения (14-15 сентября): ПЕРВАЯ метрика в очереди почти всегда
+// проходит нормально — Seller API "остыл" за время предыдущего шага (сбор
+// кампаний). А вот КАЖДАЯ СЛЕДУЮЩАЯ метрика начинает получать 429 сразу и
+// требует много ретраев, потому что реальное окно лимита у Ozon шире, чем
+// казалось: не "запросов в секунду", а скорее "запросов за несколько секунд
+// подряд". Поэтому вместо того, чтобы полагаться на ретраи (которые лишь
+// НАКАПЛИВАЮТ достаточную паузу постфактум, но не всегда успевают за 10
+// попыток), пауза увеличена сразу — так, чтобы к следующему запросу лимит
+// уже гарантированно "отпустил".
+const MAX_RATE_LIMIT_RETRIES = 12;
+const RATE_LIMIT_BASE_WAIT = 4000;
 
 // "Пульс" — обновляет updated_at в ad_collect_runs, чтобы блокировка
 // isRunActive() (см. runStatus.js) не сочла ещё живой процесс мёртвым из-за
@@ -37,7 +46,7 @@ async function fetchMetric(headers, dateFrom, dateTo, metricName, cabinet) {
   const result = new Map();
   let offset = 0;
   while (true) {
-    await delay(1800);
+    await delay(4000);
     let resp;
     let rateLimitRetries = 0;
     while (true) {
@@ -65,7 +74,7 @@ async function fetchMetric(headers, dateFrom, dateTo, metricName, cabinet) {
         // сдаёмся сразу, как раньше (из-за чего вся метрика молча терялась).
         if ((code === 8 || status === 429) && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
           rateLimitRetries++;
-          const wait = Math.min(RATE_LIMIT_BASE_WAIT * rateLimitRetries, 20000);
+          const wait = Math.min(RATE_LIMIT_BASE_WAIT * rateLimitRetries, 35000);
           console.warn(`[Ads Analytics] "${metricName}": лимит запросов (429), retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} через ${wait}мс`);
           if (cabinet) await heartbeat(cabinet, `${metricName}: retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}`);
           await delay(wait);
@@ -168,8 +177,11 @@ async function collectProductAnalytics(cabinet, days) {
     }
     // Пауза между разными метриками — не только между страницами одной
     // метрики — чтобы не начинать следующую метрику "с разбегу" сразу после
-    // серии ретраев предыдущей.
-    await delay(2500);
+    // серии ретраев предыдущей. Живые тесты показали: первая метрика в
+    // очереди почти всегда проходит с первого раза, а вот все следующие
+    // упираются в лимит и жгут кучу ретраев — короткой паузы (2.5с) между
+    // метриками было явно недостаточно, лимит Ozon не успевал "отпустить".
+    await delay(6000);
   }
 
   // Если какая-то метрика не набралась вообще ни с одной попытки — пробуем
@@ -179,7 +191,7 @@ async function collectProductAnalytics(cabinet, days) {
   // API "остыл", часто успешен там, где первый проход упёрся в лимит.
   if (failedMetrics.length) {
     console.warn(`[Ads Analytics] Повторная попытка для метрик, не собравшихся с первого раза: ${failedMetrics.join(', ')}`);
-    await delay(5000);
+    await delay(10000);
     for (const m of failedMetrics) {
       await heartbeat(cabinet, `повтор метрики: ${m}`);
       const data = await fetchMetric(headers, from, to, m, cabinet);
@@ -188,7 +200,7 @@ async function collectProductAnalytics(cabinet, days) {
         total += saved;
         console.log(`[Ads Analytics:${cabinet}] "${m}" (повтор): сохранено строк ${saved}`);
       }
-      await delay(2500);
+      await delay(6000);
     }
   }
 
