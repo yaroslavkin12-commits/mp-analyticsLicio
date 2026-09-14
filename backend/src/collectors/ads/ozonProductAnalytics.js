@@ -81,6 +81,49 @@ async function fetchMetric(headers, dateFrom, dateTo, metricName) {
   return result;
 }
 
+// Колонка в product_analytics_daily для каждой метрики Ozon — нужна для
+// точечного UPSERT-а по одной метрике (см. ниже, почему это важно).
+const METRIC_COLUMN = {
+  hits_view: 'hits_view',
+  hits_view_search: 'hits_view_search',
+  hits_view_pdp: 'hits_view_pdp',
+  hits_tocart: 'hits_tocart',
+  orders_item: 'orders_item',
+  revenue: 'revenue',
+  position_category: 'position_category',
+};
+
+// Сохраняет результат ОДНОЙ метрики сразу после её сбора, а не в самом конце
+// после всех 7 метрик. Раньше все метрики копились в памяти и запись в БД
+// шла одним проходом в конце collectProductAnalytics — из-за этого, если
+// процесс обрывался посреди сбора (сервер Render на бесплатном тарифе
+// периодически "засыпает"/перезапускается без явной ошибки), ВСЯ уже
+// проделанная работа пропадала бесследно: ни одной строки не сохранялось,
+// даже если 5 из 7 метрик уже успешно собрались. Точечный upsert по каждой
+// метрике сразу же фиксирует прогресс — обрыв на середине теряет только то,
+// что ещё не собрано, а не всё целиком.
+async function saveMetric(cabinet, metricName, dataMap, offerBySku) {
+  const column = METRIC_COLUMN[metricName];
+  if (!column || !dataMap || !dataMap.size) return 0;
+  let saved = 0;
+  for (const [key, entry] of dataMap) {
+    const [sku, date] = key.split('|');
+    const value = metricName === 'position_category' ? (entry[metricName] ?? null) : (entry[metricName] ?? 0);
+    try {
+      await query(
+        `INSERT INTO product_analytics_daily (cabinet, platform, date, sku, offer_id, ${column})
+         VALUES ($1,'ozon',$2,$3,$4,$5)
+         ON CONFLICT (cabinet, platform, date, sku) DO UPDATE SET
+           offer_id = COALESCE(EXCLUDED.offer_id, product_analytics_daily.offer_id),
+           ${column} = EXCLUDED.${column}`,
+        [cabinet, date, sku, offerBySku.get(String(sku)) || null, value]
+      );
+      saved++;
+    } catch(e) { /* пропускаем отдельную строку, не весь сбор */ }
+  }
+  return saved;
+}
+
 async function collectProductAnalytics(cabinet, days) {
   const cfg = getCabinet(cabinet);
   if (!cfg.ozonClientId || !cfg.ozonApiKey) {
@@ -91,12 +134,24 @@ async function collectProductAnalytics(cabinet, days) {
   const from = dayjs().subtract(days || 30, 'day').format('YYYY-MM-DD');
   const to = dayjs().format('YYYY-MM-DD');
 
+  const catalogRows = await query(
+    `SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`,
+    [cabinet]
+  );
+  const offerBySku = new Map(catalogRows.map(r => [String(r.sku), r.offer_id]));
+
   const METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
-  const collected = {};
   const failedMetrics = [];
+  let total = 0;
   for (const m of METRICS) {
     const data = await fetchMetric(headers, from, to, m);
-    if (data !== null) collected[m] = data; else failedMetrics.push(m);
+    if (data !== null) {
+      const saved = await saveMetric(cabinet, m, data, offerBySku);
+      total += saved;
+      console.log(`[Ads Analytics:${cabinet}] "${m}": сохранено строк ${saved}`);
+    } else {
+      failedMetrics.push(m);
+    }
     // Пауза между разными метриками — не только между страницами одной
     // метрики — чтобы не начинать следующую метрику "с разбегу" сразу после
     // серии ретраев предыдущей.
@@ -113,44 +168,16 @@ async function collectProductAnalytics(cabinet, days) {
     await delay(5000);
     for (const m of failedMetrics) {
       const data = await fetchMetric(headers, from, to, m);
-      if (data !== null) collected[m] = data;
+      if (data !== null) {
+        const saved = await saveMetric(cabinet, m, data, offerBySku);
+        total += saved;
+        console.log(`[Ads Analytics:${cabinet}] "${m}" (повтор): сохранено строк ${saved}`);
+      }
       await delay(2500);
     }
   }
 
-  const allKeys = new Set();
-  for (const map of Object.values(collected)) for (const k of map.keys()) allKeys.add(k);
-  if (!allKeys.size) { console.log(`[Ads Analytics:${cabinet}] Нет данных`); return 0; }
-
-  const catalogRows = await query(
-    `SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`,
-    [cabinet]
-  );
-  const offerBySku = new Map(catalogRows.map(r => [String(r.sku), r.offer_id]));
-
-  let total = 0;
-  for (const key of allKeys) {
-    const [sku, date] = key.split('|');
-    const get = (m) => collected[m] ? (collected[m].get(key)?.[m] || 0) : 0;
-    try {
-      await query(
-        `INSERT INTO product_analytics_daily
-          (cabinet, platform, date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
-           hits_tocart, orders_item, revenue, position_category)
-         VALUES ($1,'ozon',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (cabinet, platform, date, sku) DO UPDATE SET
-           offer_id=EXCLUDED.offer_id, hits_view=EXCLUDED.hits_view, hits_view_search=EXCLUDED.hits_view_search,
-           hits_view_pdp=EXCLUDED.hits_view_pdp, hits_tocart=EXCLUDED.hits_tocart, orders_item=EXCLUDED.orders_item,
-           revenue=EXCLUDED.revenue, position_category=EXCLUDED.position_category`,
-        [cabinet, date, sku, offerBySku.get(String(sku)) || null,
-         get('hits_view'), get('hits_view_search'), get('hits_view_pdp'),
-         get('hits_tocart'), get('orders_item'), get('revenue'),
-         collected.position_category ? (collected.position_category.get(key)?.position_category ?? null) : null]
-      );
-      total++;
-    } catch(e) { /* skip */ }
-  }
-  console.log(`[Ads Analytics:${cabinet}] Сохранено: ${total}`);
+  console.log(`[Ads Analytics:${cabinet}] Сохранено всего: ${total}`);
   return total;
 }
 

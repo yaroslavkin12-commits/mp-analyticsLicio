@@ -6,6 +6,7 @@ const { listCabinets } = require('../config/cabinets');
 const { collectCatalog } = require('../collectors/ads/ozonCatalog');
 const { collectAdStats } = require('../collectors/ads/ozonPerf');
 const { collectProductAnalytics } = require('../collectors/ads/ozonProductAnalytics');
+const { saveRunStatus, isRunActive } = require('../collectors/ads/runStatus');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
 // в интерфейсе, какие токены ещё нужно добавить в Render).
@@ -17,36 +18,19 @@ router.get('/cabinets', (req, res) => {
 // статистики для кабинета. Нужен, пока Defly не в общем расписании сборщиков.
 //
 // Статус последнего фонового сбора раньше хранился только в памяти процесса
-// (lastCollectRun) — и пропадал бесследно, если процесс перезапускался
-// посреди долгого сбора. А сбор теперь (после усиления защиты от лимита
-// Ozon) идёт 15-30+ минут, и на практике сервер несколько раз перезапускался
-// именно в середине сбора показов/заказов, из-за чего он молча обрывался и
-// новые данные не сохранялись, а диагностировать это было нечем — /debug-raw
-// после рестарта всегда показывал lastCollectRun: null, как будто сбор
-// вообще не запускался. Теперь пишем статус в таблицу ad_collect_runs — он
-// переживает рестарт процесса и виден в /debug-raw в любом случае.
-async function saveRunStatus(cabinet, patch) {
-  try {
-    await query(
-      `INSERT INTO ad_collect_runs (cabinet, started_at, step, detail, error, finished_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
-       ON CONFLICT (cabinet) DO UPDATE SET
-         started_at = COALESCE(EXCLUDED.started_at, ad_collect_runs.started_at),
-         step = COALESCE(EXCLUDED.step, ad_collect_runs.step),
-         detail = EXCLUDED.detail,
-         error = EXCLUDED.error,
-         finished_at = EXCLUDED.finished_at,
-         updated_at = NOW()`,
-      [cabinet, patch.startedAt || null, patch.step || null, patch.detail || null,
-       patch.error || null, patch.finishedAt || null]
-    );
-  } catch(e) { console.warn('[Ads] Не удалось сохранить статус сбора:', e.message); }
-}
+// и пропадал бесследно при рестарте — вынесено в отдельный модуль
+// collectors/ads/runStatus.js, общий с планировщиком (scheduler.js), чтобы
+// оба места, откуда может запуститься сбор для кабинета, не запускали его
+// друг на друга одновременно (см. подробности в runStatus.js).
 
 router.post('/collect', async (req, res) => {
   const cabinet = req.query.cabinet || req.body?.cabinet;
   const days = parseInt(req.query.days || req.body?.days, 10) || 30;
   if (!cabinet) return res.status(400).json({ success: false, error: 'Нужен параметр cabinet' });
+
+  if (await isRunActive(cabinet)) {
+    return res.json({ success: false, message: `Сбор для кабинета ${cabinet} уже идёт — дождитесь завершения` });
+  }
 
   res.json({ success: true, message: `Сбор запущен для кабинета ${cabinet}` });
   const startedAt = new Date().toISOString();

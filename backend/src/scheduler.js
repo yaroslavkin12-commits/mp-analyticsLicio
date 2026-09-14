@@ -18,6 +18,7 @@ const { CABINETS }                          = require('./config/cabinets');
 const { collectCatalog: adsCatalog }         = require('./collectors/ads/ozonCatalog');
 const { collectAdStats: adsStats }           = require('./collectors/ads/ozonPerf');
 const { collectProductAnalytics: adsAnalytics } = require('./collectors/ads/ozonProductAnalytics');
+const { saveRunStatus: adsSaveRunStatus, isRunActive: adsIsRunActive } = require('./collectors/ads/runStatus');
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
@@ -127,12 +128,30 @@ async function runAdsCabinets(days = 3) {
   for (const [id, cfg] of Object.entries(CABINETS)) {
     if (id === 'licio') continue; // у Licio реклама уже идёт через runOzon/ozAds
     if (!cfg.ozonClientId && !cfg.ozonPerfClientId) continue;
+    // Ручной запуск через POST /api/ads/collect (routes/ads.js) пишет статус
+    // в ту же таблицу ad_collect_runs — если он ещё выполняется, не запускаем
+    // сбор по расписанию поверх него: два параллельных сбора для одного
+    // кабинета вдвое усиливают лимит запросов Ozon и не дают ни одному из них
+    // нормально завершиться (это и было главной причиной, почему показы и
+    // заказы никогда не собирались до конца).
+    if (await adsIsRunActive(id)) {
+      console.log(`[Ads:${id}] Сбор уже идёт (запущен вручную или предыдущим циклом) — пропускаем по расписанию`);
+      continue;
+    }
     console.log(`\n=== Реклама: ${id} ===`);
+    const startedAt = new Date().toISOString();
+    await adsSaveRunStatus(id, { startedAt, step: 'catalog', error: null, finishedAt: null, detail: 'по расписанию' });
     try {
       await run(`${id} Каталог`, id, 'ads_catalog', () => adsCatalog(id));
+      await adsSaveRunStatus(id, { step: 'ad_stats' });
       await run(`${id} Реклама (Performance)`, id, 'ads_perf', () => adsStats(id, days));
+      await adsSaveRunStatus(id, { step: 'product_analytics' });
       await run(`${id} Аналитика товаров`, id, 'ads_analytics', () => adsAnalytics(id, days));
-    } catch(e) { console.error(`[Ads:${id}]`, e.message); }
+      await adsSaveRunStatus(id, { step: 'done', finishedAt: new Date().toISOString() });
+    } catch(e) {
+      console.error(`[Ads:${id}]`, e.message);
+      await adsSaveRunStatus(id, { error: e.message || String(e), finishedAt: new Date().toISOString() });
+    }
   }
 }
 
