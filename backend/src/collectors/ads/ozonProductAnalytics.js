@@ -2,6 +2,7 @@ const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('../../db');
 const { getCabinet } = require('../../config/cabinets');
+const { saveRunStatus } = require('./runStatus');
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
@@ -21,7 +22,18 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 const MAX_RATE_LIMIT_RETRIES = 10;
 const RATE_LIMIT_BASE_WAIT = 2000;
 
-async function fetchMetric(headers, dateFrom, dateTo, metricName) {
+// "Пульс" — обновляет updated_at в ad_collect_runs, чтобы блокировка
+// isRunActive() (см. runStatus.js) не сочла ещё живой процесс мёртвым из-за
+// того, что одна метрика с несколькими повторными попытками (до 10 ретраев
+// по 20 секунд каждый) заняла дольше окна "протухания" блокировки — иначе
+// долгая, но НЕ зависшая работа выглядела бы так же, как реально мёртвый
+// процесс, и второй параллельный запуск мог бы стартовать поверх первого
+// (та самая гонка, которую блокировка должна предотвращать).
+async function heartbeat(cabinet, detail) {
+  await saveRunStatus(cabinet, { step: 'product_analytics', detail });
+}
+
+async function fetchMetric(headers, dateFrom, dateTo, metricName, cabinet) {
   const result = new Map();
   let offset = 0;
   while (true) {
@@ -55,6 +67,7 @@ async function fetchMetric(headers, dateFrom, dateTo, metricName) {
           rateLimitRetries++;
           const wait = Math.min(RATE_LIMIT_BASE_WAIT * rateLimitRetries, 20000);
           console.warn(`[Ads Analytics] "${metricName}": лимит запросов (429), retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} через ${wait}мс`);
+          if (cabinet) await heartbeat(cabinet, `${metricName}: retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}`);
           await delay(wait);
           continue;
         }
@@ -144,7 +157,8 @@ async function collectProductAnalytics(cabinet, days) {
   const failedMetrics = [];
   let total = 0;
   for (const m of METRICS) {
-    const data = await fetchMetric(headers, from, to, m);
+    await heartbeat(cabinet, `метрика: ${m}`);
+    const data = await fetchMetric(headers, from, to, m, cabinet);
     if (data !== null) {
       const saved = await saveMetric(cabinet, m, data, offerBySku);
       total += saved;
@@ -167,7 +181,8 @@ async function collectProductAnalytics(cabinet, days) {
     console.warn(`[Ads Analytics] Повторная попытка для метрик, не собравшихся с первого раза: ${failedMetrics.join(', ')}`);
     await delay(5000);
     for (const m of failedMetrics) {
-      const data = await fetchMetric(headers, from, to, m);
+      await heartbeat(cabinet, `повтор метрики: ${m}`);
+      const data = await fetchMetric(headers, from, to, m, cabinet);
       if (data !== null) {
         const saved = await saveMetric(cabinet, m, data, offerBySku);
         total += saved;
