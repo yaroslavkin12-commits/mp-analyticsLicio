@@ -12,11 +12,20 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 // "метрика больше не поддерживается"), поэтому каждую метрику запрашиваем
 // отдельно и просто пропускаем те, что отвалились, вместо падения сборщика
 // целиком.
+// Лимит запросов у Ozon Seller Analytics API оказался жёстче, чем казалось:
+// живые тесты показывают code:8/429 даже при паузе 700мс и 5 попытках — на
+// продакшене метрика может провалиться целиком на весь месяц. Поэтому здесь
+// пауза между страницами увеличена и ретраи стали намного настойчивее:
+// 10 попыток на страницу с паузой до 20 секунд на последней. Это делает один
+// вызов дольше, но гарантированно не даёт метрике "потеряться" молча.
+const MAX_RATE_LIMIT_RETRIES = 10;
+const RATE_LIMIT_BASE_WAIT = 2000;
+
 async function fetchMetric(headers, dateFrom, dateTo, metricName) {
   const result = new Map();
   let offset = 0;
   while (true) {
-    await delay(700);
+    await delay(1800);
     let resp;
     let rateLimitRetries = 0;
     while (true) {
@@ -42,14 +51,14 @@ async function fetchMetric(headers, dateFrom, dateTo, metricName) {
         // code 8 / HTTP 429 = превышен лимит запросов в секунду — это
         // временно, поэтому ждём и повторяем (с нарастающей паузой), а не
         // сдаёмся сразу, как раньше (из-за чего вся метрика молча терялась).
-        if ((code === 8 || status === 429) && rateLimitRetries < 5) {
+        if ((code === 8 || status === 429) && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
           rateLimitRetries++;
-          const wait = 1500 * rateLimitRetries;
-          console.warn(`[Ads Analytics] "${metricName}": лимит запросов (429), retry ${rateLimitRetries}/5 через ${wait}мс`);
+          const wait = Math.min(RATE_LIMIT_BASE_WAIT * rateLimitRetries, 20000);
+          console.warn(`[Ads Analytics] "${metricName}": лимит запросов (429), retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} через ${wait}мс`);
           await delay(wait);
           continue;
         }
-        console.warn(`[Ads Analytics] "${metricName}":`, e.response?.data?.message || e.message);
+        console.warn(`[Ads Analytics] "${metricName}" — не удалось получить после ${rateLimitRetries} попыток:`, e.response?.data?.message || e.message);
         return null;
       }
     }
@@ -84,9 +93,29 @@ async function collectProductAnalytics(cabinet, days) {
 
   const METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
   const collected = {};
+  const failedMetrics = [];
   for (const m of METRICS) {
     const data = await fetchMetric(headers, from, to, m);
-    if (data !== null) collected[m] = data;
+    if (data !== null) collected[m] = data; else failedMetrics.push(m);
+    // Пауза между разными метриками — не только между страницами одной
+    // метрики — чтобы не начинать следующую метрику "с разбегу" сразу после
+    // серии ретраев предыдущей.
+    await delay(2500);
+  }
+
+  // Если какая-то метрика не набралась вообще ни с одной попытки — пробуем
+  // её ещё раз отдельным проходом после паузы. На практике лимит запросов
+  // Ozon посекундный и "отпускает" за несколько секунд простоя, поэтому
+  // повторный проход после того, как остальные метрики уже отработали и
+  // API "остыл", часто успешен там, где первый проход упёрся в лимит.
+  if (failedMetrics.length) {
+    console.warn(`[Ads Analytics] Повторная попытка для метрик, не собравшихся с первого раза: ${failedMetrics.join(', ')}`);
+    await delay(5000);
+    for (const m of failedMetrics) {
+      const data = await fetchMetric(headers, from, to, m);
+      if (data !== null) collected[m] = data;
+      await delay(2500);
+    }
   }
 
   const allKeys = new Set();
