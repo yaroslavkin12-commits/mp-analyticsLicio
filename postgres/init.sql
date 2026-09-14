@@ -288,3 +288,19 @@ ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS payment_type VARCHAR(64);
 ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS autopilot_strategy VARCHAR(64);
 ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS placement VARCHAR(128);
 ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS expense_strategy VARCHAR(64);
+
+-- Статус фонового сбора рекламной аналитики — раньше хранился только в
+-- памяти процесса (lastCollectRun в routes/ads.js), из-за чего пропадал
+-- бесследно, если процесс перезапускался посреди долгого сбора (а сбор
+-- показов/заказов с усиленными паузами против лимита Ozon теперь идёт
+-- 15-30+ минут). Пишем в БД, чтобы видеть реальный прогресс/ошибку даже
+-- после перезапуска сервера.
+CREATE TABLE IF NOT EXISTS ad_collect_runs (
+  cabinet VARCHAR(32) PRIMARY KEY,
+  started_at TIMESTAMP,
+  step VARCHAR(32),
+  detail VARCHAR(256),
+  error TEXT,
+  finished_at TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT NOW()
+);

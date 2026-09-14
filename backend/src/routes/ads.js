@@ -15,10 +15,33 @@ router.get('/cabinets', (req, res) => {
 
 // POST /api/ads/collect?cabinet=defly&days=30 — ручной запуск сбора рекламной
 // статистики для кабинета. Нужен, пока Defly не в общем расписании сборщиков.
-// Статус последнего фонового сбора — только в памяти процесса (сбрасывается
-// при рестарте), нужен для диагностики через /debug-raw, т.к. логи сервера
-// снаружи не видны.
-const lastCollectRun = {};
+//
+// Статус последнего фонового сбора раньше хранился только в памяти процесса
+// (lastCollectRun) — и пропадал бесследно, если процесс перезапускался
+// посреди долгого сбора. А сбор теперь (после усиления защиты от лимита
+// Ozon) идёт 15-30+ минут, и на практике сервер несколько раз перезапускался
+// именно в середине сбора показов/заказов, из-за чего он молча обрывался и
+// новые данные не сохранялись, а диагностировать это было нечем — /debug-raw
+// после рестарта всегда показывал lastCollectRun: null, как будто сбор
+// вообще не запускался. Теперь пишем статус в таблицу ad_collect_runs — он
+// переживает рестарт процесса и виден в /debug-raw в любом случае.
+async function saveRunStatus(cabinet, patch) {
+  try {
+    await query(
+      `INSERT INTO ad_collect_runs (cabinet, started_at, step, detail, error, finished_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (cabinet) DO UPDATE SET
+         started_at = COALESCE(EXCLUDED.started_at, ad_collect_runs.started_at),
+         step = COALESCE(EXCLUDED.step, ad_collect_runs.step),
+         detail = EXCLUDED.detail,
+         error = EXCLUDED.error,
+         finished_at = EXCLUDED.finished_at,
+         updated_at = NOW()`,
+      [cabinet, patch.startedAt || null, patch.step || null, patch.detail || null,
+       patch.error || null, patch.finishedAt || null]
+    );
+  } catch(e) { console.warn('[Ads] Не удалось сохранить статус сбора:', e.message); }
+}
 
 router.post('/collect', async (req, res) => {
   const cabinet = req.query.cabinet || req.body?.cabinet;
@@ -26,25 +49,24 @@ router.post('/collect', async (req, res) => {
   if (!cabinet) return res.status(400).json({ success: false, error: 'Нужен параметр cabinet' });
 
   res.json({ success: true, message: `Сбор запущен для кабинета ${cabinet}` });
-  const run = { startedAt: new Date().toISOString(), step: 'catalog', error: null, finishedAt: null };
-  lastCollectRun[cabinet] = run;
+  const startedAt = new Date().toISOString();
+  await saveRunStatus(cabinet, { startedAt, step: 'catalog', error: null, finishedAt: null, detail: null });
   setTimeout(async () => {
     try {
       console.log(`[Ads] Сбор для ${cabinet}: каталог...`);
       await collectCatalog(cabinet);
-      run.step = 'ad_stats';
+      await saveRunStatus(cabinet, { step: 'ad_stats' });
       console.log(`[Ads] Сбор для ${cabinet}: реклама (Performance API)...`);
       await collectAdStats(cabinet, days);
-      run.step = 'product_analytics';
+      await saveRunStatus(cabinet, { step: 'product_analytics' });
       console.log(`[Ads] Сбор для ${cabinet}: аналитика по товарам...`);
       await collectProductAnalytics(cabinet, days);
-      run.step = 'done';
-      run.finishedAt = new Date().toISOString();
+      await saveRunStatus(cabinet, { step: 'done', finishedAt: new Date().toISOString() });
       console.log(`[Ads] Сбор для ${cabinet}: готово`);
     } catch(e) {
-      run.error = e.response?.data || e.message;
-      run.finishedAt = new Date().toISOString();
-      console.error(`[Ads] Сбор для ${cabinet} упал на шаге ${run.step}:`, e.response?.data || e.message);
+      const errMsg = JSON.stringify(e.response?.data || null) || e.message || String(e);
+      await saveRunStatus(cabinet, { error: errMsg, finishedAt: new Date().toISOString() });
+      console.error(`[Ads] Сбор для ${cabinet} упал:`, e.response?.data || e.message || e);
     }
   }, 100);
 });
@@ -199,7 +221,7 @@ router.get('/stats', async (req, res) => {
 router.get('/debug-raw', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';
-    const [catalogCount, campCount, campSample, statsCount, statsSample, analyticsCount, analyticsSample, campTitles] = await Promise.all([
+    const [catalogCount, campCount, campSample, statsCount, statsSample, analyticsCount, analyticsSample, campTitles, runRows] = await Promise.all([
       query(`SELECT COUNT(*)::int as n FROM ad_product_catalog WHERE cabinet = $1`, [cabinet]),
       query(`SELECT COUNT(*)::int as n FROM ad_campaigns WHERE cabinet = $1`, [cabinet]),
       query(`SELECT campaign_id, title, state, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 ORDER BY updated_at DESC LIMIT 10`, [cabinet]),
@@ -208,6 +230,7 @@ router.get('/debug-raw', async (req, res) => {
       query(`SELECT COUNT(*)::int as n FROM product_analytics_daily WHERE cabinet = $1`, [cabinet]),
       query(`SELECT * FROM product_analytics_daily WHERE cabinet = $1 ORDER BY collected_at DESC LIMIT 10`, [cabinet]),
       query(`SELECT title FROM ad_campaigns WHERE cabinet = $1 AND matched_offer_id IS NULL AND title IS NOT NULL LIMIT 30`, [cabinet]),
+      query(`SELECT * FROM ad_collect_runs WHERE cabinet = $1`, [cabinet]),
     ]);
     res.json({
       success: true,
@@ -220,7 +243,7 @@ router.get('/debug-raw', async (req, res) => {
         productAnalyticsDailyTotal: analyticsCount[0]?.n,
         productAnalyticsDailySample: analyticsSample,
         unmatchedTitlesSample: campTitles.map(r => r.title),
-        lastCollectRun: lastCollectRun[cabinet] || null,
+        lastCollectRun: runRows[0] || null,
       },
     });
   } catch (e) {
