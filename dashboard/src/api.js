@@ -20,3 +20,5 @@ export const getOzonCategories  = p => api.get('/analytics/ozon/categories', { p
 export const getAdsCabinets = () => api.get('/ads/cabinets');
 export const collectAds     = (cabinet, days) => api.post('/ads/collect', {}, { params: { cabinet, days } });
 export const getAdsStats    = (cabinet, days) => api.get('/ads/stats', { params: { cabinet, days } });
+export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
+  api.post('/ads/manual', { cabinet, offerId, date, metric, value });

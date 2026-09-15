@@ -55,6 +55,46 @@ router.post('/collect', async (req, res) => {
   }, 100);
 });
 
+// POST /api/ads/manual — ручной ввод показателя воронки по артикулу и дате,
+// когда сбор с Ozon для них так и не дал данных. Приоритет всегда у данных
+// с маркетплейса (см. merge в /stats выше) — ручное значение здесь просто
+// сохраняется про запас и показывается только пока собранное значение
+// пустое/нулевое. metric — один из: views, pdpViews, cart, orders, revenue.
+// value = null/'' удаляет ранее сохранённое ручное значение (сброс к 0).
+const MANUAL_METRICS = new Set(['views', 'pdpViews', 'cart', 'orders', 'revenue']);
+router.post('/manual', async (req, res) => {
+  try {
+    const { cabinet, offerId, date, metric } = req.body || {};
+    let { value } = req.body || {};
+    if (!cabinet || !offerId || !date || !metric) {
+      return res.status(400).json({ success: false, error: 'Нужны cabinet, offerId, date, metric' });
+    }
+    if (!MANUAL_METRICS.has(metric)) {
+      return res.status(400).json({ success: false, error: `Недопустимая метрика: ${metric}` });
+    }
+    if (value === '' || value === null || value === undefined) {
+      await query(
+        `DELETE FROM product_analytics_manual WHERE cabinet=$1 AND platform='ozon' AND offer_id=$2 AND date=$3 AND metric=$4`,
+        [cabinet, offerId, date, metric]
+      );
+      return res.json({ success: true, cleared: true });
+    }
+    value = Number(value);
+    if (!Number.isFinite(value) || value < 0) {
+      return res.status(400).json({ success: false, error: 'value должно быть неотрицательным числом' });
+    }
+    await query(
+      `INSERT INTO product_analytics_manual (cabinet, platform, offer_id, date, metric, value, updated_at)
+       VALUES ($1, 'ozon', $2, $3, $4, $5, NOW())
+       ON CONFLICT (cabinet, platform, offer_id, date, metric) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [cabinet, offerId, date, metric, value]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // GET /api/ads/stats?cabinet=defly&days=30 — сводка для вкладки "Реклама",
 // сгруппированная по артикулу (а не по кампании), т.к. на один артикул может
 // быть запущено сразу несколько РК. Внутри каждого артикула — список его
@@ -69,7 +109,7 @@ router.get('/stats', async (req, res) => {
     const from = dayjs().subtract(days, 'day').format('YYYY-MM-DD');
     const to = dayjs().format('YYYY-MM-DD');
 
-    const [campaigns, adRows, analyticsRows, catalogRows] = await Promise.all([
+    const [campaigns, adRows, analyticsRows, catalogRows, manualRows] = await Promise.all([
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
@@ -82,6 +122,14 @@ router.get('/stats', async (req, res) => {
              [cabinet, from, to]),
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`,
              [cabinet]),
+      // Ручные значения — на случай, если сбор с Ozon для каких-то дат/
+      // метрик так и не дал данных (см. product_analytics_manual в
+      // init.sql). Приоритет всегда у данных с маркетплейса: ручное
+      // значение подставляется только там, где собранное значение пустое
+      // или равно нулю (см. merge ниже).
+      query(`SELECT date::text as date, offer_id, metric, value
+             FROM product_analytics_manual WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
+             [cabinet, from, to]),
     ]);
 
     const dates = [];
@@ -94,6 +142,11 @@ router.get('/stats', async (req, res) => {
     for (const r of adRows) spendByKey.set(`${r.campaign_id}|${r.date}`, Number(r.spend) || 0);
 
     const nameByOfferId = new Map(catalogRows.map(r => [r.offer_id, r.product_name]));
+
+    // Ручные значения — сгруппированы по offerId|date|metric, метрики те же
+    // ключи, что и в byDate ниже (views/pdpViews/cart/orders/revenue).
+    const manualByKey = new Map(); // offerId|date|metric -> value
+    for (const r of manualRows) manualByKey.set(`${r.offer_id}|${r.date}|${r.metric}`, Number(r.value));
 
     // Группируем кампании по matched_offer_id — так на один артикул попадают
     // все его РК. Кампании без привязки к артикулу идут в отдельную группу
@@ -144,25 +197,47 @@ router.get('/stats', async (req, res) => {
       let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0;
       for (const date of dates) {
         const an = article.sku ? analyticsByKey.get(`${article.sku}|${date}`) : null;
-        const views = an ? Number(an.hits_view) || 0 : 0;
-        const pdpViews = an ? Number(an.hits_view_pdp) || 0 : 0;
-        const cart = an ? Number(an.hits_tocart) || 0 : 0;
-        const orders = an ? Number(an.orders_item) || 0 : 0;
-        const revenue = an ? Number(an.revenue) || 0 : 0;
+        const mpViews = an ? Number(an.hits_view) || 0 : 0;
+        const mpPdpViews = an ? Number(an.hits_view_pdp) || 0 : 0;
+        const mpCart = an ? Number(an.hits_tocart) || 0 : 0;
+        const mpOrders = an ? Number(an.orders_item) || 0 : 0;
+        const mpRevenue = an ? Number(an.revenue) || 0 : 0;
         const position = an?.position_category != null ? Number(an.position_category) : null;
 
-        totalRevenue += revenue; totalOrders += orders; totalViews += views; totalPdpViews += pdpViews; totalCart += cart;
+        // Приоритет всегда у данных с маркетплейса — ручное значение
+        // подставляется, только если Ozon для этой даты/метрики отдал 0
+        // (или сбора вообще не было). Как только сбор реально соберёт
+        // ненулевое значение, оно автоматически заменит ручное в выдаче —
+        // ручное значение из БД при этом никуда не удаляется (на случай,
+        // если сбор снова перестанет что-то отдавать).
+        const manualOf = metric => article.offerId ? manualByKey.get(`${article.offerId}|${date}|${metric}`) : undefined;
+        function pick(mpValue, metric) {
+          if (mpValue) return { value: mpValue, manual: false };
+          const m = manualOf(metric);
+          return m !== undefined ? { value: m, manual: true } : { value: mpValue, manual: false };
+        }
+        const views = pick(mpViews, 'views');
+        const pdpViews = pick(mpPdpViews, 'pdpViews');
+        const cart = pick(mpCart, 'cart');
+        const orders = pick(mpOrders, 'orders');
+        const revenue = pick(mpRevenue, 'revenue');
+
+        totalRevenue += revenue.value; totalOrders += orders.value; totalViews += views.value; totalPdpViews += pdpViews.value; totalCart += cart.value;
 
         byDate[date] = {
-          views,
-          pdpViews,
-          ctr: views > 0 ? pdpViews / views * 100 : 0,
-          cart,
-          crToCart: views > 0 ? cart / views * 100 : 0,
-          crToOrder: cart > 0 ? orders / cart * 100 : 0,
-          orders,
-          revenue,
+          views: views.value,
+          pdpViews: pdpViews.value,
+          ctr: views.value > 0 ? pdpViews.value / views.value * 100 : 0,
+          cart: cart.value,
+          crToCart: views.value > 0 ? cart.value / views.value * 100 : 0,
+          crToOrder: cart.value > 0 ? orders.value / cart.value * 100 : 0,
+          orders: orders.value,
+          revenue: revenue.value,
           position,
+          manual: {
+            views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
+            orders: orders.manual, revenue: revenue.manual,
+          },
         };
       }
 

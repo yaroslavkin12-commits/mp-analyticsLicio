@@ -304,3 +304,40 @@ CREATE TABLE IF NOT EXISTS ad_collect_runs (
   finished_at TIMESTAMP,
   updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Прогресс сбора аналитики по товару В РАЗРЕЗЕ ОТДЕЛЬНЫХ МЕТРИК.
+-- До этого при обрыве процесса (Render на бесплатном тарифе перезапускается
+-- гораздо чаще, чем хватает времени на все 7 метрик с усиленными паузами
+-- против лимита Ozon) следующий запуск начинал ВСЕ 7 метрик заново — даже
+-- те, что уже успешно собрались в прошлый раз. Из-за этого показы (первая
+-- метрика в очереди) собирались почти всегда, а остальные — почти никогда,
+-- сколько бы ни усиливали паузы: процесс каждый раз умирал раньше, чем
+-- доходил до них. Теперь каждая успешно собранная метрика помечается здесь
+-- как готовая "в рамках текущего цикла" и повторно не запрашивается, пока
+-- цикл не завершится целиком (после чего список сбрасывается для следующего
+-- планового сбора) — прогресс копится МЕЖДУ перезапусками, а не теряется.
+CREATE TABLE IF NOT EXISTS ad_metric_progress (
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  metric VARCHAR(32) NOT NULL,
+  cycle_started_at TIMESTAMP NOT NULL,
+  done_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, platform, metric)
+);
+
+-- Ручной ввод показателей по артикулу, когда сбор с маркетплейса пока не
+-- дал данных (0/пусто) — пользователь может ввести значение сам, оно
+-- хранится отдельно от собранных данных и НЕ перезаписывает их: как только
+-- реальные данные с Ozon появятся (ненулевые), в интерфейсе показываются
+-- они, а ручное значение остаётся про запас на случай, если сбор снова
+-- перестанет что-то отдавать.
+CREATE TABLE IF NOT EXISTS product_analytics_manual (
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  offer_id VARCHAR(128) NOT NULL,
+  date DATE NOT NULL,
+  metric VARCHAR(32) NOT NULL,
+  value DECIMAL(14,2) NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, platform, offer_id, date, metric)
+);

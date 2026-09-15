@@ -3,19 +3,22 @@ import dayjs from 'dayjs';
 import {
   ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
-import { getAdsStats, getAdsCabinets, collectAds } from '../api';
+import { getAdsStats, getAdsCabinets, collectAds, saveManualAdsMetric } from '../api';
 
 const DAY_OPTIONS = [14, 30, 60];
 
 // Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
-// по товару, как на Дашборде).
+// по товару, как на Дашборде). editable — можно ввести значение вручную,
+// если сбор с Ozon по этой метрике/дате ничего не дал (см. AdsStats/backend
+// product_analytics_manual) — данные с маркетплейса всегда в приоритете,
+// ручное значение только подстраховка.
 const FUNNEL_ROWS = [
-  { key: 'revenue',   label: 'Заказы, ₽',            fmt: 'money', good: 'up' },
-  { key: 'orders',    label: 'Заказы, шт',            fmt: 'int',   good: 'up' },
+  { key: 'revenue',   label: 'Заказы, ₽',            fmt: 'money', good: 'up',   editable: true },
+  { key: 'orders',    label: 'Заказы, шт',            fmt: 'int',   good: 'up',   editable: true },
   { key: 'position',  label: 'Позиция в поиске',      fmt: 'pos',   good: 'down' },
-  { key: 'views',     label: 'Показы',                fmt: 'int',   good: 'up' },
-  { key: 'pdpViews',  label: 'Переходы на карточку',  fmt: 'int',   good: 'up' },
-  { key: 'cart',      label: 'Корзины',                fmt: 'int',   good: 'up' },
+  { key: 'views',     label: 'Показы',                fmt: 'int',   good: 'up',   editable: true },
+  { key: 'pdpViews',  label: 'Переходы на карточку',  fmt: 'int',   good: 'up',   editable: true },
+  { key: 'cart',      label: 'Корзины',                fmt: 'int',   good: 'up',   editable: true },
 ];
 
 // Блок 2 — конверсии, отдельным визуальным блоком.
@@ -114,7 +117,64 @@ function heatColor(v, min, max, direction) {
   return `hsla(${hue}, 65%, 42%, 0.35)`;
 }
 
-function MetricTable({ rows, dates, byDate }) {
+// Редактируемая ячейка — клик превращает значение в поле ввода; Enter или
+// потеря фокуса сохраняет (POST /api/ads/manual), Escape отменяет. Пока
+// сохраняется — значение приглушено, чтобы был виден отклик на клик.
+function EditableCell({ value, fmt, background, manual, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function startEdit() {
+    setDraft(value !== null && value !== undefined ? String(value) : '');
+    setEditing(true);
+  }
+
+  async function commit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed === (value !== null && value !== undefined ? String(value) : '')) return;
+    setSaving(true);
+    try { await onSave(trimmed === '' ? null : trimmed); }
+    finally { setSaving(false); }
+  }
+
+  if (editing) {
+    return (
+      <td style={{ padding:'2px 4px', textAlign:'center', background }}>
+        <input
+          autoFocus
+          type="number"
+          min="0"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => {
+            if (e.key === 'Enter') e.target.blur();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          style={{ width:56, textAlign:'center', padding:'2px 4px', borderRadius:4, border:'1px solid var(--border)' }}
+        />
+      </td>
+    );
+  }
+
+  return (
+    <td
+      onClick={startEdit}
+      title={manual ? 'Введено вручную — заменится данными Ozon, как только они появятся' : 'Нажмите, чтобы ввести значение вручную'}
+      style={{
+        padding:'5px 6px', textAlign:'center', background, color:'var(--text)', whiteSpace:'nowrap',
+        cursor:'pointer', opacity: saving ? 0.5 : 1,
+        boxShadow: manual ? 'inset 0 0 0 1px var(--accent, #6366f1)' : 'none',
+      }}
+    >
+      {fmtValue(value, fmt)}{manual && <span style={{ fontSize:9, verticalAlign:'super', color:'var(--accent, #6366f1)', marginLeft:2 }}>✎</span>}
+    </td>
+  );
+}
+
+function MetricTable({ rows, dates, byDate, onManualSave }) {
   return (
     <>
       {rows.map(row => {
@@ -128,14 +188,30 @@ function MetricTable({ rows, dates, byDate }) {
               position:'sticky', left:0, background:'var(--surface)', color:'var(--text2)',
               padding:'5px 10px', borderRight:'1px solid var(--border)', whiteSpace:'nowrap',
             }}>{row.label}</td>
-            {values.map((v, i) => (
-              <td key={dates[i]} style={{
-                padding:'5px 6px', textAlign:'center', background: heatColor(v, min, max, row.good),
-                color:'var(--text)', whiteSpace:'nowrap',
-              }}>
-                {fmtValue(v, row.fmt)}
-              </td>
-            ))}
+            {values.map((v, i) => {
+              const d = dates[i];
+              const background = heatColor(v, min, max, row.good);
+              if (row.editable && onManualSave) {
+                return (
+                  <EditableCell
+                    key={d}
+                    value={v}
+                    fmt={row.fmt}
+                    background={background}
+                    manual={!!byDate[d]?.manual?.[row.key]}
+                    onSave={val => onManualSave(d, row.key, val)}
+                  />
+                );
+              }
+              return (
+                <td key={d} style={{
+                  padding:'5px 6px', textAlign:'center', background,
+                  color:'var(--text)', whiteSpace:'nowrap',
+                }}>
+                  {fmtValue(v, row.fmt)}
+                </td>
+              );
+            })}
           </tr>
         );
       })}
@@ -315,7 +391,7 @@ function CampaignsList({ campaigns }) {
 // Карточка одного артикула — вынесена отдельным компонентом, чтобы хук
 // useMemo (расход/ДРР по дням) вызывался безусловно на верхнем уровне
 // компонента, а не внутри .map() у родителя (это нарушало Rules of Hooks).
-function ArticleCard({ article, dates, cabinet, isOpen, onToggle }) {
+function ArticleCard({ article, dates, cabinet, isOpen, onToggle, onManualSave }) {
   const mergedByDate = useMemo(() => {
     const out = {};
     for (const d of dates) {
@@ -365,7 +441,14 @@ function ArticleCard({ article, dates, cabinet, isOpen, onToggle }) {
               </thead>
               <tbody>
                 <BlockLabel>Показатели</BlockLabel>
-                <MetricTable rows={FUNNEL_ROWS} dates={dates} byDate={mergedByDate} />
+                <MetricTable
+                  rows={FUNNEL_ROWS}
+                  dates={dates}
+                  byDate={mergedByDate}
+                  onManualSave={article.offerId && onManualSave
+                    ? (date, metric, value) => onManualSave(article.offerId, date, metric, value)
+                    : null}
+                />
                 <BlockLabel>Конверсии</BlockLabel>
                 <MetricTable rows={CONVERSION_ROWS} dates={dates} byDate={mergedByDate} />
                 <BlockLabel>Расход и ДРР</BlockLabel>
@@ -419,6 +502,40 @@ export default function AdsStats({ cabinet }) {
     } finally {
       setTimeout(() => setCollecting(false), 15000);
     }
+  }
+
+  // Сохраняет ручное значение и сразу обновляет локальное состояние (не
+  // дожидаясь перезагрузки), чтобы ввод ощущался мгновенным. Пересчитывать
+  // totals/конверсии здесь не пытаемся — они подтянутся точным значением
+  // при следующей загрузке (load()), а до этого приблизительны.
+  function handleManualSave(offerId, date, metric, value) {
+    return saveManualAdsMetric(cabinet, offerId, date, metric, value)
+      .then(() => {
+        setData(prev => {
+          if (!prev) return prev;
+          const articles = prev.articles.map(a => {
+            if (a.offerId !== offerId) return a;
+            const day = a.byDate[date] || {};
+            const numValue = value === null || value === '' ? 0 : Number(value);
+            return {
+              ...a,
+              byDate: {
+                ...a.byDate,
+                [date]: {
+                  ...day,
+                  [metric]: numValue,
+                  manual: { ...day.manual, [metric]: value !== null && value !== '' },
+                },
+              },
+            };
+          });
+          return { ...prev, articles };
+        });
+      })
+      .catch(e => {
+        console.error(e);
+        window.alert('Не удалось сохранить значение — попробуйте ещё раз.');
+      });
   }
 
   function toggleArticle(key) {
@@ -529,6 +646,7 @@ export default function AdsStats({ cabinet }) {
             cabinet={cabinet}
             isOpen={expandedArticles.has(key)}
             onToggle={() => toggleArticle(key)}
+            onManualSave={handleManualSave}
           />
         );
       })}

@@ -146,6 +146,44 @@ async function saveMetric(cabinet, metricName, dataMap, offerBySku) {
   return saved;
 }
 
+// Метрики, уже собранные УСПЕШНО в рамках текущего цикла — читаем ДО того,
+// как начинаем сбор, и пропускаем их: без этого каждый рестарт процесса
+// (Render на бесплатном тарифе перезапускается заметно чаще, чем занимает
+// полный проход всех 7 метрик с усиленными паузами против лимита Ozon)
+// заново начинал с hits_view, из-за чего первая метрика собиралась почти
+// всегда, а до остальных дело просто не доходило НИ РАЗУ. Цикл считается
+// текущим, пока последняя отметка "готово" по кабинету не старше 20 часов —
+// после этого он протухает и все метрики запрашиваются заново (следующий
+// плановый сбор), чтобы данные не застревали навсегда на старых значениях.
+const CYCLE_MAX_AGE_HOURS = 20;
+
+async function getDoneMetrics(cabinet) {
+  try {
+    const rows = await query(
+      `SELECT metric FROM ad_metric_progress
+       WHERE cabinet = $1 AND platform = 'ozon' AND done_at > NOW() - INTERVAL '${CYCLE_MAX_AGE_HOURS} hours'`,
+      [cabinet]
+    );
+    return new Set(rows.map(r => r.metric));
+  } catch(e) { return new Set(); }
+}
+
+async function markMetricDone(cabinet, metric) {
+  try {
+    await query(
+      `INSERT INTO ad_metric_progress (cabinet, platform, metric, cycle_started_at, done_at)
+       VALUES ($1, 'ozon', $2, NOW(), NOW())
+       ON CONFLICT (cabinet, platform, metric) DO UPDATE SET done_at = NOW()`,
+      [cabinet, metric]
+    );
+  } catch(e) { console.warn('[Ads Analytics] Не удалось сохранить прогресс метрики:', e.message); }
+}
+
+async function clearCycle(cabinet) {
+  try { await query(`DELETE FROM ad_metric_progress WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]); }
+  catch(e) { /* не критично — просто цикл переиспользуется дольше */ }
+}
+
 async function collectProductAnalytics(cabinet, days) {
   const cfg = getCabinet(cabinet);
   if (!cfg.ozonClientId || !cfg.ozonApiKey) {
@@ -162,7 +200,13 @@ async function collectProductAnalytics(cabinet, days) {
   );
   const offerBySku = new Map(catalogRows.map(r => [String(r.sku), r.offer_id]));
 
-  const METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
+  const ALL_METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
+  const doneAlready = await getDoneMetrics(cabinet);
+  const METRICS = ALL_METRICS.filter(m => !doneAlready.has(m));
+  if (doneAlready.size) {
+    console.log(`[Ads Analytics:${cabinet}] Уже собрано в этом цикле (пропускаем): ${[...doneAlready].join(', ') || '—'}`);
+  }
+
   const failedMetrics = [];
   let total = 0;
   for (const m of METRICS) {
@@ -171,6 +215,7 @@ async function collectProductAnalytics(cabinet, days) {
     if (data !== null) {
       const saved = await saveMetric(cabinet, m, data, offerBySku);
       total += saved;
+      await markMetricDone(cabinet, m);
       console.log(`[Ads Analytics:${cabinet}] "${m}": сохранено строк ${saved}`);
     } else {
       failedMetrics.push(m);
@@ -198,10 +243,20 @@ async function collectProductAnalytics(cabinet, days) {
       if (data !== null) {
         const saved = await saveMetric(cabinet, m, data, offerBySku);
         total += saved;
+        await markMetricDone(cabinet, m);
         console.log(`[Ads Analytics:${cabinet}] "${m}" (повтор): сохранено строк ${saved}`);
       }
       await delay(6000);
     }
+  }
+
+  // Цикл полностью закрыт (все 7 метрик когда-либо помечены готовыми) —
+  // сбрасываем прогресс, чтобы следующий плановый сбор обновил все метрики
+  // заново, а не застрял навсегда на данных этого цикла.
+  const stillDone = await getDoneMetrics(cabinet);
+  if (ALL_METRICS.every(m => stillDone.has(m))) {
+    await clearCycle(cabinet);
+    console.log(`[Ads Analytics:${cabinet}] Цикл завершён полностью — прогресс сброшен для следующего сбора`);
   }
 
   console.log(`[Ads Analytics:${cabinet}] Сохранено всего: ${total}`);
