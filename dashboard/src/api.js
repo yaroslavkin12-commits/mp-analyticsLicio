@@ -22,3 +22,5 @@ export const collectAds     = (cabinet, days) => api.post('/ads/collect', {}, { 
 export const getAdsStats    = (cabinet, params) => api.get('/ads/stats', { params: { cabinet, ...params } });
 export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
   api.post('/ads/manual', { cabinet, offerId, date, metric, value });
+export const getAdsOrder  = cabinet => api.get('/ads/order', { params: { cabinet } });
+export const saveAdsOrder = (cabinet, order) => api.post('/ads/order', { cabinet, order });

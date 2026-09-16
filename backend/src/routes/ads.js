@@ -96,6 +96,36 @@ router.post('/manual', async (req, res) => {
   }
 });
 
+// GET/POST /api/ads/order?cabinet=defly — ручной порядок артикулов в общем
+// списке (drag-n-drop на фронте). Хранится как JSON-массив offerId в общей
+// таблице app_settings под ключом ads_order:<cabinet>, чтобы не заводить
+// отдельную таблицу под одну строку на кабинет.
+router.get('/order', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const { rows } = await query('SELECT value FROM app_settings WHERE key=$1', [`ads_order:${cabinet}`]);
+    const order = rows[0] ? JSON.parse(rows[0].value) : [];
+    res.json({ success: true, data: order });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/order', async (req, res) => {
+  try {
+    const { cabinet, order } = req.body || {};
+    if (!cabinet || !Array.isArray(order)) return res.status(400).json({ success: false, error: 'cabinet и order (массив) обязательны' });
+    await query(
+      `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [`ads_order:${cabinet}`, JSON.stringify(order)]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // GET /api/ads/stats?cabinet=defly&days=30 — сводка для вкладки "Реклама",
 // сгруппированная по артикулу (а не по кампании), т.к. на один артикул может
 // быть запущено сразу несколько РК. Внутри каждого артикула — список его

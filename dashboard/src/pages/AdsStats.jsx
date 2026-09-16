@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import {
   ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
-import { getAdsStats, getAdsCabinets, collectAds, saveManualAdsMetric } from '../api';
+import { getAdsStats, getAdsCabinets, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
 
 // Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
@@ -64,6 +64,7 @@ const SORT_OPTIONS = [
   { value: 'spend', label: 'По расходу' },
   { value: 'drr', label: 'По ДРР' },
   { value: 'name', label: 'По названию' },
+  { value: 'manual', label: 'Свой порядок' },
 ];
 
 function placementBucket(placement) {
@@ -192,7 +193,7 @@ function MetricTable({ rows, dates, byDate, onManualSave }) {
         return (
           <tr key={row.key}>
             <td style={{
-              position:'sticky', left:0, background:'var(--surface)', color:'var(--text2)',
+              position:'sticky', left:0, zIndex:1, background:'var(--surface)', color:'var(--text2)',
               padding:'5px 10px', borderRight:'1px solid var(--border)', whiteSpace:'nowrap',
             }}>{row.label}</td>
             {values.map((v, i) => {
@@ -230,7 +231,7 @@ function BlockLabel({ children }) {
   return (
     <tr>
       <td colSpan={999} style={{
-        position:'sticky', left:0, background:'var(--surface2)', color:'var(--text3)',
+        position:'sticky', left:0, zIndex:1, background:'var(--surface2)', color:'var(--text3)',
         fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:.4,
         padding:'6px 10px', borderTop:'1px solid var(--border)', borderBottom:'1px solid var(--border)',
       }}>{children}</td>
@@ -444,7 +445,10 @@ function CampaignsList({ campaigns }) {
 // Карточка одного артикула — вынесена отдельным компонентом, чтобы хук
 // useMemo (расход/ДРР по дням) вызывался безусловно на верхнем уровне
 // компонента, а не внутри .map() у родителя (это нарушало Rules of Hooks).
-function ArticleCard({ article, dates, cabinet, isOpen, onToggle, onManualSave }) {
+function ArticleCard({
+  article, dates, cabinet, isOpen, onToggle, onManualSave,
+  draggable, isDragging, isDragOver, onDragStart, onDragOverCard, onDropCard, onDragEndCard,
+}) {
   // Конверсии (ctr/crToCart/crToOrder) пересчитываются здесь из сырых
   // метрик, а не берутся готовыми из article.byDate — так правка ячейки
   // вручную (см. handleManualSave в AdsStats) сразу отражается и в таблице
@@ -486,12 +490,25 @@ function ArticleCard({ article, dates, cabinet, isOpen, onToggle, onManualSave }
   }, [mergedByDate, dates]);
 
   return (
-    <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
+    <div
+      draggable={draggable}
+      onDragStart={draggable ? onDragStart : undefined}
+      onDragOver={draggable ? e => { e.preventDefault(); onDragOverCard(); } : undefined}
+      onDrop={draggable ? e => { e.preventDefault(); onDropCard(); } : undefined}
+      onDragEnd={draggable ? onDragEndCard : undefined}
+      style={{
+        background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden',
+        opacity: isDragging ? 0.4 : 1,
+        outline: isDragOver ? '2px dashed var(--accent, #6366f1)' : 'none',
+        outlineOffset: -2,
+      }}
+    >
       <div onClick={onToggle} style={{
         display:'flex', alignItems:'center', gap:10, padding:'12px 16px', cursor:'pointer',
         background:'var(--surface2)', flexWrap:'wrap',
       }}>
         <span>{isOpen ? '▾' : '▸'}</span>
+        {draggable && <span title="Перетащите, чтобы изменить порядок" style={{ cursor:'grab', color:'var(--text3)' }}>⠿</span>}
         <span style={{ fontSize:15, fontWeight:700 }}>{article.offerId || 'Без привязки к артикулу'}</span>
         {article.productName && <span style={{ color:'var(--text3)', fontSize:12 }}>{article.productName}</span>}
         <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text2)', display:'flex', gap:14 }}>
@@ -563,6 +580,9 @@ export default function AdsStats({ cabinet }) {
   const [paymentFilter, setPaymentFilter] = useState('');
   const [placementFilter, setPlacementFilter] = useState('');
   const [sortBy, setSortBy] = useState('spend');
+  const [manualOrder, setManualOrder] = useState([]);
+  const [dragKey, setDragKey] = useState(null);
+  const [dragOverKey, setDragOverKey] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -576,6 +596,12 @@ export default function AdsStats({ cabinet }) {
   }, [cabinet, dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Сохранённый порядок артикулов для этого кабинета — подгружается отдельно,
+  // не зависит от периода/фильтров.
+  useEffect(() => {
+    getAdsOrder(cabinet).then(r => setManualOrder(r.data.data || [])).catch(() => setManualOrder([]));
+  }, [cabinet]);
 
   const cabInfo = cabinets.find(c => c.id === cabinet);
   const notConfigured = cabInfo && !cabInfo.ozonSellerConfigured && !cabInfo.ozonPerfConfigured;
@@ -668,16 +694,47 @@ export default function AdsStats({ cabinet }) {
     const matched = filtered.filter(a => a.offerId);
     const unmatched = filtered.filter(a => !a.offerId);
 
-    const cmp = sortBy === 'name'
-      ? (a, b) => naturalCompare(a.campaigns[0]?.title, b.campaigns[0]?.title)
-      : sortBy === 'drr'
-      ? (a, b) => (b.totals.drr || 0) - (a.totals.drr || 0)
-      : (a, b) => (b.totals.spend || 0) - (a.totals.spend || 0);
+    const spendCmp = (a, b) => (b.totals.spend || 0) - (a.totals.spend || 0);
+    unmatched.sort(spendCmp);
 
-    matched.sort(cmp);
-    unmatched.sort(cmp);
+    if (sortBy === 'manual') {
+      // Свой порядок — по сохранённому manualOrder (массив offerId). Артикулы,
+      // которых ещё нет в сохранённом порядке (новые), уходят в конец списка
+      // по расходу — так они не перемешивают то, что пользователь уже расставил.
+      const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
+      matched.sort((a, b) => {
+        const ia = orderIndex.has(a.offerId) ? orderIndex.get(a.offerId) : Infinity;
+        const ib = orderIndex.has(b.offerId) ? orderIndex.get(b.offerId) : Infinity;
+        return ia !== ib ? ia - ib : spendCmp(a, b);
+      });
+    } else {
+      const cmp = sortBy === 'name'
+        ? (a, b) => naturalCompare(a.campaigns[0]?.title, b.campaigns[0]?.title)
+        : sortBy === 'drr'
+        ? (a, b) => (b.totals.drr || 0) - (a.totals.drr || 0)
+        : spendCmp;
+      matched.sort(cmp);
+    }
     return [...matched, ...unmatched];
-  }, [articlesRaw, onlyActive, search, paymentFilter, placementFilter, sortBy]);
+  }, [articlesRaw, onlyActive, search, paymentFilter, placementFilter, sortBy, manualOrder]);
+
+  // Перетаскивание карточек в режиме "Свой порядок" — переставляет
+  // draggedKey перед/на место targetKey в списке offerId и сохраняет на
+  // сервер. Опирается на текущий видимый порядок (articles), а не на сырой
+  // manualOrder, чтобы новые/ещё не расставленные артикулы тоже корректно
+  // попадали в нужное место при первом же перетаскивании.
+  function handleReorder(draggedKey, targetKey) {
+    if (!draggedKey || draggedKey === targetKey) return;
+    const currentKeys = articles.filter(a => a.offerId).map(a => a.offerId);
+    const fromIdx = currentKeys.indexOf(draggedKey);
+    const toIdx = currentKeys.indexOf(targetKey);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const next = [...currentKeys];
+    next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, draggedKey);
+    setManualOrder(next);
+    saveAdsOrder(cabinet, next).catch(console.error);
+  }
 
   if (loading && !data) return <div style={{ padding:60, textAlign:'center', color:'var(--text2)' }}>Загрузка...</div>;
 
@@ -733,6 +790,7 @@ export default function AdsStats({ cabinet }) {
 
       {articles.map(article => {
         const key = article.offerId || '__unmatched__';
+        const draggable = sortBy === 'manual' && !!article.offerId;
         return (
           <ArticleCard
             key={key}
@@ -742,6 +800,13 @@ export default function AdsStats({ cabinet }) {
             isOpen={expandedArticles.has(key)}
             onToggle={() => toggleArticle(key)}
             onManualSave={handleManualSave}
+            draggable={draggable}
+            isDragging={dragKey === key}
+            isDragOver={draggable && dragOverKey === key && dragKey && dragKey !== key}
+            onDragStart={() => setDragKey(key)}
+            onDragOverCard={() => draggable && setDragOverKey(key)}
+            onDropCard={() => { handleReorder(dragKey, key); setDragKey(null); setDragOverKey(null); }}
+            onDragEndCard={() => { setDragKey(null); setDragOverKey(null); }}
           />
         );
       })}
