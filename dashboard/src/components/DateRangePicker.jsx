@@ -133,10 +133,10 @@ export default function DateRangePicker({ from, to, onChange }) {
       {/* Popup */}
       {open && (
         <div style={{
-          position:'absolute', top:'calc(100% + 6px)', right:0, zIndex:1000,
+          position:'absolute', top:'calc(100% + 6px)', left:0, zIndex:1000,
           background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12,
           padding:20, boxShadow:'0 8px 32px rgba(0,0,0,0.4)',
-          display:'flex', flexDirection:'column', gap:16, minWidth:520,
+          display:'flex', flexDirection:'column', gap:16, width:'max-content', maxWidth:'calc(100vw - 40px)',
         }}>
           {/* Быстрые периоды */}
           <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>

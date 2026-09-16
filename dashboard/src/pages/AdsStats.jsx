@@ -165,12 +165,18 @@ function EditableCell({ value, fmt, background, manual, onSave }) {
       onClick={startEdit}
       title={manual ? 'Введено вручную — заменится данными Ozon, как только они появятся' : 'Нажмите, чтобы ввести значение вручную'}
       style={{
+        position:'relative',
         padding:'5px 6px', textAlign:'center', background, color:'var(--text)', whiteSpace:'nowrap',
         cursor:'pointer', opacity: saving ? 0.5 : 1,
-        boxShadow: manual ? 'inset 0 0 0 1px var(--accent, #6366f1)' : 'none',
       }}
     >
-      {fmtValue(value, fmt)}{manual && <span style={{ fontSize:9, verticalAlign:'super', color:'var(--accent, #6366f1)', marginLeft:2 }}>✎</span>}
+      {fmtValue(value, fmt)}
+      {manual && (
+        <span style={{
+          position:'absolute', top:2, right:2, width:4, height:4, borderRadius:'50%',
+          background:'var(--accent, #6366f1)', opacity:0.55,
+        }} />
+      )}
     </td>
   );
 }
