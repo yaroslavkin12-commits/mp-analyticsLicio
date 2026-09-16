@@ -103,7 +103,7 @@ router.post('/manual', async (req, res) => {
 router.get('/order', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';
-    const { rows } = await query('SELECT value FROM app_settings WHERE key=$1', [`ads_order:${cabinet}`]);
+    const rows = await query('SELECT value FROM app_settings WHERE key=$1', [`ads_order:${cabinet}`]);
     const order = rows[0] ? JSON.parse(rows[0].value) : [];
     res.json({ success: true, data: order });
   } catch (e) {
