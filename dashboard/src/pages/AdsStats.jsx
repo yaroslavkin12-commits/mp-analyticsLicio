@@ -4,8 +4,7 @@ import {
   ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
 import { getAdsStats, getAdsCabinets, collectAds, saveManualAdsMetric } from '../api';
-
-const DAY_OPTIONS = [14, 30, 60];
+import DateRangePicker from '../components/DateRangePicker';
 
 // Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
 // по товару, как на Дашборде). editable — можно ввести значение вручную,
@@ -29,8 +28,10 @@ const CONVERSION_ROWS = [
 ];
 
 // Блок 3 — расход и ДРР внизу таблицы (просили не мешать со сводкой выше).
+// Расход подсвечивается по дням тепловой картой (good:'up'), чтобы было
+// сразу видно, в какие дни лили больше денег в рекламу.
 const SPEND_ROWS = [
-  { key: 'spend', label: 'Расход, ₽', fmt: 'money0', good: 'neutral' },
+  { key: 'spend', label: 'Расход, ₽', fmt: 'money0', good: 'up' },
   { key: 'drr',   label: 'ДРР',       fmt: 'pct',    good: 'down' },
 ];
 
@@ -374,9 +375,21 @@ function ArticleSummary({ totals }) {
     { label: 'Расход, ₽',              value: fmtValue(totals.spend, 'money0') },
     { label: 'ДРР',                    value: fmtValue(totals.drr, 'pct') },
   ];
+  // Общая конверсия за весь период — сумма/сумма (не среднее по дням),
+  // отдельным рядом, чтобы не путать штучные метрики с процентами.
+  const convCards = [
+    { label: 'СТР (карточка/показ)', value: fmtValue(totals.ctr, 'pct') },
+    { label: 'СР в корзину',          value: fmtValue(totals.crToCart, 'pct') },
+    { label: 'СР в заказ',            value: fmtValue(totals.crToOrder, 'pct') },
+  ];
   return (
-    <div style={{ display:'flex', gap:8, flexWrap:'wrap', padding:'12px 16px 4px' }}>
-      {cards.map(c => <StatCard key={c.label} {...c} />)}
+    <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'12px 16px 4px' }}>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+        {cards.map(c => <StatCard key={c.label} {...c} />)}
+      </div>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+        {convCards.map(c => <StatCard key={c.label} {...c} accent="var(--text2)" />)}
+      </div>
     </div>
   );
 }
@@ -426,15 +439,45 @@ function CampaignsList({ campaigns }) {
 // useMemo (расход/ДРР по дням) вызывался безусловно на верхнем уровне
 // компонента, а не внутри .map() у родителя (это нарушало Rules of Hooks).
 function ArticleCard({ article, dates, cabinet, isOpen, onToggle, onManualSave }) {
+  // Конверсии (ctr/crToCart/crToOrder) пересчитываются здесь из сырых
+  // метрик, а не берутся готовыми из article.byDate — так правка ячейки
+  // вручную (см. handleManualSave в AdsStats) сразу отражается и в таблице
+  // конверсий, и в сводке ниже, без ожидания следующей загрузки с сервера.
   const mergedByDate = useMemo(() => {
     const out = {};
     for (const d of dates) {
       const spend = article.campaigns.reduce((s, c) => s + (c.byDate[d]?.spend || 0), 0);
-      const revenue = article.byDate[d]?.revenue || 0;
-      out[d] = { ...article.byDate[d], spend, drr: revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0) };
+      const day = article.byDate[d] || {};
+      const views = day.views || 0, pdpViews = day.pdpViews || 0, cart = day.cart || 0, orders = day.orders || 0;
+      const revenue = day.revenue || 0;
+      out[d] = {
+        ...day,
+        ctr: views > 0 ? pdpViews / views * 100 : 0,
+        crToCart: pdpViews > 0 ? cart / pdpViews * 100 : 0,
+        crToOrder: cart > 0 ? orders / cart * 100 : 0,
+        spend,
+        drr: revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0),
+      };
     }
     return out;
   }, [article, dates]);
+
+  // Сводка за период — сумма по дням из mergedByDate (а не готовый
+  // article.totals с сервера), по той же причине: правка любой ячейки
+  // видна в сводке сразу же, а не после перезагрузки страницы.
+  const computedTotals = useMemo(() => {
+    let revenue = 0, orders = 0, views = 0, pdpViews = 0, cart = 0, spend = 0;
+    for (const d of dates) {
+      const day = mergedByDate[d] || {};
+      revenue += day.revenue || 0; orders += day.orders || 0; views += day.views || 0;
+      pdpViews += day.pdpViews || 0; cart += day.cart || 0; spend += day.spend || 0;
+    }
+    const drr = revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0);
+    const ctr = views > 0 ? pdpViews / views * 100 : 0;
+    const crToCart = pdpViews > 0 ? cart / pdpViews * 100 : 0;
+    const crToOrder = cart > 0 ? orders / cart * 100 : 0;
+    return { revenue, orders, views, pdpViews, cart, spend, drr, ctr, crToCart, crToOrder };
+  }, [mergedByDate, dates]);
 
   return (
     <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
@@ -447,14 +490,14 @@ function ArticleCard({ article, dates, cabinet, isOpen, onToggle, onManualSave }
         {article.productName && <span style={{ color:'var(--text3)', fontSize:12 }}>{article.productName}</span>}
         <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text2)', display:'flex', gap:14 }}>
           <span>РК: {article.campaigns.length}</span>
-          <span>Расход: {fmtValue(article.totals.spend, 'money0')} ₽</span>
-          <span style={{ fontWeight:700 }}>ДРР: {fmtValue(article.totals.drr, 'pct')}</span>
+          <span>Расход: {fmtValue(computedTotals.spend, 'money0')} ₽</span>
+          <span style={{ fontWeight:700 }}>ДРР: {fmtValue(computedTotals.drr, 'pct')}</span>
         </span>
       </div>
 
       {isOpen && (
         <>
-          <ArticleSummary totals={article.totals} />
+          <ArticleSummary totals={computedTotals} />
 
           <div style={{ padding:'10px 0 0' }}>
             <div style={{ padding:'0 16px 8px', fontSize:11, color:'var(--text3)', fontWeight:700, textTransform:'uppercase', letterSpacing:.4 }}>
@@ -501,7 +544,8 @@ function ArticleCard({ article, dates, cabinet, isOpen, onToggle, onManualSave }
 }
 
 export default function AdsStats({ cabinet }) {
-  const [days, setDays] = useState(30);
+  const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
+  const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [data, setData] = useState(null);
   const [cabinets, setCabinets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -516,14 +560,14 @@ export default function AdsStats({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.all([getAdsStats(cabinet, days), getAdsCabinets()])
+    Promise.all([getAdsStats(cabinet, { dateFrom, dateTo }), getAdsCabinets()])
       .then(([statsRes, cabRes]) => {
         setData(statsRes.data.data);
         setCabinets(cabRes.data.data);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [cabinet, days]);
+  }, [cabinet, dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -532,8 +576,13 @@ export default function AdsStats({ cabinet }) {
 
   async function handleCollect() {
     setCollecting(true);
+    // Сбор с Ozon всегда идёт вглубь от сегодняшнего дня (а не строго
+    // выбранного диапазона) — collectDays считается от начала выбранного
+    // периода до сегодня, чтобы выбор старого диапазона в календаре тоже
+    // подтягивал свежие данные, а не только те даты, что видны в таблице.
+    const collectDays = Math.min(60, Math.max(7, dayjs().diff(dayjs(dateFrom), 'day')));
     try {
-      await collectAds(cabinet, days);
+      await collectAds(cabinet, collectDays);
       setTimeout(load, 15000);
     } finally {
       setTimeout(() => setCollecting(false), 15000);
@@ -630,7 +679,7 @@ export default function AdsStats({ cabinet }) {
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
         <h1 style={{ fontSize:17, fontWeight:700, margin:0 }}>Реклама</h1>
-        <Segmented options={DAY_OPTIONS.map(d => ({ value:d, label:`${d} дн.` }))} value={days} onChange={setDays} getKey={o=>o.value} />
+        <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         <button onClick={handleCollect} disabled={collecting} style={{
           marginLeft:'auto', padding:'7px 14px', borderRadius:8, border:'1px solid var(--border)',
           background:'var(--surface2)', color:'var(--text)', fontSize:13, fontWeight:500,

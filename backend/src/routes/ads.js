@@ -106,9 +106,21 @@ router.post('/manual', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';
-    const days = Math.min(60, Math.max(7, parseInt(req.query.days, 10) || 30));
-    const from = dayjs().subtract(days, 'day').format('YYYY-MM-DD');
-    const to = dayjs().format('YYYY-MM-DD');
+    // Период — либо явный диапазон с календаря (dateFrom/dateTo), либо
+    // старое поведение "последние N дней" (days) для обратной совместимости.
+    let from, to;
+    if (req.query.dateFrom && req.query.dateTo) {
+      from = dayjs(req.query.dateFrom).format('YYYY-MM-DD');
+      to = dayjs(req.query.dateTo).format('YYYY-MM-DD');
+      if (dayjs(to).isBefore(from)) [from, to] = [to, from];
+      // Не даём выбрать больше 92 дней разом — иначе таблица по дням
+      // становится нечитаемой, а сам запрос — очень тяжёлым.
+      if (dayjs(to).diff(from, 'day') > 92) from = dayjs(to).subtract(92, 'day').format('YYYY-MM-DD');
+    } else {
+      const days = Math.min(60, Math.max(7, parseInt(req.query.days, 10) || 30));
+      from = dayjs().subtract(days, 'day').format('YYYY-MM-DD');
+      to = dayjs().format('YYYY-MM-DD');
+    }
 
     const [campaigns, adRows, analyticsRows, catalogRows, manualRows] = await Promise.all([
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
@@ -134,7 +146,7 @@ router.get('/stats', async (req, res) => {
     ]);
 
     const dates = [];
-    for (let i = days; i >= 0; i--) dates.push(dayjs().subtract(i, 'day').format('YYYY-MM-DD'));
+    for (let d = dayjs(from); !d.isAfter(to, 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
 
     const analyticsByKey = new Map(); // sku|date -> row
     for (const r of analyticsRows) analyticsByKey.set(`${r.sku}|${r.date}`, r);
@@ -238,7 +250,10 @@ router.get('/stats', async (req, res) => {
           pdpViews: pdpViews.value,
           ctr: views.value > 0 ? pdpViews.value / views.value * 100 : 0,
           cart: cart.value,
-          crToCart: views.value > 0 ? cart.value / views.value * 100 : 0,
+          // СР в корзину — доля переходов в карточку, которые закончились
+          // добавлением в корзину: корзины / переходы (было ошибочно
+          // корзины / показы).
+          crToCart: pdpViews.value > 0 ? cart.value / pdpViews.value * 100 : 0,
           crToOrder: cart.value > 0 ? orders.value / cart.value * 100 : 0,
           orders: orders.value,
           revenue: revenue.value,
@@ -260,11 +275,21 @@ router.get('/stats', async (req, res) => {
       }
       const totalDrr = totalRevenue > 0 ? totalSpendAllCampaigns / totalRevenue * 100 : (totalSpendAllCampaigns > 0 ? 100 : 0);
 
+      // Общая конверсия за весь период (не среднее по дням — сумма/сумма,
+      // это корректнее на низких абсолютных числах).
+      const totalCtr       = totalViews > 0 ? totalPdpViews / totalViews * 100 : 0;
+      const totalCrToCart  = totalPdpViews > 0 ? totalCart / totalPdpViews * 100 : 0;
+      const totalCrToOrder = totalCart > 0 ? totalOrders / totalCart * 100 : 0;
+
       articlesOut.push({
         offerId: article.offerId,
         productName: article.productName,
         byDate,
-        totals: { revenue: totalRevenue, orders: totalOrders, views: totalViews, pdpViews: totalPdpViews, cart: totalCart, spend: totalSpendAllCampaigns, drr: totalDrr },
+        totals: {
+          revenue: totalRevenue, orders: totalOrders, views: totalViews, pdpViews: totalPdpViews, cart: totalCart,
+          spend: totalSpendAllCampaigns, drr: totalDrr,
+          ctr: totalCtr, crToCart: totalCrToCart, crToOrder: totalCrToOrder,
+        },
         campaigns: article.campaigns,
       });
     }
