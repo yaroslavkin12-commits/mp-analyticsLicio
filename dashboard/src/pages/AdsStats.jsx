@@ -15,7 +15,7 @@ const DAY_OPTIONS = [14, 30, 60];
 const FUNNEL_ROWS = [
   { key: 'revenue',   label: 'Заказы, ₽',            fmt: 'money', good: 'up',   editable: true },
   { key: 'orders',    label: 'Заказы, шт',            fmt: 'int',   good: 'up',   editable: true },
-  { key: 'position',  label: 'Позиция в поиске',      fmt: 'pos',   good: 'down' },
+  { key: 'position',  label: 'Позиция в поиске',      fmt: 'pos',   good: 'down',  editable: true },
   { key: 'views',     label: 'Показы',                fmt: 'int',   good: 'up',   editable: true },
   { key: 'pdpViews',  label: 'Переходы на карточку',  fmt: 'int',   good: 'up',   editable: true },
   { key: 'cart',      label: 'Корзины',                fmt: 'int',   good: 'up',   editable: true },
@@ -347,6 +347,40 @@ function ArticleCompareChart({ dates, byDate, storageKey }) {
 // нужно было ещё раз раскрывать отдельно, что было запутанно. Теперь всё
 // видно сразу одним списком: полное название (как в самом Ozon), статус,
 // тип, зона показа, расход и ДРР по каждой конкретной РК.
+// Один блок сводки — крупное число + подпись, в общем стиле карточек
+// приложения (var(--surface2) фон, тонкая рамка).
+function StatCard({ label, value, accent }) {
+  return (
+    <div style={{
+      background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8,
+      padding:'10px 14px', minWidth:120, flex:'1 1 130px',
+    }}>
+      <div style={{ fontSize:11, color:'var(--text3)', marginBottom:4, whiteSpace:'nowrap' }}>{label}</div>
+      <div style={{ fontSize:19, fontWeight:700, color: accent || 'var(--text)' }}>{value}</div>
+    </div>
+  );
+}
+
+// Сводка по артикулу за весь выбранный период — показывается сразу при
+// раскрытии карточки, до списка кампаний и таблицы по дням, чтобы не
+// прокручивать/складывать в уме дневные значения ради общей картины.
+function ArticleSummary({ totals }) {
+  const cards = [
+    { label: 'Заказано, ₽',            value: fmtValue(totals.revenue, 'money') },
+    { label: 'Заказано, шт',           value: fmtValue(totals.orders, 'int') },
+    { label: 'Показы',                 value: fmtValue(totals.views, 'int') },
+    { label: 'Переходы на карточку',   value: fmtValue(totals.pdpViews, 'int') },
+    { label: 'Корзины',                value: fmtValue(totals.cart, 'int') },
+    { label: 'Расход, ₽',              value: fmtValue(totals.spend, 'money0') },
+    { label: 'ДРР',                    value: fmtValue(totals.drr, 'pct') },
+  ];
+  return (
+    <div style={{ display:'flex', gap:8, flexWrap:'wrap', padding:'12px 16px 4px' }}>
+      {cards.map(c => <StatCard key={c.label} {...c} />)}
+    </div>
+  );
+}
+
 function CampaignsList({ campaigns }) {
   return (
     <div style={{ maxHeight: 420, overflowY:'auto', border:'1px solid var(--border)', borderRadius:8, margin:'0 10px 10px' }}>
@@ -420,6 +454,8 @@ function ArticleCard({ article, dates, cabinet, isOpen, onToggle, onManualSave }
 
       {isOpen && (
         <>
+          <ArticleSummary totals={article.totals} />
+
           <div style={{ padding:'10px 0 0' }}>
             <div style={{ padding:'0 16px 8px', fontSize:11, color:'var(--text3)', fontWeight:700, textTransform:'uppercase', letterSpacing:.4 }}>
               Кампании ({article.campaigns.length})
@@ -516,7 +552,11 @@ export default function AdsStats({ cabinet }) {
           const articles = prev.articles.map(a => {
             if (a.offerId !== offerId) return a;
             const day = a.byDate[date] || {};
-            const numValue = value === null || value === '' ? 0 : Number(value);
+            const cleared = value === null || value === '';
+            // У позиции в поиске "пусто" — это null ("нет данных"), а не 0
+            // (0 была бы отличной позицией), поэтому сброс ведёт себя иначе,
+            // чем у остальных метрик.
+            const numValue = cleared ? (metric === 'position' ? null : 0) : Number(value);
             return {
               ...a,
               byDate: {
@@ -524,7 +564,7 @@ export default function AdsStats({ cabinet }) {
                 [date]: {
                   ...day,
                   [metric]: numValue,
-                  manual: { ...day.manual, [metric]: value !== null && value !== '' },
+                  manual: { ...day.manual, [metric]: !cleared },
                 },
               },
             };

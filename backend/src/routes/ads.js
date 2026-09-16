@@ -60,8 +60,9 @@ router.post('/collect', async (req, res) => {
 // с маркетплейса (см. merge в /stats выше) — ручное значение здесь просто
 // сохраняется про запас и показывается только пока собранное значение
 // пустое/нулевое. metric — один из: views, pdpViews, cart, orders, revenue.
-// value = null/'' удаляет ранее сохранённое ручное значение (сброс к 0).
-const MANUAL_METRICS = new Set(['views', 'pdpViews', 'cart', 'orders', 'revenue']);
+// value = null/'' удаляет ранее сохранённое ручное значение (сброс к 0, а
+// для position — к "нет данных").
+const MANUAL_METRICS = new Set(['views', 'pdpViews', 'cart', 'orders', 'revenue', 'position']);
 router.post('/manual', async (req, res) => {
   try {
     const { cabinet, offerId, date, metric } = req.body || {};
@@ -202,25 +203,33 @@ router.get('/stats', async (req, res) => {
         const mpCart = an ? Number(an.hits_tocart) || 0 : 0;
         const mpOrders = an ? Number(an.orders_item) || 0 : 0;
         const mpRevenue = an ? Number(an.revenue) || 0 : 0;
-        const position = an?.position_category != null ? Number(an.position_category) : null;
+        const mpPosition = an?.position_category != null ? Number(an.position_category) : null;
 
         // Приоритет всегда у данных с маркетплейса — ручное значение
         // подставляется, только если Ozon для этой даты/метрики отдал 0
         // (или сбора вообще не было). Как только сбор реально соберёт
         // ненулевое значение, оно автоматически заменит ручное в выдаче —
         // ручное значение из БД при этом никуда не удаляется (на случай,
-        // если сбор снова перестанет что-то отдавать).
+        // если сбор снова перестанет что-то отдавать). Для позиции в поиске
+        // "пусто" — это null (а не 0, там 0 была бы отличной позицией),
+        // поэтому у неё своя проверка.
         const manualOf = metric => article.offerId ? manualByKey.get(`${article.offerId}|${date}|${metric}`) : undefined;
         function pick(mpValue, metric) {
           if (mpValue) return { value: mpValue, manual: false };
           const m = manualOf(metric);
           return m !== undefined ? { value: m, manual: true } : { value: mpValue, manual: false };
         }
+        function pickNullable(mpValue, metric) {
+          if (mpValue !== null && mpValue !== undefined) return { value: mpValue, manual: false };
+          const m = manualOf(metric);
+          return m !== undefined ? { value: m, manual: true } : { value: null, manual: false };
+        }
         const views = pick(mpViews, 'views');
         const pdpViews = pick(mpPdpViews, 'pdpViews');
         const cart = pick(mpCart, 'cart');
         const orders = pick(mpOrders, 'orders');
         const revenue = pick(mpRevenue, 'revenue');
+        const position = pickNullable(mpPosition, 'position');
 
         totalRevenue += revenue.value; totalOrders += orders.value; totalViews += views.value; totalPdpViews += pdpViews.value; totalCart += cart.value;
 
@@ -233,10 +242,10 @@ router.get('/stats', async (req, res) => {
           crToOrder: cart.value > 0 ? orders.value / cart.value * 100 : 0,
           orders: orders.value,
           revenue: revenue.value,
-          position,
+          position: position.value,
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
-            orders: orders.manual, revenue: revenue.manual,
+            orders: orders.manual, revenue: revenue.manual, position: position.manual,
           },
         };
       }
