@@ -67,6 +67,31 @@ const SORT_OPTIONS = [
   { value: 'manual', label: 'Свой порядок' },
 ];
 
+// Фиксированный набор артикулов для блока "Общая статистика" — не связан
+// с фильтрами/сортировкой основного списка ниже, показывает сводку только
+// по этим товарам.
+const GENERAL_STATS_OFFER_IDS = [
+  'Hv4-2KR', 'V015-5-2KR', 'Hnd1-2K', 'V017-2K', 'V020-2', 'Fr2-2K',
+  'Fr1-2KR', 'V024-2K', 'V023-2K', 'Kia3-2K', 'Vw1-2K', 'Rn1-2KR',
+  'Rn5-2', 'U2-2K',
+];
+
+// Метрики на выбор для таблицы по дням в "Общей статистике" — та же
+// палитра показателей, что и в карточке артикула, но выбирается только
+// одна за раз (не блоками, как в FUNNEL/CONVERSION/SPEND_ROWS).
+const GENERAL_METRIC_OPTIONS = [
+  { key: 'revenue',    label: 'Заказы, ₽',            fmt: 'money',  good: 'up' },
+  { key: 'orders',     label: 'Заказы, шт',            fmt: 'int',    good: 'up' },
+  { key: 'views',      label: 'Показы',                fmt: 'int',    good: 'up' },
+  { key: 'pdpViews',   label: 'Переходы на карточку',  fmt: 'int',    good: 'up' },
+  { key: 'cart',       label: 'Корзины',                fmt: 'int',    good: 'up' },
+  { key: 'ctr',        label: 'СТР (карточка/показ)',  fmt: 'pct',    good: 'up' },
+  { key: 'crToCart',   label: 'СР в корзину',          fmt: 'pct',    good: 'up' },
+  { key: 'crToOrder',  label: 'СР в заказ',            fmt: 'pct',    good: 'up' },
+  { key: 'spend',      label: 'Расход, ₽',             fmt: 'money0', good: 'up' },
+  { key: 'drr',        label: 'ДРР',                   fmt: 'pct',    good: 'down' },
+];
+
 function placementBucket(placement) {
   const p = (placement || '').toUpperCase();
   if (!p) return null;
@@ -397,6 +422,114 @@ function ArticleSummary({ totals }) {
       <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
         {convCards.map(c => <StatCard key={c.label} {...c} accent="var(--text2)" />)}
       </div>
+    </div>
+  );
+}
+
+// Скрытый по умолчанию блок сверху списка — сводка по дням для фиксированного
+// набора артикулов (GENERAL_STATS_OFFER_IDS), не зависящая от фильтров и
+// сортировки основного списка ниже. Метрика выбирается одна за раз (как и
+// просили — "можно выбрать метрику... но мы одну выбираем").
+function GeneralStatsCard({ articlesRaw, dates }) {
+  const [open, setOpen] = useState(false);
+  const [metric, setMetric] = useState('revenue');
+
+  const targetArticles = useMemo(
+    () => articlesRaw.filter(a => a.offerId && GENERAL_STATS_OFFER_IDS.includes(a.offerId)),
+    [articlesRaw]
+  );
+
+  const byDate = useMemo(() => {
+    const out = {};
+    for (const d of dates) {
+      let views = 0, pdpViews = 0, cart = 0, orders = 0, revenue = 0, spend = 0;
+      for (const a of targetArticles) {
+        const day = a.byDate[d] || {};
+        views += day.views || 0; pdpViews += day.pdpViews || 0; cart += day.cart || 0;
+        orders += day.orders || 0; revenue += day.revenue || 0;
+        spend += a.campaigns.reduce((s, c) => s + (c.byDate[d]?.spend || 0), 0);
+      }
+      out[d] = {
+        views, pdpViews, cart, orders, revenue, spend,
+        ctr: views > 0 ? pdpViews / views * 100 : 0,
+        crToCart: pdpViews > 0 ? cart / pdpViews * 100 : 0,
+        crToOrder: cart > 0 ? orders / cart * 100 : 0,
+        drr: revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0),
+      };
+    }
+    return out;
+  }, [targetArticles, dates]);
+
+  const totals = useMemo(() => {
+    let revenue = 0, orders = 0, views = 0, pdpViews = 0, cart = 0, spend = 0;
+    for (const d of dates) {
+      const day = byDate[d] || {};
+      revenue += day.revenue || 0; orders += day.orders || 0; views += day.views || 0;
+      pdpViews += day.pdpViews || 0; cart += day.cart || 0; spend += day.spend || 0;
+    }
+    const drr = revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0);
+    return { revenue, orders, views, pdpViews, cart, spend, drr };
+  }, [byDate, dates]);
+
+  const activeRow = GENERAL_METRIC_OPTIONS.find(m => m.key === metric) || GENERAL_METRIC_OPTIONS[0];
+
+  return (
+    <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
+      <div onClick={() => setOpen(o => !o)} style={{
+        display:'flex', alignItems:'center', gap:10, padding:'12px 16px', cursor:'pointer',
+        background:'var(--surface2)', flexWrap:'wrap',
+      }}>
+        <span>{open ? '▾' : '▸'}</span>
+        <span style={{ fontSize:15, fontWeight:700 }}>Общая статистика</span>
+        <span style={{ color:'var(--text3)', fontSize:12 }}>{targetArticles.length} из {GENERAL_STATS_OFFER_IDS.length} артикулов найдено</span>
+        <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text2)', display:'flex', gap:14 }}>
+          <span>Расход: {fmtValue(totals.spend, 'money0')} ₽</span>
+          <span style={{ fontWeight:700 }}>ДРР: {fmtValue(totals.drr, 'pct')}</span>
+        </span>
+      </div>
+
+      {open && (
+        <>
+          <div style={{ padding:'12px 16px 4px', display:'flex', gap:8, flexWrap:'wrap' }}>
+            {[
+              { label: 'Заказано, ₽',            value: fmtValue(totals.revenue, 'money') },
+              { label: 'Заказано, шт',           value: fmtValue(totals.orders, 'int') },
+              { label: 'Показы',                 value: fmtValue(totals.views, 'int') },
+              { label: 'Переходы на карточку',   value: fmtValue(totals.pdpViews, 'int') },
+              { label: 'Корзины',                value: fmtValue(totals.cart, 'int') },
+              { label: 'Расход, ₽',              value: fmtValue(totals.spend, 'money0') },
+              { label: 'ДРР',                    value: fmtValue(totals.drr, 'pct') },
+            ].map(c => <StatCard key={c.label} {...c} />)}
+          </div>
+
+          <div style={{ padding:'8px 16px 12px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+            <span style={{ fontSize:12, color:'var(--text3)' }}>Метрика по дням:</span>
+            <Segmented
+              options={GENERAL_METRIC_OPTIONS.map(m => ({ value: m.key, label: m.label }))}
+              value={metric}
+              onChange={setMetric}
+            />
+          </div>
+
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: 260 + dates.length * 62, width:'100%' }}>
+              <thead>
+                <tr>
+                  <th style={{ position:'sticky', left:0, zIndex:2, background:'var(--surface)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'left', minWidth:220 }}>Метрика</th>
+                  {dates.map(d => (
+                    <th key={d} style={{ borderBottom:'2px solid var(--border)', padding:'8px 6px', fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap' }}>
+                      {d.slice(8,10)}.{d.slice(5,7)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <MetricTable rows={[activeRow]} dates={dates} byDate={byDate} />
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -751,6 +884,8 @@ export default function AdsStats({ cabinet }) {
           {collecting ? 'Собираем...' : '↻ Обновить данные'}
         </button>
       </div>
+
+      <GeneralStatsCard articlesRaw={articlesRaw} dates={dates} />
 
       {/* Фильтры и сортировка — всё работает параллельно (И) */}
       <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:10 }}>
