@@ -485,13 +485,26 @@ router.get('/debug-statistics', async (req, res) => {
     }
     out.campaignId = campaignId;
 
-    for (const domain of ['api-performance.ozon.ru', 'performance.ozon.ru']) {
+    // GET на api-performance.ozon.ru отдаёт 405 — пробуем POST (Ozon Performance
+    // API v2/v3 обычно требует POST для запуска отчёта, а не синхронный GET).
+    try {
+      const { data } = await axios.post('https://api-performance.ozon.ru/api/client/statistics',
+        { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' },
+        { headers, timeout: 30000 });
+      out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path: '/api/client/statistics', ok: true, body: data });
+    } catch (e) {
+      out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path: '/api/client/statistics', ok: false, status: e.response?.status, body: e.response?.data || e.message });
+    }
+    // Вариант v3 (UUID-отчёт) — многие интеграции Ozon Performance API теперь
+    // используют именно /api/client/statistics/json или /v3/... для отчётов.
+    for (const path of ['/api/client/statistics/json', '/api/client/statistics/daily/json']) {
       try {
-        const { data } = await axios.get(`https://${domain}/api/client/statistics`,
-          { headers, params: { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' }, timeout: 30000 });
-        out.attempts.push({ domain, ok: true, rowCount: data?.list?.length, sample: data?.list?.slice(0, 3) });
+        const { data } = await axios.post(`https://api-performance.ozon.ru${path}`,
+          { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' },
+          { headers, timeout: 30000 });
+        out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path, ok: true, body: data });
       } catch (e) {
-        out.attempts.push({ domain, ok: false, status: e.response?.status, body: e.response?.data || e.message });
+        out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path, ok: false, status: e.response?.status, body: e.response?.data || e.message });
       }
     }
     res.json({ success: true, data: out });
