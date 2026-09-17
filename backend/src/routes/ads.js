@@ -513,4 +513,52 @@ router.get('/debug-statistics', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ debug-роут: POST /api/client/statistics подтверждён рабочим —
+// отдаёт {UUID} (асинхронный отчёт, максимум 1 активный запрос на аккаунт).
+// Этот роут запускает отчёт и сам поллит GET /api/client/statistics/{UUID}
+// до готовности, чтобы увидеть реальную форму данных (CSV-ссылка или JSON?).
+router.get('/debug-statistics-poll', async (req, res) => {
+  const axios = require('axios');
+  const dayjs = require('dayjs');
+  const { getCabinet } = require('../config/cabinets');
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const cfg = getCabinet(cabinet);
+    const { data: tokenData } = await axios.post('https://api-performance.ozon.ru/api/client/token',
+      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
+      { timeout: 15000 });
+    const token = tokenData?.access_token;
+    if (!token) return res.json({ success: false, error: 'Нет токена Performance API' });
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const from = dayjs().subtract(parseInt(req.query.days, 10) || 3, 'day').format('YYYY-MM-DD');
+    const to = dayjs().format('YYYY-MM-DD');
+
+    let campaignId = req.query.campaignId;
+    if (!campaignId) {
+      const { data: campData } = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
+        { headers, params: { state: 'CAMPAIGN_STATE_RUNNING' }, timeout: 30000 });
+      campaignId = campData?.list?.[0]?.id;
+    }
+
+    const { data: startData } = await axios.post('https://api-performance.ozon.ru/api/client/statistics',
+      { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' },
+      { headers, timeout: 30000 });
+    const uuid = startData?.UUID;
+    if (!uuid) return res.json({ success: false, error: 'Нет UUID', startData });
+
+    let status = null;
+    for (let i = 0; i < 10; i++) {
+      await delay(2000);
+      const { data } = await axios.get(`https://api-performance.ozon.ru/api/client/statistics/${uuid}`,
+        { headers, timeout: 30000 });
+      status = data;
+      if (data?.state === 'OK' || data?.state === 'ERROR') break;
+    }
+    res.json({ success: true, data: { campaignId, uuid, status } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.response?.data || e.message });
+  }
+});
+
 module.exports = router;
