@@ -397,7 +397,7 @@ function StatCard({ label, value, accent }) {
 // Сводка по артикулу за весь выбранный период — показывается сразу при
 // раскрытии карточки, до списка кампаний и таблицы по дням, чтобы не
 // прокручивать/складывать в уме дневные значения ради общей картины.
-function ArticleSummary({ totals }) {
+function ArticleSummary({ totals, stock }) {
   const cards = [
     { label: 'Заказано, ₽',            value: fmtValue(totals.revenue, 'money') },
     { label: 'Заказано, шт',           value: fmtValue(totals.orders, 'int') },
@@ -407,6 +407,15 @@ function ArticleSummary({ totals }) {
     { label: 'Расход, ₽',              value: fmtValue(totals.spend, 'money0') },
     { label: 'ДРР',                    value: fmtValue(totals.drr, 'pct') },
   ];
+  // Текущие остатки — FBO и FBS в одной карточке (не два отдельных блока),
+  // как попросили: "разместим в одном блоке и fbo и FBS". Данные "на
+  // сейчас", не зависят от выбранного периода — см. ad_product_stocks.
+  if (stock) {
+    cards.push({
+      label: 'Остатки (FBO · FBS)',
+      value: `${fmtValue(stock.fboPresent, 'int')} · ${fmtValue(stock.fbsPresent, 'int')}`,
+    });
+  }
   // Общая конверсия за весь период — сумма/сумма (не среднее по дням),
   // отдельным рядом, чтобы не путать штучные метрики с процентами.
   const convCards = [
@@ -653,7 +662,7 @@ function ArticleCard({
 
       {isOpen && (
         <>
-          <ArticleSummary totals={computedTotals} />
+          <ArticleSummary totals={computedTotals} stock={article.stock} />
 
           <div style={{ padding:'10px 0 0' }}>
             <div style={{ padding:'0 16px 8px', fontSize:11, color:'var(--text3)', fontWeight:700, textTransform:'uppercase', letterSpacing:.4 }}>

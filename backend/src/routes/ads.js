@@ -6,6 +6,7 @@ const { listCabinets } = require('../config/cabinets');
 const { collectCatalog } = require('../collectors/ads/ozonCatalog');
 const { collectAdStats } = require('../collectors/ads/ozonPerf');
 const { collectProductAnalytics } = require('../collectors/ads/ozonProductAnalytics');
+const { collectProductStocks } = require('../collectors/ads/ozonProductStocks');
 const { saveRunStatus, isRunActive } = require('../collectors/ads/runStatus');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
@@ -45,6 +46,9 @@ router.post('/collect', async (req, res) => {
       await saveRunStatus(cabinet, { step: 'product_analytics' });
       console.log(`[Ads] Сбор для ${cabinet}: аналитика по товарам...`);
       await collectProductAnalytics(cabinet, days);
+      await saveRunStatus(cabinet, { step: 'stocks' });
+      console.log(`[Ads] Сбор для ${cabinet}: остатки...`);
+      await collectProductStocks(cabinet);
       await saveRunStatus(cabinet, { step: 'done', finishedAt: new Date().toISOString() });
       console.log(`[Ads] Сбор для ${cabinet}: готово`);
     } catch(e) {
@@ -152,7 +156,7 @@ router.get('/stats', async (req, res) => {
       to = dayjs().format('YYYY-MM-DD');
     }
 
-    const [campaigns, adRows, analyticsRows, catalogRows, manualRows] = await Promise.all([
+    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows] = await Promise.all([
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
@@ -173,6 +177,14 @@ router.get('/stats', async (req, res) => {
       query(`SELECT date::text as date, offer_id, metric, value
              FROM product_analytics_manual WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
+      // Текущие остатки FBO/FBS — последний собранный снепшот по кабинету
+      // (см. collectors/ads/ozonProductStocks.js). Не зависит от выбранного
+      // периода — это "сейчас", а не история.
+      query(`SELECT offer_id, fbo_present, fbo_reserved, fbs_present, fbs_reserved
+             FROM ad_product_stocks
+             WHERE cabinet = $1 AND platform = 'ozon'
+               AND snapshot_date = (SELECT MAX(snapshot_date) FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon')`,
+             [cabinet]),
     ]);
 
     const dates = [];
@@ -185,6 +197,13 @@ router.get('/stats', async (req, res) => {
     for (const r of adRows) spendByKey.set(`${r.campaign_id}|${r.date}`, Number(r.spend) || 0);
 
     const nameByOfferId = new Map(catalogRows.map(r => [r.offer_id, r.product_name]));
+
+    const stockByOfferId = new Map(stockRows.map(r => [r.offer_id, {
+      fboPresent: Number(r.fbo_present) || 0,
+      fboReserved: Number(r.fbo_reserved) || 0,
+      fbsPresent: Number(r.fbs_present) || 0,
+      fbsReserved: Number(r.fbs_reserved) || 0,
+    }]));
 
     // Ручные значения — сгруппированы по offerId|date|metric, метрики те же
     // ключи, что и в byDate ниже (views/pdpViews/cart/orders/revenue).
@@ -321,6 +340,7 @@ router.get('/stats', async (req, res) => {
           ctr: totalCtr, crToCart: totalCrToCart, crToOrder: totalCrToOrder,
         },
         campaigns: article.campaigns,
+        stock: article.offerId ? (stockByOfferId.get(article.offerId) || null) : null,
       });
     }
 

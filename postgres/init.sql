@@ -341,3 +341,25 @@ CREATE TABLE IF NOT EXISTS product_analytics_manual (
   updated_at TIMESTAMP DEFAULT NOW(),
   PRIMARY KEY (cabinet, platform, offer_id, date, metric)
 );
+
+-- Текущие остатки (FBO/FBS) по товарам мультикабинетных сборщиков рекламы
+-- (Defly и далее) — отдельная таблица от старой ozon_stocks (та без cabinet,
+-- жёстко привязана к "родным" переменным окружения Licio). Хранится по одному
+-- снепшоту на кабинет+день (сборщик чистит сегодняшний снепшот перед
+-- вставкой новых данных, как и старый сборщик Licio) — см.
+-- collectors/ads/ozonProductStocks.js.
+CREATE TABLE IF NOT EXISTS ad_product_stocks (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  collected_at TIMESTAMP DEFAULT NOW(),
+  snapshot_date DATE NOT NULL,
+  sku BIGINT,
+  offer_id VARCHAR(128) NOT NULL,
+  fbo_present INT DEFAULT 0,
+  fbo_reserved INT DEFAULT 0,
+  fbs_present INT DEFAULT 0,
+  fbs_reserved INT DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ad_product_stocks_snap ON ad_product_stocks(cabinet, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_ad_product_stocks_offer ON ad_product_stocks(cabinet, offer_id);
