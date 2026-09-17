@@ -555,7 +555,15 @@ router.get('/debug-statistics-poll', async (req, res) => {
       status = data;
       if (data?.state === 'OK' || data?.state === 'ERROR') break;
     }
-    res.json({ success: true, data: { campaignId, uuid, status } });
+    let report = null;
+    if (status?.link) {
+      try {
+        const { data } = await axios.get(`https://api-performance.ozon.ru${status.link}`,
+          { headers, timeout: 30000, responseType: 'text', transformResponse: [d => d] });
+        report = String(data).slice(0, 3000);
+      } catch (e) { report = `Ошибка загрузки отчёта: ${e.response?.status} ${e.message}`; }
+    }
+    res.json({ success: true, data: { campaignId, uuid, status, report } });
   } catch (e) {
     res.status(500).json({ success: false, error: e.response?.data || e.message });
   }
