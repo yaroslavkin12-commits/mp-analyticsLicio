@@ -425,4 +425,31 @@ router.get('/debug-analytics', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ debug-роут: сырой ответ Ozon Performance API (statistics/expense/json)
+// для кабинета — посмотреть, какие поля реально приходят (клики/показы/CPC),
+// т.к. текущий сборщик (ozonPerf.js) сохраняет только moneySpent.
+router.get('/debug-expense', async (req, res) => {
+  const axios = require('axios');
+  const dayjs = require('dayjs');
+  const { getCabinet } = require('../config/cabinets');
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const cfg = getCabinet(cabinet);
+    const { data: tokenData } = await axios.post('https://api-performance.ozon.ru/api/client/token',
+      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
+      { timeout: 15000 });
+    const token = tokenData?.access_token;
+    if (!token) return res.json({ success: false, error: 'Нет токена Performance API' });
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const from = dayjs().subtract(parseInt(req.query.days, 10) || 3, 'day').format('YYYY-MM-DD');
+    const to = dayjs().format('YYYY-MM-DD');
+    const { data } = await axios.get('https://api-performance.ozon.ru/api/client/statistics/expense/json',
+      { headers, params: { dateFrom: from, dateTo: to }, timeout: 30000 });
+    const rows = data?.rows || data?.list || (Array.isArray(data) ? data : []);
+    res.json({ success: true, data: { from, to, rowCount: rows.length, keysSample: rows[0] ? Object.keys(rows[0]) : [], sample: rows.slice(0, 5) } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.response?.data || e.message });
+  }
+});
+
 module.exports = router;

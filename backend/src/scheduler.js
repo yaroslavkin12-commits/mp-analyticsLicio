@@ -18,6 +18,7 @@ const { CABINETS }                          = require('./config/cabinets');
 const { collectCatalog: adsCatalog }         = require('./collectors/ads/ozonCatalog');
 const { collectAdStats: adsStats }           = require('./collectors/ads/ozonPerf');
 const { collectProductAnalytics: adsAnalytics } = require('./collectors/ads/ozonProductAnalytics');
+const { collectProductStocks: adsStocks } = require('./collectors/ads/ozonProductStocks');
 const { saveRunStatus: adsSaveRunStatus, isRunActive: adsIsRunActive } = require('./collectors/ads/runStatus');
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -147,6 +148,8 @@ async function runAdsCabinets(days = 3) {
       await run(`${id} Реклама (Performance)`, id, 'ads_perf', () => adsStats(id, days));
       await adsSaveRunStatus(id, { step: 'product_analytics' });
       await run(`${id} Аналитика товаров`, id, 'ads_analytics', () => adsAnalytics(id, days));
+      await adsSaveRunStatus(id, { step: 'stocks' });
+      await run(`${id} Остатки`, id, 'ads_stocks', () => adsStocks(id));
       await adsSaveRunStatus(id, { step: 'done', finishedAt: new Date().toISOString() });
     } catch(e) {
       console.error(`[Ads:${id}]`, e.message);
