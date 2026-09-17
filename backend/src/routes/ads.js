@@ -534,15 +534,15 @@ router.get('/debug-statistics-poll', async (req, res) => {
     const from = dayjs().subtract(parseInt(req.query.days, 10) || 3, 'day').format('YYYY-MM-DD');
     const to = dayjs().format('YYYY-MM-DD');
 
-    let campaignId = req.query.campaignId;
-    if (!campaignId) {
+    let campaignIds = req.query.campaignId ? [req.query.campaignId] : null;
+    if (!campaignIds) {
       const { data: campData } = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
         { headers, params: { state: 'CAMPAIGN_STATE_RUNNING' }, timeout: 30000 });
-      campaignId = campData?.list?.[0]?.id;
+      campaignIds = (campData?.list || []).slice(0, 5).map(c => c.id); // пробуем batch на нескольких сразу
     }
 
     const { data: startData } = await axios.post('https://api-performance.ozon.ru/api/client/statistics',
-      { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' },
+      { campaigns: campaignIds, dateFrom: from, dateTo: to, groupBy: 'DATE' },
       { headers, timeout: 30000 });
     const uuid = startData?.UUID;
     if (!uuid) return res.json({ success: false, error: 'Нет UUID', startData });
@@ -560,10 +560,10 @@ router.get('/debug-statistics-poll', async (req, res) => {
       try {
         const { data } = await axios.get(`https://api-performance.ozon.ru${status.link}`,
           { headers, timeout: 30000, responseType: 'text', transformResponse: [d => d] });
-        report = String(data).slice(0, 3000);
+        report = String(data).slice(0, 6000);
       } catch (e) { report = `Ошибка загрузки отчёта: ${e.response?.status} ${e.message}`; }
     }
-    res.json({ success: true, data: { campaignId, uuid, status, report } });
+    res.json({ success: true, data: { campaignIds, uuid, status, report } });
   } catch (e) {
     res.status(500).json({ success: false, error: e.response?.data || e.message });
   }
