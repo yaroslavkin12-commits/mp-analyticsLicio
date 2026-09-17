@@ -46,34 +46,60 @@ function parseRuNumber(v) {
   return Number(String(v).replace(/\s/g, '').replace(',', '.')) || 0;
 }
 
+// Определяем индексы нужных колонок ПО НАЗВАНИЮ из строки заголовка, а не по
+// фиксированной позиции. Раньше индексы были жёстко зашиты (6 Показы, 7 Клики,
+// 11 Расход, ...), и для большинства кампаний совпадали — но у части кампаний
+// набор колонок отличается (например, нет разбивки по SKU/типу страницы, если
+// в кампании всего один товар), из-за чего фиксированные индексы съезжали и
+// "Клики"/"Расход" читались из совсем других колонок — отсюда наблюдались
+// бессмысленные результаты вроде 43 837 ₽ за клик.
+function detectColumns(headerCols) {
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const idx = {};
+  headerCols.forEach((raw, i) => {
+    const c = norm(raw);
+    if (c.startsWith('день')) idx.day = i;
+    else if (c.startsWith('показы')) idx.views = i;
+    else if (c.startsWith('клики')) idx.clicks = i;
+    else if (c.startsWith('расход')) idx.spend = i;
+    else if (c.startsWith('заказы модели')) { /* отдельная метрика, не нужна */ }
+    else if (c.startsWith('заказы')) idx.orders = i;
+    else if (c.startsWith('выручка с заказов модели')) { /* не нужна */ }
+    else if (c.startsWith('выручка')) idx.ordersMoney = i;
+  });
+  return idx;
+}
+
 // Парсинг одного CSV-отчёта по одной кампании. Формат (разделитель ";"):
 // строка 1 — заголовок отчёта (";Рекламная кампания № ..."), пропускаем;
-// строка 2 — названия колонок, пропускаем;
+// строка 2 — названия колонок — по ней определяем индексы (см. detectColumns);
 // далее — по одной строке на день (может быть несколько строк на день, если
 // в кампании больше одного SKU/типа страницы — суммируем по дате);
 // последняя строка "Всего" — общий итог, пропускаем (считаем сумму сами).
-//
-// Колонки (по индексу): 0 День, 1 sku, 2 Название, 3 Цена, 4 Тип страницы,
-// 5 Условие показа, 6 Показы, 7 Клики, 8 CTR, 9 В корзину,
-// 10 Средняя ставка, 11 Расход, 12 Заказы, 13 Выручка, 14 Заказы модели,
-// 15 Выручка с заказов модели.
 function parseCampaignCsv(csvText) {
   const lines = csvText.split('\n').map(l => l.trim()).filter(Boolean);
   const byDate = new Map(); // "YYYY-MM-DD" -> {views,clicks,spend,orders,ordersMoney}
+  let cols_ = null; // индексы колонок, из строки заголовка
   for (const line of lines) {
-    if (line.startsWith(';')) continue; // строка заголовка отчёта
+    if (line.startsWith(';')) continue; // строка заголовка отчёта (комментарий)
     const cols = line.split(';');
-    const day = cols[0];
+    if (!cols_) {
+      // Первая не-комментарийная строка — заголовки колонок, саму строку с
+      // данными не считаем.
+      cols_ = detectColumns(cols);
+      continue;
+    }
+    const day = cols[cols_.day != null ? cols_.day : 0];
     if (!day || day === 'Всего' || day === 'День') continue;
     // День приходит как "12.09.2026"
     const m = day.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
     if (!m) continue;
     const date = `${m[3]}-${m[2]}-${m[1]}`;
-    const views = parseRuNumber(cols[6]);
-    const clicks = parseRuNumber(cols[7]);
-    const spend = parseRuNumber(cols[11]);
-    const orders = parseRuNumber(cols[12]);
-    const ordersMoney = parseRuNumber(cols[13]);
+    const views = cols_.views != null ? parseRuNumber(cols[cols_.views]) : 0;
+    const clicks = cols_.clicks != null ? parseRuNumber(cols[cols_.clicks]) : 0;
+    const spend = cols_.spend != null ? parseRuNumber(cols[cols_.spend]) : 0;
+    const orders = cols_.orders != null ? parseRuNumber(cols[cols_.orders]) : 0;
+    const ordersMoney = cols_.ordersMoney != null ? parseRuNumber(cols[cols_.ordersMoney]) : 0;
     if (!byDate.has(date)) byDate.set(date, { views: 0, clicks: 0, spend: 0, orders: 0, ordersMoney: 0 });
     const acc = byDate.get(date);
     acc.views += views; acc.clicks += clicks; acc.spend += spend;
