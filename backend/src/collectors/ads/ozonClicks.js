@@ -182,6 +182,15 @@ async function collectClicks(cabinet, days, debugErrors) {
     const batch = campaignIds.slice(i, i + BATCH_SIZE);
     try {
       const byCampaign = await requestReport(batch, from, to, headers);
+      if (byCampaign.size === 0) {
+        try {
+          await query(
+            `INSERT INTO collection_log (platform,collector_type,status,records_collected,error_message,finished_at)
+             VALUES ($1,'ads_clicks_batch','error',0,$2,NOW())`,
+            [cabinet, JSON.stringify({ batch, error: 'Отчёт получен, но парсер не нашёл ни одной кампании (пустой Map)' }).slice(0, 1000)]
+          );
+        } catch (logErr) { /* non-critical */ }
+      }
       for (const [campaignId, byDate] of byCampaign) {
         for (const [date, m] of byDate) {
           try {
@@ -204,6 +213,16 @@ async function collectClicks(cabinet, days, debugErrors) {
       const errInfo = e.response?.data || e.message;
       console.warn(`[Ads Clicks] ${cabinet}: батч ${i / BATCH_SIZE + 1}:`, errInfo);
       if (Array.isArray(debugErrors)) debugErrors.push({ batch: batch.slice(0, 3), error: errInfo });
+      // Логи console.warn недоступны без доступа к панели Render — пишем
+      // ошибку батча в collection_log, чтобы её можно было посмотреть через
+      // существующий GET /api/dashboard/collection-log без доступа к серверу.
+      try {
+        await query(
+          `INSERT INTO collection_log (platform,collector_type,status,records_collected,error_message,finished_at)
+           VALUES ($1,'ads_clicks_batch','error',0,$2,NOW())`,
+          [cabinet, JSON.stringify({ batch, error: errInfo }).slice(0, 1000)]
+        );
+      } catch (logErr) { /* non-critical */ }
     }
     await delay(500);
   }
