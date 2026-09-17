@@ -452,4 +452,52 @@ router.get('/debug-expense', async (req, res) => {
   }
 });
 
+// ВРЕМЕННЫЙ debug-роут: пробуем синхронный GET .../api/client/statistics
+// (даёт views/clicks/ctr по дням на кампанию — то, что нужно для CPC) на
+// обоих известных доменах Performance API, т.к. "родной" сборщик Licio
+// (collectors/ozon/ads.js) успешно ходит на performance.ozon.ru, а
+// мультикабинетный (ozonPerf.js) — на api-performance.ozon.ru, и раньше
+// решили, что statistics отдаёт 405 "на этом аккаунте", хотя, возможно,
+// дело было в домене, а не в аккаунте.
+router.get('/debug-statistics', async (req, res) => {
+  const axios = require('axios');
+  const dayjs = require('dayjs');
+  const { getCabinet } = require('../config/cabinets');
+  const out = { attempts: [] };
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const cfg = getCabinet(cabinet);
+    const { data: tokenData } = await axios.post('https://api-performance.ozon.ru/api/client/token',
+      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
+      { timeout: 15000 });
+    const token = tokenData?.access_token;
+    if (!token) return res.json({ success: false, error: 'Нет токена Performance API' });
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const from = dayjs().subtract(parseInt(req.query.days, 10) || 3, 'day').format('YYYY-MM-DD');
+    const to = dayjs().format('YYYY-MM-DD');
+
+    // Нужен ID хотя бы одной активной кампании — берём из списка.
+    let campaignId = req.query.campaignId;
+    if (!campaignId) {
+      const { data: campData } = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
+        { headers, params: { state: 'CAMPAIGN_STATE_RUNNING' }, timeout: 30000 });
+      campaignId = campData?.list?.[0]?.id;
+    }
+    out.campaignId = campaignId;
+
+    for (const domain of ['api-performance.ozon.ru', 'performance.ozon.ru']) {
+      try {
+        const { data } = await axios.get(`https://${domain}/api/client/statistics`,
+          { headers, params: { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' }, timeout: 30000 });
+        out.attempts.push({ domain, ok: true, rowCount: data?.list?.length, sample: data?.list?.slice(0, 3) });
+      } catch (e) {
+        out.attempts.push({ domain, ok: false, status: e.response?.status, body: e.response?.data || e.message });
+      }
+    }
+    res.json({ success: true, data: out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.response?.data || e.message, out });
+  }
+});
+
 module.exports = router;
