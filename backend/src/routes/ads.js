@@ -440,25 +440,4 @@ router.get('/debug-analytics', async (req, res) => {
   }
 });
 
-// ВРЕМЕННЫЙ debug-роут: запустить сборщик кликов напрямую (без остальной
-// цепочки /collect) и увидеть счётчик кампаний/ошибки сразу, не дожидаясь
-// полного цикла сбора (каталог+расход+клики+аналитика+остатки — минут 10+).
-router.get('/debug-clicks', async (req, res) => {
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const days = parseInt(req.query.days, 10) || 7;
-    const campaignRows = await query(
-      `SELECT campaign_id FROM ad_campaigns
-       WHERE cabinet = $1 AND platform = 'ozon' AND matched_offer_id IS NOT NULL
-         AND state NOT IN ('CAMPAIGN_STATE_ARCHIVED', 'CAMPAIGN_STATE_FINISHED')`,
-      [cabinet]
-    );
-    const errors = [];
-    const updated = await collectClicks(cabinet, days, errors);
-    res.json({ success: true, data: { candidateCampaigns: campaignRows.length, rowsUpdated: updated, errors } });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.response?.data || e.message });
-  }
-});
-
 module.exports = router;
