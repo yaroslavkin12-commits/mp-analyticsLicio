@@ -31,8 +31,9 @@ const CONVERSION_ROWS = [
 // Расход подсвечивается по дням тепловой картой (good:'up'), чтобы было
 // сразу видно, в какие дни лили больше денег в рекламу.
 const SPEND_ROWS = [
-  { key: 'spend', label: 'Расход, ₽', fmt: 'money0', good: 'up' },
-  { key: 'drr',   label: 'ДРР',       fmt: 'pct',    good: 'down' },
+  { key: 'avgCpc', label: 'Ср. цена клика, ₽', fmt: 'money2', good: 'down' },
+  { key: 'spend',  label: 'Расход, ₽',          fmt: 'money0', good: 'up' },
+  { key: 'drr',    label: 'ДРР',                fmt: 'pct',    good: 'down' },
 ];
 
 // Метрики для графика сравнения — фиксированный порядок цветов (как на
@@ -128,6 +129,7 @@ function fmtValue(v, fmt) {
   switch (fmt) {
     case 'money':  return Math.round(v).toLocaleString('ru-RU');
     case 'money0': return v ? Math.round(v).toLocaleString('ru-RU') : '—';
+    case 'money2': return v ? v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
     case 'int':    return Math.round(v).toLocaleString('ru-RU');
     case 'pct':    return `${v.toFixed(1)}%`;
     case 'pos':    return v.toFixed(1);
@@ -553,6 +555,7 @@ function CampaignsList({ campaigns }) {
             <th style={{ textAlign:'left', padding:'7px 8px', fontWeight:600, color:'var(--text3)' }}>Статус</th>
             <th style={{ textAlign:'left', padding:'7px 8px', fontWeight:600, color:'var(--text3)' }}>Тип</th>
             <th style={{ textAlign:'left', padding:'7px 8px', fontWeight:600, color:'var(--text3)' }}>Зона</th>
+            <th style={{ textAlign:'right', padding:'7px 10px', fontWeight:600, color:'var(--text3)' }}>Ср. цена клика, ₽</th>
             <th style={{ textAlign:'right', padding:'7px 10px', fontWeight:600, color:'var(--text3)' }}>Расход, ₽</th>
             <th style={{ textAlign:'right', padding:'7px 10px', fontWeight:600, color:'var(--text3)' }}>ДРР</th>
           </tr>
@@ -574,6 +577,7 @@ function CampaignsList({ campaigns }) {
               <td style={{ padding:'7px 8px', color:'var(--text2)', whiteSpace:'nowrap' }}>
                 {placementBucket(camp.placement) === 'search' ? 'Поиск' : placementBucket(camp.placement) ? 'Поиск+рек.' : '—'}
               </td>
+              <td style={{ padding:'7px 10px', textAlign:'right', whiteSpace:'nowrap' }}>{fmtValue(camp.avgCpc, 'money2')}</td>
               <td style={{ padding:'7px 10px', textAlign:'right', whiteSpace:'nowrap' }}>{fmtValue(camp.totalSpend, 'money0')}</td>
               <td style={{ padding:'7px 10px', textAlign:'right', whiteSpace:'nowrap', fontWeight:600 }}>{fmtValue(camp.drr, 'pct')}</td>
             </tr>
@@ -599,6 +603,9 @@ function ArticleCard({
     const out = {};
     for (const d of dates) {
       const spend = article.campaigns.reduce((s, c) => s + (c.byDate[d]?.spend || 0), 0);
+      // Клики — сумма по всем РК артикула за день, отдельно от расхода
+      // (собираются отдельным сборщиком, см. collectors/ads/ozonClicks.js).
+      const clicks = article.campaigns.reduce((s, c) => s + (c.byDate[d]?.clicks || 0), 0);
       const day = article.byDate[d] || {};
       const views = day.views || 0, pdpViews = day.pdpViews || 0, cart = day.cart || 0, orders = day.orders || 0;
       const revenue = day.revenue || 0;
@@ -608,6 +615,7 @@ function ArticleCard({
         crToCart: pdpViews > 0 ? cart / pdpViews * 100 : 0,
         crToOrder: cart > 0 ? orders / cart * 100 : 0,
         spend,
+        avgCpc: clicks > 0 ? spend / clicks : 0,
         drr: revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0),
       };
     }

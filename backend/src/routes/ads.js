@@ -7,6 +7,7 @@ const { collectCatalog } = require('../collectors/ads/ozonCatalog');
 const { collectAdStats } = require('../collectors/ads/ozonPerf');
 const { collectProductAnalytics } = require('../collectors/ads/ozonProductAnalytics');
 const { collectProductStocks } = require('../collectors/ads/ozonProductStocks');
+const { collectClicks } = require('../collectors/ads/ozonClicks');
 const { saveRunStatus, isRunActive } = require('../collectors/ads/runStatus');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
@@ -43,6 +44,9 @@ router.post('/collect', async (req, res) => {
       await saveRunStatus(cabinet, { step: 'ad_stats' });
       console.log(`[Ads] Сбор для ${cabinet}: реклама (Performance API)...`);
       await collectAdStats(cabinet, days);
+      await saveRunStatus(cabinet, { step: 'clicks' });
+      console.log(`[Ads] Сбор для ${cabinet}: клики/CPC...`);
+      await collectClicks(cabinet, days);
       await saveRunStatus(cabinet, { step: 'product_analytics' });
       console.log(`[Ads] Сбор для ${cabinet}: аналитика по товарам...`);
       await collectProductAnalytics(cabinet, days);
@@ -160,7 +164,7 @@ router.get('/stats', async (req, res) => {
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT date::text as date, campaign_id, spend
+      query(`SELECT date::text as date, campaign_id, spend, clicks
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
       query(`SELECT date::text as date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
@@ -194,7 +198,11 @@ router.get('/stats', async (req, res) => {
     for (const r of analyticsRows) analyticsByKey.set(`${r.sku}|${r.date}`, r);
 
     const spendByKey = new Map(); // campaignId|date -> spend
-    for (const r of adRows) spendByKey.set(`${r.campaign_id}|${r.date}`, Number(r.spend) || 0);
+    const clicksByKey = new Map(); // campaignId|date -> clicks
+    for (const r of adRows) {
+      spendByKey.set(`${r.campaign_id}|${r.date}`, Number(r.spend) || 0);
+      clicksByKey.set(`${r.campaign_id}|${r.date}`, Number(r.clicks) || 0);
+    }
 
     const nameByOfferId = new Map(catalogRows.map(r => [r.offer_id, r.product_name]));
 
@@ -230,11 +238,16 @@ router.get('/stats', async (req, res) => {
     for (const camp of campaigns) {
       const article = getArticle(camp.matched_offer_id, camp.matched_sku);
       const byDate = {};
-      let totalSpend = 0;
+      let totalSpend = 0, totalClicks = 0;
       for (const date of dates) {
         const spend = spendByKey.get(`${camp.campaign_id}|${date}`) || 0;
+        const clicks = clicksByKey.get(`${camp.campaign_id}|${date}`) || 0;
         totalSpend += spend;
-        byDate[date] = { spend };
+        totalClicks += clicks;
+        // Средняя цена клика за день — расход / клики (клики собираются
+        // отдельно через collectors/ads/ozonClicks.js, т.к. эндпоинт расхода
+        // их не отдаёт). 0, если кликов не было — не делить на 0.
+        byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0 };
       }
       article.campaigns.push({
         campaignId: camp.campaign_id,
@@ -246,6 +259,8 @@ router.get('/stats', async (req, res) => {
         placement: camp.placement,
         expenseStrategy: camp.expense_strategy,
         totalSpend,
+        totalClicks,
+        avgCpc: totalClicks > 0 ? totalSpend / totalClicks : 0,
         byDate,
       });
     }
@@ -422,150 +437,6 @@ router.get('/debug-analytics', async (req, res) => {
     res.json({ success: true, data: out });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ВРЕМЕННЫЙ debug-роут: сырой ответ Ozon Performance API (statistics/expense/json)
-// для кабинета — посмотреть, какие поля реально приходят (клики/показы/CPC),
-// т.к. текущий сборщик (ozonPerf.js) сохраняет только moneySpent.
-router.get('/debug-expense', async (req, res) => {
-  const axios = require('axios');
-  const dayjs = require('dayjs');
-  const { getCabinet } = require('../config/cabinets');
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const cfg = getCabinet(cabinet);
-    const { data: tokenData } = await axios.post('https://api-performance.ozon.ru/api/client/token',
-      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
-      { timeout: 15000 });
-    const token = tokenData?.access_token;
-    if (!token) return res.json({ success: false, error: 'Нет токена Performance API' });
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-    const from = dayjs().subtract(parseInt(req.query.days, 10) || 3, 'day').format('YYYY-MM-DD');
-    const to = dayjs().format('YYYY-MM-DD');
-    const { data } = await axios.get('https://api-performance.ozon.ru/api/client/statistics/expense/json',
-      { headers, params: { dateFrom: from, dateTo: to }, timeout: 30000 });
-    const rows = data?.rows || data?.list || (Array.isArray(data) ? data : []);
-    res.json({ success: true, data: { from, to, rowCount: rows.length, keysSample: rows[0] ? Object.keys(rows[0]) : [], sample: rows.slice(0, 5) } });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.response?.data || e.message });
-  }
-});
-
-// ВРЕМЕННЫЙ debug-роут: пробуем синхронный GET .../api/client/statistics
-// (даёт views/clicks/ctr по дням на кампанию — то, что нужно для CPC) на
-// обоих известных доменах Performance API, т.к. "родной" сборщик Licio
-// (collectors/ozon/ads.js) успешно ходит на performance.ozon.ru, а
-// мультикабинетный (ozonPerf.js) — на api-performance.ozon.ru, и раньше
-// решили, что statistics отдаёт 405 "на этом аккаунте", хотя, возможно,
-// дело было в домене, а не в аккаунте.
-router.get('/debug-statistics', async (req, res) => {
-  const axios = require('axios');
-  const dayjs = require('dayjs');
-  const { getCabinet } = require('../config/cabinets');
-  const out = { attempts: [] };
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const cfg = getCabinet(cabinet);
-    const { data: tokenData } = await axios.post('https://api-performance.ozon.ru/api/client/token',
-      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
-      { timeout: 15000 });
-    const token = tokenData?.access_token;
-    if (!token) return res.json({ success: false, error: 'Нет токена Performance API' });
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-    const from = dayjs().subtract(parseInt(req.query.days, 10) || 3, 'day').format('YYYY-MM-DD');
-    const to = dayjs().format('YYYY-MM-DD');
-
-    // Нужен ID хотя бы одной активной кампании — берём из списка.
-    let campaignId = req.query.campaignId;
-    if (!campaignId) {
-      const { data: campData } = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
-        { headers, params: { state: 'CAMPAIGN_STATE_RUNNING' }, timeout: 30000 });
-      campaignId = campData?.list?.[0]?.id;
-    }
-    out.campaignId = campaignId;
-
-    // GET на api-performance.ozon.ru отдаёт 405 — пробуем POST (Ozon Performance
-    // API v2/v3 обычно требует POST для запуска отчёта, а не синхронный GET).
-    try {
-      const { data } = await axios.post('https://api-performance.ozon.ru/api/client/statistics',
-        { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' },
-        { headers, timeout: 30000 });
-      out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path: '/api/client/statistics', ok: true, body: data });
-    } catch (e) {
-      out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path: '/api/client/statistics', ok: false, status: e.response?.status, body: e.response?.data || e.message });
-    }
-    // Вариант v3 (UUID-отчёт) — многие интеграции Ozon Performance API теперь
-    // используют именно /api/client/statistics/json или /v3/... для отчётов.
-    for (const path of ['/api/client/statistics/json', '/api/client/statistics/daily/json']) {
-      try {
-        const { data } = await axios.post(`https://api-performance.ozon.ru${path}`,
-          { campaigns: [campaignId], dateFrom: from, dateTo: to, groupBy: 'DATE' },
-          { headers, timeout: 30000 });
-        out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path, ok: true, body: data });
-      } catch (e) {
-        out.attempts.push({ method: 'POST', domain: 'api-performance.ozon.ru', path, ok: false, status: e.response?.status, body: e.response?.data || e.message });
-      }
-    }
-    res.json({ success: true, data: out });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.response?.data || e.message, out });
-  }
-});
-
-// ВРЕМЕННЫЙ debug-роут: POST /api/client/statistics подтверждён рабочим —
-// отдаёт {UUID} (асинхронный отчёт, максимум 1 активный запрос на аккаунт).
-// Этот роут запускает отчёт и сам поллит GET /api/client/statistics/{UUID}
-// до готовности, чтобы увидеть реальную форму данных (CSV-ссылка или JSON?).
-router.get('/debug-statistics-poll', async (req, res) => {
-  const axios = require('axios');
-  const dayjs = require('dayjs');
-  const { getCabinet } = require('../config/cabinets');
-  const delay = ms => new Promise(r => setTimeout(r, ms));
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const cfg = getCabinet(cabinet);
-    const { data: tokenData } = await axios.post('https://api-performance.ozon.ru/api/client/token',
-      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
-      { timeout: 15000 });
-    const token = tokenData?.access_token;
-    if (!token) return res.json({ success: false, error: 'Нет токена Performance API' });
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-    const from = dayjs().subtract(parseInt(req.query.days, 10) || 3, 'day').format('YYYY-MM-DD');
-    const to = dayjs().format('YYYY-MM-DD');
-
-    let campaignIds = req.query.campaignId ? [req.query.campaignId] : null;
-    if (!campaignIds) {
-      const { data: campData } = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
-        { headers, params: { state: 'CAMPAIGN_STATE_RUNNING' }, timeout: 30000 });
-      campaignIds = (campData?.list || []).slice(0, 5).map(c => c.id); // пробуем batch на нескольких сразу
-    }
-
-    const { data: startData } = await axios.post('https://api-performance.ozon.ru/api/client/statistics',
-      { campaigns: campaignIds, dateFrom: from, dateTo: to, groupBy: 'DATE' },
-      { headers, timeout: 30000 });
-    const uuid = startData?.UUID;
-    if (!uuid) return res.json({ success: false, error: 'Нет UUID', startData });
-
-    let status = null;
-    for (let i = 0; i < 10; i++) {
-      await delay(2000);
-      const { data } = await axios.get(`https://api-performance.ozon.ru/api/client/statistics/${uuid}`,
-        { headers, timeout: 30000 });
-      status = data;
-      if (data?.state === 'OK' || data?.state === 'ERROR') break;
-    }
-    let report = null;
-    if (status?.link) {
-      try {
-        const { data } = await axios.get(`https://api-performance.ozon.ru${status.link}`,
-          { headers, timeout: 30000, responseType: 'text', transformResponse: [d => d] });
-        report = String(data).slice(0, 6000);
-      } catch (e) { report = `Ошибка загрузки отчёта: ${e.response?.status} ${e.message}`; }
-    }
-    res.json({ success: true, data: { campaignIds, uuid, status, report } });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.response?.data || e.message });
   }
 });
 

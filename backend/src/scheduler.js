@@ -17,6 +17,7 @@ const { collectAds: ozAds }             = require('./collectors/ozon/ads');
 const { CABINETS }                          = require('./config/cabinets');
 const { collectCatalog: adsCatalog }         = require('./collectors/ads/ozonCatalog');
 const { collectAdStats: adsStats }           = require('./collectors/ads/ozonPerf');
+const { collectClicks: adsClicks }           = require('./collectors/ads/ozonClicks');
 const { collectProductAnalytics: adsAnalytics } = require('./collectors/ads/ozonProductAnalytics');
 const { collectProductStocks: adsStocks } = require('./collectors/ads/ozonProductStocks');
 const { saveRunStatus: adsSaveRunStatus, isRunActive: adsIsRunActive } = require('./collectors/ads/runStatus');
@@ -146,6 +147,8 @@ async function runAdsCabinets(days = 3) {
       await run(`${id} Каталог`, id, 'ads_catalog', () => adsCatalog(id));
       await adsSaveRunStatus(id, { step: 'ad_stats' });
       await run(`${id} Реклама (Performance)`, id, 'ads_perf', () => adsStats(id, days));
+      await adsSaveRunStatus(id, { step: 'clicks' });
+      await run(`${id} Клики/CPC`, id, 'ads_clicks', () => adsClicks(id, days));
       await adsSaveRunStatus(id, { step: 'product_analytics' });
       await run(`${id} Аналитика товаров`, id, 'ads_analytics', () => adsAnalytics(id, days));
       await adsSaveRunStatus(id, { step: 'stocks' });
