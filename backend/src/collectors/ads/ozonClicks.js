@@ -101,10 +101,32 @@ function parseReport(buffer, campaignIds) {
   return result;
 }
 
+// Лимит "1 активный запрос на аккаунт" — сообщение об ошибке приходит как
+// 429, в том числе если "завис" отчёт от предыдущего/параллельного запуска
+// (например, ручной сбор и сбор по расписанию пересеклись, или на аккаунте
+// ещё донашивается отчёт с прошлого запроса). Ретраим с растущей паузой,
+// а не сразу сдаёмся — иначе весь батч кампаний остаётся без кликов.
+async function createReport(campaignIds, from, to, headers) {
+  for (let attempt = 0; attempt <= 5; attempt++) {
+    try {
+      const { data } = await axios.post('https://api-performance.ozon.ru/api/client/statistics',
+        { campaigns: campaignIds, dateFrom: from, dateTo: to, groupBy: 'DATE' },
+        { headers, timeout: 30000 });
+      return data;
+    } catch (e) {
+      if (e.response?.status === 429 && attempt < 5) {
+        const wait = 5000 * (attempt + 1);
+        console.warn(`[Ads Clicks] Лимит активных отчётов (429), retry ${attempt + 1}/5 через ${wait}мс`);
+        await delay(wait);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 async function requestReport(campaignIds, from, to, headers) {
-  const { data: startData } = await axios.post('https://api-performance.ozon.ru/api/client/statistics',
-    { campaigns: campaignIds, dateFrom: from, dateTo: to, groupBy: 'DATE' },
-    { headers, timeout: 30000 });
+  const startData = await createReport(campaignIds, from, to, headers);
   const uuid = startData?.UUID;
   if (!uuid) throw new Error('Нет UUID в ответе на создание отчёта');
 
@@ -128,7 +150,7 @@ async function requestReport(campaignIds, from, to, headers) {
 // (matched_offer_id) — так же, как остальная сводка по артикулу — и не
 // архивных/завершённых, чтобы не тратить драгоценные батчи (лимит 1 отчёт
 // одновременно на аккаунт) на кампании, которые всё равно не показываются.
-async function collectClicks(cabinet, days) {
+async function collectClicks(cabinet, days, debugErrors) {
   const cfg = getCabinet(cabinet);
   const token = await getToken(cfg);
   if (!token) {
@@ -175,7 +197,9 @@ async function collectClicks(cabinet, days) {
         }
       }
     } catch (e) {
-      console.warn(`[Ads Clicks] ${cabinet}: батч ${i / BATCH_SIZE + 1}:`, e.response?.data || e.message);
+      const errInfo = e.response?.data || e.message;
+      console.warn(`[Ads Clicks] ${cabinet}: батч ${i / BATCH_SIZE + 1}:`, errInfo);
+      if (Array.isArray(debugErrors)) debugErrors.push({ batch: batch.slice(0, 3), error: errInfo });
     }
     await delay(500);
   }
@@ -183,4 +207,4 @@ async function collectClicks(cabinet, days) {
   return total;
 }
 
-module.exports = { collectClicks };
+module.exports = { collectClicks, BATCH_SIZE };
