@@ -562,7 +562,7 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
   const min = allValues.length ? Math.min(...allValues) : 0;
   const max = allValues.length ? Math.max(...allValues) : 0;
 
-  const COL1 = 210, COL2 = 96; // ширины первых двух зафиксированных колонок
+  const COL1 = 240, COL2 = 96; // ширины первых двух зафиксированных колонок
 
   return (
     <div style={{ padding:'4px 16px 16px' }}>
@@ -600,12 +600,17 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
                     maxWidth:COL1, overflow:'hidden',
                   }}
                 >
-                  <div style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.offerId}</div>
-                  {extractCarModel(a.productName) && (
-                    <div style={{ fontSize:10.5, color:'var(--text3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                      {extractCarModel(a.productName)}
-                    </div>
-                  )}
+                  <div style={{ display:'flex', alignItems:'baseline', gap:7, overflow:'hidden' }}>
+                    <span style={{ flexShrink:0 }}>{a.offerId}</span>
+                    {extractCarModel(a.productName) && (
+                      <span style={{
+                        fontSize:10.5, color:'var(--text3)', whiteSpace:'nowrap',
+                        overflow:'hidden', textOverflow:'ellipsis',
+                      }}>
+                        {extractCarModel(a.productName)}
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td style={{
                   position:'sticky', left:COL1, zIndex:1, background:'var(--surface2)', fontWeight:700,
@@ -805,6 +810,87 @@ function CampaignsList({ campaigns }) {
   );
 }
 
+// Таблица "Ассоциированные конверсии" — в самом низу карточки артикула.
+// Реклама крутится на одном артикуле склейки (напр. Hv4-2KR), но заказы
+// приходят по ВСЕЙ склейке — покупатель видит на карточке все варианты
+// (материал/комплектацию) и может заказать любой. Список склеек задаётся
+// вручную в backend/src/config/associatedArticles.js, сюда приходит уже
+// готовым в article.associated. Переключатель "Шт / ₽" — как и просили,
+// без реклама-метрик (расхода/ДРР) у этих артикулов нет, только заказы.
+function AssociatedConversionsTable({ associated, dates, unit, onUnitChange }) {
+  if (!associated || !associated.length) return null;
+  const key = unit === 'rub' ? 'revenue' : 'orders';
+  const fmt = unit === 'rub' ? 'money0' : 'int';
+
+  const grandTotal = associated.reduce((s, a) => s + (a.totals[key] || 0), 0);
+  const totalsByDate = dates.map(d => associated.reduce((s, a) => s + (a.byDate[d]?.[key] || 0), 0));
+
+  return (
+    <div style={{ padding:'4px 16px 16px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
+        <span style={{ fontSize:12, fontWeight:700, color:'var(--text3)', textTransform:'uppercase', letterSpacing:.4 }}>
+          Ассоциированные конверсии (остальные артикулы склейки)
+        </span>
+        <Segmented
+          options={[{ value:'units', label:'Шт' }, { value:'rub', label:'₽' }]}
+          value={unit}
+          onChange={onUnitChange}
+        />
+      </div>
+      <div style={{ overflowX:'auto', border:'1px solid var(--border)', borderRadius:8 }}>
+        <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: 240 + 96 + dates.length * 62, width:'100%' }}>
+          <thead>
+            <tr>
+              <th style={{ position:'sticky', left:0, zIndex:2, background:'var(--surface)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'left', width:240, minWidth:240 }}>Артикул</th>
+              <th style={{ position:'sticky', left:240, zIndex:2, background:'var(--surface2)', borderBottom:'2px solid var(--border)', borderRight:'2px solid var(--border)', padding:'8px 10px', textAlign:'center', width:96, minWidth:96 }}>Итого</th>
+              {dates.map(d => (
+                <th key={d} style={{ borderBottom:'2px solid var(--border)', padding:'8px 6px', fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap' }}>
+                  {d.slice(8,10)}.{d.slice(5,7)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {associated.map(a => (
+              <tr key={a.offerId}>
+                <td title={a.productName || a.offerId} style={{
+                  position:'sticky', left:0, zIndex:1, background:'var(--surface)', color:'var(--text2)',
+                  padding:'5px 10px', borderRight:'1px solid var(--border)', maxWidth:240, overflow:'hidden',
+                }}>
+                  <div style={{ display:'flex', alignItems:'baseline', gap:7, overflow:'hidden' }}>
+                    <span style={{ flexShrink:0 }}>{a.offerId}</span>
+                    {extractCarModel(a.productName) && (
+                      <span style={{ fontSize:10.5, color:'var(--text3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                        {extractCarModel(a.productName)}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td style={{
+                  position:'sticky', left:240, zIndex:1, background:'var(--surface2)', fontWeight:700,
+                  padding:'5px 10px', borderRight:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
+                }}>{fmtValue(a.totals[key], fmt)}</td>
+                {dates.map(d => (
+                  <td key={d} style={{ padding:'5px 6px', textAlign:'center', color:'var(--text)', whiteSpace:'nowrap' }}>
+                    {fmtValue(a.byDate[d]?.[key], fmt)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr>
+              <td style={{ position:'sticky', left:0, zIndex:1, background:'var(--surface2)', fontWeight:700, padding:'6px 10px', borderRight:'1px solid var(--border)', borderTop:'2px solid var(--border)', whiteSpace:'nowrap' }}>Итого</td>
+              <td style={{ position:'sticky', left:240, zIndex:1, background:'var(--surface2)', fontWeight:700, padding:'6px 10px', borderRight:'2px solid var(--border)', borderTop:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap' }}>{fmtValue(grandTotal, fmt)}</td>
+              {totalsByDate.map((t, i) => (
+                <td key={dates[i]} style={{ padding:'6px 6px', textAlign:'center', fontWeight:700, background:'var(--surface2)', borderTop:'2px solid var(--border)' }}>{fmtValue(t, fmt)}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // Карточка одного артикула — вынесена отдельным компонентом, чтобы хук
 // useMemo (расход/ДРР по дням) вызывался безусловно на верхнем уровне
 // компонента, а не внутри .map() у родителя (это нарушало Rules of Hooks).
@@ -855,6 +941,8 @@ function ArticleCard({
     const crToOrder = cart > 0 ? orders / cart * 100 : 0;
     return { revenue, orders, views, pdpViews, cart, spend, drr, ctr, crToCart, crToOrder };
   }, [mergedByDate, dates]);
+
+  const [assocUnit, setAssocUnit] = useState('units');
 
   return (
     <div
@@ -927,6 +1015,13 @@ function ArticleCard({
           </div>
 
           <ArticleCompareChart dates={dates} byDate={mergedByDate} storageKey={`mp-ads-chart-${cabinet}`} />
+
+          <AssociatedConversionsTable
+            associated={article.associated}
+            dates={dates}
+            unit={assocUnit}
+            onUnitChange={setAssocUnit}
+          />
         </>
       )}
     </div>

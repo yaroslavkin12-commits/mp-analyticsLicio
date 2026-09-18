@@ -9,6 +9,7 @@ const { collectProductAnalytics } = require('../collectors/ads/ozonProductAnalyt
 const { collectProductStocks } = require('../collectors/ads/ozonProductStocks');
 const { collectClicks } = require('../collectors/ads/ozonClicks');
 const { saveRunStatus, isRunActive } = require('../collectors/ads/runStatus');
+const { getAssociatedOfferIds } = require('../config/associatedArticles');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
 // в интерфейсе, какие токены ещё нужно добавить в Render).
@@ -201,6 +202,16 @@ router.get('/stats', async (req, res) => {
     const analyticsByKey = new Map(); // sku|date -> row
     for (const r of analyticsRows) analyticsByKey.set(`${r.sku}|${r.date}`, r);
 
+    // То же самое, но по offer_id — нужно для артикулов "склейки", которые
+    // сами не рекламируются (у них нет строки в ad_campaigns, а значит и
+    // article.sku не определён), но заказы по ним всё равно приходят и
+    // попадают в product_analytics_daily (сбор идёт по ВСЕМ SKU кабинета,
+    // см. collectors/ads/ozonProductAnalytics.js), просто под своим offer_id.
+    const analyticsByOfferDate = new Map(); // offerId|date -> row
+    for (const r of analyticsRows) {
+      if (r.offer_id) analyticsByOfferDate.set(`${r.offer_id}|${r.date}`, r);
+    }
+
     const spendByKey = new Map(); // campaignId|date -> spend
     const clicksByKey = new Map(); // campaignId|date -> clicks
     for (const r of adRows) {
@@ -349,6 +360,29 @@ router.get('/stats', async (req, res) => {
       const totalCrToCart  = totalPdpViews > 0 ? totalCart / totalPdpViews * 100 : 0;
       const totalCrToOrder = totalCart > 0 ? totalOrders / totalCart * 100 : 0;
 
+      // Ассоциированные конверсии — другие артикулы той же склейки (см.
+      // config/associatedArticles.js). Реклама на них не крутится, поэтому
+      // тут только заказы/выручка по дням из product_analytics_daily (без
+      // расхода/ДРР — рекламных денег на них нет).
+      const associatedIds = article.offerId ? getAssociatedOfferIds(cabinet, article.offerId) : [];
+      const associated = associatedIds.map(assocId => {
+        const assocByDate = {};
+        let assocTotalOrders = 0, assocTotalRevenue = 0;
+        for (const date of dates) {
+          const an = analyticsByOfferDate.get(`${assocId}|${date}`);
+          const orders = an ? Number(an.orders_item) || 0 : 0;
+          const revenue = an ? Number(an.revenue) || 0 : 0;
+          assocByDate[date] = { orders, revenue };
+          assocTotalOrders += orders; assocTotalRevenue += revenue;
+        }
+        return {
+          offerId: assocId,
+          productName: nameByOfferId.get(assocId) || null,
+          byDate: assocByDate,
+          totals: { orders: assocTotalOrders, revenue: assocTotalRevenue },
+        };
+      });
+
       articlesOut.push({
         offerId: article.offerId,
         productName: article.productName,
@@ -360,6 +394,7 @@ router.get('/stats', async (req, res) => {
         },
         campaigns: article.campaigns,
         stock: article.offerId ? (stockByOfferId.get(article.offerId) || null) : null,
+        associated,
       });
     }
 
