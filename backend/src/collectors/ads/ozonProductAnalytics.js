@@ -105,12 +105,22 @@ async function fetchMetric(headers, dateFrom, dateTo, metricName, cabinet) {
 
 // Колонка в product_analytics_daily для каждой метрики Ozon — нужна для
 // точечного UPSERT-а по одной метрике (см. ниже, почему это важно).
+//
+// ВАЖНО: имя метрики "заказы, шт" в запросе к Ozon Seller Analytics API —
+// "ordered_units", а НЕ "orders_item" (так называется только наша колонка
+// в БД — историческое имя из ранней версии схемы). Раньше в запросе
+// отправлялось "orders_item" — Ozon отвечал 400
+// "invalid AnalyticsGetDataRequest.Metrics" (код 3, "метрика не
+// поддерживается"), и эта ветка кода трактует код 3 как "метрику сняли,
+// просто пропускаем" — поэтому заказы молча оставались нулевыми на каждом
+// сборе, без единой ошибки в логах. Проверено напрямую через
+// /api/ads/debug-analytics: "ordered_units" отдаёт реальные данные.
 const METRIC_COLUMN = {
   hits_view: 'hits_view',
   hits_view_search: 'hits_view_search',
   hits_view_pdp: 'hits_view_pdp',
   hits_tocart: 'hits_tocart',
-  orders_item: 'orders_item',
+  ordered_units: 'orders_item',
   revenue: 'revenue',
   position_category: 'position_category',
 };
@@ -200,7 +210,7 @@ async function collectProductAnalytics(cabinet, days) {
   );
   const offerBySku = new Map(catalogRows.map(r => [String(r.sku), r.offer_id]));
 
-  const ALL_METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
+  const ALL_METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'ordered_units', 'revenue', 'position_category'];
   const doneAlready = await getDoneMetrics(cabinet);
   const METRICS = ALL_METRICS.filter(m => !doneAlready.has(m));
   if (doneAlready.size) {
