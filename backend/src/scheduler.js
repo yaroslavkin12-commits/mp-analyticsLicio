@@ -149,10 +149,20 @@ async function runAdsCabinets(days = 3) {
       await run(`${id} Реклама (Performance)`, id, 'ads_perf', () => adsStats(id, days));
       await adsSaveRunStatus(id, { step: 'clicks' });
       await run(`${id} Клики/CPC`, id, 'ads_clicks', () => adsClicks(id, days));
-      await adsSaveRunStatus(id, { step: 'product_analytics' });
-      await run(`${id} Аналитика товаров`, id, 'ads_analytics', () => adsAnalytics(id, days));
+      // Остатки — до аналитики товаров, а не после. Аналитика товаров (7
+      // метрик Ozon Seller Analytics API, у которой по факту оказался очень
+      // жёсткий лимит запросов) регулярно занимает по 20-40+ минут и часто
+      // не успевает закончиться за один непрерывный запуск процесса (Render
+      // засыпает/перезапускается) — из-за этого шаг "остатки", стоявший
+      // ПОСЛЕ неё, месяцами вообще ни разу не выполнялся (0 записей в
+      // collection_log с collector_type='ads_stocks'). Остатки собираются
+      // одним быстрым запросом без такого лимита, поэтому переставлены
+      // раньше — тогда они гарантированно успевают собраться даже если
+      // аналитика товаров снова прервётся на середине.
       await adsSaveRunStatus(id, { step: 'stocks' });
       await run(`${id} Остатки`, id, 'ads_stocks', () => adsStocks(id));
+      await adsSaveRunStatus(id, { step: 'product_analytics' });
+      await run(`${id} Аналитика товаров`, id, 'ads_analytics', () => adsAnalytics(id, days));
       await adsSaveRunStatus(id, { step: 'done', finishedAt: new Date().toISOString() });
     } catch(e) {
       console.error(`[Ads:${id}]`, e.message);

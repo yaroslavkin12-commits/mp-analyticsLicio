@@ -47,12 +47,16 @@ router.post('/collect', async (req, res) => {
       await saveRunStatus(cabinet, { step: 'clicks' });
       console.log(`[Ads] Сбор для ${cabinet}: клики/CPC...`);
       await collectClicks(cabinet, days);
-      await saveRunStatus(cabinet, { step: 'product_analytics' });
-      console.log(`[Ads] Сбор для ${cabinet}: аналитика по товарам...`);
-      await collectProductAnalytics(cabinet, days);
+      // Остатки — до аналитики товаров (см. подробное объяснение в
+      // scheduler.js): аналитика товаров часто занимает 20-40+ минут и не
+      // всегда успевает закончиться за один запуск, из-за чего "остатки",
+      // стоявшие после неё, могли месяцами ни разу не собраться.
       await saveRunStatus(cabinet, { step: 'stocks' });
       console.log(`[Ads] Сбор для ${cabinet}: остатки...`);
       await collectProductStocks(cabinet);
+      await saveRunStatus(cabinet, { step: 'product_analytics' });
+      console.log(`[Ads] Сбор для ${cabinet}: аналитика по товарам...`);
+      await collectProductAnalytics(cabinet, days);
       await saveRunStatus(cabinet, { step: 'done', finishedAt: new Date().toISOString() });
       console.log(`[Ads] Сбор для ${cabinet}: готово`);
     } catch(e) {
@@ -424,15 +428,27 @@ router.get('/debug-analytics', async (req, res) => {
 
     const out = { clientIdSet: !!cfg.ozonClientId, apiKeySet: !!cfg.ozonApiKey, from, to, attempts: [] };
 
-    for (const metric of ['hits_view', 'revenue', 'ordered_units']) {
-      try {
-        const { data } = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
-          date_from: from, date_to: to, metrics: [metric], dimension: ['sku', 'day'], limit: 20, offset: 0,
-        }, { headers, timeout: 30000 });
-        out.attempts.push({ metric, ok: true, rowCount: data?.result?.data?.length, sample: data?.result?.data?.slice(0, 3) });
-      } catch (e) {
-        out.attempts.push({ metric, ok: false, status: e.response?.status, body: e.response?.data || e.message });
+    const delay = ms => new Promise(r => setTimeout(r, ms));
+    for (const metric of ['orders_item', 'ordered_units']) {
+      for (let attempt = 0; attempt <= 4; attempt++) {
+        try {
+          const { data } = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
+            date_from: from, date_to: to, metrics: [metric], dimension: ['sku', 'day'], limit: 20, offset: 0,
+          }, { headers, timeout: 30000 });
+          out.attempts.push({ metric, ok: true, rowCount: data?.result?.data?.length, sample: data?.result?.data?.slice(0, 3) });
+          break;
+        } catch (e) {
+          const code = e.response?.data?.code;
+          const status = e.response?.status;
+          if ((code === 8 || status === 429) && attempt < 4) {
+            await delay(6000 * (attempt + 1));
+            continue;
+          }
+          out.attempts.push({ metric, ok: false, status, body: e.response?.data || e.message });
+          break;
+        }
       }
+      await delay(6000);
     }
     res.json({ success: true, data: out });
   } catch (e) {
