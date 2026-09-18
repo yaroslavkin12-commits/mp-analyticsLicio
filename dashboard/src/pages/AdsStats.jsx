@@ -437,43 +437,123 @@ function ArticleSummary({ totals, stock }) {
   );
 }
 
-// Таблица под общей сводкой блока "Общая статистика" — заказы ПО КАЖДОМУ
-// артикулу отдельной строкой (а не суммой по всем сразу, как в таблице выше),
-// с датами в шапке. По умолчанию — в штуках, с переключателем на рубли
-// (выручку). Тепловая заливка считается по всей таблице сразу (across всех
-// артикулов и дат), а не по каждой строке отдельно — иначе слабый артикул
-// с 1 заказом красился бы так же "жарко", как лидер с 50.
-function ArticlesOrdersTable({ articles, dates, unit, onUnitChange }) {
-  const metricKey = unit === 'money' ? 'revenue' : 'orders';
-  const fmt = unit === 'money' ? 'money' : 'int';
+// Полный список метрик для таблицы "по артикулам" ниже — та же палитра,
+// что и при раскрытии карточки артикула (воронка + конверсии + расход/ДРР/
+// цена клика), но выбирается одна за раз, как и в таблице-сводке выше.
+const ARTICLE_TABLE_METRIC_OPTIONS = [
+  { key: 'orders',     label: 'Заказы, шт',            fmt: 'int',    good: 'up' },
+  { key: 'revenue',    label: 'Заказы, ₽',             fmt: 'money',  good: 'up' },
+  { key: 'views',      label: 'Показы',                fmt: 'int',    good: 'up' },
+  { key: 'pdpViews',   label: 'Переходы на карточку',  fmt: 'int',    good: 'up' },
+  { key: 'cart',       label: 'Корзины',                fmt: 'int',    good: 'up' },
+  { key: 'clicks',     label: 'Клики',                  fmt: 'int',    good: 'up' },
+  { key: 'ctr',        label: 'СТР (карточка/показ)',  fmt: 'pct',    good: 'up' },
+  { key: 'crToCart',   label: 'СР в корзину',          fmt: 'pct',    good: 'up' },
+  { key: 'crToOrder',  label: 'СР в заказ',            fmt: 'pct',    good: 'up' },
+  { key: 'avgCpc',     label: 'Ср. цена клика, ₽',      fmt: 'money2', good: 'down' },
+  { key: 'spend',      label: 'Расход, ₽',             fmt: 'money0', good: 'up' },
+  { key: 'drr',        label: 'ДРР',                   fmt: 'pct',    good: 'down' },
+];
 
-  const allValues = [];
-  for (const a of articles) {
+// Производные метрики (СТР/СР в корзину/СР в заказ/ср. цена клика/ДРР) —
+// ВСЕГДА считаются как отношение суммы числителя к сумме знаменателя за
+// нужный промежуток (день, весь период по артикулу, весь период по всем
+// артикулам сразу), а не как сумма или среднее уже готовых дневных
+// процентов. Например, ДРР "Итого" за месяц — это (сумма расхода за месяц)
+// / (сумма заказов за месяц), а не сумма 30 дневных значений ДРР (что было
+// бы бессмысленным числом за сотни процентов).
+function deriveRatios(raw) {
+  return {
+    ctr: raw.views > 0 ? raw.pdpViews / raw.views * 100 : 0,
+    crToCart: raw.pdpViews > 0 ? raw.cart / raw.pdpViews * 100 : 0,
+    crToOrder: raw.cart > 0 ? raw.orders / raw.cart * 100 : 0,
+    avgCpc: raw.clicks > 0 ? raw.spend / raw.clicks : 0,
+    drr: raw.revenue > 0 ? raw.spend / raw.revenue * 100 : (raw.spend > 0 ? 100 : 0),
+  };
+}
+
+const ARTICLE_TABLE_RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'clicks'];
+
+function emptyRawTotals() {
+  return { views: 0, pdpViews: 0, cart: 0, orders: 0, revenue: 0, spend: 0, clicks: 0 };
+}
+
+// Таблица под общей сводкой блока "Общая статистика" — ПО КАЖДОМУ артикулу
+// отдельной строкой (а не суммой по всем сразу, как в таблице выше), с
+// датами в шапке. Слева, сразу после названия артикула, зафиксированная
+// колонка "Итого" — сумма/корректно посчитанное значение метрики за весь
+// выбранный период по этой строке (просили: "зафиксированную колонку...
+// сколько за этот период по этому артикулу"). Метрика выбирается одна за
+// раз, по умолчанию — заказы в штуках.
+function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
+  const config = ARTICLE_TABLE_METRIC_OPTIONS.find(m => m.key === metric) || ARTICLE_TABLE_METRIC_OPTIONS[0];
+
+  // Сырые метрики по дням на артикул (расход/клики лежат не в article.byDate,
+  // а собираются из article.campaigns — как и в карточке артикула выше) +
+  // агрегат за весь период сразу, с которого пересчитываются производные
+  // метрики (см. deriveRatios).
+  const perArticle = useMemo(() => articles.map(a => {
+    const byDate = {};
+    const totalsRaw = emptyRawTotals();
     for (const d of dates) {
-      const v = a.byDate[d]?.[metricKey];
-      if (v !== null && v !== undefined) allValues.push(v);
+      const day = a.byDate[d] || {};
+      const spend = a.campaigns.reduce((s, c) => s + (c.byDate[d]?.spend || 0), 0);
+      const clicks = a.campaigns.reduce((s, c) => s + (c.byDate[d]?.clicks || 0), 0);
+      const raw = {
+        views: day.views || 0, pdpViews: day.pdpViews || 0, cart: day.cart || 0,
+        orders: day.orders || 0, revenue: day.revenue || 0, spend, clicks,
+      };
+      byDate[d] = { ...raw, ...deriveRatios(raw) };
+      for (const k of ARTICLE_TABLE_RAW_KEYS) totalsRaw[k] += raw[k];
     }
+    return { article: a, byDate, total: { ...totalsRaw, ...deriveRatios(totalsRaw) } };
+  }), [articles, dates]);
+
+  const grandTotalsRaw = useMemo(() => {
+    const t = emptyRawTotals();
+    for (const pa of perArticle) for (const k of ARTICLE_TABLE_RAW_KEYS) t[k] += pa.total[k];
+    return t;
+  }, [perArticle]);
+  const grandTotal = { ...grandTotalsRaw, ...deriveRatios(grandTotalsRaw) };
+
+  const totalsByDate = useMemo(() => dates.map(d => {
+    const t = emptyRawTotals();
+    for (const pa of perArticle) for (const k of ARTICLE_TABLE_RAW_KEYS) t[k] += pa.byDate[d][k];
+    return { ...t, ...deriveRatios(t) };
+  }), [perArticle, dates]);
+
+  // Тепловая заливка — по всем ДНЕВНЫМ ячейкам сразу (across артикулов и
+  // дат), а не по строке отдельно (иначе слабый артикул выглядел бы так же
+  // "жарко", как лидер) и не включая колонку "Итого" (она не из того же
+  // распределения, что дневные значения, — своя заливка там только мешала бы).
+  const allValues = [];
+  for (const pa of perArticle) for (const d of dates) {
+    const v = pa.byDate[d][metric];
+    if (v !== null && v !== undefined) allValues.push(v);
   }
   const min = allValues.length ? Math.min(...allValues) : 0;
   const max = allValues.length ? Math.max(...allValues) : 0;
 
-  const totalsByDate = dates.map(d => articles.reduce((s, a) => s + (a.byDate[d]?.[metricKey] || 0), 0));
+  const COL1 = 180, COL2 = 96; // ширины первых двух зафиксированных колонок
 
   return (
     <div style={{ padding:'4px 16px 16px' }}>
       <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, flexWrap:'wrap' }}>
-        <span style={{ fontSize:13, fontWeight:700 }}>Заказы по артикулам</span>
+        <span style={{ fontSize:13, fontWeight:700 }}>Метрики по артикулам</span>
+      </div>
+      <div style={{ marginBottom:8 }}>
         <Segmented
-          options={[{ value:'units', label:'Штуки' }, { value:'money', label:'Рубли' }]}
-          value={unit}
-          onChange={onUnitChange}
+          options={ARTICLE_TABLE_METRIC_OPTIONS.map(m => ({ value: m.key, label: m.label }))}
+          value={metric}
+          onChange={onMetricChange}
         />
       </div>
       <div style={{ overflowX:'auto', border:'1px solid var(--border)', borderRadius:8 }}>
-        <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: 260 + dates.length * 62, width:'100%' }}>
+        <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: COL1 + COL2 + 40 + dates.length * 62, width:'100%' }}>
           <thead>
             <tr>
-              <th style={{ position:'sticky', left:0, zIndex:2, background:'var(--surface)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'left', minWidth:220 }}>Артикул</th>
+              <th style={{ position:'sticky', left:0, zIndex:2, background:'var(--surface)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'left', width:COL1, minWidth:COL1 }}>Артикул</th>
+              <th style={{ position:'sticky', left:COL1, zIndex:2, background:'var(--surface2)', borderBottom:'2px solid var(--border)', borderRight:'2px solid var(--border)', padding:'8px 10px', textAlign:'center', width:COL2, minWidth:COL2 }}>Итого</th>
               {dates.map(d => (
                 <th key={d} style={{ borderBottom:'2px solid var(--border)', padding:'8px 6px', fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap' }}>
                   {d.slice(8,10)}.{d.slice(5,7)}
@@ -482,23 +562,27 @@ function ArticlesOrdersTable({ articles, dates, unit, onUnitChange }) {
             </tr>
           </thead>
           <tbody>
-            {articles.map(a => (
+            {perArticle.map(({ article: a, byDate, total }) => (
               <tr key={a.offerId}>
                 <td
                   title={a.productName || a.offerId}
                   style={{
                     position:'sticky', left:0, zIndex:1, background:'var(--surface)', color:'var(--text2)',
                     padding:'5px 10px', borderRight:'1px solid var(--border)', whiteSpace:'nowrap',
-                    maxWidth:220, overflow:'hidden', textOverflow:'ellipsis',
+                    maxWidth:COL1, overflow:'hidden', textOverflow:'ellipsis',
                   }}
                 >{a.offerId}</td>
+                <td style={{
+                  position:'sticky', left:COL1, zIndex:1, background:'var(--surface2)', fontWeight:700,
+                  padding:'5px 10px', borderRight:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
+                }}>{fmtValue(total[metric], config.fmt)}</td>
                 {dates.map(d => {
-                  const v = a.byDate[d]?.[metricKey];
+                  const v = byDate[d][metric];
                   return (
                     <td key={d} style={{
-                      padding:'5px 6px', textAlign:'center', background: heatColor(v, min, max, 'up'),
+                      padding:'5px 6px', textAlign:'center', background: heatColor(v, min, max, config.good),
                       color:'var(--text)', whiteSpace:'nowrap',
-                    }}>{fmtValue(v, fmt)}</td>
+                    }}>{fmtValue(v, config.fmt)}</td>
                   );
                 })}
               </tr>
@@ -508,11 +592,15 @@ function ArticlesOrdersTable({ articles, dates, unit, onUnitChange }) {
                 position:'sticky', left:0, zIndex:1, background:'var(--surface2)', fontWeight:700,
                 padding:'6px 10px', borderRight:'1px solid var(--border)', borderTop:'2px solid var(--border)', whiteSpace:'nowrap',
               }}>Итого</td>
-              {totalsByDate.map((v, i) => (
+              <td style={{
+                position:'sticky', left:COL1, zIndex:1, background:'var(--surface2)', fontWeight:700,
+                padding:'6px 10px', borderRight:'2px solid var(--border)', borderTop:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
+              }}>{fmtValue(grandTotal[metric], config.fmt)}</td>
+              {totalsByDate.map((t, i) => (
                 <td key={dates[i]} style={{
                   padding:'6px 6px', textAlign:'center', fontWeight:700, background:'var(--surface2)',
                   borderTop:'2px solid var(--border)',
-                }}>{fmtValue(v, fmt)}</td>
+                }}>{fmtValue(t[metric], config.fmt)}</td>
               ))}
             </tr>
           </tbody>
@@ -529,9 +617,9 @@ function ArticlesOrdersTable({ articles, dates, unit, onUnitChange }) {
 function GeneralStatsCard({ articlesRaw, dates }) {
   const [open, setOpen] = useState(false);
   const [metric, setMetric] = useState('revenue');
-  // По умолчанию "Штуки" — как и просили, заказы по артикулам показываются
-  // в штуках, с возможностью переключить на рубли (выручку).
-  const [ordersUnit, setOrdersUnit] = useState('units');
+  // По умолчанию заказы в штуках — как и просили; переключается на любую
+  // другую метрику из ARTICLE_TABLE_METRIC_OPTIONS (см. ArticlesMetricTable).
+  const [articleMetric, setArticleMetric] = useState('orders');
 
   const targetArticles = useMemo(
     () => articlesRaw
@@ -632,7 +720,7 @@ function GeneralStatsCard({ articlesRaw, dates }) {
             </table>
           </div>
 
-          <ArticlesOrdersTable articles={targetArticles} dates={dates} unit={ordersUnit} onUnitChange={setOrdersUnit} />
+          <ArticlesMetricTable articles={targetArticles} dates={dates} metric={articleMetric} onMetricChange={setArticleMetric} />
         </>
       )}
     </div>
