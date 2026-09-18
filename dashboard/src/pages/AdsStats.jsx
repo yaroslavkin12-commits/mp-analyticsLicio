@@ -472,6 +472,34 @@ function deriveRatios(raw) {
   };
 }
 
+// Короткое "название модели" из полного названия товара — для подписи под
+// артикулом в таблице ниже. У Defly почти все товары называются по схеме
+// "Чехлы на сиденья <Модель>, <год>, <доп. детали>" — модель это то, что
+// между типом товара и первой запятой. Известные префиксы отрезаются, а
+// дальше берётся кусок строки до первой запятой (напр. из "Чехлы на сиденья
+// Haval M6, 2021-н.в., ..." получаем "Haval M6").
+const PRODUCT_TYPE_PREFIXES = [
+  /^чехлы\s+на\s+сиден[ьи]я?\s+/i,
+  /^авточехлы\s+(?:на\s+сиден[ьи]я?\s+|для\s+)?/i,
+  /^накидки?\s+на\s+сиден[ьи]я?\s+(?:для\s+)?/i,
+  /^коврики?\s+(?:в\s+салон\s+)?для\s+/i,
+  /^брызговики\s+(?:defly,?\s*)?для\s+/i,
+  /^дефлекторы\s+окон\s+(?:"[^"]*"\s+)?для\s+/i,
+  /^утеплитель\s+радиатора\s+для\s+/i,
+];
+
+function extractCarModel(productName) {
+  if (!productName) return null;
+  let s = productName.trim();
+  for (const re of PRODUCT_TYPE_PREFIXES) {
+    if (re.test(s)) { s = s.replace(re, ''); break; }
+  }
+  const commaIdx = s.indexOf(',');
+  if (commaIdx > 0) s = s.slice(0, commaIdx);
+  s = s.trim();
+  return s || null;
+}
+
 const ARTICLE_TABLE_RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'clicks'];
 
 function emptyRawTotals() {
@@ -534,7 +562,7 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
   const min = allValues.length ? Math.min(...allValues) : 0;
   const max = allValues.length ? Math.max(...allValues) : 0;
 
-  const COL1 = 180, COL2 = 96; // ширины первых двух зафиксированных колонок
+  const COL1 = 210, COL2 = 96; // ширины первых двух зафиксированных колонок
 
   return (
     <div style={{ padding:'4px 16px 16px' }}>
@@ -568,10 +596,17 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
                   title={a.productName || a.offerId}
                   style={{
                     position:'sticky', left:0, zIndex:1, background:'var(--surface)', color:'var(--text2)',
-                    padding:'5px 10px', borderRight:'1px solid var(--border)', whiteSpace:'nowrap',
-                    maxWidth:COL1, overflow:'hidden', textOverflow:'ellipsis',
+                    padding:'5px 10px', borderRight:'1px solid var(--border)',
+                    maxWidth:COL1, overflow:'hidden',
                   }}
-                >{a.offerId}</td>
+                >
+                  <div style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.offerId}</div>
+                  {extractCarModel(a.productName) && (
+                    <div style={{ fontSize:10.5, color:'var(--text3)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                      {extractCarModel(a.productName)}
+                    </div>
+                  )}
+                </td>
                 <td style={{
                   position:'sticky', left:COL1, zIndex:1, background:'var(--surface2)', fontWeight:700,
                   padding:'5px 10px', borderRight:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
