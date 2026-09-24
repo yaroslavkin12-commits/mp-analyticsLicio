@@ -64,20 +64,24 @@ async function collectProductAnalytics(cabinet, { dateFrom, dateTo } = {}) {
 
     const { rows, totals } = await fetchWindow(headers, wf, wt);
     const out = [];
-    let ordersInRows = 0;
+    let viewsInRows = 0;
     for (const r of rows) {
       const dims = r.dimensions || [];
       const sku = dims[0]?.id, date = dims[1]?.id;
       if (!sku || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) continue;
       const m = (r.metrics || []).map(v => Number(v) || 0);
-      ordersInRows += m[4] || 0;
+      viewsInRows += m[0] || 0;
       out.push([cabinet, 'ozon', date, sku, offerBySku.get(String(sku)) || null,
         m[0], m[1], m[2], m[3], m[4], m[5], m[6] || null, new Date()]);
     }
-    // Сверка с итогами, которые отдаёт сам Ozon: если сумма заказов по
-    // строкам не сошлась — страницы пришли не полностью, пишем в лог.
-    if (totals && Math.abs((Number(totals[4]) || 0) - ordersInRows) > 0.5) {
-      mismatches.push(`${wf}..${wt}: в строках ${ordersInRows} заказов, в итогах Ozon ${totals[4]}`);
+    // Сверка полноты выгрузки с итогами, которые отдаёт сам Ozon, — по
+    // показам (они сходятся до единицы). По заказам сверять нельзя: у Ozon
+    // сумма заказов по товарам всегда чуть больше итога по кабинету
+    // (проверено 24.09: 253 по товарам против 243 в итоге и в отправлениях),
+    // это особенность Ozon, а не потеря строк.
+    const totalViews = Number(totals?.[0]) || 0;
+    if (totals && Math.abs(totalViews - viewsInRows) > Math.max(10, totalViews * 0.001)) {
+      mismatches.push(`${wf}..${wt}: показы в строках ${viewsInRows}, в итогах Ozon ${totalViews} — выгрузка неполная`);
     }
     saved += await bulkUpsert('product_analytics_daily',
       ['cabinet', 'platform', 'date', 'sku', 'offer_id', 'hits_view', 'hits_view_search', 'hits_view_pdp',

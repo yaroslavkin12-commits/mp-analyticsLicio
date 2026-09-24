@@ -77,7 +77,10 @@ function parseRuNumber(v) {
 // INSERT. columns — список колонок, rows — массив массивов значений в том же
 // порядке, conflict — колонки уникального ключа, update — какие колонки
 // обновлять при конфликте (по умолчанию все, кроме ключа).
-async function bulkUpsert(table, columns, rows, conflict, update, { chunk = 500 } = {}) {
+async function bulkUpsert(table, columns, rows, conflict, update, { chunk } = {}) {
+  // Postgres принимает до 65535 параметров в одной команде — берём пачку
+  // побольше (меньше обращений к удалённой БД), но в пределах лимита.
+  chunk = chunk || Math.floor(60000 / columns.length);
   if (!rows.length) return 0;
   // Postgres не даёт одной командой обновить одну и ту же строку дважды —
   // убираем дубли по ключу (последнее значение побеждает).
@@ -104,8 +107,9 @@ async function bulkUpsert(table, columns, rows, conflict, update, { chunk = 500 
   return done;
 }
 
-async function bulkInsert(table, columns, rows, { chunk = 500 } = {}) {
+async function bulkInsert(table, columns, rows, { chunk } = {}) {
   if (!rows.length) return 0;
+  chunk = chunk || Math.floor(60000 / columns.length);
   const pool = getPool();
   for (let i = 0; i < rows.length; i += chunk) {
     const part = rows.slice(i, i + chunk);
