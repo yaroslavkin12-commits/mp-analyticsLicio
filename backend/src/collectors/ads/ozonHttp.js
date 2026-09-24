@@ -89,7 +89,7 @@ async function bulkUpsert(table, columns, rows, conflict, update, { chunk } = {}
   for (const row of rows) byKey.set(keyIdx.map(i => String(row[i])).join('|'), row);
   rows = [...byKey.values()];
   const upd = (update || columns.filter(c => !conflict.includes(c)))
-    .map(c => `${c} = EXCLUDED.${c}`);
+    .map(c => (c.includes('=') ? c : `${c} = EXCLUDED.${c}`));
   const pool = getPool();
   let done = 0;
   for (let i = 0; i < rows.length; i += chunk) {

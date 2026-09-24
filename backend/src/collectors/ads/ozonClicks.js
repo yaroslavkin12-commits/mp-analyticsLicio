@@ -28,13 +28,16 @@ async function collectClicks(cabinet, { dateFrom, dateTo } = {}) {
     rows.push([cabinet, 'ozon', r.date, campaignId, views, clicks,
       views > 0 ? clicks / views * 100 : 0,
       clicks > 0 ? parseRuNumber(r.moneySpent) / clicks : 0,
-      parseRuNumber(r.orders), parseRuNumber(r.ordersMoney), new Date()]);
+      parseRuNumber(r.orders), parseRuNumber(r.ordersMoney), parseRuNumber(r.moneySpent), new Date()]);
   }
-  // Расход (spend) здесь НЕ трогаем — его пишет сборщик расходов
-  // (statistics/expense/json), он охватывает и кампании с оплатой за заказ.
+  // Расход: основной источник — statistics/expense/json (ozonPerf.js), но за
+  // сегодняшний день он обновляется у Ozon с большой задержкой, а дневная
+  // статистика кампаний — почти сразу. Берём большее из двух значений.
   const saved = await bulkUpsert('ad_stats_daily',
-    ['cabinet', 'platform', 'date', 'campaign_id', 'views', 'clicks', 'ctr', 'avg_bid', 'orders', 'orders_money', 'collected_at'],
-    rows, ['cabinet', 'platform', 'date', 'campaign_id']);
+    ['cabinet', 'platform', 'date', 'campaign_id', 'views', 'clicks', 'ctr', 'avg_bid', 'orders', 'orders_money', 'spend', 'collected_at'],
+    rows, ['cabinet', 'platform', 'date', 'campaign_id'],
+    ['views', 'clicks', 'ctr', 'avg_bid', 'orders', 'orders_money', 'collected_at',
+     'spend = GREATEST(COALESCE(ad_stats_daily.spend, 0), EXCLUDED.spend)']);
   console.log(`[Clicks:${cabinet}] ${from}..${to}: строк ${saved}`);
   return { rows: saved };
 }
