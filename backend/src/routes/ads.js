@@ -456,79 +456,34 @@ async function runProbe(cabinet) {
   const delay = ms => new Promise(r => setTimeout(r, ms));
   const push = o => probeState.steps.push({ at: new Date().toISOString(), ...o });
   const sh = { 'Client-Id': cfg.ozonClientId, 'Api-Key': cfg.ozonApiKey, 'Content-Type': 'application/json' };
-  const y = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+  const y = dayjs().add(3, 'hour').subtract(1, 'day').format('YYYY-MM-DD');
   const METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'ordered_units', 'revenue', 'position_category'];
-
-  async function analytics(label, body) {
-    const t0 = Date.now();
+  // Проверка стабильности постраничной выдачи при разных сортировках.
+  const variants = [
+    ['no_sort', undefined],
+    ['sort_sku_asc', [{ key: 'sku', order: 'ASC' }]],
+    ['sort_views_desc', [{ key: 'hits_view', order: 'DESC' }]],
+    ['sort_orders_desc', [{ key: 'ordered_units', order: 'DESC' }]],
+  ];
+  for (const [label, sort] of variants) {
     try {
-      const { data } = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', body, { headers: sh, timeout: 60000 });
-      const rows = data?.result?.data || [];
-      const sums = {};
-      for (const r of rows) (r.metrics || []).forEach((v, i) => { const m = body.metrics[i]; sums[m] = (sums[m] || 0) + (Number(v) || 0); });
-      push({ step: label, ok: true, ms: Date.now() - t0, rows: rows.length, totals: data?.result?.totals, sums, sample: rows.slice(0, 2) });
-      return true;
-    } catch (e) {
-      push({ step: label, ok: false, ms: Date.now() - t0, status: e.response?.status, body: e.response?.data || e.message });
-      return false;
-    }
-  }
-
-  // 1. Все метрики одним запросом, вчерашний день.
-  await analytics('analytics_all_metrics_yesterday', { date_from: y, date_to: y, metrics: METRICS, dimension: ['sku', 'day'], limit: 1000, offset: 0 });
-  // 2. Сразу второй запрос — ловим лимит и меряем, сколько ждать до успеха.
-  const t0 = Date.now();
-  let ok = false;
-  for (let i = 0; i < 16 && !ok; i++) {
-    ok = await analytics(`analytics_retry_${i}_after_${Math.round((Date.now() - t0) / 1000)}s`, { date_from: y, date_to: y, metrics: METRICS, dimension: ['sku', 'day'], limit: 1000, offset: 1000 });
-    if (!ok) await delay(10000);
-  }
-  push({ step: 'analytics_limit_window_s', value: Math.round((Date.now() - t0) / 1000) });
-
-  // 3. Performance API: список кампаний и синхронная дневная статистика.
-  try {
-    const { data: tok } = await axios.post('https://api-performance.ozon.ru/api/client/token',
-      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' }, { timeout: 15000 });
-    const ph = { Authorization: `Bearer ${tok.access_token}`, 'Content-Type': 'application/json' };
-    try {
-      const { data } = await axios.get('https://api-performance.ozon.ru/api/client/campaign', { headers: ph, timeout: 30000 });
-      const list = data?.list || [];
-      const byState = {};
-      for (const c of list) byState[c.state] = (byState[c.state] || 0) + 1;
-      push({ step: 'perf_campaigns', ok: true, count: list.length, byState });
-    } catch (e) { push({ step: 'perf_campaigns', ok: false, status: e.response?.status, body: e.response?.data || e.message }); }
-    const from7 = dayjs().subtract(7, 'day').format('YYYY-MM-DD');
-    for (const [label, params] of [
-      ['perf_daily_json_all', { dateFrom: from7, dateTo: y }],
-    ]) {
-      const t1 = Date.now();
-      try {
-        const { data } = await axios.get('https://api-performance.ozon.ru/api/client/statistics/daily/json', { headers: ph, params, timeout: 60000 });
-        const rows = data?.rows || data?.list || (Array.isArray(data) ? data : []);
-        let clicks = 0, views = 0;
-        for (const r of rows) { clicks += Number(String(r.clicks || 0).replace(',', '.')) || 0; views += Number(String(r.views || 0).replace(',', '.')) || 0; }
-        push({ step: label, ok: true, ms: Date.now() - t1, rows: rows.length, clicks, views, keys: rows[0] ? Object.keys(rows[0]) : Object.keys(data || {}), sample: rows.slice(0, 3) });
-      } catch (e) { push({ step: label, ok: false, ms: Date.now() - t1, status: e.response?.status, body: e.response?.data || e.message }); }
-    }
-  } catch (e) { push({ step: 'perf_token', ok: false, body: e.response?.data || e.message }); }
-
-  // 4. Заказы по отправлениям (FBO + FBS) за вчера — сверка с аналитикой.
-  const since = dayjs(`${y}T00:00:00+03:00`).toISOString();
-  const to = dayjs(`${y}T23:59:59+03:00`).toISOString();
-  for (const [label, url, body] of [
-    ['postings_fbo', 'https://api-seller.ozon.ru/v2/posting/fbo/list', { dir: 'ASC', filter: { since, to }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: false } }],
-    ['postings_fbs', 'https://api-seller.ozon.ru/v3/posting/fbs/list', { dir: 'ASC', filter: { since, to }, limit: 1000, offset: 0, with: { analytics_data: false, financial_data: false } }],
-  ]) {
-    try {
-      const { data } = await axios.post(url, body, { headers: sh, timeout: 60000 });
-      const postings = Array.isArray(data?.result) ? data.result : (data?.result?.postings || []);
-      let qty = 0, money = 0, cancelled = 0;
-      for (const p of postings) {
-        if (String(p.status).includes('cancel')) cancelled++;
-        for (const pr of (p.products || [])) { qty += Number(pr.quantity) || 0; money += (Number(pr.price) || 0) * (Number(pr.quantity) || 0); }
+      const seen = new Map(); let raw = 0, totals = null, pages = 0;
+      for (let offset = 0; offset < 5000; offset += 1000) {
+        const body = { date_from: y, date_to: y, metrics: METRICS, dimension: ['sku', 'day'], limit: 1000, offset };
+        if (sort) body.sort = sort;
+        const { data } = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', body, { headers: sh, timeout: 60000 });
+        const rows = data?.result?.data || []; pages++;
+        totals = totals || data?.result?.totals;
+        for (const r of rows) { raw++; seen.set(r.dimensions[0].id, r.metrics); }
+        if (rows.length < 1000) break;
+        await delay(300);
       }
-      push({ step: label, ok: true, postings: postings.length, qty, money: Math.round(money), cancelled, hasNext: data?.result?.has_next });
+      let ou = 0, tc = 0, hv = 0;
+      for (const m of seen.values()) { ou += Number(m[4]) || 0; tc += Number(m[3]) || 0; hv += Number(m[0]) || 0; }
+      push({ step: label, ok: true, pages, rawRows: raw, uniqueSkus: seen.size, dup: raw - seen.size,
+        uniqOrders: ou, totalOrders: totals?.[4], uniqCart: tc, totalCart: totals?.[3], uniqViews: hv, totalViews: totals?.[0] });
     } catch (e) { push({ step: label, ok: false, status: e.response?.status, body: e.response?.data || e.message }); }
+    await delay(1000);
   }
   push({ step: 'done' });
 }
