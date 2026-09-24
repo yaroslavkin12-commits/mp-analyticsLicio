@@ -363,3 +363,23 @@ CREATE TABLE IF NOT EXISTS ad_product_stocks (
 );
 CREATE INDEX IF NOT EXISTS idx_ad_product_stocks_snap ON ad_product_stocks(cabinet, snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_ad_product_stocks_offer ON ad_product_stocks(cabinet, offer_id);
+
+-- Статус задач сбора по кабинетам (Defly и т.д.) — см. collectors/ads/jobs.js.
+-- У каждой короткой задачи своя отметка последнего успеха, по ней
+-- планировщик решает, что пора запускать, в том числе после перезапуска.
+CREATE TABLE IF NOT EXISTS ad_job_status (
+  cabinet VARCHAR(32) NOT NULL,
+  job VARCHAR(32) NOT NULL,
+  last_started_at TIMESTAMP,
+  last_success_at TIMESTAMP,
+  last_error_at TIMESTAMP,
+  last_error TEXT,
+  last_warning TEXT,
+  last_rows INT,
+  last_duration_ms INT,
+  PRIMARY KEY (cabinet, job)
+);
+
+-- Когда последний раз спрашивали у Ozon список товаров кампании (не чаще
+-- раза в сутки на кампанию).
+ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS sku_checked_at TIMESTAMP;

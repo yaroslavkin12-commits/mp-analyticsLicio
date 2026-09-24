@@ -15,12 +15,7 @@ const { collectCatalog: ozCatalog }     = require('./collectors/ozon/catalog');
 const { collectAds: ozAds }             = require('./collectors/ozon/ads');
 
 const { CABINETS }                          = require('./config/cabinets');
-const { collectCatalog: adsCatalog }         = require('./collectors/ads/ozonCatalog');
-const { collectAdStats: adsStats }           = require('./collectors/ads/ozonPerf');
-const { collectClicks: adsClicks }           = require('./collectors/ads/ozonClicks');
-const { collectProductAnalytics: adsAnalytics } = require('./collectors/ads/ozonProductAnalytics');
-const { collectProductStocks: adsStocks } = require('./collectors/ads/ozonProductStocks');
-const { saveRunStatus: adsSaveRunStatus, isRunActive: adsIsRunActive } = require('./collectors/ads/runStatus');
+const { startAdsJobs } = require('./collectors/ads/jobs');
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
@@ -122,60 +117,10 @@ async function runOzon(dateFrom) {
   await run('Ozon Реклама',   'ozon', 'ads',       ozAds,       dateFrom);
 }
 
-// Реклама по дополнительным кабинетам (Defly и т.д.) — отдельно от основного
-// runOzon/runWB, потому что у "родного" кабинета (Licio) свои переменные
-// окружения без префикса, а у остальных кабинетов — токены в config/cabinets.
-// Кабинет без настроенных токенов просто пропускается.
-async function runAdsCabinets(days = 3) {
-  for (const [id, cfg] of Object.entries(CABINETS)) {
-    if (id === 'licio') continue; // у Licio реклама уже идёт через runOzon/ozAds
-    if (!cfg.ozonClientId && !cfg.ozonPerfClientId) continue;
-    // Ручной запуск через POST /api/ads/collect (routes/ads.js) пишет статус
-    // в ту же таблицу ad_collect_runs — если он ещё выполняется, не запускаем
-    // сбор по расписанию поверх него: два параллельных сбора для одного
-    // кабинета вдвое усиливают лимит запросов Ozon и не дают ни одному из них
-    // нормально завершиться (это и было главной причиной, почему показы и
-    // заказы никогда не собирались до конца).
-    if (await adsIsRunActive(id)) {
-      console.log(`[Ads:${id}] Сбор уже идёт (запущен вручную или предыдущим циклом) — пропускаем по расписанию`);
-      continue;
-    }
-    console.log(`\n=== Реклама: ${id} ===`);
-    const startedAt = new Date().toISOString();
-    await adsSaveRunStatus(id, { startedAt, step: 'catalog', error: null, finishedAt: null, detail: 'по расписанию' });
-    try {
-      await run(`${id} Каталог`, id, 'ads_catalog', () => adsCatalog(id));
-      await adsSaveRunStatus(id, { step: 'ad_stats' });
-      await run(`${id} Реклама (Performance)`, id, 'ads_perf', () => adsStats(id, days));
-      await adsSaveRunStatus(id, { step: 'clicks' });
-      await run(`${id} Клики/CPC`, id, 'ads_clicks', () => adsClicks(id, days));
-      // Остатки — до аналитики товаров, а не после. Аналитика товаров (7
-      // метрик Ozon Seller Analytics API, у которой по факту оказался очень
-      // жёсткий лимит запросов) регулярно занимает по 20-40+ минут и часто
-      // не успевает закончиться за один непрерывный запуск процесса (Render
-      // засыпает/перезапускается) — из-за этого шаг "остатки", стоявший
-      // ПОСЛЕ неё, месяцами вообще ни разу не выполнялся (0 записей в
-      // collection_log с collector_type='ads_stocks'). Остатки собираются
-      // одним быстрым запросом без такого лимита, поэтому переставлены
-      // раньше — тогда они гарантированно успевают собраться даже если
-      // аналитика товаров снова прервётся на середине.
-      await adsSaveRunStatus(id, { step: 'stocks' });
-      await run(`${id} Остатки`, id, 'ads_stocks', () => adsStocks(id));
-      await adsSaveRunStatus(id, { step: 'product_analytics' });
-      await run(`${id} Аналитика товаров`, id, 'ads_analytics', () => adsAnalytics(id, days));
-      await adsSaveRunStatus(id, { step: 'done', finishedAt: new Date().toISOString() });
-    } catch(e) {
-      console.error(`[Ads:${id}]`, e.message);
-      await adsSaveRunStatus(id, { error: e.message || String(e), finishedAt: new Date().toISOString() });
-    }
-  }
-}
-
 async function runAll(dateFrom) {
   console.log(`\n🚀 Сбор данных ${dayjs().format('DD.MM.YYYY HH:mm')}`);
   await runWB(dateFrom);
   await runOzon(dateFrom);
-  await runAdsCabinets();
   console.log(`✅ Готово ${dayjs().format('HH:mm')}\n`);
 }
 
@@ -200,8 +145,11 @@ function startScheduler() {
     console.log(`🔄 Первый запуск: WB с ${wbFrom}, Ozon с ${ozFrom}`);
     await runWB(wbFrom);
     await runOzon(ozFrom);
-    await runAdsCabinets(30);
   }, 8000);
+
+  // Кабинеты (Defly и т.д.) — отдельный планировщик коротких задач, не ждёт
+  // WB/Licio и не зависит от перезапусков (см. collectors/ads/jobs.js).
+  startAdsJobs();
 }
 
-module.exports = { startScheduler, runAll, runWB, runOzon, runAdsCabinets };
+module.exports = { startScheduler, runAll, runWB, runOzon };

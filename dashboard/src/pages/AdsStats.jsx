@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import {
   ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
-import { getAdsStats, getAdsCabinets, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder } from '../api';
+import { getAdsStats, getAdsCabinets, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
 
 // Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
@@ -1028,6 +1028,47 @@ function ArticleCard({
   );
 }
 
+// Строка "когда обновлялись данные" — по отметкам задач сбора на сервере
+// (collectors/ads/jobs.js). Сразу видно, свежие ли цифры и не сломалось ли
+// что-то, без захода в логи.
+const DATA_STATUS_PARTS = [
+  { job: 'perf', label: 'Расход' },
+  { job: 'clicks', label: 'Клики' },
+  { job: 'analytics', label: 'Заказы и воронка' },
+  { job: 'stocks', label: 'Остатки' },
+];
+
+function agoText(iso) {
+  if (!iso) return 'ещё не было';
+  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин назад`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} ч назад`;
+  return `${Math.floor(h / 24)} дн назад`;
+}
+
+function DataStatusLine({ status }) {
+  if (!status) return null;
+  const byJob = new Map(status.jobs.map(j => [j.job, j]));
+  return (
+    <div style={{ display:'flex', gap:14, flexWrap:'wrap', fontSize:11.5, color:'var(--text3)', marginTop:-6 }}>
+      {DATA_STATUS_PARTS.map(p => {
+        const j = byJob.get(p.job) || {};
+        const failed = j.lastErrorAt && (!j.lastSuccessAt || new Date(j.lastErrorAt) > new Date(j.lastSuccessAt));
+        const stale = !j.lastSuccessAt || (Date.now() - new Date(j.lastSuccessAt).getTime()) > Math.max(3 * (j.everyMin || 30), 90) * 60000;
+        const color = failed ? 'var(--danger, #ef4444)' : stale ? 'var(--warn, #f59e0b)' : 'var(--text3)';
+        return (
+          <span key={p.job} title={failed ? `Ошибка: ${j.lastError}` : (j.lastWarning || '')} style={{ color }}>
+            {p.label}: {agoText(j.lastSuccessAt)}{failed ? ' · ошибка' : ''}
+          </span>
+        );
+      })}
+      {status.running && <span>· идёт сбор…</span>}
+    </div>
+  );
+}
+
 export default function AdsStats({ cabinet }) {
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
@@ -1035,6 +1076,7 @@ export default function AdsStats({ cabinet }) {
   const [cabinets, setCabinets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
+  const [dataStatus, setDataStatus] = useState(null);
   const [expandedArticles, setExpandedArticles] = useState(() => new Set());
 
   const [onlyActive, setOnlyActive] = useState(false);
@@ -1059,6 +1101,15 @@ export default function AdsStats({ cabinet }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const loadStatus = useCallback(() => getAdsDataStatus(cabinet)
+    .then(r => { setDataStatus(r.data.data); return r.data.data; })
+    .catch(() => null), [cabinet]);
+  useEffect(() => {
+    loadStatus();
+    const t = setInterval(loadStatus, 60000);
+    return () => clearInterval(t);
+  }, [loadStatus]);
+
   // Сохранённый порядок артикулов для этого кабинета — подгружается отдельно,
   // не зависит от периода/фильтров.
   useEffect(() => {
@@ -1074,12 +1125,20 @@ export default function AdsStats({ cabinet }) {
     // выбранного диапазона) — collectDays считается от начала выбранного
     // периода до сегодня, чтобы выбор старого диапазона в календаре тоже
     // подтягивал свежие данные, а не только те даты, что видны в таблице.
-    const collectDays = Math.min(60, Math.max(7, dayjs().diff(dayjs(dateFrom), 'day')));
+    const collectDays = Math.min(90, Math.max(7, dayjs().diff(dayjs(dateFrom), 'day') + 1));
     try {
       await collectAds(cabinet, collectDays);
-      setTimeout(load, 15000);
+      // Ждём, пока сервер закончит (обычно 1-2 минуты), и перезагружаем.
+      const started = Date.now();
+      await new Promise(r => setTimeout(r, 4000));
+      while (Date.now() - started < 6 * 60000) {
+        const st = await loadStatus();
+        if (st && !st.running) break;
+        await new Promise(r => setTimeout(r, 5000));
+      }
+      load();
     } finally {
-      setTimeout(() => setCollecting(false), 15000);
+      setCollecting(false);
     }
   }
 
@@ -1213,6 +1272,7 @@ export default function AdsStats({ cabinet }) {
           {collecting ? 'Собираем...' : '↻ Обновить данные'}
         </button>
       </div>
+      <DataStatusLine status={dataStatus} />
 
       <GeneralStatsCard articlesRaw={articlesRaw} dates={dates} />
 

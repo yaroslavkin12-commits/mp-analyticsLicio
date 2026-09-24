@@ -1,276 +1,95 @@
 const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('../../db');
-const { getCabinet } = require('../../config/cabinets');
-const { saveRunStatus } = require('./runStatus');
+const { delay, mskDate, sellerHeaders, request, bulkUpsert } = require('./ozonHttp');
 
-const delay = ms => new Promise(r => setTimeout(r, ms));
-
-// Аналитика по товару (Seller API, /v1/analytics/data) — показы, переходы в
-// корзину, заказы и средняя позиция в поисковой выдаче/категории по SKU по
-// дням. Часть метрик Ozon периодически убирает без предупреждения (см.
-// комментарий в collectors/ozon/analytics.js — код 3 в ответе значит
-// "метрика больше не поддерживается"), поэтому каждую метрику запрашиваем
-// отдельно и просто пропускаем те, что отвалились, вместо падения сборщика
-// целиком.
-// Лимит запросов у Ozon Seller Analytics API оказался жёстче, чем казалось:
-// живые тесты показывают code:8/429 даже при паузе 700мс и 5 попытках — на
-// продакшене метрика может провалиться целиком на весь месяц. Поэтому здесь
-// пауза между страницами увеличена и ретраи стали намного настойчивее:
-// 10 попыток на страницу с паузой до 20 секунд на последней. Это делает один
-// вызов дольше, но гарантированно не даёт метрике "потеряться" молча.
-// Живые наблюдения (14-15 сентября): ПЕРВАЯ метрика в очереди почти всегда
-// проходит нормально — Seller API "остыл" за время предыдущего шага (сбор
-// кампаний). А вот КАЖДАЯ СЛЕДУЮЩАЯ метрика начинает получать 429 сразу и
-// требует много ретраев, потому что реальное окно лимита у Ozon шире, чем
-// казалось: не "запросов в секунду", а скорее "запросов за несколько секунд
-// подряд". Поэтому вместо того, чтобы полагаться на ретраи (которые лишь
-// НАКАПЛИВАЮТ достаточную паузу постфактум, но не всегда успевают за 10
-// попыток), пауза увеличена сразу — так, чтобы к следующему запросу лимит
-// уже гарантированно "отпустил".
-const MAX_RATE_LIMIT_RETRIES = 12;
-const RATE_LIMIT_BASE_WAIT = 4000;
-
-// "Пульс" — обновляет updated_at в ad_collect_runs, чтобы блокировка
-// isRunActive() (см. runStatus.js) не сочла ещё живой процесс мёртвым из-за
-// того, что одна метрика с несколькими повторными попытками (до 10 ретраев
-// по 20 секунд каждый) заняла дольше окна "протухания" блокировки — иначе
-// долгая, но НЕ зависшая работа выглядела бы так же, как реально мёртвый
-// процесс, и второй параллельный запуск мог бы стартовать поверх первого
-// (та самая гонка, которую блокировка должна предотвращать).
-async function heartbeat(cabinet, detail) {
-  await saveRunStatus(cabinet, { step: 'product_analytics', detail });
-}
-
-async function fetchMetric(headers, dateFrom, dateTo, metricName, cabinet) {
-  const result = new Map();
-  let offset = 0;
-  while (true) {
-    await delay(4000);
-    let resp;
-    let rateLimitRetries = 0;
-    while (true) {
-      try {
-        resp = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
-          date_from: dateFrom,
-          date_to: dateTo,
-          metrics: [metricName],
-          dimension: ['sku', 'day'],
-          limit: 1000,
-          offset,
-        }, { headers, timeout: 60000 });
-        break;
-      } catch(e) {
-        const code = e.response?.data?.code;
-        const status = e.response?.status;
-        // code 3 = метрика больше не поддерживается Ozon — пропускаем сразу,
-        // без ретраев, это не временная ошибка.
-        if (code === 3) {
-          console.log(`[Ads Analytics] Метрика "${metricName}" недоступна — пропускаем`);
-          return null;
-        }
-        // code 8 / HTTP 429 = превышен лимит запросов в секунду — это
-        // временно, поэтому ждём и повторяем (с нарастающей паузой), а не
-        // сдаёмся сразу, как раньше (из-за чего вся метрика молча терялась).
-        if ((code === 8 || status === 429) && rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
-          rateLimitRetries++;
-          const wait = Math.min(RATE_LIMIT_BASE_WAIT * rateLimitRetries, 35000);
-          console.warn(`[Ads Analytics] "${metricName}": лимит запросов (429), retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} через ${wait}мс`);
-          if (cabinet) await heartbeat(cabinet, `${metricName}: retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES}`);
-          await delay(wait);
-          continue;
-        }
-        console.warn(`[Ads Analytics] "${metricName}" — не удалось получить после ${rateLimitRetries} попыток:`, e.response?.data?.message || e.message);
-        return null;
-      }
-    }
-    const rows = resp.data?.result?.data || [];
-    for (const row of rows) {
-      const dims = row.dimensions || [];
-      const skuDim = dims.find(d => d.id && /^\d{5,}$/.test(String(d.id)));
-      const dateDim = dims.find(d => d.id && /^\d{4}-\d{2}-\d{2}$/.test(String(d.id)));
-      const sku = skuDim?.id || dims[0]?.id;
-      const date = dateDim?.id || dims[1]?.id;
-      if (!sku || !date) continue;
-      const key = `${sku}|${date}`;
-      const entry = result.get(key) || { sku, date };
-      entry[metricName] = Number((row.metrics || [])[0]) || 0;
-      result.set(key, entry);
-    }
-    if (rows.length < 1000) break;
-    offset += 1000;
-  }
-  return result;
-}
-
-// Колонка в product_analytics_daily для каждой метрики Ozon — нужна для
-// точечного UPSERT-а по одной метрике (см. ниже, почему это важно).
+// Аналитика по товарам (Seller API /v1/analytics/data): показы, показы в
+// поиске, переходы в карточку, корзины, заказы (шт), заказано на сумму,
+// позиция — по SKU и дням.
 //
-// ВАЖНО: имя метрики "заказы, шт" в запросе к Ozon Seller Analytics API —
-// "ordered_units", а НЕ "orders_item" (так называется только наша колонка
-// в БД — историческое имя из ранней версии схемы). Раньше в запросе
-// отправлялось "orders_item" — Ozon отвечал 400
-// "invalid AnalyticsGetDataRequest.Metrics" (код 3, "метрика не
-// поддерживается"), и эта ветка кода трактует код 3 как "метрику сняли,
-// просто пропускаем" — поэтому заказы молча оставались нулевыми на каждом
-// сборе, без единой ошибки в логах. Проверено напрямую через
-// /api/ads/debug-analytics: "ordered_units" отдаёт реальные данные.
-const METRIC_COLUMN = {
-  hits_view: 'hits_view',
-  hits_view_search: 'hits_view_search',
-  hits_view_pdp: 'hits_view_pdp',
-  hits_tocart: 'hits_tocart',
-  ordered_units: 'orders_item',
-  revenue: 'revenue',
-  position_category: 'position_category',
-};
+// Как было и почему ломалось: каждая из 7 метрик запрашивалась ОТДЕЛЬНЫМ
+// запросом за весь месяц, с длинными паузами и сохранением построчно. Один
+// прогон занимал 20-40+ минут, процесс на Render перезапускался раньше —
+// успевала собраться только первая метрика (показы), а корзины и заказы
+// месяцами оставались дырявыми.
+//
+// Как теперь (проверено живым запросом 24.09): Ozon отдаёт все 7 метрик
+// ОДНИМ запросом за ~1.5 сек, 1000 строк на страницу; один день по всему
+// кабинету — ~1650 строк (2 страницы). Второй запрос сразу следом тоже
+// проходит. Заказы из аналитики сверены с отправлениями FBO+FBS за тот же
+// день — совпали штука в штуку (243 = 24 + 219). Весь месяц собирается
+// примерно за минуту.
 
-// Сохраняет результат ОДНОЙ метрики сразу после её сбора, а не в самом конце
-// после всех 7 метрик. Раньше все метрики копились в памяти и запись в БД
-// шла одним проходом в конце collectProductAnalytics — из-за этого, если
-// процесс обрывался посреди сбора (сервер Render на бесплатном тарифе
-// периодически "засыпает"/перезапускается без явной ошибки), ВСЯ уже
-// проделанная работа пропадала бесследно: ни одной строки не сохранялось,
-// даже если 5 из 7 метрик уже успешно собрались. Точечный upsert по каждой
-// метрике сразу же фиксирует прогресс — обрыв на середине теряет только то,
-// что ещё не собрано, а не всё целиком.
-async function saveMetric(cabinet, metricName, dataMap, offerBySku) {
-  const column = METRIC_COLUMN[metricName];
-  if (!column || !dataMap || !dataMap.size) return 0;
+const METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'ordered_units', 'revenue', 'position_category'];
+const PAGE = 1000;
+const WINDOW_DAYS = 7; // один запрос с пагинацией на неделю — страниц немного
+
+async function fetchWindow(headers, from, to) {
+  const rows = [];
+  let totals = null;
+  for (let offset = 0; ; offset += PAGE) {
+    const data = await request(() => axios.post('https://api-seller.ozon.ru/v1/analytics/data', {
+      date_from: from, date_to: to, metrics: METRICS, dimension: ['sku', 'day'], limit: PAGE, offset,
+    }, { headers, timeout: 60000 }).then(r => r.data), `Аналитика ${from}..${to} стр.${offset / PAGE + 1}`);
+    const part = data?.result?.data || [];
+    totals = totals || data?.result?.totals || null;
+    rows.push(...part);
+    if (part.length < PAGE) break;
+    await delay(400);
+  }
+  return { rows, totals };
+}
+
+// dateFrom/dateTo включительно, строки YYYY-MM-DD (московские даты).
+async function collectProductAnalytics(cabinet, { dateFrom, dateTo } = {}) {
+  const headers = sellerHeaders(cabinet);
+  if (!headers) { console.log(`[Analytics:${cabinet}] Seller API не настроен`); return { rows: 0 }; }
+  const to = dateTo || mskDate(0);
+  const from = dateFrom || mskDate(6);
+
+  // SKU -> offer_id из каталога кабинета: в ответе аналитики есть только SKU.
+  const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
+  const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+
   let saved = 0;
-  for (const [key, entry] of dataMap) {
-    const [sku, date] = key.split('|');
-    const value = metricName === 'position_category' ? (entry[metricName] ?? null) : (entry[metricName] ?? 0);
-    try {
-      await query(
-        `INSERT INTO product_analytics_daily (cabinet, platform, date, sku, offer_id, ${column})
-         VALUES ($1,'ozon',$2,$3,$4,$5)
-         ON CONFLICT (cabinet, platform, date, sku) DO UPDATE SET
-           offer_id = COALESCE(EXCLUDED.offer_id, product_analytics_daily.offer_id),
-           ${column} = EXCLUDED.${column}`,
-        [cabinet, date, sku, offerBySku.get(String(sku)) || null, value]
-      );
-      saved++;
-    } catch(e) { /* пропускаем отдельную строку, не весь сбор */ }
-  }
-  return saved;
-}
+  const mismatches = [];
+  // Идём окнами по неделе от свежих дат к старым: если что-то прервётся,
+  // самое важное (последние дни) уже будет сохранено.
+  let windowEnd = dayjs(to);
+  const start = dayjs(from);
+  while (!windowEnd.isBefore(start, 'day')) {
+    let windowStart = windowEnd.subtract(WINDOW_DAYS - 1, 'day');
+    if (windowStart.isBefore(start, 'day')) windowStart = start;
+    const wf = windowStart.format('YYYY-MM-DD'), wt = windowEnd.format('YYYY-MM-DD');
 
-// Метрики, уже собранные УСПЕШНО в рамках текущего цикла — читаем ДО того,
-// как начинаем сбор, и пропускаем их: без этого каждый рестарт процесса
-// (Render на бесплатном тарифе перезапускается заметно чаще, чем занимает
-// полный проход всех 7 метрик с усиленными паузами против лимита Ozon)
-// заново начинал с hits_view, из-за чего первая метрика собиралась почти
-// всегда, а до остальных дело просто не доходило НИ РАЗУ. Цикл считается
-// текущим, пока последняя отметка "готово" по кабинету не старше 20 часов —
-// после этого он протухает и все метрики запрашиваются заново (следующий
-// плановый сбор), чтобы данные не застревали навсегда на старых значениях.
-const CYCLE_MAX_AGE_HOURS = 20;
-
-async function getDoneMetrics(cabinet) {
-  try {
-    const rows = await query(
-      `SELECT metric FROM ad_metric_progress
-       WHERE cabinet = $1 AND platform = 'ozon' AND done_at > NOW() - INTERVAL '${CYCLE_MAX_AGE_HOURS} hours'`,
-      [cabinet]
-    );
-    return new Set(rows.map(r => r.metric));
-  } catch(e) { return new Set(); }
-}
-
-async function markMetricDone(cabinet, metric) {
-  try {
-    await query(
-      `INSERT INTO ad_metric_progress (cabinet, platform, metric, cycle_started_at, done_at)
-       VALUES ($1, 'ozon', $2, NOW(), NOW())
-       ON CONFLICT (cabinet, platform, metric) DO UPDATE SET done_at = NOW()`,
-      [cabinet, metric]
-    );
-  } catch(e) { console.warn('[Ads Analytics] Не удалось сохранить прогресс метрики:', e.message); }
-}
-
-async function clearCycle(cabinet) {
-  try { await query(`DELETE FROM ad_metric_progress WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]); }
-  catch(e) { /* не критично — просто цикл переиспользуется дольше */ }
-}
-
-async function collectProductAnalytics(cabinet, days) {
-  const cfg = getCabinet(cabinet);
-  if (!cfg.ozonClientId || !cfg.ozonApiKey) {
-    console.log(`[Ads Analytics:${cabinet}] Ozon Seller API не настроен`);
-    return 0;
-  }
-  const headers = { 'Client-Id': cfg.ozonClientId, 'Api-Key': cfg.ozonApiKey, 'Content-Type': 'application/json' };
-  const from = dayjs().subtract(days || 30, 'day').format('YYYY-MM-DD');
-  const to = dayjs().format('YYYY-MM-DD');
-
-  const catalogRows = await query(
-    `SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`,
-    [cabinet]
-  );
-  const offerBySku = new Map(catalogRows.map(r => [String(r.sku), r.offer_id]));
-
-  const ALL_METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'ordered_units', 'revenue', 'position_category'];
-  const doneAlready = await getDoneMetrics(cabinet);
-  const METRICS = ALL_METRICS.filter(m => !doneAlready.has(m));
-  if (doneAlready.size) {
-    console.log(`[Ads Analytics:${cabinet}] Уже собрано в этом цикле (пропускаем): ${[...doneAlready].join(', ') || '—'}`);
-  }
-
-  const failedMetrics = [];
-  let total = 0;
-  for (const m of METRICS) {
-    await heartbeat(cabinet, `метрика: ${m}`);
-    const data = await fetchMetric(headers, from, to, m, cabinet);
-    if (data !== null) {
-      const saved = await saveMetric(cabinet, m, data, offerBySku);
-      total += saved;
-      await markMetricDone(cabinet, m);
-      console.log(`[Ads Analytics:${cabinet}] "${m}": сохранено строк ${saved}`);
-    } else {
-      failedMetrics.push(m);
+    const { rows, totals } = await fetchWindow(headers, wf, wt);
+    const out = [];
+    let ordersInRows = 0;
+    for (const r of rows) {
+      const dims = r.dimensions || [];
+      const sku = dims[0]?.id, date = dims[1]?.id;
+      if (!sku || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) continue;
+      const m = (r.metrics || []).map(v => Number(v) || 0);
+      ordersInRows += m[4] || 0;
+      out.push([cabinet, 'ozon', date, sku, offerBySku.get(String(sku)) || null,
+        m[0], m[1], m[2], m[3], m[4], m[5], m[6] || null, new Date()]);
     }
-    // Пауза между разными метриками — не только между страницами одной
-    // метрики — чтобы не начинать следующую метрику "с разбегу" сразу после
-    // серии ретраев предыдущей. Живые тесты показали: первая метрика в
-    // очереди почти всегда проходит с первого раза, а вот все следующие
-    // упираются в лимит и жгут кучу ретраев — короткой паузы (2.5с) между
-    // метриками было явно недостаточно, лимит Ozon не успевал "отпустить".
-    await delay(6000);
-  }
-
-  // Если какая-то метрика не набралась вообще ни с одной попытки — пробуем
-  // её ещё раз отдельным проходом после паузы. На практике лимит запросов
-  // Ozon посекундный и "отпускает" за несколько секунд простоя, поэтому
-  // повторный проход после того, как остальные метрики уже отработали и
-  // API "остыл", часто успешен там, где первый проход упёрся в лимит.
-  if (failedMetrics.length) {
-    console.warn(`[Ads Analytics] Повторная попытка для метрик, не собравшихся с первого раза: ${failedMetrics.join(', ')}`);
-    await delay(10000);
-    for (const m of failedMetrics) {
-      await heartbeat(cabinet, `повтор метрики: ${m}`);
-      const data = await fetchMetric(headers, from, to, m, cabinet);
-      if (data !== null) {
-        const saved = await saveMetric(cabinet, m, data, offerBySku);
-        total += saved;
-        await markMetricDone(cabinet, m);
-        console.log(`[Ads Analytics:${cabinet}] "${m}" (повтор): сохранено строк ${saved}`);
-      }
-      await delay(6000);
+    // Сверка с итогами, которые отдаёт сам Ozon: если сумма заказов по
+    // строкам не сошлась — страницы пришли не полностью, пишем в лог.
+    if (totals && Math.abs((Number(totals[4]) || 0) - ordersInRows) > 0.5) {
+      mismatches.push(`${wf}..${wt}: в строках ${ordersInRows} заказов, в итогах Ozon ${totals[4]}`);
     }
-  }
+    saved += await bulkUpsert('product_analytics_daily',
+      ['cabinet', 'platform', 'date', 'sku', 'offer_id', 'hits_view', 'hits_view_search', 'hits_view_pdp',
+       'hits_tocart', 'orders_item', 'revenue', 'position_category', 'collected_at'],
+      out, ['cabinet', 'platform', 'date', 'sku']);
 
-  // Цикл полностью закрыт (все 7 метрик когда-либо помечены готовыми) —
-  // сбрасываем прогресс, чтобы следующий плановый сбор обновил все метрики
-  // заново, а не застрял навсегда на данных этого цикла.
-  const stillDone = await getDoneMetrics(cabinet);
-  if (ALL_METRICS.every(m => stillDone.has(m))) {
-    await clearCycle(cabinet);
-    console.log(`[Ads Analytics:${cabinet}] Цикл завершён полностью — прогресс сброшен для следующего сбора`);
+    windowEnd = windowStart.subtract(1, 'day');
+    await delay(400);
   }
-
-  console.log(`[Ads Analytics:${cabinet}] Сохранено всего: ${total}`);
-  return total;
+  if (mismatches.length) console.warn(`[Analytics:${cabinet}] Расхождение с итогами Ozon: ${mismatches.join('; ')}`);
+  console.log(`[Analytics:${cabinet}] ${from}..${to}: сохранено строк ${saved}`);
+  return { rows: saved, warning: mismatches.length ? mismatches.join('; ') : null };
 }
 
 module.exports = { collectProductAnalytics };

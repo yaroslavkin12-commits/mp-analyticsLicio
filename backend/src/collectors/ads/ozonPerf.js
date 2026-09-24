@@ -1,190 +1,102 @@
 const axios = require('axios');
-const dayjs = require('dayjs');
 const { query } = require('../../db');
-const { getCabinet } = require('../../config/cabinets');
+const { delay, mskDate, perfHeaders, request, parseRuNumber, bulkUpsert } = require('./ozonHttp');
 
-const delay = ms => new Promise(r => setTimeout(r, ms));
+// Кампании (метаданные + привязка к артикулу) и расход по дням.
+//
+// Что было медленным: на КАЖДЫЙ прогон для каждой из ~620 активных кампаний
+// отдельным запросом спрашивался список товаров (с паузой 350 мс) — 5-7
+// минут только на это, хотя реально тратят деньги ~25 кампаний в день.
+// Теперь список товаров спрашиваем только у кампаний, у которых был расход
+// за период, и не чаще раза в сутки на кампанию — привязка сохраняется в БД.
 
-// Performance API Ozon — отдельный OAuth-токен (Client-Id + Client-Secret),
-// не тот же Api-Key, что используется для остатков/заказов. Живёт на домене
-// api-performance.ozon.ru. Токен живёт ~30 минут, поэтому получаем заново
-// на каждый прогон сборщика, а не кэшируем между вызовами.
-async function getToken(cfg) {
-  if (!cfg.ozonPerfClientId || !cfg.ozonPerfSecret) return null;
-  try {
-    const { data } = await axios.post('https://api-performance.ozon.ru/api/client/token',
-      { client_id: cfg.ozonPerfClientId, client_secret: cfg.ozonPerfSecret, grant_type: 'client_credentials' },
-      { timeout: 15000 }
-    );
-    return data?.access_token || null;
-  } catch(e) {
-    console.warn('[Ads Perf] Токен:', e.response?.data || e.message);
-    return null;
-  }
-}
-
-// Запрос с retry на 429 (лимит запросов в секунду — та же проблема, что и
-// у Seller API) — без этого один rate-limit на середине списка кампаний
-// рвал бы привязку для всех оставшихся.
-async function withRetry(fn, label) {
-  for (let attempt = 0; attempt <= 4; attempt++) {
-    try {
-      return await fn();
-    } catch(e) {
-      const status = e.response?.status;
-      if (status === 429 && attempt < 4) {
-        const wait = 1200 * (attempt + 1);
-        console.warn(`[Ads Perf] ${label}: лимит запросов (429), retry ${attempt + 1}/4 через ${wait}мс`);
-        await delay(wait);
-        continue;
-      }
-      throw e;
-    }
-  }
-}
-
-// Настоящая привязка кампании к товару — Ozon отдаёт список SKU, добавленных
-// в конкретную РК (только для кампаний с оплатой за клик/охват по товарам;
-// для остальных типов список пуст или эндпоинт недоступен). Это надёжнее,
-// чем угадывать товар по названию кампании — угадывание не срабатывает,
-// когда продавец называет кампанию по модели авто, а не по коду товара
-// (например "1.Тест Женя Haval M6 ПОИСК" вместо "Hv4-2KR").
 async function getCampaignSkus(campaignId, headers) {
   try {
-    const data = await withRetry(() => axios.get(
+    const data = await request(() => axios.get(
       `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/v2/products`,
-      { headers, timeout: 15000 }
-    ).then(r => r.data), `Товары РК ${campaignId}`);
+      { headers, timeout: 20000 }).then(r => r.data), `Товары РК ${campaignId}`, { attempts: 3 });
     return (data?.products || []).map(p => String(p.sku)).filter(Boolean);
-  } catch(e) {
-    return [];
-  }
+  } catch (e) { return []; }
 }
 
-// Резервный вариант для кампаний, где Ozon не отдал список товаров (баннеры,
-// автопилот по всему магазину и т.п.) — угадываем по вхождению offer_id в
-// название кампании, как раньше.
+// Запасной вариант, когда Ozon не отдаёт товары кампании: ищем offer_id в
+// названии кампании.
 function matchOfferByTitle(title, catalogByOfferId) {
   if (!title) return null;
   const t = title.trim().toLowerCase();
   if (catalogByOfferId.has(t)) return catalogByOfferId.get(t);
   for (const [offerId, row] of catalogByOfferId) {
-    if (offerId && t.includes(offerId)) return row;
+    if (offerId && offerId.length >= 4 && t.includes(offerId)) return row;
   }
   return null;
 }
 
-// moneySpent у Ozon приходит строкой в русском формате с запятой как
-// десятичным разделителем, например "4847,71".
-function parseRuNumber(v) {
-  if (v == null) return 0;
-  if (typeof v === 'number') return v;
-  return Number(String(v).replace(',', '.')) || 0;
-}
+async function collectAdStats(cabinet, { dateFrom, dateTo } = {}) {
+  const headers = await perfHeaders(cabinet);
+  if (!headers) { console.log(`[Perf:${cabinet}] Performance API не настроен`); return { rows: 0 }; }
+  const from = dateFrom || mskDate(13);
+  const to = dateTo || mskDate(0);
 
-// Эта функция теперь отвечает ТОЛЬКО за метаданные кампаний и расход
-// (GET .../statistics/expense/json — единственный синхронный эндпоинт,
-// подтверждённый рабочим live-тестом). Воронка (показы/клики/корзины/заказы)
-// берётся из общей аналитики по товару (ozonProductAnalytics.js), т.к.
-// поштучная статистика по кампаниям (.../api/client/statistics) отдаёт 405 и
-// не работает на этом аккаунте.
-async function collectAdStats(cabinet, days) {
-  const cfg = getCabinet(cabinet);
-  const token = await getToken(cfg);
-  if (!token) {
-    console.log(`[Ads Perf:${cabinet}] Performance API не настроен`);
-    return 0;
+  // 1. Список кампаний — метаданные, без трогания привязки к артикулу.
+  const listData = await request(() => axios.get('https://api-performance.ozon.ru/api/client/campaign',
+    { headers, timeout: 60000 }).then(r => r.data), 'Список кампаний');
+  const campaigns = listData?.list || [];
+  await bulkUpsert('ad_campaigns',
+    ['cabinet', 'platform', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type',
+     'autopilot_strategy', 'placement', 'expense_strategy', 'updated_at'],
+    campaigns.map(c => [cabinet, 'ozon', String(c.id), c.title ? String(c.title).slice(0, 500) : null, c.state || null, c.advObjectType || null,
+      c.PaymentType || c.paymentType || null, c.productAutopilotStrategy || null,
+      (Array.isArray(c.placement) ? c.placement.join(',') : (c.placement || '')).slice(0, 128) || null,
+      c.expenseStrategy || null, new Date()]),
+    ['cabinet', 'platform', 'campaign_id']);
+
+  // 2. Расход по дням — один запрос на весь период по всем кампаниям.
+  const expData = await request(() => axios.get('https://api-performance.ozon.ru/api/client/statistics/expense/json',
+    { headers, params: { dateFrom: from, dateTo: to }, timeout: 60000 }).then(r => r.data), `Расход ${from}..${to}`);
+  const expenseRows = expData?.rows || expData?.list || (Array.isArray(expData) ? expData : []);
+  const spendRows = [];
+  const activeIds = new Set();
+  for (const r of expenseRows) {
+    const campaignId = String(r.id ?? r.campaignId ?? r.campaign_id ?? '');
+    if (!campaignId || !r.date) continue;
+    const spend = parseRuNumber(r.moneySpent);
+    if (spend > 0) activeIds.add(campaignId);
+    spendRows.push([cabinet, 'ozon', r.date, campaignId, spend, new Date()]);
   }
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-  const from = dayjs().subtract(days || 30, 'day').format('YYYY-MM-DD');
-  const to = dayjs().format('YYYY-MM-DD');
+  const saved = await bulkUpsert('ad_stats_daily', ['cabinet', 'platform', 'date', 'campaign_id', 'spend', 'collected_at'],
+    spendRows, ['cabinet', 'platform', 'date', 'campaign_id']);
 
-  let campaigns = [];
-  try {
-    // Без фильтра по state — нужны и остановленные кампании тоже (видеть,
-    // когда рекламу выключили).
-    const { data } = await axios.get('https://api-performance.ozon.ru/api/client/campaign',
-      { headers, timeout: 30000 });
-    campaigns = data?.list || [];
-  } catch(e) {
-    console.warn(`[Ads Perf:${cabinet}] Список кампаний:`, e.response?.data || e.message);
-    return 0;
-  }
-
-  // Каталог для сопоставления кампании с артикулом — по SKU (надёжно) и как
-  // запасной вариант по вхождению offer_id в название (угадывание).
-  const catalogRows = await query(
-    `SELECT offer_id, sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`,
-    [cabinet]
-  );
+  // 3. Привязка кампаний к артикулам.
+  const catalogRows = await query(`SELECT offer_id, sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
   const catalogByOfferId = new Map(catalogRows.map(r => [String(r.offer_id).toLowerCase(), r]));
   const catalogBySku = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r]));
-
-  for (const camp of campaigns) {
-    let match = null;
-    // Настоящая привязка через API — только для активных/недавних кампаний
-    // с оплатой за клик, чтобы не тратить сотни запросов на старые
-    // архивные/выключенные кампании без шанса на успех.
-    if (camp.state !== 'CAMPAIGN_STATE_ARCHIVED' && camp.state !== 'CAMPAIGN_STATE_FINISHED') {
-      const skus = await getCampaignSkus(camp.id, headers);
-      for (const sku of skus) {
-        if (catalogBySku.has(sku)) { match = catalogBySku.get(sku); break; }
+  const known = await query(
+    `SELECT campaign_id, title, matched_offer_id, sku_checked_at FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
+  const dayAgo = Date.now() - 24 * 3600 * 1000;
+  let checked = 0;
+  for (const c of known) {
+    const needApi = activeIds.has(c.campaign_id) && (!c.sku_checked_at || new Date(c.sku_checked_at).getTime() < dayAgo);
+    if (needApi) {
+      const skus = await getCampaignSkus(c.campaign_id, headers);
+      let match = null;
+      for (const sku of skus) if (catalogBySku.has(sku)) { match = catalogBySku.get(sku); break; }
+      if (!match) match = matchOfferByTitle(c.title, catalogByOfferId);
+      await query(
+        `UPDATE ad_campaigns SET matched_offer_id = COALESCE($3, matched_offer_id), matched_sku = COALESCE($4, matched_sku),
+           sku_checked_at = NOW() WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id = $2`,
+        [cabinet, c.campaign_id, match?.offer_id || null, match?.sku || null]);
+      checked++;
+      await delay(250);
+    } else if (!c.matched_offer_id) {
+      const match = matchOfferByTitle(c.title, catalogByOfferId);
+      if (match) {
+        await query(`UPDATE ad_campaigns SET matched_offer_id = $3, matched_sku = $4 WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id = $2`,
+          [cabinet, c.campaign_id, match.offer_id, match.sku || null]);
       }
-      await delay(350);
     }
-    if (!match) match = matchOfferByTitle(camp.title, catalogByOfferId);
-    try {
-      await query(
-        `INSERT INTO ad_campaigns (cabinet, platform, campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
-                                    payment_type, autopilot_strategy, placement, expense_strategy, updated_at)
-         VALUES ($1,'ozon',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
-         ON CONFLICT (cabinet, platform, campaign_id) DO UPDATE SET
-           title = EXCLUDED.title, state = EXCLUDED.state, adv_object_type = EXCLUDED.adv_object_type,
-           matched_offer_id = EXCLUDED.matched_offer_id, matched_sku = EXCLUDED.matched_sku,
-           payment_type = EXCLUDED.payment_type, autopilot_strategy = EXCLUDED.autopilot_strategy,
-           placement = EXCLUDED.placement, expense_strategy = EXCLUDED.expense_strategy, updated_at = NOW()`,
-        [cabinet, String(camp.id), camp.title || null, camp.state || null, camp.advObjectType || null,
-         match?.offer_id || null, match?.sku || null,
-         camp.PaymentType || camp.paymentType || null,
-         camp.productAutopilotStrategy || null,
-         Array.isArray(camp.placement) ? camp.placement.join(',') : (camp.placement || null),
-         camp.expenseStrategy || null]
-      );
-    } catch(e) { console.warn(`[Ads Perf:${cabinet}] Кампания ${camp.id}:`, e.message); }
   }
-
-  // Расход — одним вызовом на весь период; параметр campaigns на этом
-  // эндпоинте на практике не фильтрует (Ozon отдаёт все кампании в любом
-  // случае), поэтому запрашиваем сразу все и раскладываем по campaign_id
-  // локально — так надёжнее и не требует N вызовов на N кампаний.
-  let expenseRows = [];
-  try {
-    const { data } = await axios.get('https://api-performance.ozon.ru/api/client/statistics/expense/json',
-      { headers, params: { dateFrom: from, dateTo: to }, timeout: 30000 });
-    expenseRows = data?.rows || data?.list || (Array.isArray(data) ? data : []);
-  } catch(e) {
-    console.warn(`[Ads Perf:${cabinet}] Расход:`, e.response?.data || e.message);
-  }
-
-  let total = 0;
-  for (const row of expenseRows) {
-    const campaignId = String(row.id ?? row.campaignId ?? row.campaign_id ?? '');
-    const date = row.date;
-    if (!campaignId || !date) continue;
-    const spend = parseRuNumber(row.moneySpent);
-    try {
-      await query(
-        `INSERT INTO ad_stats_daily (cabinet, platform, date, campaign_id, spend)
-         VALUES ($1,'ozon',$2,$3,$4)
-         ON CONFLICT (cabinet, platform, date, campaign_id) DO UPDATE SET spend = EXCLUDED.spend`,
-        [cabinet, date, campaignId, spend]
-      );
-      total++;
-    } catch(e) { console.warn(`[Ads Perf:${cabinet}] Расход ${campaignId}/${date}:`, e.message); }
-  }
-
-  console.log(`[Ads Perf:${cabinet}] Кампаний: ${campaigns.length}, строк расхода: ${total}`);
-  return total;
+  console.log(`[Perf:${cabinet}] Кампаний ${campaigns.length}, строк расхода ${saved}, проверено привязок ${checked}`);
+  return { rows: saved };
 }
 
 module.exports = { collectAdStats };

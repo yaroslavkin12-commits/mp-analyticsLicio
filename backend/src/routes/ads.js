@@ -3,12 +3,7 @@ const router = express.Router();
 const dayjs = require('dayjs');
 const { query } = require('../db');
 const { listCabinets } = require('../config/cabinets');
-const { collectCatalog } = require('../collectors/ads/ozonCatalog');
-const { collectAdStats } = require('../collectors/ads/ozonPerf');
-const { collectProductAnalytics } = require('../collectors/ads/ozonProductAnalytics');
-const { collectProductStocks } = require('../collectors/ads/ozonProductStocks');
-const { collectClicks } = require('../collectors/ads/ozonClicks');
-const { saveRunStatus, isRunActive } = require('../collectors/ads/runStatus');
+const { requestRefresh, currentJob, getStatus, JOBS } = require('../collectors/ads/jobs');
 const { getAssociatedOfferIds } = require('../config/associatedArticles');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
@@ -17,55 +12,37 @@ router.get('/cabinets', (req, res) => {
   res.json({ success: true, data: listCabinets() });
 });
 
-// POST /api/ads/collect?cabinet=defly&days=30 — ручной запуск сбора рекламной
-// статистики для кабинета. Нужен, пока Defly не в общем расписании сборщиков.
-//
-// Статус последнего фонового сбора раньше хранился только в памяти процесса
-// и пропадал бесследно при рестарте — вынесено в отдельный модуль
-// collectors/ads/runStatus.js, общий с планировщиком (scheduler.js), чтобы
-// оба места, откуда может запуститься сбор для кабинета, не запускали его
-// друг на друга одновременно (см. подробности в runStatus.js).
-
+// POST /api/ads/collect?cabinet=defly&days=30 — ручное обновление с кнопки.
+// Ставит в очередь планировщика (collectors/ads/jobs.js) немедленный сбор
+// расхода, кликов, аналитики и остатков за нужный период. Весь сбор теперь
+// занимает 1-2 минуты, поэтому отвечаем сразу, а данные подтягиваются
+// следующей загрузкой страницы.
 router.post('/collect', async (req, res) => {
   const cabinet = req.query.cabinet || req.body?.cabinet;
   const days = parseInt(req.query.days || req.body?.days, 10) || 30;
   if (!cabinet) return res.status(400).json({ success: false, error: 'Нужен параметр cabinet' });
+  const wasBusy = requestRefresh(cabinet, days);
+  res.json({ success: true, message: wasBusy
+    ? `Сбор для ${cabinet} уже идёт — обновление за ${days} дн. выполнится сразу после него`
+    : `Сбор запущен для кабинета ${cabinet} за ${days} дн.` });
+});
 
-  if (await isRunActive(cabinet)) {
-    return res.json({ success: false, message: `Сбор для кабинета ${cabinet} уже идёт — дождитесь завершения` });
-  }
-
-  res.json({ success: true, message: `Сбор запущен для кабинета ${cabinet}` });
-  const startedAt = new Date().toISOString();
-  await saveRunStatus(cabinet, { startedAt, step: 'catalog', error: null, finishedAt: null, detail: null });
-  setTimeout(async () => {
-    try {
-      console.log(`[Ads] Сбор для ${cabinet}: каталог...`);
-      await collectCatalog(cabinet);
-      await saveRunStatus(cabinet, { step: 'ad_stats' });
-      console.log(`[Ads] Сбор для ${cabinet}: реклама (Performance API)...`);
-      await collectAdStats(cabinet, days);
-      await saveRunStatus(cabinet, { step: 'clicks' });
-      console.log(`[Ads] Сбор для ${cabinet}: клики/CPC...`);
-      await collectClicks(cabinet, days);
-      // Остатки — до аналитики товаров (см. подробное объяснение в
-      // scheduler.js): аналитика товаров часто занимает 20-40+ минут и не
-      // всегда успевает закончиться за один запуск, из-за чего "остатки",
-      // стоявшие после неё, могли месяцами ни разу не собраться.
-      await saveRunStatus(cabinet, { step: 'stocks' });
-      console.log(`[Ads] Сбор для ${cabinet}: остатки...`);
-      await collectProductStocks(cabinet);
-      await saveRunStatus(cabinet, { step: 'product_analytics' });
-      console.log(`[Ads] Сбор для ${cabinet}: аналитика по товарам...`);
-      await collectProductAnalytics(cabinet, days);
-      await saveRunStatus(cabinet, { step: 'done', finishedAt: new Date().toISOString() });
-      console.log(`[Ads] Сбор для ${cabinet}: готово`);
-    } catch(e) {
-      const errMsg = JSON.stringify(e.response?.data || null) || e.message || String(e);
-      await saveRunStatus(cabinet, { error: errMsg, finishedAt: new Date().toISOString() });
-      console.error(`[Ads] Сбор для ${cabinet} упал:`, e.response?.data || e.message || e);
-    }
-  }, 100);
+// GET /api/ads/data-status?cabinet=defly — когда какая часть данных
+// обновлялась последний раз (для строки статуса на странице "Реклама").
+router.get('/data-status', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const st = await getStatus(cabinet);
+    res.json({ success: true, data: {
+      running: currentJob(cabinet),
+      jobs: JOBS.map(j => {
+        const r = st.get(j.id) || {};
+        return { job: j.id, everyMin: Math.round(j.every / 60000), lastSuccessAt: r.last_success_at || null,
+          lastErrorAt: r.last_error_at || null, lastError: r.last_error || null, lastWarning: r.last_warning || null,
+          lastRows: r.last_rows ?? null, lastDurationMs: r.last_duration_ms ?? null };
+      }),
+    } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // POST /api/ads/manual — ручной ввод показателя воронки по артикулу и дате,
@@ -208,8 +185,12 @@ router.get('/stats', async (req, res) => {
     // попадают в product_analytics_daily (сбор идёт по ВСЕМ SKU кабинета,
     // см. collectors/ads/ozonProductAnalytics.js), просто под своим offer_id.
     const analyticsByOfferDate = new Map(); // offerId|date -> row
+    // Если у строки аналитики нет offer_id (товар попал в каталог позже
+    // сбора аналитики) — достраиваем его по SKU из каталога.
+    const offerBySkuCat = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
     for (const r of analyticsRows) {
-      if (r.offer_id) analyticsByOfferDate.set(`${r.offer_id}|${r.date}`, r);
+      const offerId = r.offer_id || offerBySkuCat.get(String(r.sku));
+      if (offerId) analyticsByOfferDate.set(`${offerId}|${r.date}`, r);
     }
 
     const spendByKey = new Map(); // campaignId|date -> spend
@@ -427,7 +408,7 @@ router.get('/debug-raw', async (req, res) => {
       query(`SELECT COUNT(*)::int as n FROM product_analytics_daily WHERE cabinet = $1`, [cabinet]),
       query(`SELECT * FROM product_analytics_daily WHERE cabinet = $1 ORDER BY collected_at DESC LIMIT 10`, [cabinet]),
       query(`SELECT title FROM ad_campaigns WHERE cabinet = $1 AND matched_offer_id IS NULL AND title IS NOT NULL LIMIT 30`, [cabinet]),
-      query(`SELECT * FROM ad_collect_runs WHERE cabinet = $1`, [cabinet]),
+      query(`SELECT * FROM ad_job_status WHERE cabinet = $1 ORDER BY job`, [cabinet]),
     ]);
     res.json({
       success: true,
@@ -440,7 +421,7 @@ router.get('/debug-raw', async (req, res) => {
         productAnalyticsDailyTotal: analyticsCount[0]?.n,
         productAnalyticsDailySample: analyticsSample,
         unmatchedTitlesSample: campTitles.map(r => r.title),
-        lastCollectRun: runRows[0] || null,
+        jobStatus: runRows,
       },
     });
   } catch (e) {
