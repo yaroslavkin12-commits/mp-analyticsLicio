@@ -7,11 +7,11 @@ const { query } = require('./db');
 //   TELEGRAM_BOT_TOKEN — токен бота от @BotFather
 //   TELEGRAM_CHAT_ID   — id чата/канала, куда слать сообщения (можно узнать
 //                        через @userinfobot или API-метод getUpdates)
-// Порог срабатывания — TELEGRAM_DISCOUNT_THRESHOLD (п.п., по умолчанию 3).
+// Порог срабатывания — TELEGRAM_DISCOUNT_THRESHOLD (п.п., по умолчанию 1.5).
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID || null;
-const THRESHOLD = Number(process.env.TELEGRAM_DISCOUNT_THRESHOLD) || 3;
+const THRESHOLD = Number(process.env.TELEGRAM_DISCOUNT_THRESHOLD) || 1.5;
 
 async function sendMessage(text) {
   if (!TOKEN || !CHAT_ID) return false;
@@ -45,4 +45,4 @@ async function notifyDiscountChange(cabinet, changed) {
   await sendMessage(text);
 }
 
-module.exports = { sendMessage, notifyDiscountChange };
+module.exports = { sendMessage, notifyDiscountChange, THRESHOLD };

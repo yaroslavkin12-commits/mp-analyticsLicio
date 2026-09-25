@@ -1,7 +1,7 @@
 const axios = require('axios');
 const { query } = require('../../db');
 const { delay, sellerHeaders, request, bulkInsert } = require('./ozonHttp');
-const { notifyDiscountChange } = require('../../telegram');
+const { notifyDiscountChange, THRESHOLD } = require('../../telegram');
 
 // Слежение за "Соинвестированием в скидку" на Ozon — это тот же механизм,
 // что и СПП (скидка постоянного покупателя) на Wildberries: маркетплейс сам
@@ -81,7 +81,7 @@ async function collectDiscounts(cabinet) {
     if (prevPct === null || Math.abs(prevPct - pct) >= 0.1) {
       toInsert.push([cabinet, 'ozon', offerId, item.product_id || null,
         price, oldPrice, marketingPrice, sellerPrice, pct, now]);
-      if (prevPct !== null && Math.abs(prevPct - pct) >= 1) {
+      if (prevPct !== null && Math.abs(prevPct - pct) >= THRESHOLD) {
         changed.push({ offerId, prevPct, pct, marketingPrice, price });
       }
     }
