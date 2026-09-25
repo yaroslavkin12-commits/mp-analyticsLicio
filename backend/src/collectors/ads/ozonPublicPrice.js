@@ -64,21 +64,54 @@ function parsePrice(v) {
   return Number(cleaned) || 0;
 }
 
+// Диагностика от 25.09 показала: КАЖДЫЙ запрос получает 307 на тот же URL с
+// добавленным "&__rr=1" — это не бесконечный бан, а анти-бот, который на
+// первый запрос от незнакомого клиента отвечает редиректом + Set-Cookie
+// (обычно что-то вроде __Secure-ab-group / xxxxx), ожидая, что клиент
+// вернётся с этой cookie на втором заходе. Обычный браузер (fetch/XHR) это
+// делает автоматически и невидимо; axios без cookie-jar — нет, поэтому
+// раньше (с maxRedirects по умолчанию) получался бесконечный цикл
+// (ERR_FR_TOO_MANY_REDIRECTS): каждый повтор редиректа шёл БЕЗ cookie.
+// Здесь эмулируем ровно то, что делает браузер: один шаг вручную — взять
+// Set-Cookie из 307-ответа и повторить запрос на Location с этой cookie.
+function extractCookieHeader(setCookieHeader) {
+  if (!setCookieHeader) return '';
+  const arr = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+  return arr.map(c => c.split(';')[0]).join('; ');
+}
+
+async function requestOnce(url, cookie) {
+  return axios.get(url, {
+    timeout: TIMEOUT,
+    headers: cookie ? { ...BROWSER_HEADERS, cookie } : BROWSER_HEADERS,
+    httpsAgent, httpAgent,
+    maxRedirects: 0,
+    validateStatus: () => true,
+  });
+}
+
 // Возвращает { ok: true, data } либо { ok: false, reason, detail } — detail
 // нужен только для диагностики (см. fetchPublicPrices: первый образец на
 // каждую причину логируется отдельно), в основной логике не участвует.
 async function fetchOne(productId) {
+  const initialUrl = `${ENDPOINT}?url=${encodeURIComponent(`/product/${productId}/`)}`;
   try {
-    const resp = await axios.get(ENDPOINT, {
-      params: { url: `/product/${productId}/` },
-      timeout: TIMEOUT,
-      headers: BROWSER_HEADERS,
-      httpsAgent, httpAgent,
-      maxRedirects: 0, // сами смотрим, куда редиректит — вместо того чтобы зацикливаться
-      validateStatus: () => true,
-    });
+    let resp = await requestOnce(initialUrl, '');
+    let cookie = '';
+    let hops = 0;
+    // До 3 редиректов подряд, каждый раз донося cookie дальше — обычный
+    // браузер именно так и работает, никакого зацикливания при этом нет,
+    // если сервер реально ожидает вернувшуюся cookie, а не банит совсем.
+    while (resp.status >= 300 && resp.status < 400 && hops < 3) {
+      const location = resp.headers?.location;
+      if (!location) return { ok: false, reason: `redirect_${resp.status}_no_location` };
+      cookie = extractCookieHeader(resp.headers?.['set-cookie']) || cookie;
+      const target = location.startsWith('http') ? location : new URL(location, ENDPOINT).toString();
+      resp = await requestOnce(target, cookie);
+      hops++;
+    }
     if (resp.status >= 300 && resp.status < 400) {
-      return { ok: false, reason: `redirect_${resp.status}`, detail: resp.headers?.location || '(нет Location)' };
+      return { ok: false, reason: `redirect_loop_${resp.status}`, detail: resp.headers?.location || '(нет Location)' };
     }
     if (resp.status !== 200) {
       const snippet = typeof resp.data === 'string' ? resp.data.slice(0, 200) : JSON.stringify(resp.data).slice(0, 200);
