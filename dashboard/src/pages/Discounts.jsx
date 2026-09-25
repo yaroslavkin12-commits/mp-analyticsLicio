@@ -39,16 +39,18 @@ function ArticleHistory({ history }) {
             <th style={{ padding: '3px 8px', fontWeight: 500 }}>Когда</th>
             <th style={{ padding: '3px 8px', fontWeight: 500 }}>Соинвест</th>
             <th style={{ padding: '3px 8px', fontWeight: 500 }}>Цена продавца</th>
-            <th style={{ padding: '3px 8px', fontWeight: 500 }}>Цена покупателя</th>
+            <th style={{ padding: '3px 8px', fontWeight: 500 }}>Цена на сайте</th>
+            <th style={{ padding: '3px 8px', fontWeight: 500 }}>С Ozon Картой</th>
           </tr>
         </thead>
         <tbody>
           {last20.map((h, i) => (
             <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-              <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtDateTime(h.at)}</td>
+              <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtDateTime(h.at)}{h.source && h.source !== 'seller_cabinet' ? ' *' : ''}</td>
               <td style={{ padding: '4px 8px', fontWeight: 600 }}>{fmtPct(h.pct)}</td>
               <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtMoney(h.price)}</td>
               <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtMoney(h.marketingPrice)}</td>
+              <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{h.ozonCardPrice ? fmtMoney(h.ozonCardPrice) : '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -103,6 +105,7 @@ export default function Discounts({ cabinet }) {
         Соинвест — доля скидки, которую Ozon покрывает сам за счёт своей комиссии (аналог СПП на Wildberries).
         Разница между ценой продавца и ценой на витрине для покупателя. Показаны только реальные изменения
         процента — таблица обновляется примерно раз в 20 минут; при резком сдвиге приходит уведомление в Telegram.
+        Значок «≈» — сессия кабинета не настроена, показана приблизительная оценка без реальной цены на сайте.
       </div>
 
       {loading && !data && <div style={{ color: 'var(--text3)' }}>Загрузка…</div>}
@@ -132,7 +135,10 @@ export default function Discounts({ cabinet }) {
                       <div style={{ fontWeight: 600 }}>{a.offerId}</div>
                       {a.productName && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{a.productName.slice(0, 60)}</div>}
                     </td>
-                    <td style={{ padding: '9px 14px', fontWeight: 700, fontSize: 14 }}>{a.current ? fmtPct(a.current.pct) : '—'}</td>
+                    <td style={{ padding: '9px 14px', fontWeight: 700, fontSize: 14 }}>
+                      {a.current ? fmtPct(a.current.pct) : '—'}
+                      {a.isEstimate && <span title="Сессия кабинета не настроена — это приблизительная оценка без реальной цены на сайте" style={{ marginLeft: 4, fontSize: 11, fontWeight: 400, color: 'var(--text3)' }}>≈</span>}
+                    </td>
                     <td style={{ padding: '9px 14px' }}><ChangeBadge value={a.changes24h} /></td>
                     <td style={{ padding: '9px 14px', color: 'var(--text2)' }}>{fmtPct(a.minPct)} / {fmtPct(a.maxPct)}</td>
                     <td style={{ padding: '9px 14px', color: 'var(--text2)' }}>{a.current ? fmtMoney(a.current.marketingPrice) : '—'}</td>

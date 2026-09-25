@@ -12,27 +12,6 @@ router.get('/cabinets', (req, res) => {
   res.json({ success: true, data: listCabinets() });
 });
 
-// ВРЕМЕННЫЙ диагностический роут — сырой ответ Ozon v5/product/info/prices
-// по одному offer_id, чтобы свериться с реальными названиями полей (найден
-// расхожий с TrueStats расчёт Соинвеста — подозрение на неверный маппинг
-// marketing_price/marketing_seller_price). Убрать после разбора.
-router.get('/debug-prices', async (req, res) => {
-  try {
-    const axios = require('axios');
-    const { sellerHeaders } = require('../collectors/ads/ozonHttp');
-    const cabinet = req.query.cabinet || 'licio';
-    const offerId = req.query.offer_id;
-    if (!offerId) return res.status(400).json({ success: false, error: 'offer_id обязателен' });
-    const headers = sellerHeaders(cabinet);
-    if (!headers) return res.status(400).json({ success: false, error: 'Seller API не настроен' });
-    const { data } = await axios.post('https://api-seller.ozon.ru/v5/product/info/prices',
-      { filter: { offer_id: [offerId], visibility: 'ALL' }, limit: 1 }, { headers, timeout: 20000 });
-    res.json({ success: true, data });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.response?.data || e.message });
-  }
-});
-
 // GET /api/ads/discounts?cabinet=licio&days=30 — Соинвест Ozon (аналог СПП)
 // по артикулам: текущее значение, изменение за последние сутки и история
 // изменений за период (см. collectors/ads/ozonDiscounts.js).
@@ -44,7 +23,7 @@ router.get('/discounts', async (req, res) => {
 
     const rows = await query(
       `SELECT h.offer_id, h.price, h.old_price, h.marketing_price, h.marketing_seller_price,
-              h.ozon_discount_pct, h.collected_at, c.product_name
+              h.marketing_oa_price, h.ozon_discount_pct, h.source, h.collected_at, c.product_name
          FROM product_discount_history h
          LEFT JOIN ad_product_catalog c
            ON c.cabinet = h.cabinet AND c.platform = h.platform AND c.offer_id = h.offer_id
@@ -58,7 +37,8 @@ router.get('/discounts', async (req, res) => {
       byOffer.get(r.offer_id).history.push({
         at: r.collected_at, price: Number(r.price), oldPrice: Number(r.old_price),
         marketingPrice: Number(r.marketing_price), sellerMarketingPrice: Number(r.marketing_seller_price),
-        pct: Number(r.ozon_discount_pct),
+        ozonCardPrice: Number(r.marketing_oa_price), pct: Number(r.ozon_discount_pct),
+        source: r.source,
       });
     }
 
@@ -71,6 +51,7 @@ router.get('/discounts', async (req, res) => {
         offerId: a.offerId,
         productName: a.productName,
         current: last || null,
+        isEstimate: last ? last.source !== 'seller_cabinet' : false,
         changes24h: last && dayAgoPoint ? Math.round((last.pct - dayAgoPoint.pct) * 100) / 100 : 0,
         minPct: pcts.length ? Math.min(...pcts) : 0,
         maxPct: pcts.length ? Math.max(...pcts) : 0,

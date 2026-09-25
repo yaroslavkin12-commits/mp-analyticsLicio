@@ -16,6 +16,11 @@ const CABINETS = {
     ozonApiKey: process.env.OZON_API_KEY || null,
     ozonPerfClientId: process.env.OZON_PERF_CLIENT_ID || null,
     ozonPerfSecret: process.env.OZON_PERF_SECRET || null,
+    // Сессия кабинета seller.ozon.ru (не Seller API!) — нужна только для
+    // получения реальной цены на витрине с учётом Соинвеста Ozon, которую
+    // публичный Seller API не отдаёт (см. collectors/ads/ozonInternalPrices.js).
+    ozonSellerCookie: process.env.OZON_SELLER_COOKIE || null,
+    ozonCompanyId: process.env.OZON_COMPANY_ID || null,
   },
   defly: {
     label: 'Defly',
@@ -23,6 +28,8 @@ const CABINETS = {
     ozonApiKey: process.env.DEFLY_OZON_API_KEY || null,
     ozonPerfClientId: process.env.DEFLY_OZON_PERF_CLIENT_ID || null,
     ozonPerfSecret: process.env.DEFLY_OZON_PERF_SECRET || null,
+    ozonSellerCookie: process.env.DEFLY_OZON_SELLER_COOKIE || null,
+    ozonCompanyId: process.env.DEFLY_OZON_COMPANY_ID || null,
   },
 };
 
@@ -32,6 +39,7 @@ function listCabinets() {
     label: c.label,
     ozonSellerConfigured: !!(c.ozonClientId && c.ozonApiKey),
     ozonPerfConfigured: !!(c.ozonPerfClientId && c.ozonPerfSecret),
+    ozonSessionConfigured: !!(c.ozonSellerCookie && c.ozonCompanyId),
   }));
 }
 

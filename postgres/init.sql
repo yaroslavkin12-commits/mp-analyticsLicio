@@ -403,3 +403,9 @@ CREATE TABLE IF NOT EXISTS product_discount_history (
 );
 CREATE INDEX IF NOT EXISTS idx_prod_discount_hist_offer ON product_discount_history(cabinet, offer_id, collected_at);
 CREATE INDEX IF NOT EXISTS idx_prod_discount_hist_date ON product_discount_history(cabinet, collected_at);
+-- Цена с Ozon Картой (marketing_oa_price) — приходит только из внутреннего
+-- метода кабинета seller.ozon.ru, см. collectors/ads/ozonInternalPrices.js.
+ALTER TABLE product_discount_history ADD COLUMN IF NOT EXISTS marketing_oa_price DECIMAL(12,2) DEFAULT 0;
+-- Признак, что процент реально посчитан из внутреннего API кабинета
+-- (а не оставлен как приблизительный fallback без сессии).
+ALTER TABLE product_discount_history ADD COLUMN IF NOT EXISTS source VARCHAR(16) DEFAULT 'public_api';
