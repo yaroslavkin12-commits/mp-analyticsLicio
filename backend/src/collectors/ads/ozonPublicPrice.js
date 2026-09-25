@@ -35,6 +35,12 @@ function parsePrice(v) {
   return Number(cleaned) || 0;
 }
 
+// Возвращает { ok: true, data } либо { ok: false, reason } — reason нужен
+// только для диагностики (см. fetchPublicPrices), в основной логике не
+// участвует. ВАЖНО: раньше любая ошибка тут молча превращалась в null, и по
+// логам было не отличить "заблокировали антиботом" от "просто нет виджета
+// цены на странице" — при полном провале метода в проде (0 из 0) это не
+// давало понять причину.
 async function fetchOne(productId) {
   try {
     const resp = await axios.get(ENDPOINT, {
@@ -43,16 +49,21 @@ async function fetchOne(productId) {
       headers: { accept: 'application/json', 'user-agent': UA },
       validateStatus: () => true,
     });
-    if (resp.status !== 200 || typeof resp.data !== 'object') return null;
+    if (resp.status !== 200) {
+      return { ok: false, reason: `http_${resp.status}` };
+    }
+    if (typeof resp.data !== 'object') {
+      return { ok: false, reason: 'non_json_response' };
+    }
     const states = resp.data.widgetStates || {};
     const key = Object.keys(states).find(k => k.startsWith('webPrice-'));
-    if (!key) return null;
+    if (!key) return { ok: false, reason: 'no_price_widget' };
     const w = states[key];
     const price = parsePrice(w.price);
-    if (!price) return null;
-    return { item_id: String(productId), marketing_price: price, marketing_oa_price: parsePrice(w.cardPrice) || 0 };
+    if (!price) return { ok: false, reason: 'unparseable_price' };
+    return { ok: true, data: { item_id: String(productId), marketing_price: price, marketing_oa_price: parsePrice(w.cardPrice) || 0 } };
   } catch (e) {
-    return null;
+    return { ok: false, reason: `error_${e.code || e.message || 'unknown'}` };
   }
 }
 
@@ -61,18 +72,20 @@ async function fetchOne(productId) {
 // был бы слишком резкий всплеск нагрузки на публичный API за один прогон.
 async function fetchPublicPrices(productIds) {
   const items = [];
+  const reasonCounts = {};
   let i = 0;
   async function worker() {
     while (i < productIds.length) {
       const id = productIds[i++];
       const r = await fetchOne(id);
-      if (r) items.push(r);
+      if (r.ok) items.push(r.data);
+      else reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1;
       await delay(150);
     }
   }
   const workers = Math.min(CONCURRENCY, productIds.length) || 1;
   await Promise.all(Array.from({ length: workers }, worker));
-  return items;
+  return { items, reasonCounts };
 }
 
 module.exports = { fetchPublicPrices };

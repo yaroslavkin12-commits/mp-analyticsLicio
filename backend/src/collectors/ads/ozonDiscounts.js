@@ -62,7 +62,7 @@ async function collectDiscounts(cabinet) {
   // Реальную цену на витрине (с учётом Соинвеста Ozon) достаём с публичной
   // страницы товара — по одному запросу на product_id (см. ozonPublicPrice.js).
   const productIds = items.map(it => it.product_id).filter(Boolean);
-  const publicPrices = await fetchPublicPrices(productIds);
+  const { items: publicPrices, reasonCounts } = await fetchPublicPrices(productIds);
   const internalByItem = new Map(publicPrices.map(it => [it.item_id, it]));
 
   const prevRows = await query(
@@ -123,7 +123,13 @@ async function collectDiscounts(cabinet) {
     console.log(`[Discounts:${cabinet}] изменений Соинвеста: ${changed.length}`);
     await notifyDiscountChange(cabinet, changed).catch(e => console.warn('[Discounts] telegram:', e.message));
   }
-  console.log(`[Discounts:${cabinet}] проверено ${items.length}, из них с реальной ценой сайта ${withInternal}, записано новых строк ${saved}`);
+  // Диагностика причин отказа публичного API — иначе "0 из N реальных цен" в
+  // проде ничего не говорит о том, блокирует ли антибот, нет ли виджета цены
+  // на странице, или это сетевая ошибка/таймаут.
+  const reasonsStr = Object.entries(reasonCounts || {}).sort((a, b) => b[1] - a[1])
+    .map(([r, n]) => `${r}=${n}`).join(', ');
+  console.log(`[Discounts:${cabinet}] проверено ${items.length}, из них с реальной ценой сайта ${withInternal}, записано новых строк ${saved}` +
+    (reasonsStr ? ` (отказы публичной цены: ${reasonsStr})` : ''));
   return { rows: saved, withInternal };
 }
 
