@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 const NAV_BY_CABINET = {
-  licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['settings','⚙️','Настройки']],
-  defly: [['ads','📣','Реклама']],
+  licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['settings','⚙️','Настройки']],
+  defly: [['ads','📣','Реклама'],['discounts','💸','Соинвест']],
 };
 const CABINETS = [['licio','Licio'],['defly','Defly']];
 

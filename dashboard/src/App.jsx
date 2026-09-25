@@ -3,16 +3,17 @@ import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
 import AdsStats from './pages/AdsStats';
+import Discounts from './pages/Discounts';
 import Settings from './pages/Settings';
 
-const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, settings: Settings };
+const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
-// вкладку "Реклама").
+// вкладку "Реклама"). "Соинвест" — общий Seller API Ozon, доступен обоим.
 const PAGES_BY_CABINET = {
-  licio: ['dashboard', 'stocks', 'settings'],
-  defly: ['ads'],
+  licio: ['dashboard', 'stocks', 'discounts', 'settings'],
+  defly: ['ads', 'discounts'],
 };
 
 const THEME_KEY = 'mp-theme';

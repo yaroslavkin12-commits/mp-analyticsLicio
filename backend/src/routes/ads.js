@@ -12,6 +12,56 @@ router.get('/cabinets', (req, res) => {
   res.json({ success: true, data: listCabinets() });
 });
 
+// GET /api/ads/discounts?cabinet=licio&days=30 — Соинвест Ozon (аналог СПП)
+// по артикулам: текущее значение, изменение за последние сутки и история
+// изменений за период (см. collectors/ads/ozonDiscounts.js).
+router.get('/discounts', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'licio';
+    const days = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 30));
+    const since = dayjs().subtract(days, 'day').toDate();
+
+    const rows = await query(
+      `SELECT h.offer_id, h.price, h.old_price, h.marketing_price, h.marketing_seller_price,
+              h.ozon_discount_pct, h.collected_at, c.product_name
+         FROM product_discount_history h
+         LEFT JOIN ad_product_catalog c
+           ON c.cabinet = h.cabinet AND c.platform = h.platform AND c.offer_id = h.offer_id
+        WHERE h.cabinet = $1 AND h.collected_at >= $2
+        ORDER BY h.offer_id, h.collected_at ASC`,
+      [cabinet, since]);
+
+    const byOffer = new Map();
+    for (const r of rows) {
+      if (!byOffer.has(r.offer_id)) byOffer.set(r.offer_id, { offerId: r.offer_id, productName: r.product_name, history: [] });
+      byOffer.get(r.offer_id).history.push({
+        at: r.collected_at, price: Number(r.price), oldPrice: Number(r.old_price),
+        marketingPrice: Number(r.marketing_price), sellerMarketingPrice: Number(r.marketing_seller_price),
+        pct: Number(r.ozon_discount_pct),
+      });
+    }
+
+    const dayAgo = Date.now() - 24 * 3600 * 1000;
+    const articles = [...byOffer.values()].map(a => {
+      const last = a.history[a.history.length - 1];
+      const dayAgoPoint = [...a.history].reverse().find(h => new Date(h.at).getTime() <= dayAgo) || a.history[0];
+      const pcts = a.history.map(h => h.pct);
+      return {
+        offerId: a.offerId,
+        productName: a.productName,
+        current: last || null,
+        changes24h: last && dayAgoPoint ? Math.round((last.pct - dayAgoPoint.pct) * 100) / 100 : 0,
+        minPct: pcts.length ? Math.min(...pcts) : 0,
+        maxPct: pcts.length ? Math.max(...pcts) : 0,
+        changesCount: a.history.length,
+        history: a.history,
+      };
+    }).sort((x, y) => (y.current?.pct || 0) - (x.current?.pct || 0));
+
+    res.json({ success: true, data: { cabinet, days, articles } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // POST /api/ads/collect?cabinet=defly&days=30 — ручное обновление с кнопки.
 // Ставит в очередь планировщика (collectors/ads/jobs.js) немедленный сбор
 // расхода, кликов, аналитики и остатков за нужный период. Весь сбор теперь

@@ -25,3 +25,4 @@ export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
   api.post('/ads/manual', { cabinet, offerId, date, metric, value });
 export const getAdsOrder  = cabinet => api.get('/ads/order', { params: { cabinet } });
 export const saveAdsOrder = (cabinet, order) => api.post('/ads/order', { cabinet, order });
+export const getDiscounts = (cabinet, days) => api.get('/ads/discounts', { params: { cabinet, days } });

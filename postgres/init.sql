@@ -383,3 +383,23 @@ CREATE TABLE IF NOT EXISTS ad_job_status (
 -- Когда последний раз спрашивали у Ozon список товаров кампании (не чаще
 -- раза в сутки на кампанию).
 ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS sku_checked_at TIMESTAMP;
+
+-- История "Соинвестирования в скидку" Ozon (аналог СПП на WB) по артикулам —
+-- см. collectors/ads/ozonDiscounts.js. Строка пишется только когда процент
+-- Соинвеста реально изменился с прошлой проверки, поэтому это не снепшот на
+-- каждый прогон, а именно история изменений (как у бота TrueStats).
+CREATE TABLE IF NOT EXISTS product_discount_history (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  offer_id VARCHAR(128) NOT NULL,
+  product_id BIGINT,
+  price DECIMAL(12,2) DEFAULT 0,
+  old_price DECIMAL(12,2) DEFAULT 0,
+  marketing_price DECIMAL(12,2) DEFAULT 0,
+  marketing_seller_price DECIMAL(12,2) DEFAULT 0,
+  ozon_discount_pct DECIMAL(6,2) DEFAULT 0,
+  collected_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_prod_discount_hist_offer ON product_discount_history(cabinet, offer_id, collected_at);
+CREATE INDEX IF NOT EXISTS idx_prod_discount_hist_date ON product_discount_history(cabinet, collected_at);

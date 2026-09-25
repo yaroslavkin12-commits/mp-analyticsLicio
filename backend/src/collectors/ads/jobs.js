@@ -6,6 +6,7 @@ const { collectAdStats } = require('./ozonPerf');
 const { collectClicks } = require('./ozonClicks');
 const { collectProductAnalytics } = require('./ozonProductAnalytics');
 const { collectProductStocks } = require('./ozonProductStocks');
+const { collectDiscounts } = require('./ozonDiscounts');
 
 // Планировщик сбора по кабинетам (Defly и т.д.).
 //
@@ -45,6 +46,27 @@ function adsCabinets() {
   return Object.entries(CABINETS)
     .filter(([id, cfg]) => id !== 'licio' && (cfg.ozonClientId || cfg.ozonPerfClientId))
     .map(([id]) => id);
+}
+
+// Соинвест (аналог СПП) — отдельная от остальной рекламной аналитики
+// задача: интересна ОБОИМ кабинетам (у Licio своя старая аналитика/остатки,
+// но Seller API один и тот же), поэтому не ограничиваем adsCabinets().
+const DISCOUNT_JOB = { id: 'discounts', every: 20 * MIN, run: c => collectDiscounts(c) };
+function discountCabinets() {
+  return Object.entries(CABINETS)
+    .filter(([, cfg]) => cfg.ozonClientId && cfg.ozonApiKey)
+    .map(([id]) => id);
+}
+const discBusy = new Set();
+async function tickDiscounts(cabinet) {
+  if (discBusy.has(cabinet)) return;
+  discBusy.add(cabinet);
+  try {
+    const st = await getStatus(cabinet);
+    if (isDue(DISCOUNT_JOB, st.get(DISCOUNT_JOB.id), Date.now())) await runJob(cabinet, DISCOUNT_JOB);
+  } finally {
+    discBusy.delete(cabinet);
+  }
 }
 
 async function getStatus(cabinet) {
@@ -139,7 +161,10 @@ async function tickCabinet(cabinet) {
 }
 
 async function tick() {
-  await Promise.all(adsCabinets().map(c => tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message))));
+  await Promise.all([
+    ...adsCabinets().map(c => tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message))),
+    ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
+  ]);
 }
 
 function requestRefresh(cabinet, days) {
@@ -157,6 +182,7 @@ function startAdsJobs() {
   setTimeout(() => tick().catch(() => {}), 10 * 1000);
   setInterval(() => tick().catch(() => {}), 5 * MIN);
   console.log(`⏰ Сбор кабинетов (${adsCabinets().join(', ') || 'нет'}): проверка каждые 5 мин`);
+  console.log(`⏰ Соинвест/СПП (${discountCabinets().join(', ') || 'нет'}): проверка каждые 5 мин`);
 }
 
-module.exports = { startAdsJobs, requestRefresh, currentJob, getStatus, JOBS, adsCabinets };
+module.exports = { startAdsJobs, requestRefresh, currentJob, getStatus, JOBS, adsCabinets, discountCabinets };
