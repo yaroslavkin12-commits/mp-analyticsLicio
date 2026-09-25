@@ -56,12 +56,28 @@ async function fetchCommonPrices(cabinet, productIds) {
         {
           timeout: 30000,
           headers: {
-            'Content-Type': 'application/json',
+            accept: 'application/json, text/plain, */*',
+            'accept-language': 'ru',
+            'content-type': 'application/json',
             Cookie: sess.cookie,
+            origin: 'https://seller.ozon.ru',
+            referer: 'https://seller.ozon.ru/app/prices/control',
+            'sec-ch-ua': '"Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"macOS"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-origin',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+            'x-o3-app-name': 'seller-ui',
             'x-o3-company-id': String(sess.companyId),
+            'x-o3-language': 'ru',
+            'x-o3-page-type': 'prices',
           },
-          // Ozon отдаёт HTML-страницу логина вместо JSON, когда сессия
-          // протухла — не считаем это транспортной ошибкой.
+          // Ozon отдаёт HTML-страницу логина (или редирект-цепочку) вместо
+          // JSON, когда сессия протухла или запрос не похож на браузерный —
+          // не считаем это транспортной ошибкой, сами решаем по статусу.
+          maxRedirects: 0,
           validateStatus: () => true,
         });
       if (resp.status !== 200 || typeof resp.data !== 'object') {
