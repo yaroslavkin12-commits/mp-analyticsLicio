@@ -25,8 +25,11 @@ export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
   api.post('/ads/manual', { cabinet, offerId, date, metric, value });
 export const getAdsOrder  = cabinet => api.get('/ads/order', { params: { cabinet } });
 export const saveAdsOrder = (cabinet, order) => api.post('/ads/order', { cabinet, order });
-export const getDiscounts = (cabinet, days) => api.get('/ads/discounts', { params: { cabinet, days } });
-export const getDiscountsSummary  = (cabinet, days) => api.get('/ads/discounts/summary', { params: { cabinet, days } });
-export const getDiscountsFeed     = (cabinet, days) => api.get('/ads/discounts/feed', { params: { cabinet, days } });
-export const getDiscountSettings  = cabinet => api.get('/ads/discounts/settings', { params: { cabinet } });
-export const saveDiscountSettings = (cabinet, settings) => api.post('/ads/discounts/settings', { cabinet, ...settings });
+// /api/discounts (не /api/ads/discounts): путь с "/ads/" у части пользователей
+// режется блокировщиками рекламы прямо в браузере (см. комментарий в
+// backend/src/routes/discounts.js), поэтому вынесен на отдельный путь.
+export const getDiscounts = (cabinet, days) => api.get('/discounts', { params: { cabinet, days } });
+export const getDiscountsSummary  = (cabinet, days) => api.get('/discounts/summary', { params: { cabinet, days } });
+export const getDiscountsFeed     = (cabinet, days) => api.get('/discounts/feed', { params: { cabinet, days } });
+export const getDiscountSettings  = cabinet => api.get('/discounts/settings', { params: { cabinet } });
+export const saveDiscountSettings = (cabinet, settings) => api.post('/discounts/settings', { cabinet, ...settings });

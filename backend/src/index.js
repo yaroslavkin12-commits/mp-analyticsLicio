@@ -17,6 +17,7 @@ app.use('/api/settings',  require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));
 
 app.use('/api/ads', require('./routes/ads'));
+app.use('/api/discounts', require('./routes/discounts'));
 
 const distPath = path.join(__dirname, '../../dashboard/dist');
 app.use(express.static(distPath));
