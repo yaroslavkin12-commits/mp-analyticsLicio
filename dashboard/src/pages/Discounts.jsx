@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
+  ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
 } from 'recharts';
 import {
   getDiscounts, getDiscountsSummary, getDiscountsFeed, getDiscountSettings, saveDiscountSettings,
@@ -21,6 +21,12 @@ import {
 
 const DAYS_OPTIONS = [['1', '1 д'], ['7', '7 д'], ['30', '30 д'], ['90', '90 д']];
 const TABS = [['articles', 'Мои артикулы'], ['feed', 'Уведомления'], ['settings', 'Настройки']];
+const SORT_OPTIONS = [
+  ['pct_desc', 'Соинвест ↓'],
+  ['pct_asc', 'Соинвест ↑'],
+  ['change_desc', 'Изменение за 24ч'],
+  ['name_asc', 'По алфавиту'],
+];
 
 function fmtPct(v) { return `${v > 0 ? v.toFixed(1) : '0.0'}%`; }
 function fmtMoney(v) { return `${Math.round(v).toLocaleString('ru-RU')} ₽`; }
@@ -60,6 +66,138 @@ function DaysSwitch({ days, setDays }) {
           background: days === v ? 'var(--accent-oz)' : 'transparent', color: days === v ? '#fff' : 'var(--text2)',
         }}>{l}</button>
       ))}
+    </div>
+  );
+}
+
+// Небольшая цветная точка-легенда под графиком с двумя линиями — как
+// подписи серий в СПП-мониторе TrueStats, без встроенной легенды recharts,
+// чтобы не расходиться со стилем остальной страницы.
+function LegendDot({ color, dashed, label }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--text3)' }}>
+      <span style={{
+        width: 14, height: dashed ? 0 : 8, borderRadius: dashed ? 0 : '50%',
+        borderTop: dashed ? `2px dashed ${color}` : 'none', background: dashed ? 'transparent' : color,
+      }} />
+      {label}
+    </div>
+  );
+}
+
+function PctTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', fontSize: 12 }}>
+      <div style={{ color: 'var(--text2)', marginBottom: 4 }}>{fmtDateTime(label)}</div>
+      <div style={{ fontWeight: 600 }}>{fmtPct(payload[0].value)}</div>
+    </div>
+  );
+}
+
+function PriceTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', fontSize: 12 }}>
+      <div style={{ color: 'var(--text2)', marginBottom: 4 }}>{fmtDateTime(label)}</div>
+      {payload.map(p => (
+        <div key={p.dataKey} style={{ color: p.color }}>{p.name}: {fmtMoney(p.value)}</div>
+      ))}
+    </div>
+  );
+}
+
+// Полная карточка артикула — открывается кликом по строке в таблице, как
+// провал внутрь товара в СПП-мониторе TrueStats: два графика (динамика
+// Соинвеста и динамика цен) плюс та же табличная история под ними.
+function ArticleDetailModal({ article, onClose }) {
+  useEffect(() => {
+    function onKey(e) { if (e.key === 'Escape') onClose(); }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const chartData = article.history.map(h => ({
+    at: h.at, pct: h.pct, price: h.price, marketingPrice: h.marketingPrice, ozonCardPrice: h.ozonCardPrice || null,
+  }));
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', overflowY: 'auto',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14,
+          width: '100%', maxWidth: 760, padding: 22,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 4 }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 700 }}>{article.offerId}</div>
+            {article.productName && <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{article.productName}</div>}
+          </div>
+          <button onClick={onClose} style={{
+            border: 'none', background: 'var(--surface2)', color: 'var(--text2)', borderRadius: 8,
+            width: 28, height: 28, fontSize: 14, cursor: 'pointer', flexShrink: 0,
+          }}>✕</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 18, margin: '14px 0', flexWrap: 'wrap' }}>
+          {[
+            ['Текущий Соинвест', article.current ? fmtPct(article.current.pct) : '—'],
+            ['Мин / Макс за период', `${fmtPct(article.minPct)} / ${fmtPct(article.maxPct)}`],
+            ['Цена покупателя', article.current ? fmtMoney(article.current.marketingPrice) : '—'],
+            ['Изменений за период', article.changesCount],
+          ].map(([l, v]) => (
+            <div key={l}>
+              <div style={{ fontSize: 11, color: 'var(--text3)' }}>{l}</div>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+
+        {chartData.length > 1 && (
+          <>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', margin: '16px 0 6px' }}>Динамика Соинвеста</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="at" tickFormatter={d => new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+                  stroke="var(--text3)" fontSize={11} tickLine={false} axisLine={{ stroke: 'var(--border)' }} minTickGap={30} />
+                <YAxis stroke="var(--text3)" fontSize={11} tickLine={false} axisLine={false} width={40}
+                  tickFormatter={v => `${v}%`} domain={['dataMin - 2', 'dataMax + 2']} />
+                <Tooltip content={<PctTooltip />} />
+                <Line type="stepAfter" dataKey="pct" stroke="var(--accent-oz)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', margin: '18px 0 6px' }}>Динамика цен</div>
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="at" tickFormatter={d => new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+                  stroke="var(--text3)" fontSize={11} tickLine={false} axisLine={{ stroke: 'var(--border)' }} minTickGap={30} />
+                <YAxis stroke="var(--text3)" fontSize={11} tickLine={false} axisLine={false} width={56}
+                  tickFormatter={v => `${Math.round(v / 1000)}k`} domain={['dataMin - 100', 'dataMax + 100']} />
+                <Tooltip content={<PriceTooltip />} />
+                <Line type="stepAfter" dataKey="price" name="Цена продавца" stroke="var(--text3)" strokeWidth={2} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                <Line type="stepAfter" dataKey="marketingPrice" name="Цена на витрине" stroke="var(--accent-oz)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+            <div style={{ display: 'flex', gap: 16, marginTop: 6 }}>
+              <LegendDot color="var(--text3)" dashed label="Цена продавца" />
+              <LegendDot color="var(--accent-oz)" label="Цена на витрине" />
+            </div>
+          </>
+        )}
+
+        <ArticleHistory history={article.history} />
+      </div>
     </div>
   );
 }
@@ -123,8 +261,13 @@ function ArticlesTab({ cabinet, days, setDays }) {
   const [loading, setLoading] = useState(true);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [expanded, setExpanded] = useState(null);
+  const [detail, setDetail] = useState(null);
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('pct_desc');
+  const [minPct, setMinPct] = useState('');
+  const [maxPct, setMaxPct] = useState('');
+  const [hideEstimates, setHideEstimates] = useState(false);
+  const [onlyChanged, setOnlyChanged] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true); setSummaryLoading(true);
@@ -138,13 +281,26 @@ function ArticlesTab({ cabinet, days, setDays }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const articles = (data?.articles || []).filter(a =>
-    !search || a.offerId.toLowerCase().includes(search.toLowerCase()) ||
-    (a.productName || '').toLowerCase().includes(search.toLowerCase()));
+  const min = minPct !== '' ? Number(minPct) : null;
+  const max = maxPct !== '' ? Number(maxPct) : null;
+
+  const articles = (data?.articles || [])
+    .filter(a => !search || a.offerId.toLowerCase().includes(search.toLowerCase()) ||
+      (a.productName || '').toLowerCase().includes(search.toLowerCase()))
+    .filter(a => min === null || (a.current && a.current.pct >= min))
+    .filter(a => max === null || (a.current && a.current.pct <= max))
+    .filter(a => !hideEstimates || !a.isEstimate)
+    .filter(a => !onlyChanged || a.changes24h !== 0)
+    .sort((a, b) => {
+      if (sortBy === 'pct_asc') return (a.current?.pct || 0) - (b.current?.pct || 0);
+      if (sortBy === 'change_desc') return Math.abs(b.changes24h || 0) - Math.abs(a.changes24h || 0);
+      if (sortBy === 'name_asc') return a.offerId.localeCompare(b.offerId);
+      return (b.current?.pct || 0) - (a.current?.pct || 0); // pct_desc (по умолчанию)
+    });
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
         <DaysSwitch days={days} setDays={setDays} />
         <input
           value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск по артикулу…"
@@ -153,6 +309,43 @@ function ArticlesTab({ cabinet, days, setDays }) {
         />
         <button onClick={load} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)',
           background: 'var(--surface2)', color: 'var(--text2)', fontSize: 12.5 }}>Обновить</button>
+      </div>
+
+      {/* Фильтры по образцу СПП-монитора TrueStats: диапазон Соинвеста,
+          сортировка, скрыть оценки без реальной цены, только с изменениями. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap', fontSize: 12.5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text2)' }}>
+          <span>Соинвест от</span>
+          <input type="number" min={0} max={100} value={minPct} onChange={e => setMinPct(e.target.value)} placeholder="0"
+            style={{ width: 56, padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5 }} />
+          <span>до</span>
+          <input type="number" min={0} max={100} value={maxPct} onChange={e => setMaxPct(e.target.value)} placeholder="100"
+            style={{ width: 56, padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5 }} />
+          <span>%</span>
+        </div>
+
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{
+          padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5,
+        }}>
+          {SORT_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text2)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={hideEstimates} onChange={e => setHideEstimates(e.target.checked)} />
+          Только с реальной ценой сайта
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text2)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={onlyChanged} onChange={e => setOnlyChanged(e.target.checked)} />
+          Только с изменениями за 24ч
+        </label>
+
+        {(minPct !== '' || maxPct !== '' || hideEstimates || onlyChanged || search) && (
+          <button onClick={() => { setMinPct(''); setMaxPct(''); setHideEstimates(false); setOnlyChanged(false); setSearch(''); }}
+            style={{ border: 'none', background: 'transparent', color: 'var(--text3)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
+            Сбросить фильтры
+          </button>
+        )}
       </div>
 
       {/* Сводные метрики + график средней скидки по дням — как в СПП-мониторе TrueStats */}
@@ -200,32 +393,24 @@ function ArticlesTab({ cabinet, days, setDays }) {
             </thead>
             <tbody>
               {articles.map(a => (
-                <React.Fragment key={a.offerId}>
-                  <tr
-                    onClick={() => setExpanded(e => e === a.offerId ? null : a.offerId)}
-                    style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}
-                  >
-                    <td style={{ padding: '9px 14px' }}>
-                      <div style={{ fontWeight: 600 }}>{a.offerId}</div>
-                      {a.productName && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{a.productName.slice(0, 60)}</div>}
-                    </td>
-                    <td style={{ padding: '9px 14px', fontWeight: 700, fontSize: 14 }}>
-                      {a.current ? fmtPct(a.current.pct) : '—'}
-                      {a.isEstimate && <span title="Не удалось получить цену с публичной страницы товара — это приблизительная оценка без реальной цены на сайте" style={{ marginLeft: 4, fontSize: 11, fontWeight: 400, color: 'var(--text3)' }}>≈</span>}
-                    </td>
-                    <td style={{ padding: '9px 14px' }}><ChangeBadge value={a.changes24h} /></td>
-                    <td style={{ padding: '9px 14px', color: 'var(--text2)' }}>{fmtPct(a.minPct)} / {fmtPct(a.maxPct)}</td>
-                    <td style={{ padding: '9px 14px', color: 'var(--text2)' }}>{a.current ? fmtMoney(a.current.marketingPrice) : '—'}</td>
-                    <td style={{ padding: '9px 14px', color: 'var(--text3)' }}>{a.changesCount}</td>
-                  </tr>
-                  {expanded === a.offerId && (
-                    <tr>
-                      <td colSpan={6} style={{ padding: '0 14px 12px' }}>
-                        <ArticleHistory history={a.history} />
-                      </td>
-                    </tr>
-                  )}
-                </React.Fragment>
+                <tr
+                  key={a.offerId}
+                  onClick={() => setDetail(a)}
+                  style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}
+                >
+                  <td style={{ padding: '9px 14px' }}>
+                    <div style={{ fontWeight: 600 }}>{a.offerId}</div>
+                    {a.productName && <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>{a.productName.slice(0, 60)}</div>}
+                  </td>
+                  <td style={{ padding: '9px 14px', fontWeight: 700, fontSize: 14 }}>
+                    {a.current ? fmtPct(a.current.pct) : '—'}
+                    {a.isEstimate && <span title="Не удалось получить цену с публичной страницы товара — это приблизительная оценка без реальной цены на сайте" style={{ marginLeft: 4, fontSize: 11, fontWeight: 400, color: 'var(--text3)' }}>≈</span>}
+                  </td>
+                  <td style={{ padding: '9px 14px' }}><ChangeBadge value={a.changes24h} /></td>
+                  <td style={{ padding: '9px 14px', color: 'var(--text2)' }}>{fmtPct(a.minPct)} / {fmtPct(a.maxPct)}</td>
+                  <td style={{ padding: '9px 14px', color: 'var(--text2)' }}>{a.current ? fmtMoney(a.current.marketingPrice) : '—'}</td>
+                  <td style={{ padding: '9px 14px', color: 'var(--text3)' }}>{a.changesCount}</td>
+                </tr>
               ))}
               {!articles.length && (
                 <tr><td colSpan={6} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>
@@ -236,6 +421,8 @@ function ArticlesTab({ cabinet, days, setDays }) {
           </table>
         </div>
       )}
+
+      {detail && <ArticleDetailModal article={detail} onClose={() => setDetail(null)} />}
     </div>
   );
 }
