@@ -1,8 +1,8 @@
 const axios = require('axios');
 const { query } = require('../../db');
 const { delay, sellerHeaders, request, bulkInsert } = require('./ozonHttp');
-const { fetchCommonPrices } = require('./ozonInternalPrices');
-const { notifyDiscountChange, notifySessionExpired, THRESHOLD } = require('../../telegram');
+const { fetchPublicPrices } = require('./ozonPublicPrice');
+const { notifyDiscountChange, THRESHOLD } = require('../../telegram');
 
 // Слежение за "Соинвестированием в скидку" на Ozon — это тот же механизм,
 // что и СПП (скидка постоянного покупателя) на Wildberries: маркетплейс сам
@@ -14,13 +14,15 @@ const { notifyDiscountChange, notifySessionExpired, THRESHOLD } = require('../..
 // (v5/product/info/prices) НЕ отдаёт цену на витрине с учётом Соинвеста —
 // поле marketing_price там попросту отсутствует, только цена продавца
 // (price/old_price/marketing_seller_price). Поэтому:
-//   1) публичный API даёт список товаров и offer_id → product_id;
-//   2) реальная цена на сайте (обычная и с Ozon Картой) берётся из
-//      внутреннего метода самого кабинета seller.ozon.ru — см.
-//      collectors/ads/ozonInternalPrices.js. Он требует cookie сессии
-//      кабинета (OZON_SELLER_COOKIE/OZON_COMPANY_ID в env), без неё
-//      Соинвест посчитать не из чего — сборщик тогда только обновляет
-//      каталог цен продавца и не трогает историю Соинвеста.
+//   1) публичный Seller API (Client-Id/Api-Key) даёт список товаров и
+//      offer_id → product_id — это данные продавца, авторизация обычная;
+//   2) реальная цена на сайте (обычная и с банковской картой) берётся с
+//      ПУБЛИЧНОЙ страницы товара на ozon.ru — см. ozonPublicPrice.js. Она
+//      анонимна (доступна и незалогиненным покупателям), поэтому не требует
+//      ни cookie кабинета, ни company_id — только сам product_id. Раньше
+//      использовался внутренний метод кабинета продавца с cookie сессии
+//      браузера, но антибот-защита Ozon блокирует такие запросы с серверных
+//      IP даже с валидной свежей cookie.
 //
 // История здесь ведётся "по изменениям": новая строка пишется только тогда,
 // когда процент Соинвеста реально сдвинулся с прошлого раза — иначе таблица
@@ -57,15 +59,11 @@ async function collectDiscounts(cabinet) {
 
   const items = await fetchAllPrices(headers);
 
-  // Реальную цену на витрине (с учётом Соинвеста Ozon) достаём отдельным
-  // запросом к внутреннему API кабинета — по всем product_id разом.
+  // Реальную цену на витрине (с учётом Соинвеста Ozon) достаём с публичной
+  // страницы товара — по одному запросу на product_id (см. ozonPublicPrice.js).
   const productIds = items.map(it => it.product_id).filter(Boolean);
-  const internal = await fetchCommonPrices(cabinet, productIds);
-  if (internal.sessionExpired) {
-    await notifySessionExpired(cabinet).catch(e => console.warn('[Discounts] telegram:', e.message));
-  }
-  const internalByItem = new Map((internal.items || []).map(it => [String(it.item_id), it]));
-  const haveSession = !internal.sessionMissing;
+  const publicPrices = await fetchPublicPrices(productIds);
+  const internalByItem = new Map(publicPrices.map(it => [it.item_id, it]));
 
   const prevRows = await query(
     `SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct, source
@@ -90,11 +88,11 @@ async function collectDiscounts(cabinet) {
     const inner = item.product_id ? internalByItem.get(String(item.product_id)) : null;
     let sitePrice = sellerPrice;
     let oaPrice = 0;
-    let source = 'public_api'; // без сессии кабинета — это лишь приближение (=цена продавца, Соинвест не виден)
+    let source = 'public_api'; // без публичной цены — это лишь приближение (=цена продавца, Соинвест не виден)
     if (inner) {
       sitePrice = Number(inner.marketing_price) || sellerPrice;
       oaPrice = Number(inner.marketing_oa_price) || 0;
-      source = 'seller_cabinet';
+      source = 'public_page';
       withInternal++;
     }
     const pct = Math.round(discountPct(sellerPrice, sitePrice) * 100) / 100;
@@ -110,7 +108,7 @@ async function collectDiscounts(cabinet) {
       // Алертим только если оба значения посчитаны из реального Соинвеста
       // (внутренний API) — иначе на "включении" интеграции придёт лавина
       // ложных "изменений" просто из-за смены источника расчёта.
-      if (prevPct !== null && prevSource === 'seller_cabinet' && source === 'seller_cabinet'
+      if (prevPct !== null && prevSource === 'public_page' && source === 'public_page'
           && Math.abs(prevPct - pct) >= THRESHOLD) {
         changed.push({ offerId, prevPct, pct, marketingPrice: sitePrice, price });
       }
@@ -125,7 +123,7 @@ async function collectDiscounts(cabinet) {
     console.log(`[Discounts:${cabinet}] изменений Соинвеста: ${changed.length}`);
     await notifyDiscountChange(cabinet, changed).catch(e => console.warn('[Discounts] telegram:', e.message));
   }
-  console.log(`[Discounts:${cabinet}] проверено ${items.length}, из них с реальной ценой сайта ${withInternal}${haveSession ? '' : ' (сессия кабинета не настроена)'}, записано новых строк ${saved}`);
+  console.log(`[Discounts:${cabinet}] проверено ${items.length}, из них с реальной ценой сайта ${withInternal}, записано новых строк ${saved}`);
   return { rows: saved, withInternal };
 }
 

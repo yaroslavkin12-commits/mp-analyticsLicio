@@ -82,7 +82,7 @@ function ArticleHistory({ history }) {
         <tbody>
           {last20.map((h, i) => (
             <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-              <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtDateTime(h.at)}{h.source && h.source !== 'seller_cabinet' ? ' *' : ''}</td>
+              <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtDateTime(h.at)}{h.source && h.source !== 'public_page' ? ' *' : ''}</td>
               <td style={{ padding: '4px 8px', fontWeight: 600 }}>{fmtPct(h.pct)}</td>
               <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtMoney(h.price)}</td>
               <td style={{ padding: '4px 8px', color: 'var(--text2)' }}>{fmtMoney(h.marketingPrice)}</td>
@@ -179,7 +179,7 @@ function ArticlesTab({ cabinet, days, setDays }) {
         Соинвест — доля скидки, которую Ozon покрывает сам за счёт своей комиссии (аналог СПП на Wildberries).
         Разница между ценой продавца и ценой на витрине для покупателя. Показаны только реальные изменения
         процента — таблица обновляется примерно раз в 20 минут; при резком сдвиге приходит уведомление в Telegram.
-        Значок «≈» — сессия кабинета не настроена, показана приблизительная оценка без реальной цены на сайте.
+        Значок «≈» — не удалось получить цену с публичной страницы товара, показана приблизительная оценка без реальной цены на сайте.
       </div>
 
       {loading && !data && <div style={{ color: 'var(--text3)' }}>Загрузка…</div>}
@@ -211,7 +211,7 @@ function ArticlesTab({ cabinet, days, setDays }) {
                     </td>
                     <td style={{ padding: '9px 14px', fontWeight: 700, fontSize: 14 }}>
                       {a.current ? fmtPct(a.current.pct) : '—'}
-                      {a.isEstimate && <span title="Сессия кабинета не настроена — это приблизительная оценка без реальной цены на сайте" style={{ marginLeft: 4, fontSize: 11, fontWeight: 400, color: 'var(--text3)' }}>≈</span>}
+                      {a.isEstimate && <span title="Не удалось получить цену с публичной страницы товара — это приблизительная оценка без реальной цены на сайте" style={{ marginLeft: 4, fontSize: 11, fontWeight: 400, color: 'var(--text3)' }}>≈</span>}
                     </td>
                     <td style={{ padding: '9px 14px' }}><ChangeBadge value={a.changes24h} /></td>
                     <td style={{ padding: '9px 14px', color: 'var(--text2)' }}>{fmtPct(a.minPct)} / {fmtPct(a.maxPct)}</td>

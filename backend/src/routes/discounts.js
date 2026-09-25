@@ -47,7 +47,7 @@ router.get('/', async (req, res) => {
         offerId: a.offerId,
         productName: a.productName,
         current: last || null,
-        isEstimate: last ? last.source !== 'seller_cabinet' : false,
+        isEstimate: last ? last.source !== 'public_page' : false,
         changes24h: last && dayAgoPoint ? Math.round((last.pct - dayAgoPoint.pct) * 100) / 100 : 0,
         minPct: pcts.length ? Math.min(...pcts) : 0,
         maxPct: pcts.length ? Math.max(...pcts) : 0,

@@ -54,19 +54,6 @@ async function notifyDiscountChange(cabinet, changed) {
   await sendMessage(text);
 }
 
-// Разово предупреждаем, что сессия кабинета (cookie) протухла и Соинвест
-// больше не считается по реальной цене — раз в час максимум на кабинет,
-// чтобы не заспамить чат при каждом прогоне сборщика (каждые 20 минут).
-const sessionAlertSentAt = new Map();
-async function notifySessionExpired(cabinet) {
-  if (!TOKEN || !CHAT_ID) return;
-  const last = sessionAlertSentAt.get(cabinet) || 0;
-  if (Date.now() - last < 60 * 60 * 1000) return;
-  sessionAlertSentAt.set(cabinet, Date.now());
-  const label = getCabinet(cabinet).label;
-  await sendMessage(`⚠️ <b>${label}: сессия кабинета Ozon протухла</b>\n\nСоинвест считается неточно (без реальной цены на сайте). Нужно обновить cookie кабинета (OZON_SELLER_COOKIE) в Render.`);
-}
-
 // Ежедневный дайджест — топ-3 изменения Соинвеста за последние сутки одним
 // сообщением, в заданное в настройках время (аналог дайджеста TrueStats).
 // Вызывается из планировщика (jobs.js), который сам следит, чтобы за день
@@ -116,4 +103,4 @@ async function sendDiscountDigest(cabinet) {
   return true;
 }
 
-module.exports = { sendMessage, notifyDiscountChange, notifySessionExpired, sendDiscountDigest, THRESHOLD };
+module.exports = { sendMessage, notifyDiscountChange, sendDiscountDigest, THRESHOLD };
