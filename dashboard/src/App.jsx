@@ -4,16 +4,18 @@ import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
 import AdsStats from './pages/AdsStats';
 import Discounts from './pages/Discounts';
+import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
 
-const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, settings: Settings };
+const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
 // вкладку "Реклама"). "Соинвест" — общий Seller API Ozon, доступен обоим.
+// "Калькулятор" — чистый клиентский инструмент, не завязан на кабинет.
 const PAGES_BY_CABINET = {
-  licio: ['dashboard', 'stocks', 'discounts', 'settings'],
-  defly: ['ads', 'discounts'],
+  licio: ['dashboard', 'stocks', 'discounts', 'calculator', 'settings'],
+  defly: ['ads', 'discounts', 'calculator'],
 };
 
 const THEME_KEY = 'mp-theme';

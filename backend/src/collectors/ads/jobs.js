@@ -7,6 +7,13 @@ const { collectClicks } = require('./ozonClicks');
 const { collectProductAnalytics } = require('./ozonProductAnalytics');
 const { collectProductStocks } = require('./ozonProductStocks');
 const { collectDiscounts } = require('./ozonDiscounts');
+const { getSettings } = require('./discountSettings');
+const { sendDiscountDigest } = require('../../telegram');
+const dayjs = require('dayjs');
+const dayjsUtc = require('dayjs/plugin/utc');
+const dayjsTz = require('dayjs/plugin/timezone');
+dayjs.extend(dayjsUtc);
+dayjs.extend(dayjsTz);
 
 // Планировщик сбора по кабинетам (Defly и т.д.).
 //
@@ -66,6 +73,34 @@ async function tickDiscounts(cabinet) {
     if (isDue(DISCOUNT_JOB, st.get(DISCOUNT_JOB.id), Date.now())) await runJob(cabinet, DISCOUNT_JOB);
   } finally {
     discBusy.delete(cabinet);
+  }
+}
+
+// Дайджест Соинвеста — раз в сутки, в момент времени из настроек кабинета
+// (вкладка "Настройки" в СПП-мониторе). Проверяем на каждом тике (каждые
+// 5 минут): если текущее локальное время кабинета попало в 5-минутное окно
+// вокруг digestTime и сегодня ещё не отправляли — шлём.
+const digestBusy = new Set();
+async function tickDigest(cabinet) {
+  if (digestBusy.has(cabinet)) return;
+  digestBusy.add(cabinet);
+  try {
+    const settings = await getSettings(cabinet);
+    if (!settings.digestEnabled) return;
+    const tz = settings.timezone || 'Europe/Moscow';
+    const now = dayjs().tz(tz);
+    const [dh, dm] = (settings.digestTime || '09:00').split(':').map(Number);
+    const target = now.hour(dh).minute(dm).second(0);
+    if (Math.abs(now.diff(target, 'minute')) > 5) return;
+
+    const st = await getStatus(cabinet);
+    const last = st.get('discount_digest')?.last_success_at;
+    if (last && dayjs(last).tz(tz).format('YYYY-MM-DD') === now.format('YYYY-MM-DD')) return;
+
+    const sent = await sendDiscountDigest(cabinet).catch(e => { console.warn('[Digest] telegram:', e.message); return false; });
+    if (sent) await mark(cabinet, 'discount_digest', { last_success_at: new Date() });
+  } finally {
+    digestBusy.delete(cabinet);
   }
 }
 
@@ -164,6 +199,7 @@ async function tick() {
   await Promise.all([
     ...adsCabinets().map(c => tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message))),
     ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
+    ...discountCabinets().map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
   ]);
 }
 

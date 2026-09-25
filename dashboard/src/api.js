@@ -26,3 +26,7 @@ export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
 export const getAdsOrder  = cabinet => api.get('/ads/order', { params: { cabinet } });
 export const saveAdsOrder = (cabinet, order) => api.post('/ads/order', { cabinet, order });
 export const getDiscounts = (cabinet, days) => api.get('/ads/discounts', { params: { cabinet, days } });
+export const getDiscountsSummary  = (cabinet, days) => api.get('/ads/discounts/summary', { params: { cabinet, days } });
+export const getDiscountsFeed     = (cabinet, days) => api.get('/ads/discounts/feed', { params: { cabinet, days } });
+export const getDiscountSettings  = cabinet => api.get('/ads/discounts/settings', { params: { cabinet } });
+export const saveDiscountSettings = (cabinet, settings) => api.post('/ads/discounts/settings', { cabinet, ...settings });
