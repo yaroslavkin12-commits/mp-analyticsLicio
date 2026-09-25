@@ -70,7 +70,7 @@ async function collectDiscounts(cabinet) {
     // чтобы понять правильное имя поля.
     console.warn(`[Discounts:${cabinet}] ни у одного из ${items.length} товаров нет product_id — пример полей: ${Object.keys(items[0]).join(', ')}`);
   }
-  const { items: publicPrices, reasonCounts } = await fetchPublicPrices(productIds);
+  const { items: publicPrices, reasonCounts, reasonSamples } = await fetchPublicPrices(productIds);
   const internalByItem = new Map(publicPrices.map(it => [it.item_id, it]));
 
   const prevRows = await query(
@@ -138,6 +138,9 @@ async function collectDiscounts(cabinet) {
     .map(([r, n]) => `${r}=${n}`).join(', ');
   console.log(`[Discounts:${cabinet}] проверено ${items.length} (с product_id: ${productIds.length}), из них с реальной ценой сайта ${withInternal}, записано новых строк ${saved}` +
     (reasonsStr ? ` (отказы публичной цены: ${reasonsStr})` : ''));
+  for (const [reason, sample] of Object.entries(reasonSamples || {})) {
+    console.log(`[Discounts:${cabinet}] образец причины "${reason}": ${sample}`);
+  }
   return { rows: saved, withInternal };
 }
 

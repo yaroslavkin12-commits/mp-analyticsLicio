@@ -8,11 +8,17 @@ const { delay } = require('./ozonHttp');
 // кабинета продавца — get-common-prices с cookie авторизованной сессии
 // браузера (см. историю ozonInternalPrices.js). Отказались от него: даже со
 // свежей валидной cookie антибот-защита Ozon блокирует запросы с серверных
-// (датацентровых) IP — редиректит на логин или просто держит соединение до
-// таймаута, не давая ответа. Публичная же страница товара, наоборот,
-// обязана открываться анонимно (её видят и незалогиненные покупатели, и
-// поисковые боты), поэтому не проверяет ни cookie, ни company_id — только
-// product_id.
+// (датацентровых) IP.
+//
+// ВАЖНО (диагностика от 25.09): и "публичная" страница товара с IP Render
+// блокируется тем же антиботом — часть запросов зацикливается на редиректах
+// (ERR_FR_TOO_MANY_REDIRECTS), часть виснет без ответа до таймаута
+// (ECONNABORTED). Т.е. дело не в том, что мы стучимся не туда, а в том, что
+// антибот Ozon распознаёт сам факт запроса с датацентрового IP (Render,
+// AWS и т.п.), а не конкретный путь/авторизацию. Ниже — попытки обойтись
+// более "браузерными" запросами (полный набор заголовков, отключенные
+// авторедиректы с логированием реальной Location, HTTP keep-alive агент,
+// меньше параллельности) прежде чем переходить на платный residential-прокси.
 //
 //   GET https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url=/product/<product_id>/
 //   → widgetStates["webPrice-...-default-1"] = {
@@ -22,12 +28,35 @@ const { delay } = require('./ozonHttp');
 //
 // Разница между ценой продавца (marketing_seller_price из официального
 // Seller API) и этой витринной ценой — и есть размер Соинвеста.
-// Так же, судя по всему, устроен и мониторинг СПП/Соинвеста в TrueStats.
+
+const http = require('http');
+const https = require('https');
 
 const ENDPOINT = 'https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2';
-const CONCURRENCY = 6;
-const TIMEOUT = 15000;
-const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
+const CONCURRENCY = 2; // антибот может реагировать и на частоту — снижено с 6
+const TIMEOUT = 12000;
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+
+// keep-alive агент — обычный браузер не открывает новое TCP-соединение на
+// каждый запрос, а датацентровые антиботы иногда как раз смотрят на этот
+// паттерн (короткоживущие соединения пачками).
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: CONCURRENCY });
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: CONCURRENCY });
+
+const BROWSER_HEADERS = {
+  accept: 'application/json, text/plain, */*',
+  'accept-language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+  'accept-encoding': 'gzip, deflate, br',
+  'user-agent': UA,
+  'sec-ch-ua': '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'sec-fetch-dest': 'empty',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-site': 'same-origin',
+  referer: 'https://www.ozon.ru/',
+  origin: 'https://www.ozon.ru',
+};
 
 function parsePrice(v) {
   if (v == null) return 0;
@@ -35,25 +64,28 @@ function parsePrice(v) {
   return Number(cleaned) || 0;
 }
 
-// Возвращает { ok: true, data } либо { ok: false, reason } — reason нужен
-// только для диагностики (см. fetchPublicPrices), в основной логике не
-// участвует. ВАЖНО: раньше любая ошибка тут молча превращалась в null, и по
-// логам было не отличить "заблокировали антиботом" от "просто нет виджета
-// цены на странице" — при полном провале метода в проде (0 из 0) это не
-// давало понять причину.
+// Возвращает { ok: true, data } либо { ok: false, reason, detail } — detail
+// нужен только для диагностики (см. fetchPublicPrices: первый образец на
+// каждую причину логируется отдельно), в основной логике не участвует.
 async function fetchOne(productId) {
   try {
     const resp = await axios.get(ENDPOINT, {
       params: { url: `/product/${productId}/` },
       timeout: TIMEOUT,
-      headers: { accept: 'application/json', 'user-agent': UA },
+      headers: BROWSER_HEADERS,
+      httpsAgent, httpAgent,
+      maxRedirects: 0, // сами смотрим, куда редиректит — вместо того чтобы зацикливаться
       validateStatus: () => true,
     });
+    if (resp.status >= 300 && resp.status < 400) {
+      return { ok: false, reason: `redirect_${resp.status}`, detail: resp.headers?.location || '(нет Location)' };
+    }
     if (resp.status !== 200) {
-      return { ok: false, reason: `http_${resp.status}` };
+      const snippet = typeof resp.data === 'string' ? resp.data.slice(0, 200) : JSON.stringify(resp.data).slice(0, 200);
+      return { ok: false, reason: `http_${resp.status}`, detail: snippet };
     }
     if (typeof resp.data !== 'object') {
-      return { ok: false, reason: 'non_json_response' };
+      return { ok: false, reason: 'non_json_response', detail: String(resp.data).slice(0, 200) };
     }
     const states = resp.data.widgetStates || {};
     const key = Object.keys(states).find(k => k.startsWith('webPrice-'));
@@ -73,19 +105,24 @@ async function fetchOne(productId) {
 async function fetchPublicPrices(productIds) {
   const items = [];
   const reasonCounts = {};
+  const reasonSamples = {};
   let i = 0;
   async function worker() {
     while (i < productIds.length) {
       const id = productIds[i++];
       const r = await fetchOne(id);
-      if (r.ok) items.push(r.data);
-      else reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1;
-      await delay(150);
+      if (r.ok) {
+        items.push(r.data);
+      } else {
+        reasonCounts[r.reason] = (reasonCounts[r.reason] || 0) + 1;
+        if (r.detail && !reasonSamples[r.reason]) reasonSamples[r.reason] = r.detail;
+      }
+      await delay(250 + Math.floor(Math.random() * 200)); // джиттер вместо ровного интервала
     }
   }
   const workers = Math.min(CONCURRENCY, productIds.length) || 1;
   await Promise.all(Array.from({ length: workers }, worker));
-  return { items, reasonCounts };
+  return { items, reasonCounts, reasonSamples };
 }
 
 module.exports = { fetchPublicPrices };
