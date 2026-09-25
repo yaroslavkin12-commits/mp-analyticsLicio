@@ -12,6 +12,27 @@ router.get('/cabinets', (req, res) => {
   res.json({ success: true, data: listCabinets() });
 });
 
+// ВРЕМЕННЫЙ диагностический роут — сырой ответ Ozon v5/product/info/prices
+// по одному offer_id, чтобы свериться с реальными названиями полей (найден
+// расхожий с TrueStats расчёт Соинвеста — подозрение на неверный маппинг
+// marketing_price/marketing_seller_price). Убрать после разбора.
+router.get('/debug-prices', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const { sellerHeaders } = require('../collectors/ads/ozonHttp');
+    const cabinet = req.query.cabinet || 'licio';
+    const offerId = req.query.offer_id;
+    if (!offerId) return res.status(400).json({ success: false, error: 'offer_id обязателен' });
+    const headers = sellerHeaders(cabinet);
+    if (!headers) return res.status(400).json({ success: false, error: 'Seller API не настроен' });
+    const { data } = await axios.post('https://api-seller.ozon.ru/v5/product/info/prices',
+      { filter: { offer_id: [offerId], visibility: 'ALL' }, limit: 1 }, { headers, timeout: 20000 });
+    res.json({ success: true, data });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.response?.data || e.message });
+  }
+});
+
 // GET /api/ads/discounts?cabinet=licio&days=30 — Соинвест Ozon (аналог СПП)
 // по артикулам: текущее значение, изменение за последние сутки и история
 // изменений за период (см. collectors/ads/ozonDiscounts.js).
