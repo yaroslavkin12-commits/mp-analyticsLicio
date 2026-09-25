@@ -62,6 +62,14 @@ async function collectDiscounts(cabinet) {
   // Реальную цену на витрине (с учётом Соинвеста Ozon) достаём с публичной
   // страницы товара — по одному запросу на product_id (см. ozonPublicPrice.js).
   const productIds = items.map(it => it.product_id).filter(Boolean);
+  if (items.length && productIds.length === 0) {
+    // Раньше это молча приводило к withInternal=0 без единой причины отказа в
+    // логах (fetchPublicPrices просто нечего было перебирать) — похоже,
+    // именно это, а не антибот, все эти сборки и было настоящей причиной
+    // отсутствия реальных цен. Печатаем реальную форму первого элемента,
+    // чтобы понять правильное имя поля.
+    console.warn(`[Discounts:${cabinet}] ни у одного из ${items.length} товаров нет product_id — пример полей: ${Object.keys(items[0]).join(', ')}`);
+  }
   const { items: publicPrices, reasonCounts } = await fetchPublicPrices(productIds);
   const internalByItem = new Map(publicPrices.map(it => [it.item_id, it]));
 
@@ -128,7 +136,7 @@ async function collectDiscounts(cabinet) {
   // на странице, или это сетевая ошибка/таймаут.
   const reasonsStr = Object.entries(reasonCounts || {}).sort((a, b) => b[1] - a[1])
     .map(([r, n]) => `${r}=${n}`).join(', ');
-  console.log(`[Discounts:${cabinet}] проверено ${items.length}, из них с реальной ценой сайта ${withInternal}, записано новых строк ${saved}` +
+  console.log(`[Discounts:${cabinet}] проверено ${items.length} (с product_id: ${productIds.length}), из них с реальной ценой сайта ${withInternal}, записано новых строк ${saved}` +
     (reasonsStr ? ` (отказы публичной цены: ${reasonsStr})` : ''));
   return { rows: saved, withInternal };
 }
