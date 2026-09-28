@@ -59,7 +59,15 @@ function adsCabinets() {
 // задача: интересна ОБОИМ кабинетам (у Licio своя старая аналитика/остатки,
 // но Seller API один и тот же), поэтому не ограничиваем adsCabinets().
 const DISCOUNT_JOB = { id: 'discounts', every: 20 * MIN, run: c => collectDiscounts(c) };
+
+// ВРЕМЕННО ОТКЛЮЧЕНО (28.09): сеть до Ozon с этого сервера заблокирована
+// (см. /api/netcheck) — попытки collectDiscounts всё равно ничего не
+// соберут, только впустую бьются в таймауты (5 попыток с задержкой до 60с
+// на каждый эндпоинт) и засоряют логи. Включить обратно, когда починим
+// сеть (прокси) — просто вернуть исходный фильтр ниже.
+const DISCOUNTS_ENABLED = false;
 function discountCabinets() {
+  if (!DISCOUNTS_ENABLED) return [];
   return Object.entries(CABINETS)
     .filter(([, cfg]) => cfg.ozonClientId && cfg.ozonApiKey)
     .map(([id]) => id);
