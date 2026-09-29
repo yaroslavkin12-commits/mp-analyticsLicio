@@ -49,10 +49,12 @@ router.get('/data-status', async (req, res) => {
 // когда сбор с Ozon для них так и не дал данных. Приоритет всегда у данных
 // с маркетплейса (см. merge в /stats выше) — ручное значение здесь просто
 // сохраняется про запас и показывается только пока собранное значение
-// пустое/нулевое. metric — один из: views, pdpViews, cart, orders, revenue.
-// value = null/'' удаляет ранее сохранённое ручное значение (сброс к 0, а
-// для position — к "нет данных").
-const MANUAL_METRICS = new Set(['views', 'pdpViews', 'cart', 'orders', 'revenue', 'position']);
+// пустое/нулевое. metric — один из: views, pdpViews, cart, orders, revenue,
+// position, spend, avgCpc (последние два добавлены на время, пока не
+// работает сбор с Ozon — 29.09, см. jobs.js: discounts отключены по той же
+// причине). value = null/'' удаляет ранее сохранённое ручное значение
+// (сброс к 0, а для position — к "нет данных").
+const MANUAL_METRICS = new Set(['views', 'pdpViews', 'cart', 'orders', 'revenue', 'position', 'spend', 'avgCpc']);
 router.post('/manual', async (req, res) => {
   try {
     const { cabinet, offerId, date, metric } = req.body || {};
@@ -79,6 +81,44 @@ router.post('/manual', async (req, res) => {
        VALUES ($1, 'ozon', $2, $3, $4, $5, NOW())
        ON CONFLICT (cabinet, platform, offer_id, date, metric) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
       [cabinet, offerId, date, metric, value]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /api/ads/manual-stock — ручной ввод остатков по артикулу (без даты —
+// это "текущее" значение, как и сам сбор остатков, см. ad_product_stocks).
+// Та же логика приоритета: используется только пока реальный снепшот для
+// этого артикула отсутствует/пустой. metric — fboPresent или fbsPresent.
+const STOCK_MANUAL_METRICS = new Set(['fboPresent', 'fbsPresent']);
+router.post('/manual-stock', async (req, res) => {
+  try {
+    const { cabinet, offerId, metric } = req.body || {};
+    let { value } = req.body || {};
+    if (!cabinet || !offerId || !metric) {
+      return res.status(400).json({ success: false, error: 'Нужны cabinet, offerId, metric' });
+    }
+    if (!STOCK_MANUAL_METRICS.has(metric)) {
+      return res.status(400).json({ success: false, error: `Недопустимая метрика: ${metric}` });
+    }
+    if (value === '' || value === null || value === undefined) {
+      await query(
+        `DELETE FROM ad_stock_manual WHERE cabinet=$1 AND platform='ozon' AND offer_id=$2 AND metric=$3`,
+        [cabinet, offerId, metric]
+      );
+      return res.json({ success: true, cleared: true });
+    }
+    value = Number(value);
+    if (!Number.isFinite(value) || value < 0) {
+      return res.status(400).json({ success: false, error: 'value должно быть неотрицательным числом' });
+    }
+    await query(
+      `INSERT INTO ad_stock_manual (cabinet, platform, offer_id, metric, value, updated_at)
+       VALUES ($1, 'ozon', $2, $3, $4, NOW())
+       ON CONFLICT (cabinet, platform, offer_id, metric) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [cabinet, offerId, metric, value]
     );
     res.json({ success: true });
   } catch (e) {
@@ -142,7 +182,7 @@ router.get('/stats', async (req, res) => {
       to = dayjs().format('YYYY-MM-DD');
     }
 
-    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows] = await Promise.all([
+    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows, stockManualRows] = await Promise.all([
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
@@ -170,6 +210,11 @@ router.get('/stats', async (req, res) => {
              FROM ad_product_stocks
              WHERE cabinet = $1 AND platform = 'ozon'
                AND snapshot_date = (SELECT MAX(snapshot_date) FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon')`,
+             [cabinet]),
+      // Ручные остатки — подстраховка на случай, если сбор остатков с Ozon
+      // не работает (см. manual-stock выше). Без периода — это "текущее"
+      // значение, а не история по дням.
+      query(`SELECT offer_id, metric, value FROM ad_stock_manual WHERE cabinet = $1 AND platform = 'ozon'`,
              [cabinet]),
     ]);
 
@@ -208,6 +253,28 @@ router.get('/stats', async (req, res) => {
       fbsPresent: Number(r.fbs_present) || 0,
       fbsReserved: Number(r.fbs_reserved) || 0,
     }]));
+
+    // Ручные остатки — по offerId|metric, приоритет всегда у реального
+    // снепшота (см. computeStock ниже, та же идея, что и у manualByKey).
+    const stockManualByKey = new Map(); // offerId|metric -> value
+    for (const r of stockManualRows) stockManualByKey.set(`${r.offer_id}|${r.metric}`, Number(r.value));
+    function computeStock(offerId) {
+      const mp = stockByOfferId.get(offerId) || null;
+      const manualFbo = stockManualByKey.get(`${offerId}|fboPresent`);
+      const manualFbs = stockManualByKey.get(`${offerId}|fbsPresent`);
+      if (!mp && manualFbo === undefined && manualFbs === undefined) return null;
+      const fboPresent = mp?.fboPresent ? mp.fboPresent : (manualFbo !== undefined ? manualFbo : (mp?.fboPresent || 0));
+      const fbsPresent = mp?.fbsPresent ? mp.fbsPresent : (manualFbs !== undefined ? manualFbs : (mp?.fbsPresent || 0));
+      return {
+        fboPresent, fbsPresent,
+        fboReserved: mp?.fboReserved || 0,
+        fbsReserved: mp?.fbsReserved || 0,
+        manual: {
+          fboPresent: !(mp?.fboPresent) && manualFbo !== undefined,
+          fbsPresent: !(mp?.fbsPresent) && manualFbs !== undefined,
+        },
+      };
+    }
 
     // Ручные значения — сгруппированы по offerId|date|metric, метрики те же
     // ключи, что и в byDate ниже (views/pdpViews/cart/orders/revenue).
@@ -267,7 +334,7 @@ router.get('/stats', async (req, res) => {
     const articlesOut = [];
     for (const [, article] of byArticle) {
       const byDate = {};
-      let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0;
+      let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0, totalSpend = 0;
       for (const date of dates) {
         const an = article.sku ? analyticsByKey.get(`${article.sku}|${date}`) : null;
         const mpViews = an ? Number(an.hits_view) || 0 : 0;
@@ -276,6 +343,11 @@ router.get('/stats', async (req, res) => {
         const mpOrders = an ? Number(an.orders_item) || 0 : 0;
         const mpRevenue = an ? Number(an.revenue) || 0 : 0;
         const mpPosition = an?.position_category != null ? Number(an.position_category) : null;
+        // Расход и ср. цена клика — сумма по всем РК артикула за день (то
+        // же, что попадает в article.campaigns[].byDate[date] выше).
+        const mpSpend = article.campaigns.reduce((s, c) => s + (c.byDate[date]?.spend || 0), 0);
+        const mpClicks = article.campaigns.reduce((s, c) => s + (c.byDate[date]?.clicks || 0), 0);
+        const mpAvgCpc = mpClicks > 0 ? mpSpend / mpClicks : 0;
 
         // Приоритет всегда у данных с маркетплейса — ручное значение
         // подставляется, только если Ozon для этой даты/метрики отдал 0
@@ -302,8 +374,13 @@ router.get('/stats', async (req, res) => {
         const orders = pick(mpOrders, 'orders');
         const revenue = pick(mpRevenue, 'revenue');
         const position = pickNullable(mpPosition, 'position');
+        // Расход/цена клика — та же подстраховка, что и у остальных метрик:
+        // ручное значение только пока с Ozon приходит 0 (временно, пока не
+        // работает сеть до Ozon — см. discounts в jobs.js).
+        const spend = pick(mpSpend, 'spend');
+        const avgCpc = pick(mpAvgCpc, 'avgCpc');
 
-        totalRevenue += revenue.value; totalOrders += orders.value; totalViews += views.value; totalPdpViews += pdpViews.value; totalCart += cart.value;
+        totalRevenue += revenue.value; totalOrders += orders.value; totalViews += views.value; totalPdpViews += pdpViews.value; totalCart += cart.value; totalSpend += spend.value;
 
         byDate[date] = {
           views: views.value,
@@ -318,22 +395,25 @@ router.get('/stats', async (req, res) => {
           orders: orders.value,
           revenue: revenue.value,
           position: position.value,
+          spend: spend.value,
+          avgCpc: avgCpc.value,
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
             orders: orders.manual, revenue: revenue.manual, position: position.manual,
+            spend: spend.manual, avgCpc: avgCpc.manual,
           },
         };
       }
 
       // ДРР по каждой РК: расход этой РК за период / выручка артикула за
-      // период * 100. Общий ДРР артикула: сумма расходов ВСЕХ его РК за
-      // период / выручка артикула за период * 100.
-      let totalSpendAllCampaigns = 0;
+      // период * 100 — считается по реальным данным РК, без учёта ручного
+      // расхода (тот не привязан к конкретной кампании). Общий ДРР артикула
+      // — от totalSpend (сумма по дням, с учётом ручной подстраховки, см.
+      // byDate выше), чтобы сортировка и сводка сразу отражали правку.
       for (const camp of article.campaigns) {
         camp.drr = totalRevenue > 0 ? camp.totalSpend / totalRevenue * 100 : (camp.totalSpend > 0 ? 100 : 0);
-        totalSpendAllCampaigns += camp.totalSpend;
       }
-      const totalDrr = totalRevenue > 0 ? totalSpendAllCampaigns / totalRevenue * 100 : (totalSpendAllCampaigns > 0 ? 100 : 0);
+      const totalDrr = totalRevenue > 0 ? totalSpend / totalRevenue * 100 : (totalSpend > 0 ? 100 : 0);
 
       // Общая конверсия за весь период (не среднее по дням — сумма/сумма,
       // это корректнее на низких абсолютных числах).
@@ -370,11 +450,11 @@ router.get('/stats', async (req, res) => {
         byDate,
         totals: {
           revenue: totalRevenue, orders: totalOrders, views: totalViews, pdpViews: totalPdpViews, cart: totalCart,
-          spend: totalSpendAllCampaigns, drr: totalDrr,
+          spend: totalSpend, drr: totalDrr,
           ctr: totalCtr, crToCart: totalCrToCart, crToOrder: totalCrToOrder,
         },
         campaigns: article.campaigns,
-        stock: article.offerId ? (stockByOfferId.get(article.offerId) || null) : null,
+        stock: article.offerId ? computeStock(article.offerId) : null,
         associated,
       });
     }

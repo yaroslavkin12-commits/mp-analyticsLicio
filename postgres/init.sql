@@ -364,6 +364,19 @@ CREATE TABLE IF NOT EXISTS ad_product_stocks (
 CREATE INDEX IF NOT EXISTS idx_ad_product_stocks_snap ON ad_product_stocks(cabinet, snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_ad_product_stocks_offer ON ad_product_stocks(cabinet, offer_id);
 
+-- Ручные остатки — та же идея подстраховки, что и у product_analytics_manual
+-- выше, но без даты: остаток — это "текущее" значение (как и сам снепшот в
+-- ad_product_stocks), а не история по дням. metric — fboPresent/fbsPresent.
+CREATE TABLE IF NOT EXISTS ad_stock_manual (
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  offer_id VARCHAR(128) NOT NULL,
+  metric VARCHAR(32) NOT NULL,
+  value INT NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, platform, offer_id, metric)
+);
+
 -- Статус задач сбора по кабинетам (Defly и т.д.) — см. collectors/ads/jobs.js.
 -- У каждой короткой задачи своя отметка последнего успеха, по ней
 -- планировщик решает, что пора запускать, в том числе после перезапуска.

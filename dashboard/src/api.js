@@ -23,6 +23,8 @@ export const getAdsDataStatus = cabinet => api.get('/ads/data-status', { params:
 export const getAdsStats    = (cabinet, params) => api.get('/ads/stats', { params: { cabinet, ...params } });
 export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
   api.post('/ads/manual', { cabinet, offerId, date, metric, value });
+export const saveManualStock = (cabinet, offerId, metric, value) =>
+  api.post('/ads/manual-stock', { cabinet, offerId, metric, value });
 export const getAdsOrder  = cabinet => api.get('/ads/order', { params: { cabinet } });
 export const saveAdsOrder = (cabinet, order) => api.post('/ads/order', { cabinet, order });
 // /api/discounts (не /api/ads/discounts): путь с "/ads/" у части пользователей

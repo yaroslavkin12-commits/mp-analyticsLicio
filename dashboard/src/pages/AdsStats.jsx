@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import {
   ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
-import { getAdsStats, getAdsCabinets, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder } from '../api';
+import { getAdsStats, getAdsCabinets, getAdsDataStatus, collectAds, saveManualAdsMetric, saveManualStock, getAdsOrder, saveAdsOrder } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
 
 // Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
@@ -29,10 +29,13 @@ const CONVERSION_ROWS = [
 
 // Блок 3 — расход и ДРР внизу таблицы (просили не мешать со сводкой выше).
 // Расход подсвечивается по дням тепловой картой (good:'up'), чтобы было
-// сразу видно, в какие дни лили больше денег в рекламу.
+// сразу видно, в какие дни лили больше денег в рекламу. avgCpc и spend —
+// editable (см. FUNNEL_ROWS выше): можно ввести вручную, пока не работает
+// сбор расхода с Ozon. ДРР остаётся производной (считается от расхода и
+// заказов), её вводить вручную нет смысла.
 const SPEND_ROWS = [
-  { key: 'avgCpc', label: 'Ср. цена клика, ₽', fmt: 'money2', good: 'down' },
-  { key: 'spend',  label: 'Расход, ₽',          fmt: 'money0', good: 'up' },
+  { key: 'avgCpc', label: 'Ср. цена клика, ₽', fmt: 'money2', good: 'down', editable: true },
+  { key: 'spend',  label: 'Расход, ₽',          fmt: 'money0', good: 'up',   editable: true },
   { key: 'drr',    label: 'ДРР',                fmt: 'pct',    good: 'down' },
 ];
 
@@ -396,10 +399,91 @@ function StatCard({ label, value, accent }) {
   );
 }
 
+// Редактируемая карточка остатков — та же идея, что у EditableCell в
+// таблице по дням, но остаток не привязан к дате (это "текущее" значение,
+// см. ad_product_stocks/ad_stock_manual), поэтому отдельный небольшой
+// компонент с двумя полями (FBO и FBS) вместо одной ячейки.
+function StockCard({ stock, onSaveStock }) {
+  const [editing, setEditing] = useState(false);
+  const [fbo, setFbo] = useState('');
+  const [fbs, setFbs] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  function startEdit() {
+    setFbo(stock?.fboPresent != null ? String(stock.fboPresent) : '');
+    setFbs(stock?.fbsPresent != null ? String(stock.fbsPresent) : '');
+    setEditing(true);
+  }
+
+  async function commit() {
+    setEditing(false);
+    setSaving(true);
+    try {
+      await Promise.all([
+        onSaveStock('fboPresent', fbo.trim() === '' ? null : fbo.trim()),
+        onSaveStock('fbsPresent', fbs.trim() === '' ? null : fbs.trim()),
+      ]);
+    } catch (e) {
+      console.error(e);
+      window.alert('Не удалось сохранить остаток — попробуйте ещё раз.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div style={{
+        background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8,
+        padding:'10px 14px', minWidth:160, flex:'1 1 160px',
+      }}>
+        <div style={{ fontSize:11, color:'var(--text3)', marginBottom:4, whiteSpace:'nowrap' }}>Остатки (FBO · FBS)</div>
+        <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+          <input
+            autoFocus type="number" min="0" value={fbo} onChange={e => setFbo(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setEditing(false); }}
+            style={{ width:56, textAlign:'center', padding:'2px 4px', borderRadius:4, border:'1px solid var(--border)' }}
+          />
+          <span style={{ color:'var(--text3)' }}>·</span>
+          <input
+            type="number" min="0" value={fbs} onChange={e => setFbs(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setEditing(false); }}
+            style={{ width:56, textAlign:'center', padding:'2px 4px', borderRadius:4, border:'1px solid var(--border)' }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const manual = !!(stock?.manual?.fboPresent || stock?.manual?.fbsPresent);
+  return (
+    <div
+      onClick={onSaveStock ? startEdit : undefined}
+      title={onSaveStock ? (manual ? 'Введено вручную — заменится данными Ozon, как только они появятся' : 'Нажмите, чтобы ввести остатки вручную') : undefined}
+      style={{
+        position:'relative',
+        background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8,
+        padding:'10px 14px', minWidth:120, flex:'1 1 130px',
+        cursor: onSaveStock ? 'pointer' : 'default', opacity: saving ? 0.5 : 1,
+      }}
+    >
+      <div style={{ fontSize:11, color:'var(--text3)', marginBottom:4, whiteSpace:'nowrap' }}>Остатки (FBO · FBS)</div>
+      <div style={{ fontSize:19, fontWeight:700 }}>{fmtValue(stock?.fboPresent, 'int')} · {fmtValue(stock?.fbsPresent, 'int')}</div>
+      {manual && (
+        <span style={{
+          position:'absolute', top:8, right:8, width:5, height:5, borderRadius:'50%',
+          background:'var(--accent, #6366f1)', opacity:0.55,
+        }} />
+      )}
+    </div>
+  );
+}
+
 // Сводка по артикулу за весь выбранный период — показывается сразу при
 // раскрытии карточки, до списка кампаний и таблицы по дням, чтобы не
 // прокручивать/складывать в уме дневные значения ради общей картины.
-function ArticleSummary({ totals, stock }) {
+function ArticleSummary({ totals, stock, onSaveStock }) {
   const cards = [
     { label: 'Заказано, ₽',            value: fmtValue(totals.revenue, 'money') },
     { label: 'Заказано, шт',           value: fmtValue(totals.orders, 'int') },
@@ -409,15 +493,6 @@ function ArticleSummary({ totals, stock }) {
     { label: 'Расход, ₽',              value: fmtValue(totals.spend, 'money0') },
     { label: 'ДРР',                    value: fmtValue(totals.drr, 'pct') },
   ];
-  // Текущие остатки — FBO и FBS в одной карточке (не два отдельных блока),
-  // как попросили: "разместим в одном блоке и fbo и FBS". Данные "на
-  // сейчас", не зависят от выбранного периода — см. ad_product_stocks.
-  if (stock) {
-    cards.push({
-      label: 'Остатки (FBO · FBS)',
-      value: `${fmtValue(stock.fboPresent, 'int')} · ${fmtValue(stock.fbsPresent, 'int')}`,
-    });
-  }
   // Общая конверсия за весь период — сумма/сумма (не среднее по дням),
   // отдельным рядом, чтобы не путать штучные метрики с процентами.
   const convCards = [
@@ -429,6 +504,12 @@ function ArticleSummary({ totals, stock }) {
     <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'12px 16px 4px' }}>
       <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
         {cards.map(c => <StatCard key={c.label} {...c} />)}
+        {/* Текущие остатки — FBO и FBS в одной карточке, "на сейчас" (не
+            зависят от периода, см. ad_product_stocks). Редактируется вручную,
+            когда есть offerId (см. onManualStockSave в AdsStats) — даже если
+            сбор ещё ничего не собрал (stock === null), можно ввести значения
+            с нуля. */}
+        {(stock || onSaveStock) && <StockCard stock={stock} onSaveStock={onSaveStock} />}
       </div>
       <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
         {convCards.map(c => <StatCard key={c.label} {...c} accent="var(--text2)" />)}
@@ -895,30 +976,30 @@ function AssociatedConversionsTable({ associated, dates, unit, onUnitChange }) {
 // useMemo (расход/ДРР по дням) вызывался безусловно на верхнем уровне
 // компонента, а не внутри .map() у родителя (это нарушало Rules of Hooks).
 function ArticleCard({
-  article, dates, cabinet, isOpen, onToggle, onManualSave,
+  article, dates, cabinet, isOpen, onToggle, onManualSave, onManualStockSave,
   draggable, isDragging, isDragOver, onDragStart, onDragOverCard, onDropCard, onDragEndCard,
 }) {
-  // Конверсии (ctr/crToCart/crToOrder) пересчитываются здесь из сырых
+  // Конверсии (ctr/crToCart/crToOrder) и ДРР пересчитываются здесь из сырых
   // метрик, а не берутся готовыми из article.byDate — так правка ячейки
   // вручную (см. handleManualSave в AdsStats) сразу отражается и в таблице
   // конверсий, и в сводке ниже, без ожидания следующей загрузки с сервера.
+  // spend/avgCpc теперь приходят уже смерженными с сервера (byDate) — там же
+  // учтён ручной ввод (см. backend/src/routes/ads.js), поэтому здесь их
+  // достаточно взять как есть через ...day, а не пересчитывать заново из
+  // article.campaigns (иначе ручная правка сразу же перезаписывалась бы
+  // суммой по кампаниям).
   const mergedByDate = useMemo(() => {
     const out = {};
     for (const d of dates) {
-      const spend = article.campaigns.reduce((s, c) => s + (c.byDate[d]?.spend || 0), 0);
-      // Клики — сумма по всем РК артикула за день, отдельно от расхода
-      // (собираются отдельным сборщиком, см. collectors/ads/ozonClicks.js).
-      const clicks = article.campaigns.reduce((s, c) => s + (c.byDate[d]?.clicks || 0), 0);
       const day = article.byDate[d] || {};
       const views = day.views || 0, pdpViews = day.pdpViews || 0, cart = day.cart || 0, orders = day.orders || 0;
       const revenue = day.revenue || 0;
+      const spend = day.spend || 0;
       out[d] = {
         ...day,
         ctr: views > 0 ? pdpViews / views * 100 : 0,
         crToCart: pdpViews > 0 ? cart / pdpViews * 100 : 0,
         crToOrder: cart > 0 ? orders / cart * 100 : 0,
-        spend,
-        avgCpc: clicks > 0 ? spend / clicks : 0,
         drr: revenue > 0 ? spend / revenue * 100 : (spend > 0 ? 100 : 0),
       };
     }
@@ -975,7 +1056,13 @@ function ArticleCard({
 
       {isOpen && (
         <>
-          <ArticleSummary totals={computedTotals} stock={article.stock} />
+          <ArticleSummary
+            totals={computedTotals}
+            stock={article.stock}
+            onSaveStock={article.offerId && onManualStockSave
+              ? (metric, value) => onManualStockSave(article.offerId, metric, value)
+              : null}
+          />
 
           <div style={{ padding:'10px 0 0' }}>
             <div style={{ padding:'0 16px 8px', fontSize:11, color:'var(--text3)', fontWeight:700, textTransform:'uppercase', letterSpacing:.4 }}>
@@ -1009,7 +1096,14 @@ function ArticleCard({
                 <BlockLabel>Конверсии</BlockLabel>
                 <MetricTable rows={CONVERSION_ROWS} dates={dates} byDate={mergedByDate} />
                 <BlockLabel>Расход и ДРР</BlockLabel>
-                <MetricTable rows={SPEND_ROWS} dates={dates} byDate={mergedByDate} />
+                <MetricTable
+                  rows={SPEND_ROWS}
+                  dates={dates}
+                  byDate={mergedByDate}
+                  onManualSave={article.offerId && onManualSave
+                    ? (date, metric, value) => onManualSave(article.offerId, date, metric, value)
+                    : null}
+                />
               </tbody>
             </table>
           </div>
@@ -1180,6 +1274,37 @@ export default function AdsStats({ cabinet }) {
       });
   }
 
+  // Сохраняет ручной остаток (FBO или FBS отдельно) и сразу патчит локальное
+  // состояние — та же идея, что и у handleManualSave выше, но без даты:
+  // остаток хранится как "текущее" значение (см. backend/ad_stock_manual).
+  function handleManualStockSave(offerId, metric, value) {
+    return saveManualStock(cabinet, offerId, metric, value)
+      .then(() => {
+        setData(prev => {
+          if (!prev) return prev;
+          const articles = prev.articles.map(a => {
+            if (a.offerId !== offerId) return a;
+            const stock = a.stock || { fboPresent: 0, fbsPresent: 0, fboReserved: 0, fbsReserved: 0, manual: {} };
+            const cleared = value === null || value === '';
+            const numValue = cleared ? 0 : Number(value);
+            return {
+              ...a,
+              stock: {
+                ...stock,
+                [metric]: numValue,
+                manual: { ...stock.manual, [metric]: !cleared },
+              },
+            };
+          });
+          return { ...prev, articles };
+        });
+      })
+      .catch(e => {
+        console.error(e);
+        window.alert('Не удалось сохранить остаток — попробуйте ещё раз.');
+      });
+  }
+
   function toggleArticle(key) {
     setExpandedArticles(prev => {
       const next = new Set(prev);
@@ -1324,6 +1449,7 @@ export default function AdsStats({ cabinet }) {
             isOpen={expandedArticles.has(key)}
             onToggle={() => toggleArticle(key)}
             onManualSave={handleManualSave}
+            onManualStockSave={handleManualStockSave}
             draggable={draggable}
             isDragging={dragKey === key}
             isDragOver={draggable && dragOverKey === key && dragKey && dragKey !== key}
