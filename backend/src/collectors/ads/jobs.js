@@ -53,17 +53,9 @@ async function withSheetFallback(cabinet, label, primary, fallback) {
   try {
     return await primary();
   } catch (e) {
-    const sid = sheetId();
-    console.warn(`[DIAG:${cabinet}] ${label}: primary упал (${e.message}); sheetId()=${sid ? sid.slice(0,6)+'...' : 'NULL/FALSY'}; typeof ADS_SHEET_ID=${typeof process.env.ADS_SHEET_ID}`);
-    if (!sid) throw e;
-    try {
-      const r = await fallback();
-      console.warn(`[DIAG:${cabinet}] ${label}: фоллбек ОК, rows=${JSON.stringify(r)}`);
-      return r;
-    } catch (e2) {
-      console.error(`[DIAG:${cabinet}] ${label}: фоллбек тоже упал: ${e2.stack || e2.message}`);
-      throw e2;
-    }
+    if (!sheetId()) throw e; // фоллбек не настроен — ведём себя как раньше
+    console.warn(`[Jobs:${cabinet}] ${label}: Ozon недоступен (${e.message}), беру данные из Google-таблицы`);
+    return await fallback();
   }
 }
 
