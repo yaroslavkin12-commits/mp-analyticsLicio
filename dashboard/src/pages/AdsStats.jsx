@@ -1388,11 +1388,24 @@ export default function AdsStats({ cabinet }) {
       })
       .filter(a => a.campaigns.length > 0);
 
-    const matched = filtered.filter(a => a.offerId);
+    let matched = filtered.filter(a => a.offerId);
     const unmatched = filtered.filter(a => !a.offerId);
 
     const spendCmp = (a, b) => (b.totals.spend || 0) - (a.totals.spend || 0);
     unmatched.sort(spendCmp);
+
+    // Вкладка-группа (sortBy === 'group:<id>') — отдельная "своя группа" со
+    // своим названием, которую можно продолжать добавлять рядом с По
+    // расходу/ДРР/названию/Свой порядок. При переключении на неё список
+    // схлопывается до только тех артикулов, что отнесены к этой группе
+    // (см. onAssignGroup — выпадающий список на карточке), несматченные
+    // кампании сюда не попадают, т.к. у них нет offerId.
+    if (sortBy.startsWith('group:')) {
+      const groupId = sortBy.slice('group:'.length);
+      matched = matched.filter(a => groupsData.members[a.offerId] === groupId);
+      matched.sort(spendCmp);
+      return matched;
+    }
 
     if (sortBy === 'manual') {
       // Свой порядок — по сохранённому manualOrder (массив offerId). Артикулы,
@@ -1413,7 +1426,7 @@ export default function AdsStats({ cabinet }) {
       matched.sort(cmp);
     }
     return [...matched, ...unmatched];
-  }, [articlesRaw, onlyActive, search, paymentFilter, placementFilter, sortBy, manualOrder]);
+  }, [articlesRaw, onlyActive, search, paymentFilter, placementFilter, sortBy, manualOrder, groupsData]);
 
   // Перетаскивание карточек в режиме "Свой порядок" — переставляет
   // draggedKey перед/на место targetKey в списке offerId и сохраняет на
@@ -1467,24 +1480,27 @@ export default function AdsStats({ cabinet }) {
         <Segmented options={PAYMENT_OPTIONS} value={paymentFilter} onChange={setPaymentFilter} />
         <Segmented options={PLACEMENT_OPTIONS} value={placementFilter} onChange={setPlacementFilter} />
         <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text3)' }}>Сортировка:</span>
-        <Segmented options={SORT_OPTIONS} value={sortBy} onChange={setSortBy} />
-      </div>
-
-      {/* Тестируемые группы — сводка по группе показывается в режиме "Свой
-          порядок" (см. ниже), создать/удалить группу можно отсюда в любом
-          режиме сортировки. */}
-      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        {/* Свои группы ("Чехлы" и т.п.) — продолжение той же сортировки:
+            идут сразу после "Свой порядок" как ещё одна вкладка-режим. При
+            переключении на группу список схлопывается только до её
+            артикулов (см. useMemo articles выше). "+" рядом — создать
+            ещё одну группу, не переключаясь из текущего режима. */}
+        <Segmented
+          options={[...SORT_OPTIONS, ...groupsData.groups.map(g => ({ value: `group:${g.id}`, label: g.name }))]}
+          value={sortBy}
+          onChange={setSortBy}
+        />
         {!showGroupForm ? (
-          <button onClick={() => setShowGroupForm(true)} style={{
+          <button onClick={() => setShowGroupForm(true)} title="Добавить свою группу" style={{
             padding:'5px 10px', borderRadius:8, border:'1px dashed var(--border)',
-            background:'transparent', color:'var(--text2)', fontSize:12, cursor:'pointer',
+            background:'transparent', color:'var(--text2)', fontSize:12.5, fontWeight:500, cursor:'pointer',
           }}>+ Группа</button>
         ) : (
           <form onSubmit={onAddGroup} style={{ display:'flex', gap:6 }}>
             <input
               autoFocus value={groupName} onChange={e => setGroupName(e.target.value)}
               placeholder="Название группы, напр. Чехлы"
-              style={{ padding:'5px 10px', borderRadius:8, fontSize:12, minWidth:200 }}
+              style={{ padding:'5px 10px', borderRadius:8, fontSize:12, minWidth:180 }}
             />
             <button type="submit" disabled={groupSaving || !groupName.trim()} style={{
               padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)',
@@ -1495,10 +1511,44 @@ export default function AdsStats({ cabinet }) {
             }}>Отмена</button>
           </form>
         )}
-        {sortBy !== 'manual' && groupsData.groups.length > 0 && (
-          <span style={{ fontSize:12, color:'var(--text3)' }}>Сводка по группам видна в сортировке «Свой порядок»</span>
-        )}
       </div>
+
+      {/* Когда активна вкладка-группа — сводная шапка по её артикулам
+          (сумма заказов/расхода/ДРР за выбранный период) + возможность
+          удалить саму группу (её артикулы при этом останутся, просто
+          станут "без группы"). */}
+      {sortBy.startsWith('group:') && (() => {
+        const groupId = sortBy.slice('group:'.length);
+        const group = groupsData.groups.find(g => g.id === groupId);
+        if (!group) return null;
+        const agg = articles.reduce((acc, a) => ({
+          orders: acc.orders + (a.totals.orders || 0),
+          revenue: acc.revenue + (a.totals.revenue || 0),
+          spend: acc.spend + (a.totals.spend || 0),
+        }), { orders: 0, revenue: 0, spend: 0 });
+        const drr = agg.revenue > 0 ? agg.spend / agg.revenue * 100 : (agg.spend > 0 ? 100 : 0);
+        return (
+          <div style={{ display:'flex', alignItems:'center', gap:14, flexWrap:'wrap', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:'10px 16px' }}>
+            <span style={{ fontWeight:700, fontSize:14 }}>📦 {group.name}</span>
+            <span style={{ fontSize:12, color:'var(--text3)' }}>{articles.length} арт.</span>
+            <span style={{ fontSize:12, color:'var(--text2)', display:'flex', gap:14 }}>
+              <span>Заказано: {fmtValue(agg.orders, 'int')} шт / {fmtValue(agg.revenue, 'money0')} ₽</span>
+              <span>Расход: {fmtValue(agg.spend, 'money0')} ₽</span>
+              <span>ДРР: {fmtValue(drr, 'pct')}</span>
+            </span>
+            <button onClick={() => { onRemoveGroup(group.id); setSortBy('spend'); }} style={{
+              marginLeft:'auto', padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)',
+              background:'transparent', color:'var(--text3)', fontSize:12, cursor:'pointer',
+            }}>Удалить группу</button>
+          </div>
+        );
+      })()}
+
+      {sortBy.startsWith('group:') && articles.length === 0 && (
+        <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:16, color:'var(--text2)', fontSize:13 }}>
+          В этой группе пока нет артикулов — переключитесь на другую сортировку и отнесите нужные артикулы к группе через выпадающий список на карточке.
+        </div>
+      )}
 
       {notConfigured && (
         <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:16, color:'var(--text2)', fontSize:13 }}>
@@ -1512,90 +1562,38 @@ export default function AdsStats({ cabinet }) {
         </div>
       )}
 
-      {!notConfigured && articlesRaw.length > 0 && articles.length === 0 && (
+      {!notConfigured && articlesRaw.length > 0 && articles.length === 0 && !sortBy.startsWith('group:') && (
         <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:16, color:'var(--text2)', fontSize:13 }}>
           Под текущие фильтры ничего не подошло.
         </div>
       )}
 
-      {(() => {
-        const renderCard = article => {
-          const key = article.offerId || '__unmatched__';
-          const draggable = sortBy === 'manual' && !!article.offerId;
-          return (
-            <ArticleCard
-              key={key}
-              article={article}
-              dates={dates}
-              cabinet={cabinet}
-              isOpen={expandedArticles.has(key)}
-              onToggle={() => toggleArticle(key)}
-              onManualSave={handleManualSave}
-              onManualStockSave={handleManualStockSave}
-              draggable={draggable}
-              isDragging={dragKey === key}
-              isDragOver={draggable && dragOverKey === key && dragKey && dragKey !== key}
-              onDragStart={() => setDragKey(key)}
-              onDragOverCard={() => draggable && setDragOverKey(key)}
-              onDropCard={() => { handleReorder(dragKey, key); setDragKey(null); setDragOverKey(null); }}
-              onDragEndCard={() => { setDragKey(null); setDragOverKey(null); }}
-              groups={groupsData.groups}
-              currentGroupId={article.offerId ? groupsData.members[article.offerId] : null}
-              onAssignGroup={onAssignGroup}
-            />
-          );
-        };
-
-        // Сводные группы ("Чехлы" и т.п.) показываем только в режиме "Свой
-        // порядок" — именно там, где у пользователя уже есть свой ручной
-        // порядок артикулов (см. запрос: "группы добавить в рекламу, вот
-        // где есть свой порядок"). В остальных режимах сортировки список
-        // остаётся плоским (как раньше), но привязку к группе всё ещё можно
-        // менять через выпадающий список на карточке.
-        if (sortBy !== 'manual' || groupsData.groups.length === 0) {
-          return articles.map(renderCard);
-        }
-
-        const grouped = groupsData.groups.map(g => ({
-          ...g,
-          members: articles.filter(a => a.offerId && groupsData.members[a.offerId] === g.id),
-        })).filter(g => g.members.length > 0);
-        const groupedIds = new Set(grouped.flatMap(g => g.members.map(a => a.offerId)));
-        const ungrouped = articles.filter(a => !a.offerId || !groupedIds.has(a.offerId));
-
+      {articles.map(article => {
+        const key = article.offerId || '__unmatched__';
+        const draggable = sortBy === 'manual' && !!article.offerId;
         return (
-          <>
-            {grouped.map(g => {
-              const agg = g.members.reduce((acc, a) => ({
-                orders: acc.orders + (a.totals.orders || 0),
-                revenue: acc.revenue + (a.totals.revenue || 0),
-                spend: acc.spend + (a.totals.spend || 0),
-              }), { orders: 0, revenue: 0, spend: 0 });
-              const drr = agg.revenue > 0 ? agg.spend / agg.revenue * 100 : (agg.spend > 0 ? 100 : 0);
-              return (
-                <div key={g.id} style={{ border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 16px', background:'var(--surface2)', flexWrap:'wrap' }}>
-                    <span style={{ fontWeight:700, fontSize:14 }}>📦 {g.name}</span>
-                    <span style={{ fontSize:12, color:'var(--text3)' }}>{g.members.length} арт.</span>
-                    <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text2)', display:'flex', gap:14 }}>
-                      <span>Заказано: {fmtValue(agg.orders, 'int')} шт / {fmtValue(agg.revenue, 'money0')} ₽</span>
-                      <span>Расход: {fmtValue(agg.spend, 'money0')} ₽</span>
-                      <span>ДРР: {fmtValue(drr, 'pct')}</span>
-                    </span>
-                    <button onClick={() => onRemoveGroup(g.id)} title="Удалить группу" style={{
-                      border:'none', background:'transparent', color:'var(--text3)', cursor:'pointer', fontSize:14,
-                    }}>×</button>
-                  </div>
-                  <div style={{ display:'flex', flexDirection:'column', gap:8, padding:8 }}>
-                    {g.members.map(renderCard)}
-                  </div>
-                </div>
-              );
-            })}
-            {ungrouped.map(renderCard)}
-          </>
+          <ArticleCard
+            key={key}
+            article={article}
+            dates={dates}
+            cabinet={cabinet}
+            isOpen={expandedArticles.has(key)}
+            onToggle={() => toggleArticle(key)}
+            onManualSave={handleManualSave}
+            onManualStockSave={handleManualStockSave}
+            draggable={draggable}
+            isDragging={dragKey === key}
+            isDragOver={draggable && dragOverKey === key && dragKey && dragKey !== key}
+            onDragStart={() => setDragKey(key)}
+            onDragOverCard={() => draggable && setDragOverKey(key)}
+            onDropCard={() => { handleReorder(dragKey, key); setDragKey(null); setDragOverKey(null); }}
+            onDragEndCard={() => { setDragKey(null); setDragOverKey(null); }}
+            groups={groupsData.groups}
+            currentGroupId={article.offerId ? groupsData.members[article.offerId] : null}
+            onAssignGroup={onAssignGroup}
+          />
         );
-      })()}
+      })}
     </div>
   );
 }
