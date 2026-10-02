@@ -6,6 +6,14 @@ const { collectAdStats } = require('./ozonPerf');
 const { collectClicks } = require('./ozonClicks');
 const { collectProductAnalytics } = require('./ozonProductAnalytics');
 const { collectProductStocks } = require('./ozonProductStocks');
+const {
+  sheetId,
+  syncCatalogFromSheet,
+  syncAnalyticsFromSheet,
+  syncStocksFromSheet,
+  syncCampaignsFromSheet,
+  syncStatsFromSheet,
+} = require('./sheetSync');
 const { collectDiscounts } = require('./ozonDiscounts');
 const { getSettings } = require('./discountSettings');
 const { sendDiscountDigest } = require('../../telegram');
@@ -35,18 +43,50 @@ const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
 const RETRY_AFTER_FAIL = 10 * MIN;
 
+// Сеть до Ozon с Render иногда блокируется целиком (см. /api/netcheck) — на
+// этот случай у каждой задачи есть запасной путь через Google Таблицу: её
+// отдельным скриптом (google-apps-script/ozon-sheet-sync.gs) наполняет сам
+// Google, у которого такой блокировки нет. Сначала всегда пробуем настоящий
+// запрос к Ozon; если он упал — берём то, что успело собраться в таблице.
+// Как только сеть разблокируется, всё само вернётся на прямой сбор.
+async function withSheetFallback(cabinet, label, primary, fallback) {
+  try {
+    return await primary();
+  } catch (e) {
+    if (!sheetId()) throw e; // фоллбек не настроен — ведём себя как раньше
+    console.warn(`[Jobs:${cabinet}] ${label}: Ozon недоступен (${e.message}), беру данные из Google-таблицы`);
+    return await fallback();
+  }
+}
+
 // Порядок важен: каталог нужен раньше всех (SKU -> артикул).
 const JOBS = [
-  { id: 'catalog',        every: 6 * HOUR,  run: c => collectCatalog(c) },
-  { id: 'perf',           every: 30 * MIN,  run: c => collectAdStats(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }) },
-  { id: 'clicks',         every: 30 * MIN,  run: c => collectClicks(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }) },
-  { id: 'analytics',      every: 30 * MIN,  run: c => collectProductAnalytics(c, { dateFrom: mskDate(6), dateTo: mskDate(0) }) },
-  { id: 'stocks',         every: 1 * HOUR,  run: c => collectProductStocks(c) },
+  { id: 'catalog', every: 6 * HOUR, run: c => withSheetFallback(c, 'catalog',
+      () => collectCatalog(c), () => syncCatalogFromSheet(c)) },
+  { id: 'perf', every: 30 * MIN, run: c => withSheetFallback(c, 'perf',
+      () => collectAdStats(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }),
+      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c)])
+        .then(([a, b]) => ({ rows: (a.rows || 0) + (b.rows || 0) }))) },
+  { id: 'clicks', every: 30 * MIN, run: c => withSheetFallback(c, 'clicks',
+      () => collectClicks(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }),
+      () => syncStatsFromSheet(c)) },
+  { id: 'analytics', every: 30 * MIN, run: c => withSheetFallback(c, 'analytics',
+      () => collectProductAnalytics(c, { dateFrom: mskDate(6), dateTo: mskDate(0) }),
+      () => syncAnalyticsFromSheet(c)) },
+  { id: 'stocks', every: 1 * HOUR, run: c => withSheetFallback(c, 'stocks',
+      () => collectProductStocks(c), () => syncStocksFromSheet(c)) },
   // Раз в сутки — полная докачка истории: Ozon задним числом уточняет
   // заказы/выручку (отмены, поздние данные), и так же закрываются любые дыры.
-  { id: 'perf_full',      every: 20 * HOUR, run: c => collectAdStats(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }) },
-  { id: 'clicks_full',    every: 20 * HOUR, run: c => collectClicks(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }) },
-  { id: 'analytics_full', every: 20 * HOUR, run: c => collectProductAnalytics(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }) },
+  { id: 'perf_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'perf_full',
+      () => collectAdStats(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
+      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c)])
+        .then(([a, b]) => ({ rows: (a.rows || 0) + (b.rows || 0) }))) },
+  { id: 'clicks_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'clicks_full',
+      () => collectClicks(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
+      () => syncStatsFromSheet(c)) },
+  { id: 'analytics_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'analytics_full',
+      () => collectProductAnalytics(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
+      () => syncAnalyticsFromSheet(c)) },
 ];
 
 function adsCabinets() {

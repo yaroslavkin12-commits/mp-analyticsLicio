@@ -25,3 +25,5 @@ services:
         sync: false
       - key: COLLECT_INTERVAL_HOURS
         value: "2"
+      - key: ADS_SHEET_ID
+        sync: false
