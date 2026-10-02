@@ -461,3 +461,33 @@ CREATE TABLE IF NOT EXISTS order_notifications_log (
   sent_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_order_notif_sent ON order_notifications_log(cabinet, sent_at);
+
+-- Тестируемые группы артикулов (например "Чехлы") — объединяют несколько
+-- отслеживаемых артикулов, чтобы видеть сводную статистику по группе целиком,
+-- а не только по каждому артикулу отдельно. ON DELETE SET NULL — при удалении
+-- группы сами артикулы не удаляются, просто становятся "без группы".
+CREATE TABLE IF NOT EXISTS tracked_groups (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  name VARCHAR(256) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(cabinet, name)
+);
+ALTER TABLE tracked_articles ADD COLUMN IF NOT EXISTS group_id BIGINT REFERENCES tracked_groups(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tracked_articles_group ON tracked_articles(group_id);
+
+-- Дедупликация для отдельного, независимого от основной таблицы ozon_orders
+-- поллера заказов, который питает уведомления для кабинетов БЕЗ общего сбора
+-- заказов (сейчас — Defly, см. collectors/trackedOrdersPoll.js). Сделана как
+-- отдельная лёгкая таблица specifически под нужды уведомлений, чтобы не трогать
+-- ozon_orders — та таблица не рассчитана на несколько кабинетов (нет колонки
+-- cabinet), и подмешивать туда заказы Defly нельзя — это испортит дашборд/
+-- аналитику Licio, которые сейчас читают ozon_orders без фильтра по кабинету.
+CREATE TABLE IF NOT EXISTS tracked_orders_seen (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  posting_number VARCHAR(64) NOT NULL,
+  sku BIGINT NOT NULL DEFAULT 0,
+  seen_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(cabinet, posting_number, sku)
+);

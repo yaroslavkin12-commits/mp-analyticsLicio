@@ -38,7 +38,15 @@ export const saveDiscountSettings = (cabinet, settings) => api.post('/discounts/
 
 export const getTrackedArticles = cabinet => api.get('/tracked-articles', { params: { cabinet } });
 export const getTrackedArticlesFeed = cabinet => api.get('/tracked-articles/feed', { params: { cabinet } });
-export const addTrackedArticle = (cabinet, platform, article, label) =>
-  api.post('/tracked-articles', { cabinet, platform, article, label });
+export const addTrackedArticle = (cabinet, platform, article, label, groupId) =>
+  api.post('/tracked-articles', { cabinet, platform, article, label, groupId });
 export const removeTrackedArticle = (cabinet, id) =>
   api.delete(`/tracked-articles/${id}`, { params: { cabinet } });
+export const moveTrackedArticle = (cabinet, id, groupId) =>
+  api.patch(`/tracked-articles/${id}`, { cabinet, groupId });
+
+export const getTrackedGroups = cabinet => api.get('/tracked-articles/groups', { params: { cabinet } });
+export const addTrackedGroup = (cabinet, name) =>
+  api.post('/tracked-articles/groups', { cabinet, name });
+export const removeTrackedGroup = (cabinet, id) =>
+  api.delete(`/tracked-articles/groups/${id}`, { params: { cabinet } });

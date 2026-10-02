@@ -113,6 +113,7 @@ async function notifyNewOrder(cabinet, platform, tracked, order) {
   const platformLabel = platform === 'wb' ? 'Wildberries' : 'Ozon';
   const title = tracked.label ? `${tracked.article} (${tracked.label})` : tracked.article;
   const lines = [`🛒 <b>${label} · ${platformLabel}: новый заказ</b>`, `Артикул: <b>${title}</b>`];
+  if (tracked.group_name) lines.push(`Группа: ${tracked.group_name}`);
   if (order.productName) lines.push(String(order.productName).slice(0, 150));
   if (order.price) lines.push(`Сумма: ${Math.round(Number(order.price)).toLocaleString('ru-RU')} ₽`);
   if (order.warehouse) lines.push(`Склад: ${order.warehouse}`);

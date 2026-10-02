@@ -17,6 +17,7 @@ const {
 const { collectDiscounts } = require('./ozonDiscounts');
 const { getSettings } = require('./discountSettings');
 const { sendDiscountDigest } = require('../../telegram');
+const { pollOzonForCabinet } = require('../trackedOrdersPoll');
 const dayjs = require('dayjs');
 const dayjsUtc = require('dayjs/plugin/utc');
 const dayjsTz = require('dayjs/plugin/timezone');
@@ -87,6 +88,12 @@ const JOBS = [
   { id: 'analytics_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'analytics_full',
       () => collectProductAnalytics(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncAnalyticsFromSheet(c)) },
+  // Вкладка "Уведомления" (отслеживание артикулов) для кабинетов без общего
+  // сбора заказов — см. collectors/trackedOrdersPoll.js. ВАЖНО: добавлен в
+  // конец массива, а не куда-то в середину — "ручной" план обновления выше
+  // (forced.get) ссылается на JOBS[0..4] по индексу, и сдвиг этих индексов
+  // его сломает.
+  { id: 'tracked_orders', every: 10 * MIN, run: c => pollOzonForCabinet(c) },
 ];
 
 function adsCabinets() {

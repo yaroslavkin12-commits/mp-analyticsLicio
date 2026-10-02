@@ -6,18 +6,79 @@ const { notifyNewOrder } = require('../telegram');
 // либо числовой артикул WB (nmId), либо свой "Артикул продавца"
 // (supplierArticle) — так привычнее большинству продавцов. Для Ozon —
 // offer_id (свой код) или SKU Ozon.
+//
+// Тестируемые группы (tracked_groups) — опциональная группировка артикулов
+// (например "Чехлы"), чтобы видеть сводную статистику по группе целиком, а
+// не только по каждому артикулу отдельно. order_count артикула/группы — это
+// просто COUNT уже отправленных уведомлений (order_notifications_log): так
+// как уведомления шлются по каждому новому заказу без порогов и фильтров,
+// количество уведомлений == количество реально поступивших заказов.
 
-async function listTracked(cabinet) {
-  return query(`SELECT * FROM tracked_articles WHERE cabinet = $1 ORDER BY created_at DESC`, [cabinet]);
+async function listGroups(cabinet) {
+  return query(
+    `SELECT g.*,
+            (SELECT COUNT(*) FROM tracked_articles ta WHERE ta.group_id = g.id) AS articles_count,
+            (SELECT COUNT(*) FROM order_notifications_log onl
+               WHERE onl.cabinet = g.cabinet
+                 AND (onl.article, onl.platform) IN (
+                   SELECT ta2.article, ta2.platform FROM tracked_articles ta2 WHERE ta2.group_id = g.id
+                 )
+            ) AS total_orders
+     FROM tracked_groups g WHERE g.cabinet = $1 ORDER BY g.created_at ASC`,
+    [cabinet]
+  );
 }
 
-async function addTracked(cabinet, platform, article, label) {
+async function addGroup(cabinet, name) {
   const rows = await query(
-    `INSERT INTO tracked_articles (cabinet, platform, article, label)
-     VALUES ($1,$2,$3,$4)
-     ON CONFLICT (cabinet, platform, article) DO UPDATE SET label = EXCLUDED.label, active = TRUE
+    `INSERT INTO tracked_groups (cabinet, name) VALUES ($1,$2)
+     ON CONFLICT (cabinet, name) DO UPDATE SET name = EXCLUDED.name
      RETURNING *`,
-    [cabinet, platform, String(article).trim(), label ? String(label).trim() : null]
+    [cabinet, String(name).trim()]
+  );
+  return rows[0];
+}
+
+async function removeGroup(cabinet, id) {
+  // Артикулы группы не удаляются — ON DELETE SET NULL (см. postgres/init.sql),
+  // они просто становятся "без группы".
+  await query(`DELETE FROM tracked_groups WHERE cabinet = $1 AND id = $2`, [cabinet, id]);
+}
+
+async function setArticleGroup(cabinet, id, groupId) {
+  const rows = await query(
+    `UPDATE tracked_articles SET group_id = $3 WHERE cabinet = $1 AND id = $2 RETURNING *`,
+    [cabinet, id, groupId || null]
+  );
+  return rows[0];
+}
+
+async function listTracked(cabinet) {
+  return query(
+    `SELECT ta.*, g.name AS group_name,
+            COALESCE(cnt.order_count, 0) AS order_count
+     FROM tracked_articles ta
+     LEFT JOIN tracked_groups g ON g.id = ta.group_id
+     LEFT JOIN (
+       SELECT article, platform, COUNT(*) AS order_count
+       FROM order_notifications_log
+       WHERE cabinet = $1
+       GROUP BY article, platform
+     ) cnt ON cnt.article = ta.article AND cnt.platform = ta.platform
+     WHERE ta.cabinet = $1
+     ORDER BY ta.created_at DESC`,
+    [cabinet]
+  );
+}
+
+async function addTracked(cabinet, platform, article, label, groupId) {
+  const rows = await query(
+    `INSERT INTO tracked_articles (cabinet, platform, article, label, group_id)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (cabinet, platform, article) DO UPDATE SET
+       label = EXCLUDED.label, group_id = EXCLUDED.group_id, active = TRUE
+     RETURNING *`,
+    [cabinet, platform, String(article).trim(), label ? String(label).trim() : null, groupId || null]
   );
   return rows[0];
 }
@@ -26,9 +87,15 @@ async function removeTracked(cabinet, id) {
   await query(`DELETE FROM tracked_articles WHERE cabinet = $1 AND id = $2`, [cabinet, id]);
 }
 
+// Включает имя группы (g.name) — используется в тексте Telegram-уведомления
+// (см. telegram.js:notifyNewOrder), чтобы сразу было видно, по какой
+// тестируемой группе пришёл заказ.
 async function getActiveTracked(cabinet, platform) {
   return query(
-    `SELECT * FROM tracked_articles WHERE cabinet = $1 AND platform = $2 AND active = TRUE`,
+    `SELECT ta.*, g.name AS group_name
+     FROM tracked_articles ta
+     LEFT JOIN tracked_groups g ON g.id = ta.group_id
+     WHERE ta.cabinet = $1 AND ta.platform = $2 AND ta.active = TRUE`,
     [cabinet, platform]
   );
 }
@@ -53,7 +120,9 @@ function matchesArticle(platform, trackedValue, row) {
 // заказов за этот прогон сборщика. См. collectors/wb/orders.js и
 // collectors/ozon/orders.js — там это определяется через RETURNING на
 // INSERT, а не задним числом сравнением, чтобы не задваивать уведомления
-// при повторном сборе одного и того же окна дат.
+// при повторном сборе одного и того же окна дат. Для кабинетов без общего
+// сбора заказов (Defly) используется отдельный collectors/trackedOrdersPoll.js
+// со своей дедупликацией (tracked_orders_seen), но итоговый вызов — тот же.
 async function checkAndNotify(cabinet, platform, newRows) {
   if (!newRows || !newRows.length) return;
   const tracked = await getActiveTracked(cabinet, platform).catch(() => []);
@@ -80,4 +149,7 @@ async function getFeed(cabinet, limit = 50) {
   );
 }
 
-module.exports = { listTracked, addTracked, removeTracked, checkAndNotify, getFeed };
+module.exports = {
+  listTracked, addTracked, removeTracked, getActiveTracked, checkAndNotify, getFeed,
+  listGroups, addGroup, removeGroup, setArticleGroup,
+};

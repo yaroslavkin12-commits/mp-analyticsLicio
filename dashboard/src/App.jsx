@@ -18,7 +18,7 @@ const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: 
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
   licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['ads', 'discounts', 'calculator'],
+  defly: ['ads', 'discounts', 'notifications', 'calculator'],
 };
 
 const THEME_KEY = 'mp-theme';
