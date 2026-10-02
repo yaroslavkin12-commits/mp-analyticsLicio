@@ -28,7 +28,7 @@
  *     их в чат.
  *  3. Выполнить функцию setupTriggers (из выпадающего списка функций вверху,
  *     кнопка "Выполнить") — она поставит сама себя собирать данные каждые
- *     20 минут (svежие данные) и раз в сутки (докачка истории + каталог).
+ *     15 минут (свежие данные) и раз в сутки (докачка истории + каталог).
  *     При первом запуске Google спросит разрешения — это нормально,
  *     разрешите (скрипт же ваш собственный).
  *  4. Таблицу -> кнопка "Настройки доступа" (Share) -> "Общий доступ" ->
@@ -57,7 +57,7 @@ const STOCKS_HEADERS = ['cabinet', 'product_id', 'offer_id', 'fbo_present', 'fbo
 const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy'];
 const STATS_HEADERS = ['cabinet', 'date', 'campaign_id', 'views', 'clicks', 'ctr', 'avg_bid', 'orders', 'orders_money', 'spend'];
 
-// "Свежее" окно собираем часто (раз в 20 минут) — быстро, мало запросов.
+// "Свежее" окно собираем часто (раз в 15 минут) — быстро, мало запросов.
 const ANALYTICS_WINDOW_DAYS_RECENT = 4;
 const STATS_WINDOW_DAYS_RECENT = 4;
 // "Полное" окно — раз в сутки, подольше, чтобы Ozon успел задним числом
@@ -371,7 +371,7 @@ function setupTriggers() {
     const fn = t.getHandlerFunction();
     if (fn === 'syncRecent' || fn === 'syncDaily') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('syncRecent').timeBased().everyMinutes(20).create();
+  ScriptApp.newTrigger('syncRecent').timeBased().everyMinutes(15).create();
   ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
-  Logger.log('Триггеры поставлены: syncRecent каждые 20 мин, syncDaily раз в сутки в 4:00.');
+  Logger.log('Триггеры поставлены: syncRecent каждые 15 мин, syncDaily раз в сутки в 4:00.');
 }
