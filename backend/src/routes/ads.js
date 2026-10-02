@@ -5,6 +5,7 @@ const { query } = require('../db');
 const { listCabinets } = require('../config/cabinets');
 const { requestRefresh, currentJob, getStatus, JOBS } = require('../collectors/ads/jobs');
 const { getAssociatedOfferIds } = require('../config/associatedArticles');
+const sheetSync = require('../collectors/ads/sheetSync');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
 // в интерфейсе, какие токены ещё нужно добавить в Render).
@@ -25,6 +26,24 @@ router.post('/collect', async (req, res) => {
   res.json({ success: true, message: wasBusy
     ? `Сбор для ${cabinet} уже идёт — обновление за ${days} дн. выполнится сразу после него`
     : `Сбор запущен для кабинета ${cabinet} за ${days} дн.` });
+});
+
+// GET /api/ads/sheet-check — ВРЕМЕННЫЙ диагностический роут: проверяет,
+// видит ли запущенный процесс ADS_SHEET_ID и реально ли читается Google
+// Таблица (без записи в БД). Убрать после того, как разберёмся с фоллбеком.
+router.get('/sheet-check', async (req, res) => {
+  const id = sheetSync.sheetId();
+  const out = { sheetIdSet: !!id, sheetIdPreview: id ? `${id.slice(0, 6)}...${id.slice(-4)}` : null, tabs: {} };
+  const tabs = ['Catalog', 'Analytics', 'Stocks', 'Campaigns', 'Stats'];
+  for (const tab of tabs) {
+    try {
+      const rows = await sheetSync.fetchSheetRows(tab);
+      out.tabs[tab] = rows === null ? { ok: false, error: 'ADS_SHEET_ID не задан' } : { ok: true, rowCount: rows.length, sample: rows[0] || null };
+    } catch (e) {
+      out.tabs[tab] = { ok: false, error: e.message, status: e.response?.status };
+    }
+  }
+  res.json({ success: true, data: out });
 });
 
 // GET /api/ads/data-status?cabinet=defly — когда какая часть данных

@@ -158,6 +158,7 @@ async function syncStatsFromSheet(cabinet) {
 
 module.exports = {
   sheetId,
+  fetchSheetRows,
   syncCatalogFromSheet,
   syncAnalyticsFromSheet,
   syncStocksFromSheet,
