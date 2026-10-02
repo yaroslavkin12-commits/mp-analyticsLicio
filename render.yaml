@@ -27,3 +27,11 @@ services:
         value: "2"
       - key: ADS_SHEET_ID
         sync: false
+      - key: DEFLY_OZON_CLIENT_ID
+        sync: false
+      - key: DEFLY_OZON_API_KEY
+        sync: false
+      - key: DEFLY_OZON_PERF_CLIENT_ID
+        sync: false
+      - key: DEFLY_OZON_PERF_SECRET
+        sync: false
