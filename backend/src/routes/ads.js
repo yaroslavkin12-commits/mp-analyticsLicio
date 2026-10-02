@@ -156,6 +156,78 @@ router.post('/order', async (req, res) => {
   }
 });
 
+// GET/POST/DELETE /api/ads/groups — тестируемые группы артикулов прямо на
+// странице "Реклама" (например "Чехлы"): объединяют несколько артикулов в
+// одну строку со сводным "Заказано"/"Расход"/ДРР сверху и списком артикулов
+// под ней. Группировка всегда по offerId — это "Артикул продавца" (свой код
+// товара, который продавец сам придумал, например Hv4-2KR), а НЕ SKU Ozon.
+// Хранится как JSON в app_settings — тем же способом, что и ads_order выше:
+//   ads_groups:<cabinet>         = [{id, name}, ...]
+//   ads_group_members:<cabinet>  = { offerId: groupId, ... }
+// Агрегаты по группе (сумма заказов/расхода за выбранный период) считаются
+// на фронте из уже загруженных totals артикулов — отдельный запрос не нужен.
+async function loadAdsGroups(cabinet) {
+  const rows = await query('SELECT key, value FROM app_settings WHERE key = ANY($1::text[])',
+    [[`ads_groups:${cabinet}`, `ads_group_members:${cabinet}`]]);
+  const byKey = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  const groups = byKey[`ads_groups:${cabinet}`] ? JSON.parse(byKey[`ads_groups:${cabinet}`]) : [];
+  const members = byKey[`ads_group_members:${cabinet}`] ? JSON.parse(byKey[`ads_group_members:${cabinet}`]) : {};
+  return { groups, members };
+}
+async function saveAdsGroupsSetting(key, value) {
+  await query(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [key, JSON.stringify(value)]
+  );
+}
+
+router.get('/groups', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    res.json({ success: true, data: await loadAdsGroups(cabinet) });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+router.post('/groups', async (req, res) => {
+  try {
+    const { cabinet, name } = req.body || {};
+    if (!cabinet || !name || !String(name).trim()) {
+      return res.status(400).json({ success: false, error: 'Нужны cabinet и name' });
+    }
+    const { groups, members } = await loadAdsGroups(cabinet);
+    const id = `${Date.now()}`;
+    groups.push({ id, name: String(name).trim() });
+    await saveAdsGroupsSetting(`ads_groups:${cabinet}`, groups);
+    res.json({ success: true, data: { groups, members } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+router.delete('/groups/:id', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const { groups, members } = await loadAdsGroups(cabinet);
+    const nextGroups = groups.filter(g => g.id !== req.params.id);
+    const nextMembers = Object.fromEntries(Object.entries(members).filter(([, gid]) => gid !== req.params.id));
+    await saveAdsGroupsSetting(`ads_groups:${cabinet}`, nextGroups);
+    await saveAdsGroupsSetting(`ads_group_members:${cabinet}`, nextMembers);
+    res.json({ success: true, data: { groups: nextGroups, members: nextMembers } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/ads/groups/assign — отнести артикул (offerId = артикул продавца)
+// к группе, либо убрать из группы (groupId: null/отсутствует).
+router.post('/groups/assign', async (req, res) => {
+  try {
+    const { cabinet, offerId, groupId } = req.body || {};
+    if (!cabinet || !offerId) return res.status(400).json({ success: false, error: 'Нужны cabinet и offerId' });
+    const { groups, members } = await loadAdsGroups(cabinet);
+    if (groupId) members[offerId] = groupId; else delete members[offerId];
+    await saveAdsGroupsSetting(`ads_group_members:${cabinet}`, members);
+    res.json({ success: true, data: { groups, members } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /api/ads/stats?cabinet=defly&days=30 — сводка для вкладки "Реклама",
 // сгруппированная по артикулу (а не по кампании), т.к. на один артикул может
 // быть запущено сразу несколько РК. Внутри каждого артикула — список его

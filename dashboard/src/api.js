@@ -27,6 +27,10 @@ export const saveManualStock = (cabinet, offerId, metric, value) =>
   api.post('/ads/manual-stock', { cabinet, offerId, metric, value });
 export const getAdsOrder  = cabinet => api.get('/ads/order', { params: { cabinet } });
 export const saveAdsOrder = (cabinet, order) => api.post('/ads/order', { cabinet, order });
+export const getAdsGroups    = cabinet => api.get('/ads/groups', { params: { cabinet } });
+export const addAdsGroup     = (cabinet, name) => api.post('/ads/groups', { cabinet, name });
+export const removeAdsGroup  = (cabinet, id) => api.delete(`/ads/groups/${id}`, { params: { cabinet } });
+export const assignAdsGroup  = (cabinet, offerId, groupId) => api.post('/ads/groups/assign', { cabinet, offerId, groupId });
 // /api/discounts (не /api/ads/discounts): путь с "/ads/" у части пользователей
 // режется блокировщиками рекламы прямо в браузере (см. комментарий в
 // backend/src/routes/discounts.js), поэтому вынесен на отдельный путь.
