@@ -6,15 +6,18 @@ import AdsStats from './pages/AdsStats';
 import Discounts from './pages/Discounts';
 import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
+import TrackedArticles from './pages/TrackedArticles';
 
-const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, calculator: Calculator, settings: Settings };
+const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
 // вкладку "Реклама"). "Соинвест" — общий Seller API Ozon, доступен обоим.
 // "Калькулятор" — чистый клиентский инструмент, не завязан на кабинет.
+// "Уведомления" — отслеживание артикулов + Telegram-алерты о новых заказах,
+// пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
-  licio: ['dashboard', 'stocks', 'discounts', 'calculator', 'settings'],
+  licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
   defly: ['ads', 'discounts', 'calculator'],
 };
 

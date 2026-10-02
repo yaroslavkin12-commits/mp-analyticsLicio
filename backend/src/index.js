@@ -18,6 +18,7 @@ app.use('/api/analytics', require('./routes/analytics'));
 
 app.use('/api/ads', require('./routes/ads'));
 app.use('/api/discounts', require('./routes/discounts'));
+app.use('/api/tracked-articles', require('./routes/trackedArticles'));
 app.use('/api/netcheck', require('./routes/netcheck')); // ВРЕМЕННО: диагностика таймаутов Ozon 28.09, убрать после
 
 const distPath = path.join(__dirname, '../../dashboard/dist');

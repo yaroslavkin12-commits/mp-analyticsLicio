@@ -35,3 +35,10 @@ export const getDiscountsSummary  = (cabinet, days) => api.get('/discounts/summa
 export const getDiscountsFeed     = (cabinet, days) => api.get('/discounts/feed', { params: { cabinet, days } });
 export const getDiscountSettings  = cabinet => api.get('/discounts/settings', { params: { cabinet } });
 export const saveDiscountSettings = (cabinet, settings) => api.post('/discounts/settings', { cabinet, ...settings });
+
+export const getTrackedArticles = cabinet => api.get('/tracked-articles', { params: { cabinet } });
+export const getTrackedArticlesFeed = cabinet => api.get('/tracked-articles/feed', { params: { cabinet } });
+export const addTrackedArticle = (cabinet, platform, article, label) =>
+  api.post('/tracked-articles', { cabinet, platform, article, label });
+export const removeTrackedArticle = (cabinet, id) =>
+  api.delete(`/tracked-articles/${id}`, { params: { cabinet } });

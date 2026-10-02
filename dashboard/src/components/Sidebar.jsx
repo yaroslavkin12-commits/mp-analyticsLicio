@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 const NAV_BY_CABINET = {
-  licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
+  licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
   defly: [['ads','📣','Реклама'],['discounts','💸','Соинвест'],['calculator','🧮','Калькулятор']],
 };
 const CABINETS = [['licio','Licio'],['defly','Defly']];

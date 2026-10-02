@@ -103,4 +103,20 @@ async function sendDiscountDigest(cabinet) {
   return true;
 }
 
-module.exports = { sendMessage, notifyDiscountChange, sendDiscountDigest, THRESHOLD };
+// Уведомление о новом заказе по отслеживаемому артикулу (вкладка
+// "Уведомления", см. collectors/trackedArticles.js). В отличие от
+// Соинвеста, тут нет порога/тихих часов — каждый новый заказ по
+// добавленному артикулу считается важным и шлётся сразу.
+async function notifyNewOrder(cabinet, platform, tracked, order) {
+  if (!TOKEN || !CHAT_ID) return;
+  const label = getCabinet(cabinet).label;
+  const platformLabel = platform === 'wb' ? 'Wildberries' : 'Ozon';
+  const title = tracked.label ? `${tracked.article} (${tracked.label})` : tracked.article;
+  const lines = [`🛒 <b>${label} · ${platformLabel}: новый заказ</b>`, `Артикул: <b>${title}</b>`];
+  if (order.productName) lines.push(String(order.productName).slice(0, 150));
+  if (order.price) lines.push(`Сумма: ${Math.round(Number(order.price)).toLocaleString('ru-RU')} ₽`);
+  if (order.warehouse) lines.push(`Склад: ${order.warehouse}`);
+  await sendMessage(lines.join('\n'));
+}
+
+module.exports = { sendMessage, notifyDiscountChange, sendDiscountDigest, notifyNewOrder, THRESHOLD };

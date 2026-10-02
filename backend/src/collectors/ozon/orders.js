@@ -1,6 +1,7 @@
 const axios = require('axios');
 const dayjs = require('dayjs');
 const { query } = require('../../db');
+const { checkAndNotify } = require('../trackedArticles');
 
 function headers() {
   return {
@@ -73,19 +74,25 @@ async function collectOrders(dateFrom) {
   console.log(`[Ozon] FBO: ${fboPostings.length}, FBS: ${fbsPostings.length}`);
 
   let total = 0;
+  const newOrders = []; // для уведомлений по отслеживаемым артикулам (см. trackedArticles.js)
   for (const p of allPostings) {
     for (const prod of p.products || []) {
       try {
         // financial_data.products матчится по product_id, а не по sku.
         const fin = p.financial_data?.products?.find(f => f.product_id === prod.sku) || {};
-        await query(
+        // RETURNING (xmax = 0) — стандартный приём Postgres: true значит
+        // строка реально ВСТАВЛЕНА впервые, false — это был UPDATE уже
+        // существующей (posting_number, sku). Только настоящие вставки
+        // считаем "новым заказом" для уведомлений.
+        const rows = await query(
           `INSERT INTO ozon_orders
             (date, posting_number, order_id, sku, offer_id, product_name,
              price, quantity, commission_amount, commission_percent, payout, status, warehouse_name)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT (posting_number, sku) DO UPDATE SET
              date=EXCLUDED.date, status=EXCLUDED.status, payout=EXCLUDED.payout,
-             commission_amount=EXCLUDED.commission_amount, commission_percent=EXCLUDED.commission_percent`,
+             commission_amount=EXCLUDED.commission_amount, commission_percent=EXCLUDED.commission_percent
+           RETURNING (xmax = 0) AS inserted, sku, offer_id, product_name, price, warehouse_name, status`,
           [
             mskDate(p.in_process_at || p.created_at),
             p.posting_number,
@@ -103,11 +110,22 @@ async function collectOrders(dateFrom) {
           ]
         );
         total++;
+        const r = rows[0];
+        if (r && r.inserted && r.status !== 'cancelled') {
+          newOrders.push({
+            offer_id: r.offer_id, sku: r.sku, productName: r.product_name,
+            price: Number(r.price) || 0, warehouse: r.warehouse_name,
+            orderRef: `${p.posting_number}:${r.sku}`,
+          });
+        }
       } catch (e) { /* skip */ }
     }
   }
 
   console.log(`[Ozon] Заказы сохранено: ${total}`);
+
+  checkAndNotify('licio', 'ozon', newOrders).catch(e => console.error('[Ozon] Уведомления:', e.message));
+
   return total;
 }
 

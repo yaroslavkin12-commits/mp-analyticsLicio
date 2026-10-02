@@ -422,3 +422,42 @@ ALTER TABLE product_discount_history ADD COLUMN IF NOT EXISTS marketing_oa_price
 -- Признак, что процент реально посчитан из внутреннего API кабинета
 -- (а не оставлен как приблизительный fallback без сессии).
 ALTER TABLE product_discount_history ADD COLUMN IF NOT EXISTS source VARCHAR(16) DEFAULT 'public_api';
+
+-- Уникальный id строки заказа WB (srid) — нужен, чтобы надёжно отличать
+-- НОВЫЙ заказ от уже виденного (ON CONFLICT DO NOTHING раньше не имел
+-- реального ключа конфликта и просто полагался на try/catch). См.
+-- collectors/wb/orders.js и collectors/trackedArticles.js.
+ALTER TABLE wb_orders ADD COLUMN IF NOT EXISTS srid VARCHAR(64);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wb_orders_srid ON wb_orders(srid);
+
+-- Артикулы (WB и/или Ozon), по которым пользователь хочет получать
+-- уведомление в Telegram при поступлении нового заказа — отдельная вкладка
+-- в интерфейсе ("Уведомления"). article — это либо числовой артикул WB,
+-- либо "Артикул продавца" (WB), либо offer_id/SKU (Ozon) — matching см. в
+-- collectors/trackedArticles.js. Сейчас привязано к кабинету Licio (там же,
+-- где идёт основной сбор заказов WB/Ozon — см. scheduler.js).
+CREATE TABLE IF NOT EXISTS tracked_articles (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL DEFAULT 'licio',
+  platform VARCHAR(16) NOT NULL,
+  article VARCHAR(128) NOT NULL,
+  label VARCHAR(256),
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(cabinet, platform, article)
+);
+
+-- Лента отправленных уведомлений о заказах — чтобы в интерфейсе было видно,
+-- что уведомление реально ушло (аналог вкладки "Уведомления" у Соинвеста).
+CREATE TABLE IF NOT EXISTS order_notifications_log (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL,
+  article VARCHAR(128) NOT NULL,
+  label VARCHAR(256),
+  order_ref VARCHAR(128),
+  price DECIMAL(12,2),
+  product_name VARCHAR(512),
+  sent_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_notif_sent ON order_notifications_log(cabinet, sent_at);
