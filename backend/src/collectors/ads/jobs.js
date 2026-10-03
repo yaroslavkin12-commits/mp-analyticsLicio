@@ -243,11 +243,25 @@ async function tickCabinet(cabinet) {
       const days = Math.max(7, Math.min(90, force.days || 30));
       const st = await getStatus(cabinet);
       const catalogAge = st.get('catalog')?.last_success_at ? Date.now() - new Date(st.get('catalog').last_success_at).getTime() : Infinity;
+      // ВАЖНО: эти 3 задачи раньше звали collectAdStats/collectClicks/
+      // collectProductAnalytics НАПРЯМУЮ, в обход withSheetFallback — то
+      // есть кнопка "Обновить данные" всегда била в Ozon напрямую, даже при
+      // ADS_DIRECT_DISABLED=true, и могла висеть по 4-8 минут на таймаутах.
+      // Теперь обёрнуты так же, как и обычный job.run, просто с периодом
+      // days (а не дефолтным) — фоллбек и флаг отключения работают одинаково
+      // что по расписанию, что по кнопке.
       const plan = [
         ...(catalogAge > HOUR ? [[JOBS[0], null]] : []),
-        [JOBS[1], c => collectAdStats(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) })],
-        [JOBS[2], c => collectClicks(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) })],
-        [JOBS[3], c => collectProductAnalytics(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) })],
+        [JOBS[1], c => withSheetFallback(c, 'perf(forced)',
+            () => collectAdStats(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) }),
+            () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c)])
+              .then(([a, b]) => ({ rows: (a.rows || 0) + (b.rows || 0) })))],
+        [JOBS[2], c => withSheetFallback(c, 'clicks(forced)',
+            () => collectClicks(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) }),
+            () => syncStatsFromSheet(c))],
+        [JOBS[3], c => withSheetFallback(c, 'analytics(forced)',
+            () => collectProductAnalytics(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) }),
+            () => syncAnalyticsFromSheet(c))],
         [JOBS[4], null],
       ];
       for (const [job, fn] of plan) { busy.set(cabinet, job.id); await runJob(cabinet, job, fn); }
