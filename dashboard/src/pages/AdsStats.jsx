@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import {
   ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
-import { getAdsStats, getAdsCabinets, getAdsDataStatus, collectAds, saveManualAdsMetric, saveManualStock, getAdsOrder, saveAdsOrder, getAdsGroups, addAdsGroup, removeAdsGroup, assignAdsGroup } from '../api';
+import { getAdsStats, getAdsCabinets, getAdsDataStatus, collectAds, saveManualAdsMetric, saveManualStock, getAdsOrder, saveAdsOrder, getAdsGroups, addAdsGroup, removeAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
 
 // Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
@@ -1202,6 +1202,12 @@ export default function AdsStats({ cabinet }) {
   const [groupName, setGroupName] = useState('');
   const [groupSaving, setGroupSaving] = useState(false);
 
+  // Готовые "склейки" из config/associatedArticles.js (одна модель — разные
+  // материалы/строчка, см. комментарий там) — чтобы предлагать готовый
+  // состав группы одной кнопкой, а не собирать его руками каждый раз.
+  const [siblingClusters, setSiblingClusters] = useState([]);
+  const [clusterSaving, setClusterSaving] = useState(null); // primary артикула, который сейчас создаётся
+
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([getAdsStats(cabinet, { dateFrom, dateTo }), getAdsCabinets()])
@@ -1236,6 +1242,28 @@ export default function AdsStats({ cabinet }) {
       .catch(() => setGroupsData({ groups: [], members: {} }));
   }, [cabinet]);
   useEffect(() => { loadGroups(); }, [loadGroups]);
+
+  useEffect(() => {
+    getSiblingClusters(cabinet).then(r => setSiblingClusters(r.data.data || [])).catch(() => setSiblingClusters([]));
+  }, [cabinet]);
+
+  // Кластер считаем "уже собранным", если все его артикулы уже в одной и
+  // той же существующей группе — тогда прятать кнопку, предлагать только
+  // то, что реально ещё не сгруппировано (целиком или частично).
+  const ungroupedClusters = siblingClusters.filter(c => {
+    const groupIds = c.members.map(id => groupsData.members[id]).filter(Boolean);
+    if (!groupIds.length) return true;
+    return !groupIds.every(g => g === groupIds[0]) || groupIds.length < c.members.length;
+  });
+
+  function onCreateFromCluster(cluster) {
+    setClusterSaving(cluster.primary);
+    const name = cluster.productName ? cluster.productName.slice(0, 40) : cluster.primary;
+    addAdsGroupFromCluster(cabinet, name, cluster.members)
+      .then(r => setGroupsData(r.data.data))
+      .catch(e => window.alert(e.response?.data?.error || 'Не удалось создать группу'))
+      .finally(() => setClusterSaving(null));
+  }
 
   function onAddGroup(e) {
     e.preventDefault();
@@ -1400,10 +1428,20 @@ export default function AdsStats({ cabinet }) {
     // схлопывается до только тех артикулов, что отнесены к этой группе
     // (см. onAssignGroup — выпадающий список на карточке), несматченные
     // кампании сюда не попадают, т.к. у них нет offerId.
+    // Общий компаратор "Свой порядок" — используется и во вкладке "Свой
+    // порядок", и внутри вкладки-группы (там тоже можно перетаскиванием
+    // менять местами артикулы одной модели — см. handleReorder ниже).
+    const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
+    const manualCmp = (a, b) => {
+      const ia = orderIndex.has(a.offerId) ? orderIndex.get(a.offerId) : Infinity;
+      const ib = orderIndex.has(b.offerId) ? orderIndex.get(b.offerId) : Infinity;
+      return ia !== ib ? ia - ib : spendCmp(a, b);
+    };
+
     if (sortBy.startsWith('group:')) {
       const groupId = sortBy.slice('group:'.length);
       matched = matched.filter(a => groupsData.members[a.offerId] === groupId);
-      matched.sort(spendCmp);
+      matched.sort(manualCmp);
       return matched;
     }
 
@@ -1411,12 +1449,7 @@ export default function AdsStats({ cabinet }) {
       // Свой порядок — по сохранённому manualOrder (массив offerId). Артикулы,
       // которых ещё нет в сохранённом порядке (новые), уходят в конец списка
       // по расходу — так они не перемешивают то, что пользователь уже расставил.
-      const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
-      matched.sort((a, b) => {
-        const ia = orderIndex.has(a.offerId) ? orderIndex.get(a.offerId) : Infinity;
-        const ib = orderIndex.has(b.offerId) ? orderIndex.get(b.offerId) : Infinity;
-        return ia !== ib ? ia - ib : spendCmp(a, b);
-      });
+      matched.sort(manualCmp);
     } else {
       const cmp = sortBy === 'name'
         ? (a, b) => naturalCompare(a.campaigns[0]?.title, b.campaigns[0]?.title)
@@ -1428,18 +1461,26 @@ export default function AdsStats({ cabinet }) {
     return [...matched, ...unmatched];
   }, [articlesRaw, onlyActive, search, paymentFilter, placementFilter, sortBy, manualOrder, groupsData]);
 
-  // Перетаскивание карточек в режиме "Свой порядок" — переставляет
-  // draggedKey перед/на место targetKey в списке offerId и сохраняет на
-  // сервер. Опирается на текущий видимый порядок (articles), а не на сырой
-  // manualOrder, чтобы новые/ещё не расставленные артикулы тоже корректно
-  // попадали в нужное место при первом же перетаскивании.
+  // Перетаскивание карточек — переставляет draggedKey перед/на место
+  // targetKey и сохраняет на сервер. Работает и во вкладке "Свой порядок",
+  // и внутри вкладки-группы (там удобно менять местами, например, материалы
+  // одной модели). Важно: строим полный порядок по ВСЕМ артикулам кабинета
+  // (а не только по видимому в группе подсписку articles) — иначе
+  // перетаскивание внутри группы стёрло бы сохранённый порядок всех
+  // остальных артикулов, которых сейчас не видно.
   function handleReorder(draggedKey, targetKey) {
     if (!draggedKey || draggedKey === targetKey) return;
-    const currentKeys = articles.filter(a => a.offerId).map(a => a.offerId);
-    const fromIdx = currentKeys.indexOf(draggedKey);
-    const toIdx = currentKeys.indexOf(targetKey);
+    const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
+    const allKeys = [...new Set(articlesRaw.filter(a => a.offerId).map(a => a.offerId))]
+      .sort((a, b) => {
+        const ia = orderIndex.has(a) ? orderIndex.get(a) : Infinity;
+        const ib = orderIndex.has(b) ? orderIndex.get(b) : Infinity;
+        return ia - ib;
+      });
+    const fromIdx = allKeys.indexOf(draggedKey);
+    const toIdx = allKeys.indexOf(targetKey);
     if (fromIdx === -1 || toIdx === -1) return;
-    const next = [...currentKeys];
+    const next = [...allKeys];
     next.splice(fromIdx, 1);
     next.splice(toIdx, 0, draggedKey);
     setManualOrder(next);
@@ -1511,6 +1552,25 @@ export default function AdsStats({ cabinet }) {
             }}>Отмена</button>
           </form>
         )}
+        {ungroupedClusters.length > 0 && (
+          <select
+            value=""
+            onChange={e => {
+              const cluster = ungroupedClusters.find(c => c.primary === e.target.value);
+              if (cluster) onCreateFromCluster(cluster);
+            }}
+            disabled={!!clusterSaving}
+            title="Готовые склейки по артикулам (config/associatedArticles.js) — создать группу со всем составом одной кнопкой"
+            style={{ padding:'5px 10px', borderRadius:8, fontSize:12, border:'1px dashed var(--border)', background:'transparent', color:'var(--text2)' }}
+          >
+            <option value="">{clusterSaving ? 'Создаю…' : '+ Группа по склейке…'}</option>
+            {ungroupedClusters.map(c => (
+              <option key={c.primary} value={c.primary}>
+                {c.primary} ({c.members.length} арт.){c.productName ? ` — ${c.productName.slice(0, 30)}` : ''}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {/* Когда активна вкладка-группа — сводная шапка по её артикулам
@@ -1527,6 +1587,26 @@ export default function AdsStats({ cabinet }) {
           spend: acc.spend + (a.totals.spend || 0),
         }), { orders: 0, revenue: 0, spend: 0 });
         const drr = agg.revenue > 0 ? agg.spend / agg.revenue * 100 : (agg.spend > 0 ? 100 : 0);
+
+        // "Эффект склейки" — заказы по артикулам той же склейки (см.
+        // config/associatedArticles.js), которые НЕ являются членами этой
+        // группы сами по себе (т.е. у них нет собственной РК и карточки
+        // здесь — иначе их заказы уже посчитаны выше, в agg, и повторный
+        // учёт задвоил бы цифры). Собираем по offerId в Map, чтобы один и
+        // тот же артикул, упомянутый у нескольких членов группы, не
+        // посчитался дважды.
+        const extraByOfferId = new Map();
+        for (const a of articles) {
+          for (const assoc of (a.associated || [])) {
+            if (groupsData.members[assoc.offerId] === groupId) continue; // уже свой член группы
+            extraByOfferId.set(assoc.offerId, assoc);
+          }
+        }
+        const extra = [...extraByOfferId.values()].reduce((acc, a) => ({
+          orders: acc.orders + (a.totals.orders || 0),
+          revenue: acc.revenue + (a.totals.revenue || 0),
+        }), { orders: 0, revenue: 0 });
+
         // Артикулы, которых ещё нет в этой группе — чтобы можно было
         // добавлять их прямо отсюда, а не переключаться на другую
         // сортировку ради выпадающего списка на карточке.
@@ -1542,6 +1622,14 @@ export default function AdsStats({ cabinet }) {
               <span>Расход: {fmtValue(agg.spend, 'money0')} ₽</span>
               <span>ДРР: {fmtValue(drr, 'pct')}</span>
             </span>
+            {extra.orders > 0 && (
+              <span
+                title="Заказы по артикулам той же склейки, которых пока нет в этой группе — учтены отдельно, чтобы не задваивать сумму выше"
+                style={{ fontSize:12, color:'var(--text3)', borderLeft:'1px solid var(--border)', paddingLeft:14 }}
+              >
+                + эффект склейки: {fmtValue(extra.orders, 'int')} шт / {fmtValue(extra.revenue, 'money0')} ₽
+              </span>
+            )}
             <select
               value=""
               onChange={e => { if (e.target.value) onAssignGroup(e.target.value, groupId); }}
@@ -1589,7 +1677,7 @@ export default function AdsStats({ cabinet }) {
 
       {articles.map(article => {
         const key = article.offerId || '__unmatched__';
-        const draggable = sortBy === 'manual' && !!article.offerId;
+        const draggable = (sortBy === 'manual' || sortBy.startsWith('group:')) && !!article.offerId;
         return (
           <ArticleCard
             key={key}

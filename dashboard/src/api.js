@@ -31,6 +31,8 @@ export const getAdsGroups    = cabinet => api.get('/ads/groups', { params: { cab
 export const addAdsGroup     = (cabinet, name) => api.post('/ads/groups', { cabinet, name });
 export const removeAdsGroup  = (cabinet, id) => api.delete(`/ads/groups/${id}`, { params: { cabinet } });
 export const assignAdsGroup  = (cabinet, offerId, groupId) => api.post('/ads/groups/assign', { cabinet, offerId, groupId });
+export const getSiblingClusters = cabinet => api.get('/ads/sibling-clusters', { params: { cabinet } });
+export const addAdsGroupFromCluster = (cabinet, name, offerIds) => api.post('/ads/groups/from-cluster', { cabinet, name, offerIds });
 // /api/discounts (не /api/ads/discounts): путь с "/ads/" у части пользователей
 // режется блокировщиками рекламы прямо в браузере (см. комментарий в
 // backend/src/routes/discounts.js), поэтому вынесен на отдельный путь.

@@ -4,7 +4,7 @@ const dayjs = require('dayjs');
 const { query } = require('../db');
 const { listCabinets } = require('../config/cabinets');
 const { requestRefresh, currentJob, getStatus, JOBS } = require('../collectors/ads/jobs');
-const { getAssociatedOfferIds } = require('../config/associatedArticles');
+const { getAssociatedOfferIds, ASSOCIATED_ARTICLES } = require('../config/associatedArticles');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
 // в интерфейсе, какие токены ещё нужно добавить в Render).
@@ -223,6 +223,53 @@ router.post('/groups/assign', async (req, res) => {
     if (!cabinet || !offerId) return res.status(400).json({ success: false, error: 'Нужны cabinet и offerId' });
     const { groups, members } = await loadAdsGroups(cabinet);
     if (groupId) members[offerId] = groupId; else delete members[offerId];
+    await saveAdsGroupsSetting(`ads_group_members:${cabinet}`, members);
+    res.json({ success: true, data: { groups, members } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// GET /api/ads/sibling-clusters?cabinet=defly — готовые "склейки" из
+// config/associatedArticles.js (один рекламируемый артикул + его материалы/
+// варианты той же модели) в виде, удобном для быстрого создания группы на
+// фронте одной кнопкой — чтобы не собирать состав группы руками каждый раз,
+// когда склейка и так уже известна и прописана в конфиге.
+router.get('/sibling-clusters', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const map = ASSOCIATED_ARTICLES[cabinet] || {};
+    const clusters = Object.entries(map).map(([primary, siblings]) => ({
+      primary,
+      members: [primary, ...siblings],
+    }));
+    const allIds = [...new Set(clusters.flatMap(c => c.members))];
+    const nameRows = allIds.length
+      ? await query(`SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = ANY($2::text[])`, [cabinet, allIds])
+      : [];
+    const nameByOfferId = new Map(nameRows.map(r => [r.offer_id, r.product_name]));
+    res.json({
+      success: true,
+      data: clusters.map(c => ({
+        ...c,
+        productName: nameByOfferId.get(c.primary) || null,
+      })),
+    });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/ads/groups/from-cluster — создать группу и сразу отнести к ней
+// весь список артикулов одним запросом (вместо create + N отдельных
+// assign) — именно то, что нужно кнопке "Создать группу по склейке".
+router.post('/groups/from-cluster', async (req, res) => {
+  try {
+    const { cabinet, name, offerIds } = req.body || {};
+    if (!cabinet || !name || !String(name).trim() || !Array.isArray(offerIds) || !offerIds.length) {
+      return res.status(400).json({ success: false, error: 'Нужны cabinet, name и offerIds' });
+    }
+    const { groups, members } = await loadAdsGroups(cabinet);
+    const id = `${Date.now()}`;
+    groups.push({ id, name: String(name).trim() });
+    for (const offerId of offerIds) members[offerId] = id;
+    await saveAdsGroupsSetting(`ads_groups:${cabinet}`, groups);
     await saveAdsGroupsSetting(`ads_group_members:${cabinet}`, members);
     res.json({ success: true, data: { groups, members } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
