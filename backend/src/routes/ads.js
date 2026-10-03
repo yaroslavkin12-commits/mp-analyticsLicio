@@ -695,6 +695,32 @@ router.get('/debug-raw', async (req, res) => {
   }
 });
 
+// ВРЕМЕННО: прямой запрос списка товаров кампании (api-performance v2/products)
+// для диагностики — используется ли эта конкретная кампания несколькими
+// артикулами сразу (кампании "Оплата за заказ: выбранные товары" и т.п.
+// могут продвигать сразу пачку SKU, а не один).
+router.get('/debug-campaign-products', async (req, res) => {
+  try {
+    const axios = require('axios');
+    const { perfHeaders } = require('../collectors/ads/ozonHttp');
+    const cabinet = req.query.cabinet || 'defly';
+    const campaignId = req.query.campaignId;
+    if (!campaignId) return res.status(400).json({ success: false, error: 'campaignId required' });
+    const headers = await perfHeaders(cabinet);
+    if (!headers) return res.status(400).json({ success: false, error: 'Performance API не настроен' });
+    const data = await axios.get(
+      `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/v2/products`,
+      { headers, timeout: 20000 }).then(r => r.data);
+    const skus = (data?.products || []).map(p => String(p.sku)).filter(Boolean);
+    const catalogRows = skus.length
+      ? await query(`SELECT offer_id, sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku = ANY($2::text[])`, [cabinet, skus])
+      : [];
+    res.json({ success: true, data: { skuCount: skus.length, skus, matchedOfferIds: catalogRows, raw: data } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ВРЕМЕННЫЙ debug-роут: сырой ответ Ozon Seller Analytics API для Defly —
 // понять, почему product_analytics_daily пустая (0 строк).
 // ВРЕМЕННЫЙ диагностический зонд для переделки сбора Defly: проверяет на
