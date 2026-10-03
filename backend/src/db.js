@@ -10,6 +10,15 @@ function getPool() {
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
       max: 10,
+      // Без этого зависший или заблокированный запрос (например, ожидание
+      // лока от другого долгого INSERT) держит соединение из пула вечно —
+      // следующие запросы (включая mark() в jobs.js) просто бесконечно ждут
+      // свободного клиента, и busy-лок кабинета никогда не снимается.
+      // С таймаутами зависание превращается в быструю явную ошибку.
+      connectionTimeoutMillis: 10000,   // не ждать свободное соединение дольше 10с
+      statement_timeout: 20000,          // Postgres сам обрубит запрос дольше 20с
+      query_timeout: 25000,              // то же самое на стороне клиента node-postgres
+      idle_in_transaction_session_timeout: 20000,
     });
   }
   return pool;

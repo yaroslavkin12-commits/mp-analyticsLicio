@@ -226,6 +226,22 @@ function isDue(job, st, now) {
   return true;
 }
 
+// Доп. подстраховка на уровень выше withSheetFallback: даже если зависнет
+// что-то совсем другое (например, mark() в начале runJob ждёт свободного
+// соединения из пула, или сам Google CSV не словился таймаутом axios) —
+// runJobGuarded всё равно отпустит busy-лок кабинета за HARD_JOB_TIMEOUT.
+// Без этого один зависший job навсегда показывает "идёт сбор..." даже
+// после всех внутренних таймаутов.
+const HARD_JOB_TIMEOUT = 45 * 1000;
+async function runJobGuarded(cabinet, job, runFn) {
+  try {
+    await withTimeout(runJob(cabinet, job, runFn), HARD_JOB_TIMEOUT, `${job.id}(watchdog)`);
+  } catch (e) {
+    console.error(`[Jobs:${cabinet}] ${job.id}: не снялся за ${HARD_JOB_TIMEOUT / 1000}с, принудительно считаю ошибкой —`, e.message);
+    mark(cabinet, job.id, { last_error_at: new Date(), last_error: e.message }).catch(() => {});
+  }
+}
+
 async function runJob(cabinet, job, runFn) {
   const t0 = Date.now();
   await mark(cabinet, job.id, { last_started_at: new Date() });
@@ -279,14 +295,14 @@ async function tickCabinet(cabinet) {
             () => syncAnalyticsFromSheet(c))],
         [JOBS[4], null],
       ];
-      for (const [job, fn] of plan) { busy.set(cabinet, job.id); await runJob(cabinet, job, fn); }
+      for (const [job, fn] of plan) { busy.set(cabinet, job.id); await runJobGuarded(cabinet, job, fn); }
     }
     const st = await getStatus(cabinet);
     const now = Date.now();
     for (const job of JOBS) {
       if (!isDue(job, st.get(job.id), now)) continue;
       busy.set(cabinet, job.id);
-      await runJob(cabinet, job);
+      await runJobGuarded(cabinet, job);
     }
   } finally {
     busy.delete(cabinet);
