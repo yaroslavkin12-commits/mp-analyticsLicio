@@ -662,6 +662,19 @@ router.get('/debug-raw', async (req, res) => {
       query(`SELECT title FROM ad_campaigns WHERE cabinet = $1 AND matched_offer_id IS NULL AND title IS NOT NULL LIMIT 30`, [cabinet]),
       query(`SELECT * FROM ad_job_status WHERE cabinet = $1 ORDER BY job`, [cabinet]),
     ]);
+    // ВРЕМЕННО: кампании без matched_offer_id, у которых есть расход за
+    // последние 3 дня — чтобы найти "потерянные" свежие кампании, чей
+    // заголовок не совпал по подстроке ни с одним offer_id (диагностика
+    // вопроса "расход не отображается по новым артикулам").
+    const recentUnmatchedSpend = await query(
+      `SELECT c.campaign_id, c.title, c.state, SUM(s.spend) AS spend3d, MAX(s.date) AS last_date
+         FROM ad_stats_daily s
+         JOIN ad_campaigns c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.campaign_id = s.campaign_id
+        WHERE s.cabinet = $1 AND c.matched_offer_id IS NULL AND s.date >= (CURRENT_DATE - INTERVAL '3 days')
+        GROUP BY c.campaign_id, c.title, c.state
+        ORDER BY spend3d DESC
+        LIMIT 20`,
+      [cabinet]);
     res.json({
       success: true,
       data: {
@@ -673,6 +686,7 @@ router.get('/debug-raw', async (req, res) => {
         productAnalyticsDailyTotal: analyticsCount[0]?.n,
         productAnalyticsDailySample: analyticsSample,
         unmatchedTitlesSample: campTitles.map(r => r.title),
+        recentUnmatchedSpend,
         jobStatus: runRows,
       },
     });
