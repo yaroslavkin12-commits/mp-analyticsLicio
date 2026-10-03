@@ -156,6 +156,25 @@ async function syncStatsFromSheet(cabinet) {
   return { rows: saved };
 }
 
+// Товары мультитоварных кампаний ("Оплата за заказ: выбранные товары" и
+// подобные — см. комментарий у ad_campaign_skus в postgres/init.sql).
+// sku='0' — служебная отметка Apps Script'а "кампанию проверили, товаров
+// нет/Ozon не отдал" (см. google-apps-script/ozon-sheet-sync.gs), её тоже
+// сохраняем как есть — нужна backend'у, чтобы не запрашивать эту кампанию
+// повторно (хотя сам backend сейчас это не перезапрашивает, т.к. список
+// товаров кампаний в фоллбек-режиме собирает только Apps Script).
+async function syncCampaignSkusFromSheet(cabinet) {
+  const rows = await fetchSheetRows('CampaignSkus');
+  if (rows === null) return { rows: 0 };
+  const filtered = rows.filter(r => r.cabinet === cabinet && r.campaign_id && r.sku !== '' && r.sku !== undefined);
+  const out = filtered.map(r => [cabinet, 'ozon', r.campaign_id, num(r.sku), new Date()]);
+  const saved = await bulkUpsert('ad_campaign_skus',
+    ['cabinet', 'platform', 'campaign_id', 'sku', 'updated_at'],
+    out, ['cabinet', 'platform', 'campaign_id', 'sku']);
+  console.log(`[SheetCampaignSkus:${cabinet}] ${saved} (из Google-таблицы)`);
+  return { rows: saved };
+}
+
 module.exports = {
   sheetId,
   fetchSheetRows,
@@ -164,4 +183,5 @@ module.exports = {
   syncStocksFromSheet,
   syncCampaignsFromSheet,
   syncStatsFromSheet,
+  syncCampaignSkusFromSheet,
 };

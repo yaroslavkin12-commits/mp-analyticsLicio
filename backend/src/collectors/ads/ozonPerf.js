@@ -74,12 +74,25 @@ async function collectAdStats(cabinet, { dateFrom, dateTo } = {}) {
     `SELECT campaign_id, title, matched_offer_id, sku_checked_at FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
   const dayAgo = Date.now() - 24 * 3600 * 1000;
   let checked = 0;
+  // Товары мультитоварных кампаний ("Оплата за заказ: выбранные товары" и
+  // подобные) — одна РК может продвигать сразу НЕСКОЛЬКО SKU, и matched_sku/
+  // matched_offer_id (единственная пара на кампанию) этого не выражают.
+  // Сохраняем здесь ВЕСЬ список SKU кампании, что нашёлся в каталоге — не
+  // только первый, с которым совпал matched_offer_id — чтобы расход такой
+  // кампании можно было поделить между всеми её товарами (см. ad_campaign_skus
+  // в postgres/init.sql и разбивку в routes/ads.js /stats).
+  const campaignSkuRows = [];
   for (const c of known) {
     const needApi = activeIds.has(c.campaign_id) && (!c.sku_checked_at || new Date(c.sku_checked_at).getTime() < dayAgo);
     if (needApi) {
       const skus = await getCampaignSkus(c.campaign_id, headers);
       let match = null;
-      for (const sku of skus) if (catalogBySku.has(sku)) { match = catalogBySku.get(sku); break; }
+      for (const sku of skus) {
+        if (catalogBySku.has(sku)) {
+          if (!match) match = catalogBySku.get(sku);
+          campaignSkuRows.push([cabinet, 'ozon', c.campaign_id, sku, new Date()]);
+        }
+      }
       if (!match) match = matchOfferByTitle(c.title, catalogByOfferId);
       await query(
         `UPDATE ad_campaigns SET matched_offer_id = COALESCE($3, matched_offer_id), matched_sku = COALESCE($4, matched_sku),
@@ -95,7 +108,11 @@ async function collectAdStats(cabinet, { dateFrom, dateTo } = {}) {
       }
     }
   }
-  console.log(`[Perf:${cabinet}] Кампаний ${campaigns.length}, строк расхода ${saved}, проверено привязок ${checked}`);
+  if (campaignSkuRows.length) {
+    await bulkUpsert('ad_campaign_skus', ['cabinet', 'platform', 'campaign_id', 'sku', 'updated_at'],
+      campaignSkuRows, ['cabinet', 'platform', 'campaign_id', 'sku']);
+  }
+  console.log(`[Perf:${cabinet}] Кампаний ${campaigns.length}, строк расхода ${saved}, проверено привязок ${checked}, товаров мультитоварных РК ${campaignSkuRows.length}`);
   return { rows: saved };
 }
 

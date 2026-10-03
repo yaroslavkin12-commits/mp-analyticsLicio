@@ -336,7 +336,7 @@ router.get('/stats', async (req, res) => {
       to = dayjs().format('YYYY-MM-DD');
     }
 
-    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows, stockManualRows] = await Promise.all([
+    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows, stockManualRows, campaignSkuRows] = await Promise.all([
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
@@ -370,6 +370,12 @@ router.get('/stats', async (req, res) => {
       // значение, а не история по дням.
       query(`SELECT offer_id, metric, value FROM ad_stock_manual WHERE cabinet = $1 AND platform = 'ozon'`,
              [cabinet]),
+      // Товары мультитоварных кампаний ("Оплата за заказ: выбранные товары"
+      // и подобные) — одна РК продвигает сразу несколько SKU, и расход по
+      // ней нужно поделить между всеми её артикулами, а не отнести целиком
+      // одному (см. ad_campaign_skus в init.sql и split ниже).
+      query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`,
+             [cabinet]),
     ]);
 
     const dates = [];
@@ -400,6 +406,7 @@ router.get('/stats', async (req, res) => {
     }
 
     const nameByOfferId = new Map(catalogRows.map(r => [r.offer_id, r.product_name]));
+    const skuByOfferId = new Map(catalogRows.filter(r => r.sku != null).map(r => [r.offer_id, r.sku]));
 
     const stockByOfferId = new Map(stockRows.map(r => [r.offer_id, {
       fboPresent: Number(r.fbo_present) || 0,
@@ -452,34 +459,66 @@ router.get('/stats', async (req, res) => {
       return byArticle.get(key);
     }
 
+    // Мультитоварные кампании ("Оплата за заказ: выбранные товары" и
+    // подобные) продвигают сразу НЕСКОЛЬКО SKU в одной РК — там, где обычное
+    // сопоставление "одна кампания = один артикул" (matched_offer_id) в
+    // принципе неприменимо (название кампании не называет ни один из
+    // товаров). ad_campaign_skus даёт реальный список SKU такой кампании;
+    // переводим их в offer_id через каталог и, если таких артикулов больше
+    // одного, делим расход/клики кампании поровну между ними — лучше
+    // приблизительно учесть у каждого, чем потерять целиком как
+    // "непривязанный". См. google-apps-script/ozon-sheet-sync.gs и
+    // collectors/ads/ozonPerf.js (оба наполняют ad_campaign_skus).
+    const campaignOfferIds = new Map(); // campaignId -> Set(offerId)
+    for (const r of campaignSkuRows) {
+      const offerId = offerBySkuCat.get(String(r.sku));
+      if (!offerId) continue;
+      if (!campaignOfferIds.has(r.campaign_id)) campaignOfferIds.set(r.campaign_id, new Set());
+      campaignOfferIds.get(r.campaign_id).add(offerId);
+    }
+
     for (const camp of campaigns) {
-      const article = getArticle(camp.matched_offer_id, camp.matched_sku);
-      const byDate = {};
-      let totalSpend = 0, totalClicks = 0;
-      for (const date of dates) {
-        const spend = spendByKey.get(`${camp.campaign_id}|${date}`) || 0;
-        const clicks = clicksByKey.get(`${camp.campaign_id}|${date}`) || 0;
-        totalSpend += spend;
-        totalClicks += clicks;
-        // Средняя цена клика за день — расход / клики (клики собираются
-        // отдельно через collectors/ads/ozonClicks.js, т.к. эндпоинт расхода
-        // их не отдаёт). 0, если кликов не было — не делить на 0.
-        byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0 };
+      const multiOfferIds = [...(campaignOfferIds.get(camp.campaign_id) || [])];
+      // >1 — реально мультитоварная кампания, делим расход поровну между
+      // артикулами. Если найден ровно 1 — это просто уточнение обычной
+      // привязки (например, когда matched_offer_id не определился по
+      // названию), используем его вместо matched_offer_id. Если 0 — старое
+      // поведение без изменений.
+      const targetOfferIds = multiOfferIds.length > 0 ? multiOfferIds : [camp.matched_offer_id];
+      const splitCount = multiOfferIds.length > 1 ? multiOfferIds.length : 1;
+      for (const offerId of targetOfferIds) {
+        const sku = splitCount > 1 ? (skuByOfferId.get(offerId) || null) : camp.matched_sku;
+        const article = getArticle(offerId, sku);
+        const byDate = {};
+        let totalSpend = 0, totalClicks = 0;
+        for (const date of dates) {
+          const spend = (spendByKey.get(`${camp.campaign_id}|${date}`) || 0) / splitCount;
+          const clicks = (clicksByKey.get(`${camp.campaign_id}|${date}`) || 0) / splitCount;
+          totalSpend += spend;
+          totalClicks += clicks;
+          // Средняя цена клика за день — расход / клики (клики собираются
+          // отдельно через collectors/ads/ozonClicks.js, т.к. эндпоинт расхода
+          // их не отдаёт). 0, если кликов не было — не делить на 0.
+          byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0 };
+        }
+        article.campaigns.push({
+          campaignId: camp.campaign_id,
+          title: camp.title,
+          state: camp.state,
+          advObjectType: camp.adv_object_type,
+          paymentType: camp.payment_type,
+          autopilotStrategy: camp.autopilot_strategy,
+          placement: camp.placement,
+          expenseStrategy: camp.expense_strategy,
+          totalSpend,
+          totalClicks,
+          avgCpc: totalClicks > 0 ? totalSpend / totalClicks : 0,
+          // Фронту — чтобы показать "расход поделен поровну на N товаров
+          // кампании" вместо того, чтобы молча выдавать точную с виду цифру.
+          splitAcross: splitCount > 1 ? splitCount : null,
+          byDate,
+        });
       }
-      article.campaigns.push({
-        campaignId: camp.campaign_id,
-        title: camp.title,
-        state: camp.state,
-        advObjectType: camp.adv_object_type,
-        paymentType: camp.payment_type,
-        autopilotStrategy: camp.autopilot_strategy,
-        placement: camp.placement,
-        expenseStrategy: camp.expense_strategy,
-        totalSpend,
-        totalClicks,
-        avgCpc: totalClicks > 0 ? totalSpend / totalClicks : 0,
-        byDate,
-      });
     }
 
     // Принудительно заводим карточки для артикулов без единой РК (значит,

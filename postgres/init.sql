@@ -491,3 +491,25 @@ CREATE TABLE IF NOT EXISTS tracked_orders_seen (
   seen_at TIMESTAMP DEFAULT NOW(),
   UNIQUE(cabinet, posting_number, sku)
 );
+
+-- Товары (SKU) МУЛЬТИТОВАРНОЙ рекламной кампании Ozon — кампании вида
+-- "Оплата за заказ: выбранные товары" (CPO) продвигают сразу НЕСКОЛЬКО SKU
+-- в одной кампании, а не один (в отличие от обычных "кампания на карточку").
+-- ad_campaigns.matched_offer_id/matched_sku остаются для случая "одна
+-- кампания — один артикул"; эта таблица — доп. список для случая "кампания —
+-- несколько артикулов", чтобы можно было разнести дневной расход кампании
+-- поровну между всеми её товарами (см. backend/src/routes/ads.js), а не
+-- терять его целиком как "непривязанный". Наполняется и напрямую
+-- (ozonPerf.js), и через Google-таблицу-фоллбек (google-apps-script/
+-- ozon-sheet-sync.gs + sheetSync.js), когда прямая сеть Render -> Ozon
+-- заблокирована.
+CREATE TABLE IF NOT EXISTS ad_campaign_skus (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  campaign_id VARCHAR(64) NOT NULL,
+  sku BIGINT NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(cabinet, platform, campaign_id, sku)
+);
+CREATE INDEX IF NOT EXISTS idx_ad_campaign_skus_campaign ON ad_campaign_skus(cabinet, platform, campaign_id);

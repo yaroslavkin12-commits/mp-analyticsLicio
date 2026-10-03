@@ -13,6 +13,7 @@ const {
   syncStocksFromSheet,
   syncCampaignsFromSheet,
   syncStatsFromSheet,
+  syncCampaignSkusFromSheet,
 } = require('./sheetSync');
 const { collectDiscounts } = require('./ozonDiscounts');
 const { getSettings } = require('./discountSettings');
@@ -93,8 +94,8 @@ const JOBS = [
       () => collectCatalog(c), () => syncCatalogFromSheet(c)) },
   { id: 'perf', every: 30 * MIN, run: c => withSheetFallback(c, 'perf',
       () => collectAdStats(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }),
-      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c)])
-        .then(([a, b]) => ({ rows: (a.rows || 0) + (b.rows || 0) }))) },
+      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c), syncCampaignSkusFromSheet(c)])
+        .then(([a, b, s]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) }))) },
   { id: 'clicks', every: 30 * MIN, run: c => withSheetFallback(c, 'clicks',
       () => collectClicks(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }),
       () => syncStatsFromSheet(c)) },
@@ -107,8 +108,8 @@ const JOBS = [
   // заказы/выручку (отмены, поздние данные), и так же закрываются любые дыры.
   { id: 'perf_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'perf_full',
       () => collectAdStats(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
-      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c)])
-        .then(([a, b]) => ({ rows: (a.rows || 0) + (b.rows || 0) }))) },
+      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c), syncCampaignSkusFromSheet(c)])
+        .then(([a, b, s]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) }))) },
   { id: 'clicks_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'clicks_full',
       () => collectClicks(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncStatsFromSheet(c)) },
@@ -285,8 +286,8 @@ async function tickCabinet(cabinet) {
         ...(catalogAge > HOUR ? [[JOBS[0], null]] : []),
         [JOBS[1], c => withSheetFallback(c, 'perf(forced)',
             () => collectAdStats(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) }),
-            () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c)])
-              .then(([a, b]) => ({ rows: (a.rows || 0) + (b.rows || 0) })))],
+            () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c), syncCampaignSkusFromSheet(c)])
+              .then(([a, b, s]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) })))],
         [JOBS[2], c => withSheetFallback(c, 'clicks(forced)',
             () => collectClicks(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) }),
             () => syncStatsFromSheet(c))],

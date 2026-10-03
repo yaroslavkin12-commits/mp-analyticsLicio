@@ -866,7 +866,17 @@ function CampaignsList({ campaigns }) {
         <tbody>
           {campaigns.map(camp => (
             <tr key={camp.campaignId} style={{ borderTop:'1px solid var(--border)' }}>
-              <td style={{ padding:'7px 10px', color:'var(--text)', whiteSpace:'normal', wordBreak:'break-word' }}>{camp.title || camp.campaignId}</td>
+              <td style={{ padding:'7px 10px', color:'var(--text)', whiteSpace:'normal', wordBreak:'break-word' }}>
+                {camp.title || camp.campaignId}
+                {camp.splitAcross > 1 && (
+                  <span
+                    title={`Мультитоварная РК — расход и клики поделены поровну между ${camp.splitAcross} артикулами, которые она продвигает (Ozon не разбивает их по товарам отдельно)`}
+                    style={{ marginLeft:6, fontSize:10.5, padding:'1px 6px', borderRadius:999, background:'rgba(234,179,8,.18)', color:'var(--warn, #ca8a04)', whiteSpace:'nowrap' }}
+                  >
+                    ÷{camp.splitAcross}
+                  </span>
+                )}
+              </td>
               <td style={{ padding:'7px 8px' }}>
                 <span style={{
                   fontSize:11, padding:'2px 8px', borderRadius:999, whiteSpace:'nowrap',

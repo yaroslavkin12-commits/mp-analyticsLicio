@@ -49,12 +49,22 @@ const SHEET_NAMES = {
   stocks: 'Stocks',
   campaigns: 'Campaigns',
   stats: 'Stats',
+  campaignSkus: 'CampaignSkus',
 };
 
 const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name'];
 const ANALYTICS_HEADERS = ['cabinet', 'date', 'sku', 'hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
 const STOCKS_HEADERS = ['cabinet', 'product_id', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'];
 const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy'];
+// Товары МУЛЬТИТОВАРНЫХ кампаний ("Оплата за заказ: выбранные товары" и
+// подобные, где одна РК продвигает сразу пачку SKU, а не один артикул) —
+// см. backend/postgres/init.sql (ad_campaign_skus) и sheetSync.js. checked_at
+// нужен, чтобы не дёргать /v2/products по одной и той же кампании каждые
+// 15 минут — список товаров кампании меняется редко. sku=0 — служебная
+// отметка "проверили, но Ozon не отдал товары" (чтобы не ходить повторно
+// слишком часто даже для пустого результата).
+const CAMPAIGN_SKUS_HEADERS = ['cabinet', 'campaign_id', 'sku', 'checked_at'];
+const CAMPAIGN_SKUS_RECHECK_HOURS = 20;
 const STATS_HEADERS = ['cabinet', 'date', 'campaign_id', 'views', 'clicks', 'ctr', 'avg_bid', 'orders', 'orders_money', 'spend'];
 
 // "Свежее" окно собираем часто (раз в 15 минут) — быстро, мало запросов.
@@ -227,8 +237,23 @@ function collectStocks_(cab, out) {
   }
 }
 
+// Список SKU конкретной кампании (api-performance v2/products) — нужен для
+// мультитоварных РК ("Оплата за заказ: выбранные товары"), где обычное
+// "offer_id встречается в названии кампании" не работает в принципе: там
+// несколько товаров сразу, и название кампании их не называет.
+function getCampaignProducts_(campaignId, headers) {
+  try {
+    const data = fetchJson_('https://api-performance.ozon.ru/api/client/campaign/' + campaignId + '/v2/products',
+      { method: 'get', headers: headers }, 'Товары РК ' + campaignId);
+    return (data.products || []).map(function (p) { return String(p.sku || ''); }).filter(Boolean);
+  } catch (e) {
+    Logger.log('Товары РК ' + campaignId + ': ' + e.message);
+    return null; // null = запрос не удался, не отмечаем как "проверено"
+  }
+}
+
 // ---------- Кампании + расход/клики ----------
-function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut) {
+function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campaignSkusOut) {
   const headers = perfHeaders_(cab);
   if (!headers) return;
   const listData = fetchJson_('https://api-performance.ozon.ru/api/client/campaign', { method: 'get', headers: headers }, 'Список кампаний');
@@ -243,10 +268,12 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut) {
     { method: 'get', headers: headers }, 'Расход');
   const expenseRows = expData.rows || expData.list || (Array.isArray(expData) ? expData : []);
   const spendByKey = {};
+  const campaignHasSpend = {};
   expenseRows.forEach(function (r) {
     const campaignId = String(r.id || r.campaignId || r.campaign_id || '');
     if (!campaignId || !r.date) return;
     spendByKey[campaignId + '|' + r.date] = parseRuNumber_(r.moneySpent);
+    campaignHasSpend[campaignId] = true;
   });
 
   const dailyData = fetchJson_('https://api-performance.ozon.ru/api/client/statistics/daily/json?dateFrom=' + from + '&dateTo=' + to,
@@ -271,6 +298,39 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut) {
     const parts = key.split('|');
     statsOut.push([cab.id, parts[1], parts[0], 0, 0, 0, 0, 0, 0, spendByKey[key]]);
   });
+
+  // Товары только у кампаний, по которым реально был расход в этом окне —
+  // активных РК обычно пара десятков, а не все 800+ за всю историю, так что
+  // укладываемся в 6-минутный лимит Apps Script. Уже проверенные недавно
+  // (CAMPAIGN_SKUS_RECHECK_HOURS) — пропускаем, список товаров кампании
+  // меняется редко.
+  if (campaignSkusOut) {
+    const checkedMap = readSheetAsMap_(SHEET_NAMES.campaignSkus, [0, 1]); // cabinet|campaign_id -> последняя строка (с checked_at)
+    const lastCheckedByCampaign = {};
+    Object.keys(checkedMap).forEach(function (key) {
+      const row = checkedMap[key];
+      const campaignId = String(row[1]);
+      const checkedAt = new Date(row[3]).getTime();
+      if (!lastCheckedByCampaign[campaignId] || checkedAt > lastCheckedByCampaign[campaignId]) {
+        lastCheckedByCampaign[campaignId] = checkedAt;
+      }
+    });
+    const cutoff = Date.now() - CAMPAIGN_SKUS_RECHECK_HOURS * 3600 * 1000;
+    const toCheck = Object.keys(campaignHasSpend).filter(function (id) {
+      return !lastCheckedByCampaign[id] || lastCheckedByCampaign[id] < cutoff;
+    });
+    const nowIso = new Date().toISOString();
+    toCheck.forEach(function (campaignId) {
+      const skus = getCampaignProducts_(campaignId, headers);
+      if (skus === null) return; // запрос не удался — попробуем в следующий раз
+      if (skus.length) {
+        skus.forEach(function (sku) { campaignSkusOut.push([cab.id, campaignId, sku, nowIso]); });
+      } else {
+        campaignSkusOut.push([cab.id, campaignId, '0', nowIso]); // отметка "проверили, товаров нет/не отдал"
+      }
+      Utilities.sleep(250);
+    });
+  }
 }
 
 // ---------- Запись в таблицу ----------
@@ -328,18 +388,19 @@ function mergeIntoSheet_(sheetName, headers, newRows, keyCols, dateCol) {
 function syncRecent() {
   const cabinets = getCabinets_();
   if (!cabinets.length) { Logger.log('Нет настроенных кабинетов — проверьте Свойства скрипта.'); return; }
-  const analytics = [], stocks = [], campaigns = [], stats = [];
+  const analytics = [], stocks = [], campaigns = [], stats = [], campaignSkus = [];
   const from = mskDate_(ANALYTICS_WINDOW_DAYS_RECENT - 1), to = mskDate_(0);
   cabinets.forEach(function (cab) {
     try { collectAnalyticsWindow_(cab, from, to, analytics); } catch (e) { Logger.log('Аналитика ' + cab.id + ': ' + e.message); }
     try { collectStocks_(cab, stocks); } catch (e) { Logger.log('Остатки ' + cab.id + ': ' + e.message); }
-    try { collectCampaignsAndStats_(cab, from, to, campaigns, stats); } catch (e) { Logger.log('Кампании/расход ' + cab.id + ': ' + e.message); }
+    try { collectCampaignsAndStats_(cab, from, to, campaigns, stats, campaignSkus); } catch (e) { Logger.log('Кампании/расход ' + cab.id + ': ' + e.message); }
   });
   mergeIntoSheet_(SHEET_NAMES.analytics, ANALYTICS_HEADERS, analytics, [0, 1, 2], 1);
   if (stocks.length) writeRows_(SHEET_NAMES.stocks, STOCKS_HEADERS, stocks); // текущий снэпшот — перезаписываем целиком
   mergeIntoSheet_(SHEET_NAMES.campaigns, CAMPAIGNS_HEADERS, campaigns, [0, 1]);
   mergeIntoSheet_(SHEET_NAMES.stats, STATS_HEADERS, stats, [0, 1, 2], 1);
-  Logger.log('syncRecent: аналитика ' + analytics.length + ', остатки ' + stocks.length + ', кампании ' + campaigns.length + ', статистика ' + stats.length);
+  mergeIntoSheet_(SHEET_NAMES.campaignSkus, CAMPAIGN_SKUS_HEADERS, campaignSkus, [0, 1, 2]);
+  Logger.log('syncRecent: аналитика ' + analytics.length + ', остатки ' + stocks.length + ', кампании ' + campaigns.length + ', статистика ' + stats.length + ', товары РК ' + campaignSkus.length);
 }
 
 function syncDaily() {
