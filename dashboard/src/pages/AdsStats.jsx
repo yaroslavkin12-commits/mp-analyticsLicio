@@ -1480,10 +1480,19 @@ export default function AdsStats({ cabinet }) {
   // скрывается только если после фильтрации у него не осталось РК.
   // Кампании внутри артикула сортируются "естественно" по названию — так
   // же, как их нумерует сам Ozon (1., 2., ... 10., а не 1,10,2 по алфавиту).
+  //
+  // Исключение: артикул без единой РК (campaigns.length уже 0 ДО фильтров
+  // выше — т.е. это не "отфильтровали всё активными/поиском", а искренне
+  // нет рекламы), но добавленный вручную в ТЕКУЩУЮ активную вкладку-группу,
+  // не скрывается — иначе добавление артикула без рекламы в склейку
+  // (см. AddArticleToGroup) не давало бы увидеть его в самой группе, хотя
+  // по нему всё равно есть аналитика (показы/корзина/заказы без расходов).
+  const activeGroupId = sortBy.startsWith('group:') ? sortBy.slice('group:'.length) : null;
   const articles = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = articlesRaw
       .map(article => {
+        const hadNoCampaignsAtAll = article.campaigns.length === 0;
         const campaigns = article.campaigns
           .filter(c => {
             if (onlyActive && c.state !== 'CAMPAIGN_STATE_RUNNING') return false;
@@ -1493,9 +1502,10 @@ export default function AdsStats({ cabinet }) {
             return true;
           })
           .sort((a, b) => naturalCompare(a.title, b.title));
-        return { ...article, campaigns };
+        return { ...article, campaigns, hadNoCampaignsAtAll };
       })
-      .filter(a => a.campaigns.length > 0);
+      .filter(a => a.campaigns.length > 0
+        || (a.hadNoCampaignsAtAll && activeGroupId && a.offerId && groupsData.members[a.offerId] === activeGroupId));
 
     let matched = filtered.filter(a => a.offerId);
     const unmatched = filtered.filter(a => !a.offerId);
