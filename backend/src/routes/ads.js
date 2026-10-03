@@ -760,6 +760,24 @@ router.get('/debug-campaign-products', async (req, res) => {
   }
 });
 
+// ВРЕМЕННО: что УЖЕ сохранено в ad_campaign_skus по кампании (из БД, без
+// похода в Ozon — быстро, не висит на таймауте).
+router.get('/debug-campaign-skus-db', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const campaignId = req.query.campaignId;
+    if (!campaignId) return res.status(400).json({ success: false, error: 'campaignId required' });
+    const rows = await query(
+      `SELECT cs.sku, c.offer_id FROM ad_campaign_skus cs
+         LEFT JOIN ad_product_catalog c ON c.cabinet = cs.cabinet AND c.platform = cs.platform AND c.sku = cs.sku
+        WHERE cs.cabinet = $1 AND cs.campaign_id = $2`,
+      [cabinet, campaignId]);
+    res.json({ success: true, data: rows });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ВРЕМЕННЫЙ debug-роут: сырой ответ Ozon Seller Analytics API для Defly —
 // понять, почему product_analytics_daily пустая (0 строк).
 // ВРЕМЕННЫЙ диагностический зонд для переделки сбора Defly: проверяет на
