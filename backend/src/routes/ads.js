@@ -760,6 +760,29 @@ router.get('/debug-campaign-products', async (req, res) => {
   }
 });
 
+// ВРЕМЕННО: принудительно создать ad_campaign_skus прямо сейчас, не дожидаясь
+// следующего рестарта процесса (initSchema() на старте почему-то не создала
+// таблицу — возможна была гонка CREATE TABLE IF NOT EXISTS при параллельном
+// старте нескольких запросов к БД).
+router.get('/debug-ensure-campaign-skus-table', async (req, res) => {
+  try {
+    await query(`CREATE TABLE IF NOT EXISTS ad_campaign_skus (
+      id BIGSERIAL PRIMARY KEY,
+      cabinet VARCHAR(32) NOT NULL,
+      platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+      campaign_id VARCHAR(64) NOT NULL,
+      sku BIGINT NOT NULL,
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(cabinet, platform, campaign_id, sku)
+    )`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_ad_campaign_skus_campaign ON ad_campaign_skus(cabinet, platform, campaign_id)`);
+    const check = await query(`SELECT COUNT(*)::int as n FROM ad_campaign_skus`);
+    res.json({ success: true, data: { rows: check[0]?.n } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ВРЕМЕННО: что УЖЕ сохранено в ad_campaign_skus по кампании (из БД, без
 // похода в Ozon — быстро, не висит на таймауте).
 router.get('/debug-campaign-skus-db', async (req, res) => {
