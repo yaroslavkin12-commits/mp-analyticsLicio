@@ -1031,7 +1031,7 @@ function AddArticleToGroup({ catalog, excludeOfferIds, onPick }) {
 function ArticleCard({
   article, dates, cabinet, isOpen, onToggle, onManualSave, onManualStockSave,
   draggable, isDragging, isDragOver, onDragStart, onDragOverCard, onDropCard, onDragEndCard,
-  groups, currentGroupId, onAssignGroup,
+  groups, currentGroupId, onAssignGroup, titleOverride,
 }) {
   // Конверсии (ctr/crToCart/crToOrder) и ДРР пересчитываются здесь из сырых
   // метрик, а не берутся готовыми из article.byDate — так правка ячейки
@@ -1099,8 +1099,8 @@ function ArticleCard({
       }}>
         <span>{isOpen ? '▾' : '▸'}</span>
         {draggable && <span title="Перетащите, чтобы изменить порядок" style={{ cursor:'grab', color:'var(--text3)' }}>⠿</span>}
-        <span style={{ fontSize:15, fontWeight:700 }}>{article.offerId || 'Без привязки к артикулу'}</span>
-        {article.productName && <span style={{ color:'var(--text3)', fontSize:12 }}>{article.productName}</span>}
+        <span style={{ fontSize:15, fontWeight:700 }}>{titleOverride || article.offerId || 'Без привязки к артикулу'}</span>
+        {!titleOverride && article.productName && <span style={{ color:'var(--text3)', fontSize:12 }}>{article.productName}</span>}
         {article.offerId && groups && onAssignGroup && (
           <select
             value={currentGroupId || ''}
@@ -1752,6 +1752,75 @@ export default function AdsStats({ cabinet }) {
               />
             </div>
           </div>
+        );
+      })()}
+
+      {sortBy.startsWith('group:') && articles.length > 0 && (() => {
+        const groupId = sortBy.slice('group:'.length);
+        const group = groupsData.groups.find(g => g.id === groupId);
+        if (!group) return null;
+
+        // Синтетический "артикул" — сумма по дням всех реальных членов
+        // группы (views/pdpViews/cart/orders/revenue/spend), плюс кампании
+        // и остатки всех членов вместе. offerId у него нет — поэтому ручная
+        // правка ячеек (onManualSave/onManualStockSave) для него сама
+        // отключается там же, где и для несматченных кампаний.
+        const byDate = {};
+        for (const d of dates) {
+          let views = 0, pdpViews = 0, cart = 0, orders = 0, revenue = 0, spend = 0;
+          for (const a of articles) {
+            const day = a.byDate[d] || {};
+            views += day.views || 0; pdpViews += day.pdpViews || 0; cart += day.cart || 0;
+            orders += day.orders || 0; revenue += day.revenue || 0; spend += day.spend || 0;
+          }
+          byDate[d] = { views, pdpViews, cart, orders, revenue, spend };
+        }
+
+        const campaigns = articles.flatMap(a => a.campaigns);
+
+        const stockMembers = articles.filter(a => a.stock);
+        const stock = stockMembers.length > 0
+          ? stockMembers.reduce((acc, a) => ({
+              fboPresent: (acc.fboPresent || 0) + (a.stock.fboPresent || 0),
+              fbsPresent: (acc.fbsPresent || 0) + (a.stock.fbsPresent || 0),
+            }), { fboPresent: 0, fbsPresent: 0 })
+          : null;
+
+        // Та же дедупликация "эффекта склейки", что и в сводной шапке выше —
+        // показываем в таблице связанных конверсий только те артикулы той
+        // же склейки, что НЕ являются членами этой группы (иначе задвоим).
+        const extraByOfferId = new Map();
+        for (const a of articles) {
+          for (const assoc of (a.associated || [])) {
+            if (groupsData.members[assoc.offerId] === groupId) continue;
+            extraByOfferId.set(assoc.offerId, assoc);
+          }
+        }
+
+        const aggregateArticle = {
+          offerId: null,
+          productName: null,
+          byDate,
+          campaigns,
+          stock,
+          associated: [...extraByOfferId.values()],
+        };
+
+        // В отличие от обычных карточек (закрыты по умолчанию), общая
+        // аналитика группы раскрыта по умолчанию — поэтому здесь множество
+        // expandedArticles используется "наоборот": присутствие ключа
+        // означает "свёрнуто вручную", а не "раскрыто".
+        const key = `__group_agg_${groupId}`;
+        return (
+          <ArticleCard
+            key={key}
+            article={aggregateArticle}
+            dates={dates}
+            cabinet={cabinet}
+            isOpen={!expandedArticles.has(key)}
+            onToggle={() => toggleArticle(key)}
+            titleOverride={`📦 ${group.name} — общая аналитика (${articles.length} арт.)`}
+          />
         );
       })()}
 
