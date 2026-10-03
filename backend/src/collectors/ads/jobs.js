@@ -59,16 +59,31 @@ const RETRY_AFTER_FAIL = 10 * MIN;
 // автоматически.
 const DIRECT_DISABLED = process.env.ADS_DIRECT_DISABLED === 'true';
 
+// Подстраховка: axios'овский timeout иногда не покрывает зависший DNS/TCP-
+// коннект (бывает на части сетей Render) — запрос к Google может висеть
+// заметно дольше указанных 20000мс и так и не долетать до catch. Без этой
+// обёртки такой запрос блокирует busy-лок кабинета навсегда (виден в
+// /api/ads/data-status как "идёт сбор..." без конца, чинится только
+// рестартом процесса). Promise.race гарантирует, что runJob всегда
+// получит resolve/reject за разумное время.
+function withTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label}: не ответил за ${Math.round(ms / 1000)}с`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
 async function withSheetFallback(cabinet, label, primary, fallback) {
   if (DIRECT_DISABLED && sheetId()) {
-    return await fallback();
+    return await withTimeout(fallback(), 30000, `${label}(таблица)`);
   }
   try {
     return await primary();
   } catch (e) {
     if (!sheetId()) throw e; // фоллбек не настроен — ведём себя как раньше
     console.warn(`[Jobs:${cabinet}] ${label}: Ozon недоступен (${e.message}), беру данные из Google-таблицы`);
-    return await fallback();
+    return await withTimeout(fallback(), 30000, `${label}(таблица)`);
   }
 }
 
