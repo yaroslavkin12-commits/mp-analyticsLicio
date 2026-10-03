@@ -1527,6 +1527,12 @@ export default function AdsStats({ cabinet }) {
           spend: acc.spend + (a.totals.spend || 0),
         }), { orders: 0, revenue: 0, spend: 0 });
         const drr = agg.revenue > 0 ? agg.spend / agg.revenue * 100 : (agg.spend > 0 ? 100 : 0);
+        // Артикулы, которых ещё нет в этой группе — чтобы можно было
+        // добавлять их прямо отсюда, а не переключаться на другую
+        // сортировку ради выпадающего списка на карточке.
+        const availableToAdd = articlesRaw
+          .filter(a => a.offerId && groupsData.members[a.offerId] !== groupId)
+          .sort((a, b) => naturalCompare(a.offerId, b.offerId));
         return (
           <div style={{ display:'flex', alignItems:'center', gap:14, flexWrap:'wrap', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:'10px 16px' }}>
             <span style={{ fontWeight:700, fontSize:14 }}>📦 {group.name}</span>
@@ -1536,8 +1542,21 @@ export default function AdsStats({ cabinet }) {
               <span>Расход: {fmtValue(agg.spend, 'money0')} ₽</span>
               <span>ДРР: {fmtValue(drr, 'pct')}</span>
             </span>
+            <select
+              value=""
+              onChange={e => { if (e.target.value) onAssignGroup(e.target.value, groupId); }}
+              disabled={availableToAdd.length === 0}
+              style={{ marginLeft:'auto', padding:'5px 10px', borderRadius:8, fontSize:12, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)' }}
+            >
+              <option value="">{availableToAdd.length ? '+ Добавить артикул…' : 'Все артикулы уже в группе'}</option>
+              {availableToAdd.map(a => (
+                <option key={a.offerId} value={a.offerId}>
+                  {a.offerId}{a.productName ? ` — ${a.productName.slice(0, 40)}` : ''}
+                </option>
+              ))}
+            </select>
             <button onClick={() => { onRemoveGroup(group.id); setSortBy('spend'); }} style={{
-              marginLeft:'auto', padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)',
+              padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)',
               background:'transparent', color:'var(--text3)', fontSize:12, cursor:'pointer',
             }}>Удалить группу</button>
           </div>

@@ -27,6 +27,8 @@ services:
         value: "2"
       - key: ADS_SHEET_ID
         sync: false
+      - key: ADS_DIRECT_DISABLED
+        value: "true"
       - key: DEFLY_OZON_CLIENT_ID
         sync: false
       - key: DEFLY_OZON_API_KEY

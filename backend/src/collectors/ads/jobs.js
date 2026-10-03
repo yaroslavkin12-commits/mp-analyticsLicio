@@ -50,7 +50,19 @@ const RETRY_AFTER_FAIL = 10 * MIN;
 // Google, у которого такой блокировки нет. Сначала всегда пробуем настоящий
 // запрос к Ozon; если он упал — берём то, что успело собраться в таблице.
 // Как только сеть разблокируется, всё само вернётся на прямой сбор.
+//
+// ADS_DIRECT_DISABLED=true — полностью отключает прямой запрос к Ozon и сразу
+// идёт в Google Таблицу (быстрее и без лишних таймаутов/логов, пока прямая
+// сеть Render -> Ozon стабильно не работает). Поставлено в render.yaml по
+// умолчанию. Если сеть когда-нибудь починят — достаточно поставить обратно
+// "false" в Render (Environment), код менять не нужно, прямой сбор включится
+// автоматически.
+const DIRECT_DISABLED = process.env.ADS_DIRECT_DISABLED === 'true';
+
 async function withSheetFallback(cabinet, label, primary, fallback) {
+  if (DIRECT_DISABLED && sheetId()) {
+    return await fallback();
+  }
   try {
     return await primary();
   } catch (e) {
@@ -93,7 +105,10 @@ const JOBS = [
   // конец массива, а не куда-то в середину — "ручной" план обновления выше
   // (forced.get) ссылается на JOBS[0..4] по индексу, и сдвиг этих индексов
   // его сломает.
-  { id: 'tracked_orders', every: 10 * MIN, run: c => pollOzonForCabinet(c) },
+  // У этой задачи нет фоллбека через Google Таблицу (заказы туда не
+  // выгружаются) — при отключённом прямом сборе просто не дёргаем Ozon
+  // понапрасну (всё равно таймаут), тихо возвращаем 0 без ошибки в статусе.
+  { id: 'tracked_orders', every: 10 * MIN, run: c => DIRECT_DISABLED ? Promise.resolve(0) : pollOzonForCabinet(c) },
 ];
 
 function adsCabinets() {
