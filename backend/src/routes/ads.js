@@ -228,6 +228,41 @@ router.post('/groups/assign', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// POST /api/ads/groups/reorder — переставить сами группы местами (порядок
+// их показа в списке групп), а не артикулы внутри группы.
+router.post('/groups/reorder', async (req, res) => {
+  try {
+    const { cabinet, order } = req.body || {};
+    if (!cabinet || !Array.isArray(order) || !order.length) {
+      return res.status(400).json({ success: false, error: 'Нужны cabinet и order' });
+    }
+    const { groups, members } = await loadAdsGroups(cabinet);
+    const byId = new Map(groups.map(g => [g.id, g]));
+    const nextGroups = order.map(id => byId.get(id)).filter(Boolean);
+    // На случай рассинхрона (группа создана/удалена в другой вкладке) —
+    // дописываем в конец те, что не попали в order, вместо потери.
+    for (const g of groups) if (!order.includes(g.id)) nextGroups.push(g);
+    await saveAdsGroupsSetting(`ads_groups:${cabinet}`, nextGroups);
+    res.json({ success: true, data: { groups: nextGroups, members } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// GET /api/ads/catalog?cabinet=defly — весь каталог кабинета (все офферы,
+// не только те, что хоть раз рекламировались) — источник для поиска при
+// добавлении артикула в группу: нужно находить и артикулы без единой РК
+// (см. forced-include в /stats выше), а не только те, что уже есть в
+// articlesRaw на фронте.
+router.get('/catalog', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const rows = await query(
+      `SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' ORDER BY offer_id`,
+      [cabinet]
+    );
+    res.json({ success: true, data: rows.map(r => ({ offerId: r.offer_id, productName: r.product_name })) });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /api/ads/sibling-clusters?cabinet=defly — готовые "склейки" из
 // config/associatedArticles.js (один рекламируемый артикул + его материалы/
 // варианты той же модели) в виде, удобном для быстрого создания группы на
@@ -447,6 +482,19 @@ router.get('/stats', async (req, res) => {
       });
     }
 
+    // Принудительно заводим карточки для артикулов без единой РК (значит,
+    // цикл по campaigns выше их не создал), но отнесённых к какой-то
+    // группе — чтобы артикул склейки без своей рекламы всё равно
+    // показывался внутри группы: без расхода/ДРР/кампаний, но с показами/
+    // корзиной/заказами из product_analytics_daily (см. analyticsByOfferDate
+    // и фолбэк на него в цикле ниже, т.к. у такого артикула нет sku из
+    // ad_campaigns). Без этого "+ Добавить артикул" мог отнести артикул,
+    // который потом просто не появлялся бы в списке группы.
+    const { members: groupMembersForStats } = await loadAdsGroups(cabinet);
+    for (const offerId of Object.keys(groupMembersForStats)) {
+      if (!byArticle.has(offerId)) getArticle(offerId, null);
+    }
+
     // Метрики воронки по артикулу — общие для всех его кампаний, из
     // product_analytics_daily по matched_sku. Считаем по дням и суммарно за
     // весь выбранный период (для ДРР).
@@ -455,7 +503,12 @@ router.get('/stats', async (req, res) => {
       const byDate = {};
       let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0, totalSpend = 0;
       for (const date of dates) {
-        const an = article.sku ? analyticsByKey.get(`${article.sku}|${date}`) : null;
+        // У артикула без своей РК (добавлен в группу вручную, см. forced-
+        // include выше) нет sku из ad_campaigns — тогда берём ту же
+        // аналитику по offer_id напрямую (analyticsByOfferDate, см. выше).
+        const an = article.sku
+          ? analyticsByKey.get(`${article.sku}|${date}`)
+          : (article.offerId ? analyticsByOfferDate.get(`${article.offerId}|${date}`) : null);
         const mpViews = an ? Number(an.hits_view) || 0 : 0;
         const mpPdpViews = an ? Number(an.hits_view_pdp) || 0 : 0;
         const mpCart = an ? Number(an.hits_tocart) || 0 : 0;

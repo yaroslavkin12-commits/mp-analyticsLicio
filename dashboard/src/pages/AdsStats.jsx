@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import {
   ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
-import { getAdsStats, getAdsCabinets, getAdsDataStatus, collectAds, saveManualAdsMetric, saveManualStock, getAdsOrder, saveAdsOrder, getAdsGroups, addAdsGroup, removeAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster } from '../api';
+import { getAdsStats, getAdsCabinets, getAdsDataStatus, collectAds, saveManualAdsMetric, saveManualStock, getAdsOrder, saveAdsOrder, getAdsGroups, addAdsGroup, removeAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster, reorderAdsGroups, getAdsCatalog } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
 
 // Блок 1 — сырые показатели воронки (общие для артикула, из общей аналитики
@@ -972,6 +972,59 @@ function AssociatedConversionsTable({ associated, dates, unit, onUnitChange }) {
   );
 }
 
+// Поиск + добавление артикула в группу — по ВСЕМУ каталогу кабинета (см.
+// GET /api/ads/catalog), а не только по articlesRaw (там только то, что
+// хоть раз рекламировалось). Так в группу можно добавить и артикул без
+// единой РК — у него просто не будет расхода/ДРР в карточке, зато будут
+// показы/корзина/заказы из общей аналитики по товару (см. forced-include
+// в /stats на бэкенде).
+function AddArticleToGroup({ catalog, excludeOfferIds, onPick }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const excluded = new Set(excludeOfferIds);
+  const q = query.trim().toLowerCase();
+  const results = q
+    ? catalog
+        .filter(a => !excluded.has(a.offerId) &&
+          (a.offerId.toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)))
+        .slice(0, 30)
+    : [];
+  return (
+    <div style={{ position:'relative' }}>
+      <input
+        value={query}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder="+ Добавить артикул (поиск по коду/названию)…"
+        style={{ padding:'5px 10px', borderRadius:8, fontSize:12, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', minWidth:240 }}
+      />
+      {open && q && (
+        <div style={{
+          position:'absolute', top:'calc(100% + 4px)', right:0, minWidth:280, maxWidth:420, maxHeight:280, overflowY:'auto',
+          background:'var(--surface)', border:'1px solid var(--border)', borderRadius:8, boxShadow:'0 4px 16px rgba(0,0,0,0.2)', zIndex:20,
+        }}>
+          {results.length === 0 && (
+            <div style={{ padding:'8px 12px', fontSize:12, color:'var(--text3)' }}>Ничего не найдено</div>
+          )}
+          {results.map(a => (
+            <div
+              key={a.offerId}
+              onMouseDown={() => { onPick(a.offerId); setQuery(''); setOpen(false); }}
+              style={{ padding:'7px 12px', fontSize:12.5, cursor:'pointer', borderBottom:'1px solid var(--border)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span style={{ fontWeight:600 }}>{a.offerId}</span>
+              {a.productName ? <span style={{ color:'var(--text2)' }}> — {a.productName.slice(0, 50)}</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Карточка одного артикула — вынесена отдельным компонентом, чтобы хук
 // useMemo (расход/ДРР по дням) вызывался безусловно на верхнем уровне
 // компонента, а не внутри .map() у родителя (это нарушало Rules of Hooks).
@@ -1208,6 +1261,16 @@ export default function AdsStats({ cabinet }) {
   const [siblingClusters, setSiblingClusters] = useState([]);
   const [clusterSaving, setClusterSaving] = useState(null); // primary артикула, который сейчас создаётся
 
+  // Перетаскивание самих групп (их порядок в списке), не артикулов внутри
+  // группы — отдельные drag-состояния, чтобы не путать с dragKey/dragOverKey
+  // у карточек артикулов.
+  const [dragGroupId, setDragGroupId] = useState(null);
+  const [dragOverGroupId, setDragOverGroupId] = useState(null);
+
+  // Весь каталог кабинета (включая артикулы без единой РК) — источник для
+  // поиска при добавлении артикула в группу, не только articlesRaw.
+  const [catalog, setCatalog] = useState([]);
+
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([getAdsStats(cabinet, { dateFrom, dateTo }), getAdsCabinets()])
@@ -1247,6 +1310,29 @@ export default function AdsStats({ cabinet }) {
     getSiblingClusters(cabinet).then(r => setSiblingClusters(r.data.data || [])).catch(() => setSiblingClusters([]));
   }, [cabinet]);
 
+  useEffect(() => {
+    getAdsCatalog(cabinet).then(r => setCatalog(r.data.data || [])).catch(() => setCatalog([]));
+  }, [cabinet]);
+
+  function onRemoveGroup(id) {
+    if (!window.confirm('Удалить группу? Артикулы останутся, просто станут "без группы".')) return;
+    removeAdsGroup(cabinet, id).then(r => { setGroupsData(r.data.data); if (sortBy === `group:${id}`) setSortBy('spend'); }).catch(console.error);
+  }
+
+  function handleGroupReorder(draggedId, targetId) {
+    if (!draggedId || draggedId === targetId) return;
+    const ids = groupsData.groups.map(g => g.id);
+    const fromIdx = ids.indexOf(draggedId);
+    const toIdx = ids.indexOf(targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const nextIds = [...ids];
+    nextIds.splice(fromIdx, 1);
+    nextIds.splice(toIdx, 0, draggedId);
+    const byId = new Map(groupsData.groups.map(g => [g.id, g]));
+    setGroupsData(prev => ({ ...prev, groups: nextIds.map(id => byId.get(id)) }));
+    reorderAdsGroups(cabinet, nextIds).catch(console.error);
+  }
+
   // Кластер считаем "уже собранным", если все его артикулы уже в одной и
   // той же существующей группе — тогда прятать кнопку, предлагать только
   // то, что реально ещё не сгруппировано (целиком или частично).
@@ -1273,11 +1359,6 @@ export default function AdsStats({ cabinet }) {
       .then(r => { setGroupsData(r.data.data); setGroupName(''); setShowGroupForm(false); })
       .catch(e => window.alert(e.response?.data?.error || 'Не удалось создать группу'))
       .finally(() => setGroupSaving(false));
-  }
-
-  function onRemoveGroup(id) {
-    if (!window.confirm('Удалить группу? Артикулы останутся, просто станут "без группы".')) return;
-    removeAdsGroup(cabinet, id).then(r => setGroupsData(r.data.data)).catch(console.error);
   }
 
   function onAssignGroup(offerId, groupId) {
@@ -1521,16 +1602,49 @@ export default function AdsStats({ cabinet }) {
         <Segmented options={PAYMENT_OPTIONS} value={paymentFilter} onChange={setPaymentFilter} />
         <Segmented options={PLACEMENT_OPTIONS} value={placementFilter} onChange={setPlacementFilter} />
         <span style={{ marginLeft:'auto', fontSize:12, color:'var(--text3)' }}>Сортировка:</span>
-        {/* Свои группы ("Чехлы" и т.п.) — продолжение той же сортировки:
-            идут сразу после "Свой порядок" как ещё одна вкладка-режим. При
-            переключении на группу список схлопывается только до её
-            артикулов (см. useMemo articles выше). "+" рядом — создать
-            ещё одну группу, не переключаясь из текущего режима. */}
-        <Segmented
-          options={[...SORT_OPTIONS, ...groupsData.groups.map(g => ({ value: `group:${g.id}`, label: g.name }))]}
-          value={sortBy}
-          onChange={setSortBy}
-        />
+        <Segmented options={SORT_OPTIONS} value={sortBy} onChange={setSortBy} />
+      </div>
+
+      {/* Свои группы ("Чехлы" и т.п., модели со складками) — отдельная
+          строка под основной сортировкой, не смешана с
+          расход/ДРР/название/свой порядок. Каждая группа — перетаскиваемый
+          чип: клик выбирает её как текущий вид, "×" удаляет, перетаскивание
+          меняет порядок в списке (сохраняется на сервере). */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+        <span style={{ fontSize:12, color:'var(--text3)' }}>Мои группы:</span>
+        {groupsData.groups.map(g => {
+          const active = sortBy === `group:${g.id}`;
+          return (
+            <div
+              key={g.id}
+              draggable
+              onDragStart={() => setDragGroupId(g.id)}
+              onDragOver={e => { e.preventDefault(); setDragOverGroupId(g.id); }}
+              onDrop={e => { e.preventDefault(); handleGroupReorder(dragGroupId, g.id); setDragGroupId(null); setDragOverGroupId(null); }}
+              onDragEnd={() => { setDragGroupId(null); setDragOverGroupId(null); }}
+              onClick={() => setSortBy(active ? 'spend' : `group:${g.id}`)}
+              style={{
+                display:'flex', alignItems:'center', gap:6, padding:'5px 6px 5px 10px', borderRadius:8,
+                border: active ? '1px solid #334155' : '1px solid var(--border)',
+                background: active ? '#334155' : 'var(--surface2)',
+                color: active ? '#fff' : 'var(--text)',
+                fontSize:12.5, fontWeight:500, cursor:'grab',
+                opacity: dragOverGroupId === g.id && dragGroupId && dragGroupId !== g.id ? 0.6 : 1,
+              }}
+            >
+              <span title="Перетащите, чтобы изменить порядок" style={{ cursor:'grab' }}>⠿</span>
+              📦 {g.name}
+              <button
+                onClick={e => { e.stopPropagation(); onRemoveGroup(g.id); }}
+                title="Удалить группу"
+                style={{
+                  border:'none', background:'transparent', cursor:'pointer', fontSize:13, lineHeight:1,
+                  color: active ? 'rgba(255,255,255,0.7)' : 'var(--text3)', padding:'2px 4px',
+                }}
+              >×</button>
+            </div>
+          );
+        })}
         {!showGroupForm ? (
           <button onClick={() => setShowGroupForm(true)} title="Добавить свою группу" style={{
             padding:'5px 10px', borderRadius:8, border:'1px dashed var(--border)',
@@ -1607,12 +1721,12 @@ export default function AdsStats({ cabinet }) {
           revenue: acc.revenue + (a.totals.revenue || 0),
         }), { orders: 0, revenue: 0 });
 
-        // Артикулы, которых ещё нет в этой группе — чтобы можно было
-        // добавлять их прямо отсюда, а не переключаться на другую
-        // сортировку ради выпадающего списка на карточке.
-        const availableToAdd = articlesRaw
-          .filter(a => a.offerId && groupsData.members[a.offerId] !== groupId)
-          .sort((a, b) => naturalCompare(a.offerId, b.offerId));
+        // Артикулы, уже состоящие в этой группе — чтобы не предлагать их
+        // повторно в поиске добавления (см. AddArticleToGroup, источник —
+        // весь каталог кабинета, а не только articlesRaw).
+        const memberOfferIds = Object.entries(groupsData.members)
+          .filter(([, gid]) => gid === groupId)
+          .map(([offerId]) => offerId);
         return (
           <div style={{ display:'flex', alignItems:'center', gap:14, flexWrap:'wrap', background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:'10px 16px' }}>
             <span style={{ fontWeight:700, fontSize:14 }}>📦 {group.name}</span>
@@ -1630,30 +1744,20 @@ export default function AdsStats({ cabinet }) {
                 + эффект склейки: {fmtValue(extra.orders, 'int')} шт / {fmtValue(extra.revenue, 'money0')} ₽
               </span>
             )}
-            <select
-              value=""
-              onChange={e => { if (e.target.value) onAssignGroup(e.target.value, groupId); }}
-              disabled={availableToAdd.length === 0}
-              style={{ marginLeft:'auto', padding:'5px 10px', borderRadius:8, fontSize:12, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)' }}
-            >
-              <option value="">{availableToAdd.length ? '+ Добавить артикул…' : 'Все артикулы уже в группе'}</option>
-              {availableToAdd.map(a => (
-                <option key={a.offerId} value={a.offerId}>
-                  {a.offerId}{a.productName ? ` — ${a.productName.slice(0, 40)}` : ''}
-                </option>
-              ))}
-            </select>
-            <button onClick={() => { onRemoveGroup(group.id); setSortBy('spend'); }} style={{
-              padding:'5px 10px', borderRadius:8, border:'1px solid var(--border)',
-              background:'transparent', color:'var(--text3)', fontSize:12, cursor:'pointer',
-            }}>Удалить группу</button>
+            <div style={{ marginLeft:'auto' }}>
+              <AddArticleToGroup
+                catalog={catalog}
+                excludeOfferIds={memberOfferIds}
+                onPick={offerId => onAssignGroup(offerId, groupId)}
+              />
+            </div>
           </div>
         );
       })()}
 
       {sortBy.startsWith('group:') && articles.length === 0 && (
         <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', padding:16, color:'var(--text2)', fontSize:13 }}>
-          В этой группе пока нет артикулов — переключитесь на другую сортировку и отнесите нужные артикулы к группе через выпадающий список на карточке.
+          В этой группе пока нет артикулов — найдите нужный через поиск справа сверху ("+ Добавить артикул").
         </div>
       )}
 
