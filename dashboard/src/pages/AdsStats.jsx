@@ -14,6 +14,11 @@ import DateRangePicker from '../components/DateRangePicker';
 const FUNNEL_ROWS = [
   { key: 'revenue',   label: 'Заказы, ₽',            fmt: 'money', good: 'up',   editable: true },
   { key: 'orders',    label: 'Заказы, шт',            fmt: 'int',   good: 'up',   editable: true },
+  // Остаток (FBO+FBS) НА ЭТОТ ДЕНЬ — история снепшотов, см.
+  // stockOnDate в backend/src/routes/ads.js. Не редактируется здесь —
+  // ручной ввод остатка только "текущий" (карточка остатков выше, см.
+  // StockCard/onManualStockSave), не по дням задним числом.
+  { key: 'stock',     label: 'Остаток',               fmt: 'int',   good: 'up' },
   { key: 'position',  label: 'Позиция в поиске',      fmt: 'pos',   good: 'down',  editable: true },
   { key: 'views',     label: 'Показы',                fmt: 'int',   good: 'up',   editable: true },
   { key: 'pdpViews',  label: 'Переходы на карточку',  fmt: 'int',   good: 'up',   editable: true },
@@ -778,14 +783,17 @@ function GeneralStatsCard({ articlesRaw, dates }) {
     const out = {};
     for (const d of dates) {
       let views = 0, pdpViews = 0, cart = 0, orders = 0, revenue = 0, spend = 0;
+      let stock = 0, stockKnown = false;
       for (const a of targetArticles) {
         const day = a.byDate[d] || {};
         views += day.views || 0; pdpViews += day.pdpViews || 0; cart += day.cart || 0;
         orders += day.orders || 0; revenue += day.revenue || 0;
         spend += a.campaigns.reduce((s, c) => s + (c.byDate[d]?.spend || 0), 0);
+        if (day.stock !== null && day.stock !== undefined) { stock += day.stock; stockKnown = true; }
       }
       out[d] = {
         views, pdpViews, cart, orders, revenue, spend,
+        stock: stockKnown ? stock : null,
         ctr: views > 0 ? pdpViews / views * 100 : 0,
         crToCart: pdpViews > 0 ? cart / pdpViews * 100 : 0,
         crToOrder: cart > 0 ? orders / cart * 100 : 0,
@@ -807,6 +815,10 @@ function GeneralStatsCard({ articlesRaw, dates }) {
   }, [byDate, dates]);
 
   const activeRow = GENERAL_METRIC_OPTIONS.find(m => m.key === metric) || GENERAL_METRIC_OPTIONS[0];
+  // Остаток — отдельной строкой ВСЕГДА под выбранной метрикой (не входит в
+  // переключатель GENERAL_METRIC_OPTIONS — это не метрика на выбор, а
+  // справочная строка, которая должна быть видна постоянно).
+  const STOCK_ROW = { key: 'stock', label: 'Остаток', fmt: 'int', good: 'up' };
 
   return (
     <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' }}>
@@ -859,7 +871,7 @@ function GeneralStatsCard({ articlesRaw, dates }) {
                 </tr>
               </thead>
               <tbody>
-                <MetricTable rows={[activeRow]} dates={dates} byDate={byDate} />
+                <MetricTable rows={[activeRow, STOCK_ROW]} dates={dates} byDate={byDate} />
               </tbody>
             </table>
           </div>

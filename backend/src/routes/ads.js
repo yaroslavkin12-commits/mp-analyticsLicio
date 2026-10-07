@@ -336,7 +336,7 @@ router.get('/stats', async (req, res) => {
       to = dayjs().format('YYYY-MM-DD');
     }
 
-    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows, stockManualRows, campaignSkuRows] = await Promise.all([
+    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows, stockManualRows, campaignSkuRows, stockHistoryRows] = await Promise.all([
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
@@ -376,6 +376,18 @@ router.get('/stats', async (req, res) => {
       // одному (см. ad_campaign_skus в init.sql и split ниже).
       query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`,
              [cabinet]),
+      // История остатков по дням (FBO+FBS) за период — чтобы в таблицах "по
+      // дням" можно было показать, сколько товара было на складе В ТОТ
+      // конкретный день, а не только "сейчас" (см. stockByOfferId выше,
+      // который остаётся для "текущего" остатка в карточке артикула).
+      // Берём с запасом на 30 дней раньше периода — если в какой-то день
+      // сбор не сработал, подставляем последний известный снепшот ДО этой
+      // даты (см. stockOnDate ниже), а не дыру в таблице.
+      query(`SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
+             FROM ad_product_stocks
+             WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date BETWEEN $2 AND $3
+             ORDER BY offer_id, snapshot_date`,
+             [cabinet, dayjs(from).subtract(30, 'day').format('YYYY-MM-DD'), to]),
     ]);
 
     const dates = [];
@@ -435,6 +447,31 @@ router.get('/stats', async (req, res) => {
           fbsPresent: !(mp?.fbsPresent) && manualFbs !== undefined,
         },
       };
+    }
+
+    // Остаток (FBO+FBS) НА КАЖДЫЙ день периода — для строки "Остаток" в
+    // таблицах по дням (а не только "текущее" значение из computeStock
+    // выше). На день без собственного снепшота переносим последний
+    // известный ДО этой даты (снепшот снимается раз в день — см.
+    // collectors/ads/ozonProductStocks.js, delete+insert на snapshot_date).
+    const stockHistoryByOffer = new Map(); // offerId -> [{date, value}] (по возрастанию)
+    for (const r of stockHistoryRows) {
+      const value = (Number(r.fbo_present) || 0) + (Number(r.fbs_present) || 0);
+      if (!stockHistoryByOffer.has(r.offer_id)) stockHistoryByOffer.set(r.offer_id, []);
+      stockHistoryByOffer.get(r.offer_id).push({ date: r.date, value });
+    }
+    const stockByOfferDate = new Map(); // offerId|date -> value
+    for (const [offerId, rows] of stockHistoryByOffer) {
+      let idx = 0, last = null;
+      for (const date of dates) {
+        while (idx < rows.length && rows[idx].date <= date) { last = rows[idx].value; idx++; }
+        if (last !== null) stockByOfferDate.set(`${offerId}|${date}`, last);
+      }
+    }
+    function stockOnDate(offerId, date) {
+      if (!offerId) return null;
+      const v = stockByOfferDate.get(`${offerId}|${date}`);
+      return v === undefined ? null : v;
     }
 
     // Ручные значения — сгруппированы по offerId|date|metric, метрики те же
@@ -608,6 +645,7 @@ router.get('/stats', async (req, res) => {
           position: position.value,
           spend: spend.value,
           avgCpc: avgCpc.value,
+          stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
             orders: orders.manual, revenue: revenue.manual, position: position.manual,
