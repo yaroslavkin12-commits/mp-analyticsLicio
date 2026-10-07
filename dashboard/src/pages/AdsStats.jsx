@@ -643,7 +643,21 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
   const min = allValues.length ? Math.min(...allValues) : 0;
   const max = allValues.length ? Math.max(...allValues) : 0;
 
-  const COL1 = 240, COL2 = 96; // ширины первых двух зафиксированных колонок
+  // Текущий остаток (FBO+FBS прямо сейчас, не зависит от периода — см.
+  // article.stock / ad_product_stocks) — отдельная колонка справа от
+  // "Итого", чтобы сразу было видно, сколько товара ещё есть на складах.
+  const stockOf = (a) => {
+    const s = a.stock;
+    if (!s) return null;
+    const fbo = s.fboPresent || 0, fbs = s.fbsPresent || 0;
+    return fbo + fbs;
+  };
+  const totalStock = perArticle.reduce((sum, pa) => {
+    const v = stockOf(pa.article);
+    return v === null ? sum : sum + v;
+  }, 0);
+
+  const COL1 = 240, COL2 = 96, COL3 = 86; // ширины зафиксированных колонок (артикул / итого / остаток)
 
   return (
     <div style={{ padding:'4px 16px 16px' }}>
@@ -658,11 +672,12 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
         />
       </div>
       <div style={{ overflowX:'auto', border:'1px solid var(--border)', borderRadius:8 }}>
-        <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: COL1 + COL2 + 40 + dates.length * 62, width:'100%' }}>
+        <table style={{ borderCollapse:'collapse', fontSize:12, minWidth: COL1 + COL2 + COL3 + 40 + dates.length * 62, width:'100%' }}>
           <thead>
             <tr>
               <th style={{ position:'sticky', left:0, zIndex:2, background:'var(--surface)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'left', width:COL1, minWidth:COL1 }}>Артикул</th>
-              <th style={{ position:'sticky', left:COL1, zIndex:2, background:'var(--surface2)', borderBottom:'2px solid var(--border)', borderRight:'2px solid var(--border)', padding:'8px 10px', textAlign:'center', width:COL2, minWidth:COL2 }}>Итого</th>
+              <th style={{ position:'sticky', left:COL1, zIndex:2, background:'var(--surface2)', borderBottom:'2px solid var(--border)', borderRight:'1px solid var(--border)', padding:'8px 10px', textAlign:'center', width:COL2, minWidth:COL2 }}>Итого</th>
+              <th title="Текущий остаток, FBO+FBS" style={{ position:'sticky', left:COL1+COL2, zIndex:2, background:'var(--surface2)', borderBottom:'2px solid var(--border)', borderRight:'2px solid var(--border)', padding:'8px 10px', textAlign:'center', width:COL3, minWidth:COL3 }}>Остаток</th>
               {dates.map(d => (
                 <th key={d} style={{ borderBottom:'2px solid var(--border)', padding:'8px 6px', fontWeight:600, color:'var(--text2)', whiteSpace:'nowrap' }}>
                   {d.slice(8,10)}.{d.slice(5,7)}
@@ -695,8 +710,12 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
                 </td>
                 <td style={{
                   position:'sticky', left:COL1, zIndex:1, background:'var(--surface2)', fontWeight:700,
-                  padding:'5px 10px', borderRight:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
+                  padding:'5px 10px', borderRight:'1px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
                 }}>{fmtValue(total[metric], config.fmt)}</td>
+                <td style={{
+                  position:'sticky', left:COL1+COL2, zIndex:1, background:'var(--surface2)', color:'var(--text2)',
+                  padding:'5px 10px', borderRight:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
+                }}>{fmtValue(stockOf(a), 'int')}</td>
                 {dates.map(d => {
                   const v = byDate[d][metric];
                   return (
@@ -715,8 +734,12 @@ function ArticlesMetricTable({ articles, dates, metric, onMetricChange }) {
               }}>Итого</td>
               <td style={{
                 position:'sticky', left:COL1, zIndex:1, background:'var(--surface2)', fontWeight:700,
-                padding:'6px 10px', borderRight:'2px solid var(--border)', borderTop:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
+                padding:'6px 10px', borderRight:'1px solid var(--border)', borderTop:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
               }}>{fmtValue(grandTotal[metric], config.fmt)}</td>
+              <td style={{
+                position:'sticky', left:COL1+COL2, zIndex:1, background:'var(--surface2)', fontWeight:700,
+                padding:'6px 10px', borderRight:'2px solid var(--border)', borderTop:'2px solid var(--border)', textAlign:'center', whiteSpace:'nowrap',
+              }}>{fmtValue(totalStock, 'int')}</td>
               {totalsByDate.map((t, i) => (
                 <td key={dates[i]} style={{
                   padding:'6px 6px', textAlign:'center', fontWeight:700, background:'var(--surface2)',
