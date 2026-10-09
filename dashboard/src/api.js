@@ -73,3 +73,7 @@ export const saveCostList = (cabinet, items) => api.post('/sales/costs', { cabin
 export const getSalesGeo = (cabinet, p) => api.get('/sales/geo', { params: { cabinet, ...p }, timeout: 90000 });
 export const getDiscountOverview = cabinet => api.get('/discounts/overview', { params: { cabinet } });
 export const getDiscountHistory = (cabinet, days) => api.get('/discounts/history', { params: { cabinet, days } });
+// Юнит-экономика, P&L, % выкупа
+export const getFinanceCoefs = cabinet => api.get('/finance/coefs', { params: { cabinet }, timeout: 90000 });
+export const getFinancePnl = (cabinet, p) => api.get('/finance/pnl', { params: { cabinet, ...p }, timeout: 90000 });
+export const getBuyoutData = (cabinet, p) => api.get('/finance/buyout', { params: { cabinet, ...p }, timeout: 90000 });

@@ -695,8 +695,12 @@ function collectGeo_(cab, days, agg, buy) {
 // Даты окна заменяются целиком (а не дописываются) — без дублей.
 function replaceWindow_(sheetName, headers, rows, window, dateCol, keepRow) {
   const from = mskDate_(window - 1);
-  const map = readSheetAsMap_(sheetName, headers.map(function (_, i) { return i; }));
-  const keep = Object.keys(map).map(function (k) { return map[k]; });
+  // Полное окно (≥ срока хранения) — старое не нужно вовсе: не читаем
+  // вкладку (большая вкладка читается дольше лимита Таблиц).
+  if (window >= RETENTION_DAYS) { writeRows_(sheetName, headers, rows); return rows.length; }
+  const sh = getSheet_(sheetName);
+  const last = sh.getLastRow();
+  const keep = last > 1 ? sh.getRange(2, 1, last - 1, Math.min(headers.length + 2, sh.getMaxColumns())).getValues() : [];
   const cutoff = mskDate_(RETENTION_DAYS);
   const old = keep.filter(function (r) {
     const d = r[dateCol] instanceof Date ? Utilities.formatDate(r[dateCol], 'GMT+3', 'yyyy-MM-dd') : String(r[dateCol]).slice(0, 10);
@@ -757,65 +761,177 @@ function syncPrices() {
 }
 
 // ---------- Финансы (начисления и списания Ozon) ----------
-function collectFinance_(cab, days, agg, started) {
+// Ozon отключил /v3/finance/transaction/list (сентябрь 2026). Теперь —
+// /v1/finance/accrual/by-day: один день за запрос, листание по last_id;
+// названия статей — из справочника /v1/finance/accrual/types.
+// Разбор сделан «по форме»: в каждой записи ищем узлы со статьёй (type_id)
+// и суммой, SKU берём из ближайшего товара. Остаток итоговой суммы записи
+// после всех статей — выручка (продажа/возврат) или статья самой записи.
+function accrualTypes_(cab) {
+  const headers = sellerHeaders_(cab);
+  const out = {};
+  try {
+    const data = fetchJson_('https://api-seller.ozon.ru/v1/finance/accrual/types', { method: 'post', contentType: 'application/json', headers: headers, payload: '{}' }, 'Типы начислений');
+    const walk = function (o) {
+      if (Array.isArray(o)) { o.forEach(walk); return; }
+      if (!o || typeof o !== 'object') return;
+      const id = o.type_id !== undefined ? o.type_id : o.id;
+      const nm = o.name || o.title || o.type_name || o.description;
+      if (id !== undefined && nm && typeof nm === 'string') out[String(id)] = nm;
+      Object.keys(o).forEach(function (k) { if (typeof o[k] === 'object') walk(o[k]); });
+    };
+    walk(data);
+  } catch (e) { Logger.log('Типы начислений ' + cab.id + ': ' + e.message); }
+  return out;
+}
+function finAmount_(o) {
+  if (!o || typeof o !== 'object') return null;
+  const pick = function (v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string' && v !== '' && !isNaN(Number(v))) return Number(v);
+    if (typeof v === 'object') { const x = v.amount !== undefined ? v.amount : (v.value !== undefined ? v.value : v.units); return pick(x); }
+    return null;
+  };
+  const keys = ['accrued', 'amount', 'total_amount', 'value', 'price', 'sum'];
+  for (let i = 0; i < keys.length; i++) { const v = pick(o[keys[i]]); if (v !== null) return v; }
+  return null;
+}
+function collectFinance_(cab, dates, agg, started, done) {
   const headers = sellerHeaders_(cab);
   if (!headers) return 0;
-  const from = mskDate_(days - 1) + 'T00:00:00.000Z', to = mskDate_(0) + 'T23:59:59.999Z';
+  const types = accrualTypes_(cab);
   const add = function (d, sku, name, amount, qty) {
     if (!amount && !qty) return;
     const k = [cab.id, d, sku, name].join('|');
     const r = agg[k] || (agg[k] = [cab.id, d, sku, name, 0, 0]);
     r[4] += amount; r[5] += qty;
   };
-  let n = 0, names = {};
-  for (let page = 1; page <= 200; page++) {
-    if (Date.now() - started > 300000) { Logger.log('Финансы ' + cab.id + ': не успели все страницы, остальное — в следующий запуск'); break; }
-    const data = fetchJson_('https://api-seller.ozon.ru/v3/finance/transaction/list', {
-      method: 'post', contentType: 'application/json', headers: headers,
-      payload: JSON.stringify({ filter: { date: { from: from, to: to }, operation_type: [], posting_number: '', transaction_type: 'all' }, page: page, page_size: 1000 }),
-    }, 'Финансы');
-    const res = data.result || {};
-    const ops = res.operations || [];
-    ops.forEach(function (op) {
-      const d = Utilities.formatDate(new Date(String(op.operation_date).replace(' ', 'T') + '+03:00'), 'GMT+3', 'yyyy-MM-dd');
-      const skus = (op.items || []).map(function (i) { return String(i.sku || ''); }).filter(Boolean);
-      const parts = skus.length ? skus : [''];
-      const k = parts.length;
-      const accr = Number(op.accruals_for_sale) || 0, comm = Number(op.sale_commission) || 0;
-      let svcSum = 0;
-      const isReturn = op.type === 'returns';
-      parts.forEach(function (sku) {
-        if (accr) add(d, sku, isReturn ? 'Возврат выручки' : 'Продажа', accr / k, isReturn ? -1 : 1);
-        if (comm) add(d, sku, isReturn ? 'Возврат комиссии' : 'Комиссия', comm / k, 0);
+  const nameOf = function (id, fallback) { return types[String(id)] || fallback || ('Статья ' + id); };
+  let n = 0, sampled = false;
+  const names = {};
+  for (let di = 0; di < dates.length; di++) {
+    const d = dates[di];
+    if (Date.now() - started > 280000) { Logger.log('Финансы ' + cab.id + ': время вышло на ' + d + ', остальные дни — в следующий запуск'); break; }
+    let lastId = '', ok = true;
+    for (let page = 0; page < 100; page++) {
+      let data;
+      try {
+        data = fetchJson_('https://api-seller.ozon.ru/v1/finance/accrual/by-day', {
+          method: 'post', contentType: 'application/json', headers: headers,
+          payload: JSON.stringify({ date: d, last_id: lastId, limit: 1000 }),
+        }, 'Финансы');
+      } catch (e) { Logger.log('Финансы ' + cab.id + ' ' + d + ': ' + e.message); ok = false; break; }
+      const res = data.result || data;
+      const list = res.accruals || res.items || res.operations || [];
+      if (!sampled && list.length) { sampled = true; Logger.log('Финансы ' + cab.id + ': пример записи ' + JSON.stringify(list[0]).slice(0, 2500)); }
+      list.forEach(function (rec) {
+        n++;
+        const total = finAmount_({ amount: rec.total_amount }) || 0;
+        let found = 0;
+        // SKU записи (если товар один) — для статей вне блока товаров.
+        const recSkus = [];
+        const collectSkus = function (o) {
+          if (Array.isArray(o)) { o.forEach(collectSkus); return; }
+          if (!o || typeof o !== 'object') return;
+          if (o.sku) recSkus.push(String(o.sku));
+          Object.keys(o).forEach(function (k) { if (typeof o[k] === 'object') collectSkus(o[k]); });
+        };
+        collectSkus(rec);
+        const uniq = recSkus.filter(function (v, i, a) { return a.indexOf(v) === i; });
+        const recSku = uniq.length === 1 ? uniq[0] : '';
+        let qty = 0;
+        const hasTyped = function (o) {
+          if (!o || typeof o !== 'object') return false;
+          if (Array.isArray(o)) return o.some(hasTyped);
+          if (o.type_id !== undefined && finAmount_(o) !== null) return true;
+          return Object.keys(o).some(function (k) { return typeof o[k] === 'object' && hasTyped(o[k]); });
+        };
+        const walk = function (o, sku, key) {
+          if (Array.isArray(o)) { o.forEach(function (x) { walk(x, sku, key); }); return; }
+          if (!o || typeof o !== 'object') return;
+          if (o.sku) { sku = String(o.sku); if (key === 'products' || key === 'items') qty += Number(o.quantity) || 0; }
+          const inner = Object.keys(o).some(function (k) { return typeof o[k] === 'object' && k !== 'total_amount' && hasTyped(o[k]); });
+          const v = finAmount_(o);
+          if (!inner && v !== null && (o.type_id !== undefined || key === 'commission')) {
+            const nm = o.type_id !== undefined ? nameOf(o.type_id, o.name) : 'Комиссия';
+            names[nm] = true; found += v; add(d, sku || recSku, nm, v, 0);
+            return;
+          }
+          Object.keys(o).forEach(function (k) { if (k !== 'total_amount' && typeof o[k] === 'object') walk(o[k], sku, k); });
+        };
+        walk(rec, '', '');
+        const rest = total - found;
+        if (Math.abs(rest) > 0.01) {
+          const cat = String(rec.accrued_category || '');
+          let nm;
+          if (cat === 'POSTING' || /posting/i.test(cat)) nm = rest > 0 ? 'Продажа' : 'Возврат выручки';
+          else nm = rec.type_id !== undefined ? nameOf(rec.type_id, rec.name) : (rec.name || cat || 'Прочее');
+          names[nm] = true;
+          const sk = uniq.length ? uniq : [''];
+          sk.forEach(function (x) { add(d, x, nm, rest / sk.length, nm === 'Продажа' ? (qty || 1) / sk.length : nm === 'Возврат выручки' ? -(qty || 1) / sk.length : 0); });
+        }
       });
-      (op.services || []).forEach(function (sv) {
-        const v = Number(sv.price) || 0; svcSum += v;
-        names[sv.name] = true;
-        parts.forEach(function (sku) { add(d, sku, sv.name, v / k, 0); });
-      });
-      const rest = (Number(op.amount) || 0) - accr - comm - svcSum;
-      if (Math.abs(rest) > 0.01) {
-        names[op.operation_type] = true;
-        parts.forEach(function (sku) { add(d, sku, op.operation_type || 'Прочее', rest / k, 0); });
-      }
-      n++;
-    });
-    if (page >= (res.page_count || 1) || !ops.length) break;
-    Utilities.sleep(200);
+      lastId = res.last_id || '';
+      if (!lastId || !list.length) break;
+      Utilities.sleep(150);
+    }
+    if (ok) done[d] = true;
   }
-  Logger.log('Финансы ' + cab.id + ': операций ' + n + '; статьи: ' + Object.keys(names).slice(0, 25).join(', '));
+  Logger.log('Финансы ' + cab.id + ': записей ' + n + ', типов в справочнике ' + Object.keys(types).length + '; статьи: ' + Object.keys(names).slice(0, 40).join(', '));
   return n;
 }
-// Каждые 6 часов — последние 5 дней. Первый раз запустите syncFinanceFull
-// вручную — заполнит 30 дней (больше месяца Ozon за один запрос не отдаёт).
+// Даты, собранные полностью, заменяются целиком; остальные не трогаем.
+function replaceDates_(sheetName, headers, rows, done, dateCol) {
+  const sh = getSheet_(sheetName);
+  const last = sh.getLastRow();
+  const cutoff = mskDate_(RETENTION_DAYS);
+  let old = [];
+  if (last > 1) {
+    old = sh.getRange(2, 1, last - 1, headers.length).getValues().filter(function (r) {
+      const d = r[dateCol] instanceof Date ? Utilities.formatDate(r[dateCol], 'GMT+3', 'yyyy-MM-dd') : String(r[dateCol]).slice(0, 10);
+      return d && d >= cutoff && !done[d];
+    });
+  }
+  const fresh = rows.filter(function (r) { return done[r[dateCol]]; });
+  writeRows_(sheetName, headers, old.concat(fresh));
+  return old.length + fresh.length;
+}
+// Каждые 6 часов — последние 5 дней. Первый раз запустите syncFinanceFull —
+// заполнит 30 дней (если не успеет за один прогон, сам продолжит через минуту).
 function syncFinance(days) {
   const window = typeof days === 'number' ? days : 5;
+  const dates = [];
+  for (let i = window - 1; i >= 0; i--) dates.push(mskDate_(i));
+  runFinance_(dates);
+}
+function runFinance_(dates) {
   const started = Date.now();
   const agg = {};
-  getCabinets_().forEach(function (cab) { try { collectFinance_(cab, window, agg, started); } catch (e) { Logger.log('Финансы ' + cab.id + ': ' + e.message); } });
-  const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[4] = Math.round(r[4] * 100) / 100; return r; });
-  const total = replaceWindow_(SHEET_NAMES.finance, FINANCE_HEADERS, rows, window, 1);
-  Logger.log('syncFinance: строк за окно ' + rows.length + ' (всего ' + total + ')');
+  const doneBy = {};
+  getCabinets_().forEach(function (cab) {
+    doneBy[cab.id] = {};
+    try { collectFinance_(cab, dates, agg, started, doneBy[cab.id]); } catch (e) { Logger.log('Финансы ' + cab.id + ': ' + e.message); }
+  });
+  // День считается собранным, если собран во всех кабинетах.
+  const cabs = Object.keys(doneBy);
+  const done = {};
+  dates.forEach(function (d) { if (cabs.every(function (c) { return doneBy[c][d]; })) done[d] = true; });
+  const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[4] = Math.round(r[4] * 100) / 100; r[5] = Math.round(r[5] * 100) / 100; return r; });
+  const total = replaceDates_(SHEET_NAMES.finance, FINANCE_HEADERS, rows, done, 1);
+  const left = dates.filter(function (d) { return !done[d]; });
+  Logger.log('syncFinance: дней собрано ' + Object.keys(done).length + ' из ' + dates.length + ', строк ' + rows.length + ' (всего во вкладке ' + total + ')');
+  const props = PropertiesService.getScriptProperties();
+  if (left.length && left.length < dates.length) {
+    props.setProperty('FIN_PENDING', JSON.stringify(left));
+    ScriptApp.newTrigger('syncFinanceContinue').timeBased().after(60 * 1000).create();
+    Logger.log('Остальные ' + left.length + ' дн. — продолжу через минуту автоматически');
+  } else props.deleteProperty('FIN_PENDING');
+}
+function syncFinanceContinue() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncFinanceContinue') ScriptApp.deleteTrigger(t); });
+  const left = JSON.parse(PropertiesService.getScriptProperties().getProperty('FIN_PENDING') || '[]');
+  if (left.length) runFinance_(left);
 }
 function syncFinanceFull() { syncFinance(30); }
 

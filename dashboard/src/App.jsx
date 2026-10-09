@@ -10,8 +10,11 @@ import TrackedArticles from './pages/TrackedArticles';
 import SalesAnalytics from './pages/SalesAnalytics';
 import Costs from './pages/Costs';
 import Geography from './pages/Geography';
+import UnitEconomics from './pages/UnitEconomics';
+import PnL from './pages/PnL';
+import Buyout from './pages/Buyout';
 
-const PAGES = { sales: SalesAnalytics, geo: Geography, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
@@ -21,7 +24,7 @@ const PAGES = { sales: SalesAnalytics, geo: Geography, costs: Costs, dashboard: 
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
   licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['sales', 'geo', 'ads', 'discounts', 'notifications', 'calculator', 'costs'],
+  defly: ['sales', 'geo', 'unit', 'pnl', 'buyout', 'ads', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 
 const THEME_KEY = 'mp-theme';
@@ -73,7 +76,7 @@ export default function App() {
   }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Переключатель WB/Ozon нужен только старым разделам Licio.
-  const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'calculator', 'notifications'].includes(page);
+  const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'calculator', 'notifications'].includes(page);
 
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>

@@ -76,3 +76,11 @@
 .mpui .g-bubble{fill:var(--s-c1);fill-opacity:.55;stroke:var(--s-c1);stroke-width:1.5}
 .mpui .g-bubble.on,.mpui g:hover>.g-bubble{fill-opacity:.85;stroke:var(--a-ink);stroke-width:2}
 .mpui .g-blabel{font-family:var(--a-num);font-size:11px;font-weight:700;fill:var(--a-ink);paint-order:stroke;stroke:var(--a-panel);stroke-width:3px;pointer-events:none}
+
+/* Юнит-экономика / P&L / % выкупа */
+.mpui .a-dt tr.f-strong td{font-weight:700}
+.mpui .a-dt tr.f-strong .lbl{color:var(--a-ink)}
+.mpui .a-dt td.f-neg{color:var(--a-bad)}
+.mpui .a-dt.f-wide .tot{width:112px;min-width:112px;max-width:112px}
+.mpui .a-dt.f-wide .lbl{width:220px;min-width:220px;max-width:220px}
+.mpui .a-dt.f-wide .tot{left:220px}
