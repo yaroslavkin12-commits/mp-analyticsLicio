@@ -202,6 +202,8 @@ router.get('/data', async (req, res) => {
       // Пустые строки (товар без показов и заказов) не передаём — иначе
       // всплывают сотни архивных SKU, которых уже нет в каталоге.
       if (!num(r.hits_view) && !num(r.hits_view_pdp) && !num(r.hits_tocart) && !num(r.orders_item) && !num(r.revenue)) continue;
+      // Товар не из каталога (архивный SKU) — только если по нему были заказы.
+      if (!idx.has(o) && !num(r.orders_item) && !num(r.revenue)) continue;
       const x = row(art(o, '', r.sku), d);
       x[2] += num(r.hits_view); x[3] += num(r.hits_view_pdp); x[4] += num(r.hits_tocart);
       x[5] += num(r.orders_item); x[6] += num(r.revenue);
