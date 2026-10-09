@@ -1274,7 +1274,7 @@ function DataStatusLine({ status }) {
   );
 }
 
-export default function AdsStats({ cabinet }) {
+export default function AdsStats({ cabinet, onNewView }) {
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [data, setData] = useState(null);
@@ -1629,6 +1629,11 @@ export default function AdsStats({ cabinet }) {
     <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
         <h1 style={{ fontSize:17, fontWeight:700, margin:0 }}>Реклама</h1>
+        {onNewView && (
+          <button onClick={onNewView} style={{ padding:'6px 12px', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:12.5 }}>
+            Новый вид
+          </button>
+        )}
         <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         <button onClick={handleCollect} disabled={collecting} style={{
           marginLeft:'auto', padding:'7px 14px', borderRadius:8, border:'1px solid var(--border)',

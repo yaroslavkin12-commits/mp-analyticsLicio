@@ -2,11 +2,22 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
-import AdsStats from './pages/AdsStats';
+import AdsStatsOld from './pages/AdsStats';
+import AdsStats2 from './pages/AdsStats2';
 import Discounts from './pages/Discounts';
 import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
 import TrackedArticles from './pages/TrackedArticles';
+
+// Реклама: новый вид по умолчанию, старый — по кнопке (пока новый согласуем).
+// Выбор запоминается в браузере.
+function AdsStats(props) {
+  const [view, setView] = useState(() => { try { return localStorage.getItem('mp-ads-view') || 'new'; } catch (e) { return 'new'; } });
+  const choose = v => { setView(v); try { localStorage.setItem('mp-ads-view', v); } catch (e) { /* ignore */ } };
+  return view === 'old'
+    ? <AdsStatsOld {...props} onNewView={() => choose('new')} />
+    : <AdsStats2 {...props} onOldView={() => choose('old')} />;
+}
 
 const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
@@ -54,8 +65,8 @@ export default function App() {
         {/* Топ-бар */}
         <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 18px',
           borderBottom:'1px solid var(--border)', background:'var(--surface)', flexShrink:0 }}>
-          {/* Переключатель площадок */}
-          <div style={{ display:'flex', gap:3, background:'var(--surface2)', borderRadius:8, padding:3 }}>
+          {/* Переключатель площадок — не нужен на «Рекламе» (там только Ozon) */}
+          {page !== 'ads' && <div style={{ display:'flex', gap:3, background:'var(--surface2)', borderRadius:8, padding:3 }}>
             {[['all','Все'],['wb','WB'],['ozon','Ozon']].map(([v,l])=>(
               <button key={v} onClick={()=>setPlatform(v)} style={{
                 padding:'5px 14px', borderRadius:6, border:'none', fontSize:13, fontWeight:500, transition:'all .15s',
@@ -63,7 +74,7 @@ export default function App() {
                 color: platform===v ? '#fff' : 'var(--text2)',
               }}>{l}</button>
             ))}
-          </div>
+          </div>}
 
           <button
             onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}

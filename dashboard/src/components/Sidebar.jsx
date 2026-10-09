@@ -24,7 +24,7 @@ export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
       <div ref={ref} style={{ padding:'18px 16px 10px', position:'relative' }}>
         <button onClick={() => setOpen(o => !o)} style={{
           display:'flex', alignItems:'center', gap:10, width:'100%', background:'transparent', border:'none',
-          padding:0, cursor:'pointer', textAlign:'left',
+          padding:0, cursor:'pointer', textAlign:'left', color:'var(--text)',
         }}>
           <img
             src="/logo.png"

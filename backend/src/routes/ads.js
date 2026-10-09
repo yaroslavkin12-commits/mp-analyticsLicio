@@ -27,6 +27,68 @@ router.post('/collect', async (req, res) => {
     : `Сбор запущен для кабинета ${cabinet} за ${days} дн.` });
 });
 
+// ── Журнал изменений (заметки + автоматически найденные изменения) ──────
+// Таблицу создаём и здесь, лениво, при первом обращении — initSchema() на
+// старте уже однажды "пропустил" новую таблицу (см. ad_campaign_skus).
+let adEventsReady = null;
+function ensureAdEvents() {
+  if (!adEventsReady) {
+    adEventsReady = (async () => {
+      await query(`CREATE TABLE IF NOT EXISTS ad_events (
+        id BIGSERIAL PRIMARY KEY, cabinet VARCHAR(32) NOT NULL, platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+        offer_id VARCHAR(128), date DATE NOT NULL, kind VARCHAR(32) NOT NULL DEFAULT 'note', text TEXT,
+        old_value TEXT, new_value TEXT, auto BOOLEAN NOT NULL DEFAULT false, created_at TIMESTAMP DEFAULT NOW())`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_ad_events_lookup ON ad_events(cabinet, platform, date)`);
+    })().catch(e => { adEventsReady = null; throw e; });
+  }
+  return adEventsReady;
+}
+
+// GET /api/ads/events?cabinet=defly&dateFrom=&dateTo=
+router.get('/events', async (req, res) => {
+  try {
+    await ensureAdEvents();
+    const cabinet = req.query.cabinet || 'defly';
+    const from = req.query.dateFrom || dayjs().subtract(90, 'day').format('YYYY-MM-DD');
+    const to = req.query.dateTo || dayjs().format('YYYY-MM-DD');
+    const rows = await query(
+      `SELECT id, offer_id, date::text AS date, kind, text, old_value, new_value, auto, created_at
+         FROM ad_events WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
+        ORDER BY date DESC, id DESC`, [cabinet, from, to]);
+    res.json({ success: true, data: rows.map(r => ({
+      id: String(r.id), offerId: r.offer_id, date: r.date, kind: r.kind, text: r.text,
+      oldValue: r.old_value, newValue: r.new_value, auto: r.auto, createdAt: r.created_at,
+    })) });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/ads/events {cabinet, offerId?, date?, text} — ручная заметка.
+router.post('/events', async (req, res) => {
+  try {
+    await ensureAdEvents();
+    const { cabinet, offerId, text } = req.body || {};
+    const date = req.body?.date || dayjs().format('YYYY-MM-DD');
+    if (!cabinet || !text || !String(text).trim()) {
+      return res.status(400).json({ success: false, error: 'Нужны cabinet и text' });
+    }
+    const rows = await query(
+      `INSERT INTO ad_events (cabinet, platform, offer_id, date, kind, text, auto)
+       VALUES ($1, 'ozon', $2, $3, 'note', $4, false) RETURNING id`,
+      [cabinet, offerId || null, date, String(text).trim().slice(0, 500)]);
+    res.json({ success: true, data: { id: String(rows[0].id) } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// DELETE /api/ads/events/:id?cabinet=defly — только ручные заметки.
+router.delete('/events/:id', async (req, res) => {
+  try {
+    await ensureAdEvents();
+    await query(`DELETE FROM ad_events WHERE id = $1 AND cabinet = $2 AND auto = false`,
+      [req.params.id, req.query.cabinet || 'defly']);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /api/ads/data-status?cabinet=defly — когда какая часть данных
 // обновлялась последний раз (для строки статуса на странице "Реклама").
 router.get('/data-status', async (req, res) => {
@@ -336,31 +398,42 @@ router.get('/stats', async (req, res) => {
       to = dayjs().format('YYYY-MM-DD');
     }
 
+    // Замер времени каждого запроса — уходит в заголовок Server-Timing, чтобы
+    // видеть прямо в DevTools, что именно тормозит страницу.
+    const timings = [];
+    const tStart = Date.now();
+    const timed = (name, promise) => {
+      const t = Date.now();
+      return promise.then(r => { timings.push(`${name};dur=${Date.now() - t}`); return r; });
+    };
+    let qi = 0;
+    const qNames = ['campaigns', 'adstats', 'analytics', 'catalog', 'manual', 'stock', 'stockManual', 'campaignSkus', 'stockHistory'];
+    const tq = (...args) => timed(qNames[qi++] || `q${qi}`, query(...args));
     const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows, stockManualRows, campaignSkuRows, stockHistoryRows] = await Promise.all([
-      query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
+      tq(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT date::text as date, campaign_id, spend, clicks, views, orders, orders_money
+      tq(`SELECT date::text as date, campaign_id, spend, clicks, views, orders, orders_money
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
-      query(`SELECT date::text as date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
+      tq(`SELECT date::text as date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
                     hits_tocart, orders_item, revenue, position_category
              FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
-      query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`,
+      tq(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`,
              [cabinet]),
       // Ручные значения — на случай, если сбор с Ozon для каких-то дат/
       // метрик так и не дал данных (см. product_analytics_manual в
       // init.sql). Приоритет всегда у данных с маркетплейса: ручное
       // значение подставляется только там, где собранное значение пустое
       // или равно нулю (см. merge ниже).
-      query(`SELECT date::text as date, offer_id, metric, value
+      tq(`SELECT date::text as date, offer_id, metric, value
              FROM product_analytics_manual WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
       // Текущие остатки FBO/FBS — последний собранный снепшот по кабинету
       // (см. collectors/ads/ozonProductStocks.js). Не зависит от выбранного
       // периода — это "сейчас", а не история.
-      query(`SELECT offer_id, fbo_present, fbo_reserved, fbs_present, fbs_reserved
+      tq(`SELECT offer_id, fbo_present, fbo_reserved, fbs_present, fbs_reserved
              FROM ad_product_stocks
              WHERE cabinet = $1 AND platform = 'ozon'
                AND snapshot_date = (SELECT MAX(snapshot_date) FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon')`,
@@ -368,13 +441,13 @@ router.get('/stats', async (req, res) => {
       // Ручные остатки — подстраховка на случай, если сбор остатков с Ozon
       // не работает (см. manual-stock выше). Без периода — это "текущее"
       // значение, а не история по дням.
-      query(`SELECT offer_id, metric, value FROM ad_stock_manual WHERE cabinet = $1 AND platform = 'ozon'`,
+      tq(`SELECT offer_id, metric, value FROM ad_stock_manual WHERE cabinet = $1 AND platform = 'ozon'`,
              [cabinet]),
       // Товары мультитоварных кампаний ("Оплата за заказ: выбранные товары"
       // и подобные) — одна РК продвигает сразу несколько SKU, и расход по
       // ней нужно поделить между всеми её артикулами, а не отнести целиком
       // одному (см. ad_campaign_skus в init.sql и split ниже).
-      query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`,
+      tq(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`,
              [cabinet]),
       // История остатков по дням (FBO+FBS) за период — чтобы в таблицах "по
       // дням" можно было показать, сколько товара было на складе В ТОТ
@@ -383,7 +456,7 @@ router.get('/stats', async (req, res) => {
       // Берём с запасом на 30 дней раньше периода — если в какой-то день
       // сбор не сработал, подставляем последний известный снепшот ДО этой
       // даты (см. stockOnDate ниже), а не дыру в таблице.
-      query(`SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
+      tq(`SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
              FROM ad_product_stocks
              WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date BETWEEN $2 AND $3
              ORDER BY offer_id, snapshot_date`,
@@ -534,6 +607,7 @@ router.get('/stats', async (req, res) => {
       for (const offerId of targetOfferIds) {
         const sku = splitCount > 1 ? (skuByOfferId.get(offerId) || null) : camp.matched_sku;
         const byDate = {};
+        const isCpo = String(camp.payment_type || '').toUpperCase() === 'CPO';
         let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
         for (const date of dates) {
           const k = `${camp.campaign_id}|${date}`;
@@ -548,6 +622,9 @@ router.get('/stats', async (req, res) => {
           // отдельно через collectors/ads/ozonClicks.js, т.к. эндпоинт расхода
           // их не отдаёт). 0, если кликов не было — не делить на 0.
           byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0, adViews, adOrders, adRevenue };
+          // Тип оплаты кампании — чтобы показывать расход отдельно "за клик"
+          // и "за заказ" (CPO: "Оплата за заказ"), а не только общей суммой.
+          if (isCpo) byDate[date].spendCpo = spend; else byDate[date].spendCpc = spend;
         }
         // Кампании без единого рубля расхода за период — VK/блогерские
         // реф-ссылки, архивные, завершённые — раньше уходили на фронт с
@@ -600,7 +677,7 @@ router.get('/stats', async (req, res) => {
     for (const [, article] of byArticle) {
       const byDate = {};
       let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0, totalSpend = 0;
-      let totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
+      let totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0, totalSpendCpc = 0, totalSpendCpo = 0;
       for (const date of dates) {
         // У артикула без своей РК (добавлен в группу вручную, см. forced-
         // include выше) нет sku из ad_campaigns — тогда берём ту же
@@ -621,6 +698,8 @@ router.get('/stats', async (req, res) => {
         const mpAvgCpc = mpClicks > 0 ? mpSpend / mpClicks : 0;
         const sumCamp = key => article.campaigns.reduce((s, c) => s + (c.byDate[date]?.[key] || 0), 0);
         const adViews = sumCamp('adViews'), adOrders = sumCamp('adOrders'), adRevenue = sumCamp('adRevenue');
+        const spendCpc = sumCamp('spendCpc'), spendCpo = sumCamp('spendCpo');
+        totalSpendCpc += spendCpc; totalSpendCpo += spendCpo;
         totalClicks += mpClicks; totalAdViews += adViews; totalAdOrders += adOrders; totalAdRevenue += adRevenue;
 
         // Приоритет всегда у данных с маркетплейса — ручное значение
@@ -672,7 +751,7 @@ router.get('/stats', async (req, res) => {
           spend: spend.value,
           avgCpc: avgCpc.value,
           clicks: mpClicks,
-          adViews, adOrders, adRevenue,
+          adViews, adOrders, adRevenue, spendCpc, spendCpo,
           stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
@@ -724,6 +803,7 @@ router.get('/stats', async (req, res) => {
 
       articlesOut.push({
         offerId: article.offerId,
+        sku: article.sku || (article.offerId ? skuByOfferId.get(article.offerId) || null : null),
         productName: article.productName,
         byDate,
         totals: {
@@ -731,6 +811,7 @@ router.get('/stats', async (req, res) => {
           spend: totalSpend, drr: totalDrr,
           ctr: totalCtr, crToCart: totalCrToCart, crToOrder: totalCrToOrder,
           clicks: totalClicks, adViews: totalAdViews, adOrders: totalAdOrders, adRevenue: totalAdRevenue,
+          spendCpc: totalSpendCpc, spendCpo: totalSpendCpo,
           // Рекламный ДРР — расход / выручка, которую Ozon отнёс к рекламе.
           // null, если рекламной выручки не было (делить не на что).
           adDrr: totalAdRevenue > 0 ? totalSpend / totalAdRevenue * 100 : null,
@@ -762,6 +843,48 @@ router.get('/stats', async (req, res) => {
       return (b.totals.spend || 0) - (a.totals.spend || 0);
     });
 
+    // Прошлый период той же длины (для "лучше/хуже" в воронке и сводке) —
+    // только по запросу (?compare=1), лёгкими агрегатами без истории по дням.
+    if (req.query.compare === '1') {
+      const len = dates.length;
+      const pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD');
+      const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
+      const [pAn, pAd] = await Promise.all([
+        timed('prevAnalytics', query(
+          `SELECT sku, offer_id, SUM(hits_view) v, SUM(hits_view_pdp) pv, SUM(hits_tocart) c, SUM(orders_item) o, SUM(revenue) r
+             FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
+            GROUP BY sku, offer_id`, [cabinet, pFrom, pTo])),
+        timed('prevAdstats', query(
+          `SELECT campaign_id, SUM(spend) s, SUM(clicks) cl, SUM(views) av, SUM(orders) ao, SUM(orders_money) ar
+             FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
+            GROUP BY campaign_id`, [cabinet, pFrom, pTo])),
+      ]);
+      const anBySku = new Map(), anByOffer = new Map();
+      for (const r of pAn) {
+        anBySku.set(String(r.sku), r);
+        const oid = r.offer_id || offerBySkuCat.get(String(r.sku));
+        if (oid) anByOffer.set(oid, r);
+      }
+      const adByCamp = new Map(pAd.map(r => [String(r.campaign_id), r]));
+      for (const a of articlesOut) {
+        const an = (a.sku && anBySku.get(String(a.sku))) || (a.offerId && anByOffer.get(a.offerId)) || null;
+        let spend = 0, clicks = 0, adViews = 0, adOrders = 0, adRevenue = 0;
+        for (const c of a.campaigns) {
+          const r = adByCamp.get(String(c.campaignId)); if (!r) continue;
+          const k = c.splitAcross || 1;
+          spend += (Number(r.s) || 0) / k; clicks += (Number(r.cl) || 0) / k;
+          adViews += (Number(r.av) || 0) / k; adOrders += (Number(r.ao) || 0) / k; adRevenue += (Number(r.ar) || 0) / k;
+        }
+        const n = x => Number(x) || 0;
+        a.prevTotals = {
+          views: n(an?.v), pdpViews: n(an?.pv), cart: n(an?.c), orders: n(an?.o), revenue: n(an?.r),
+          spend, clicks, adViews, adOrders, adRevenue,
+        };
+      }
+    }
+
+    timings.push(`total;dur=${Date.now() - tStart}`);
+    res.set('Server-Timing', timings.join(', '));
     res.json({ success: true, data: { dates, articles: articlesOut } });
   } catch (e) {
     console.error(e);

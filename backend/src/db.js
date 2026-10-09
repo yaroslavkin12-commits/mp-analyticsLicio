@@ -37,7 +37,10 @@ async function query(sql, params = []) {
 async function initSchema() {
   const sqlFile = path.join(__dirname, '../../postgres/init.sql');
   if (!fs.existsSync(sqlFile)) return;
-  const sql = fs.readFileSync(sqlFile, 'utf8');
+  // Комментарии вырезаем ДО разбиения по ";" — иначе ";" внутри комментария
+  // ломает следующий CREATE (так однажды молча не создалась
+  // ad_campaign_skus: её комментарий содержал точку с запятой).
+  const sql = fs.readFileSync(sqlFile, 'utf8').replace(/--[^\n]*/g, '');
   const statements = sql.split(';').map(s => s.trim()).filter(Boolean);
   for (const stmt of statements) {
     try { await getPool().query(stmt); } catch (e) {

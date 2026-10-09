@@ -513,3 +513,22 @@ CREATE TABLE IF NOT EXISTS ad_campaign_skus (
   UNIQUE(cabinet, platform, campaign_id, sku)
 );
 CREATE INDEX IF NOT EXISTS idx_ad_campaign_skus_campaign ON ad_campaign_skus(cabinet, platform, campaign_id);
+
+-- Журнал изменений по рекламе (страница "Реклама"): ручные заметки
+-- ("снизил ставку", "сменил фото") и автоматически найденные изменения
+-- (ставка за клик/за заказ, включение/выключение оплаты за заказ, РК
+-- включена/выключена). offer_id NULL — событие по всему кабинету.
+CREATE TABLE IF NOT EXISTS ad_events (
+  id BIGSERIAL PRIMARY KEY,
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  offer_id VARCHAR(128),
+  date DATE NOT NULL,
+  kind VARCHAR(32) NOT NULL DEFAULT 'note',
+  text TEXT,
+  old_value TEXT,
+  new_value TEXT,
+  auto BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ad_events_lookup ON ad_events(cabinet, platform, date);
