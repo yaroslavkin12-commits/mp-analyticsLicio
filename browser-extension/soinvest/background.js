@@ -78,7 +78,7 @@ async function run(reason) {
     for (const t of targets) {
       const st = { asked: t.productIds.length, got: 0, matched: 0, error: null };
       status.cabinets[t.cabinet] = st;
-      if (!t.productIds.length) { st.error = 'нет списка товаров'; continue; }
+      if (!t.productIds.length) { st.error = 'кабинет пока не подключён в сервисе'; continue; }
       const items = [];
       for (let i = 0; i < t.productIds.length; i += CHUNK) {
         const r = await askPrices(tab.id, t.companyId, t.productIds.slice(i, i + CHUNK));
@@ -86,7 +86,11 @@ async function run(reason) {
         if (r.status !== 200) { st.error = 'кабинет ответил ' + r.status + ': ' + r.text.slice(0, 120); break; }
         let data = null;
         try { data = JSON.parse(r.text); } catch (e) { st.error = 'непонятный ответ кабинета'; break; }
-        items.push(...(data.items || []));
+        // В сервис — только цены (без акций и прочих полей кабинета).
+        for (const it of (data.items || [])) items.push({
+          item_id: it.item_id, price: it.price, old_price: it.old_price, marketing_price: it.marketing_price,
+          marketing_oa_price: it.marketing_oa_price, marketing_seller_price: it.marketing_seller_price,
+        });
         await sleep(700);
       }
       st.got = items.length;
