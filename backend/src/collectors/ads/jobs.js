@@ -82,7 +82,10 @@ function withTimeout(promise, ms, label) {
 }
 
 async function withSheetFallback(cabinet, label, primary, fallback) {
-  if (DIRECT_DISABLED && sheetId()) {
+  if (DIRECT_DISABLED) {
+    // В Ozon не ходим никогда. Нет ADS_SHEET_ID — честная ошибка, а не
+    // 4 минуты таймаутов в недоступный Ozon.
+    if (!sheetId()) throw new Error('На этом сервере не задан ADS_SHEET_ID (ссылка на Google-таблицу) — данные Ozon взять неоткуда');
     return await withTimeout(fallback(), 30000, `${label}(таблица)`);
   }
   try {

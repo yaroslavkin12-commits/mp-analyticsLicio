@@ -52,21 +52,22 @@ function naturalCompare(a, b) {
   }
   return 0;
 }
-// "Чехлы на сиденья Renault Duster (HS), 2010-2015..." → "Renault Duster (HS)"
+// Короткое название — марка и модель авто, как у чехлов:
+// "Дефлекторы окон 2D Haval Jolion, 2020-н.в., комплект 6 шт." → "Haval Jolion",
+// "Дефлекторы окон "PSA" для ВАЗ 2109, 21099, 2114, 2115" → "ВАЗ 2109, 21099, 2114, 2115".
+// Полное название — во всплывающей подсказке (title).
 function shortModel(name) {
   if (!name) return '';
-  const s = String(name);
-  // Всё после "для"/"на сиденья": первая часть до запятой — марка и модель;
-  // следующие части добавляем, только если это номера моделей (ВАЗ 2109,
-  // 21099, 2114, 2115), годы и комплектации отбрасываем.
-  const m = s.match(/(?:^|\s)(?:для|на сиденья)\s+(.+)$/i);
-  if (m) {
-    const parts = m[1].split(',').map(x => x.trim());
-    const out = [parts[0]];
-    for (const p of parts.slice(1)) { if (/^\d{3,5}$/.test(p)) out.push(p); else break; }
-    return out.join(', ');
-  }
-  return s.replace(/^Утеплитель двигателя,\s*автоодеяло\s*/i, '').slice(0, 40);
+  const s = String(name).trim();
+  if (/^Утеплитель двигателя/i.test(s)) return s.replace(/^Утеплитель двигателя,\s*автоодеяло\s*/i, '').slice(0, 40);
+  if (/^Рамка для номера/i.test(s)) return s.split(',').map(x => x.trim()).slice(-2).join(', ').slice(0, 40);
+  let r = s.replace(/^(Дефлекторы окон|Дефлекторы капота|Дефлектор[а-я]*|Чехлы на сиденья|Чехлы|Утеплитель радиатора|Брызговики универсальные|Брызговики|Коврики[а-я ]*)\s*/i, '');
+  for (let i = 0; i < 4; i++) r = r.replace(/^(2D|3D|"[^"]{1,12}"|«[^»]{1,12}»|Defly)\s*,?\s*/i, '').replace(/^для\s+/i, '');
+  const parts = r.split(',').map(x => x.trim()).filter(Boolean);
+  if (!parts.length) return s.slice(0, 40);
+  const out = [parts[0]];
+  for (const p of parts.slice(1)) { if (/^\d{3,5}$/.test(p)) out.push(p); else break; }
+  return out.join(', ');
 }
 const isCpoCampaign = c => String(c.paymentType || '').toUpperCase() === 'CPO';
 function cpoText(cpo) {
@@ -646,7 +647,7 @@ function AssociatedTable({ associated, dates }) {
           <tbody>
             {associated.map(a => (
               <tr key={a.offerId}>
-                <td className="lbl">{a.offerId} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{shortModel(a.productName)}</span></td>
+                <td className="lbl" title={a.productName || ''}>{a.offerId} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{shortModel(a.productName)}</span></td>
                 <td className="tot">{fmtBy(a.totals[unit], fmt)}</td>
                 {dates.map(d => <td key={d}>{fmtBy(a.byDate[d]?.[unit], fmt)}</td>)}
               </tr>
@@ -782,7 +783,7 @@ function Matrix({ rows, dates, mode }) {
           <tbody>
             {models.map(({ a, m }) => (
               <tr key={a.offerId}>
-                <td className="lbl">{a.offerId} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{shortModel(a.productName)}</span></td>
+                <td className="lbl" title={a.productName || ''}>{a.offerId} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{shortModel(a.productName)}</span></td>
                 <td className="tot">{fmtBy(totalOf(m), cfg.fmt)}</td>
                 <td className="stk">{fmtInt(m.stockNow)}</td>
                 {dates.map(d => {
@@ -1094,7 +1095,7 @@ export default function AdsStats2({ cabinet }) {
   function assocLine(list, key, own) {
     const extra = (list || []).reduce((acc, x) => acc + (x.totals[key] || 0), 0);
     if (!extra) return <span className="a-spendsub">склейка —</span>;
-    return <span className="a-spendsub">+{fmtInt(extra)} склейка · итого {fmtInt(own + extra)}</span>;
+    return <span className="a-spendsub">+{fmtInt(extra)} склейка → <b className="a-assoc-total">{fmtInt(own + extra)}</b></span>;
   }
   // Склейка для всего списка: артикулы склеек, которых нет среди строк
   // (иначе их заказы посчитались бы дважды), каждый один раз.
@@ -1104,6 +1105,9 @@ export default function AdsStats2({ cabinet }) {
     for (const r of rows) for (const x of (r.associated || [])) if (!own.has(x.offerId)) byId.set(x.offerId, x);
     return [...byId.values()];
   })();
+
+  const assocOrdersAll = assocForRows.reduce((acc, x) => acc + (x.totals.orders || 0), 0);
+  const assocRevenueAll = assocForRows.reduce((acc, x) => acc + (x.totals.revenue || 0), 0);
 
   function articleRow(a) {
     const key = a.offerId;
@@ -1187,16 +1191,22 @@ export default function AdsStats2({ cabinet }) {
       <div className={`a-kpis ${loading ? 'a-loading' : ''}`}>
         <div className="a-kpi">
           <span className="lbl">{mode === 'ads' ? 'Заказано с рекламы, ₽' : 'Заказано, ₽'}</span>
-          <span className="val n">{fmtInt(T.revenue)}</span>
+          <div className="a-valrow">
+            <span className="val n">{fmtInt(T.revenue)}</span>
+            {showAssoc && <span className="a-withassoc"><small>со склейкой</small><b className="n">{fmtInt(T.revenue + assocRevenueAll)}</b></span>}
+          </div>
           <span className="sub"><Delta value={P && changePct(T.revenue, P.revenue)} /> к прошлому периоду</span>
-          {showAssoc && <span className="sub">+{fmtInt(assocForRows.reduce((acc, x) => acc + (x.totals.revenue || 0), 0))} ₽ по склейке</span>}
+          {showAssoc && <span className="sub">+{fmtInt(assocRevenueAll)} ₽ по склейке</span>}
           <AreaSpark values={series('revenue')} color="var(--a-rev)" />
         </div>
         <div className="a-kpi">
           <span className="lbl">{mode === 'ads' ? 'Заказы с рекламы, шт' : 'Заказы, шт'}</span>
-          <span className="val n">{fmtInt(T.orders)}</span>
+          <div className="a-valrow">
+            <span className="val n">{fmtInt(T.orders)}</span>
+            {showAssoc && <span className="a-withassoc"><small>со склейкой</small><b className="n">{fmtInt(T.orders + assocOrdersAll)}</b></span>}
+          </div>
           <span className="sub"><Delta value={P && changePct(T.orders, P.orders)} /> · ≈ {dates.length ? (T.orders / dates.length).toFixed(T.orders / dates.length < 10 ? 1 : 0).replace('.', ',') : '—'} в день</span>
-          {showAssoc && <span className="sub">+{fmtInt(assocForRows.reduce((acc, x) => acc + (x.totals.orders || 0), 0))} по склейке</span>}
+          {showAssoc && <span className="sub">+{fmtInt(assocOrdersAll)} шт по склейке</span>}
           <AreaSpark values={series('orders')} color="var(--a-good)" />
         </div>
         <div className="a-kpi">

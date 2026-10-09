@@ -48,6 +48,7 @@ function parseCsv(text) {
 // ещё нет, Google отдаёт по ссылке ПЕРВУЮ вкладку таблицы — без этой
 // проверки мы прочитали бы, например, Analytics вместо CpoProducts.
 const REQUIRED_COLUMNS = {
+  // CpoOrders: order_date не обязателен (старая версия скрипта его не пишет).
   Catalog: ['offer_id', 'sku'],
   Analytics: ['date', 'sku', 'hits_view'],
   Stocks: ['offer_id', 'fbo_present'],
@@ -219,11 +220,16 @@ async function syncSkuStatsFromSheet(cabinet) {
 async function syncCpoOrdersFromSheet(cabinet) {
   const rows = await fetchSheetRows('CpoOrders');
   if (rows === null) return { rows: 0 };
-  const out = rows.filter(r => r.cabinet === cabinet && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && (r.sku || r.promoted_sku))
+  // Колонки дня заказа могло ещё не быть (таблица создана раньше).
+  await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_date DATE`).catch(() => {});
+  await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(64)`).catch(() => {});
+  const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+  const out = rows.filter(r => r.cabinet === cabinet && isDate(r.date) && (r.sku || r.promoted_sku))
     .map(r => [cabinet, 'ozon', r.date, String(r.order_id || ''), String(r.sku || ''), String(r.promoted_sku || ''),
-      r.offer_id || null, num(r.quantity) || 1, num(r.cost), num(r.expense), new Date()]);
+      r.offer_id || null, num(r.quantity) || 1, num(r.cost), num(r.expense),
+      isDate(r.order_date) ? r.order_date : null, r.order_number || null, new Date()]);
   const saved = await bulkUpsert('ad_cpo_orders',
-    ['cabinet', 'platform', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'updated_at'],
+    ['cabinet', 'platform', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number', 'updated_at'],
     out, ['cabinet', 'platform', 'order_id', 'sku', 'promoted_sku', 'date']);
   return { rows: saved };
 }

@@ -475,8 +475,15 @@ router.get('/stats', async (req, res) => {
       // быть (до первого обновления скрипта) — тогда просто пусто.
       timed('skuStats', query(`SELECT date::text AS date, campaign_id, sku, views, clicks, to_cart, orders, sales, expense
              FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => [])),
-      timed('cpoOrders', query(`SELECT date::text AS date, sku, promoted_sku, quantity, cost, expense
-             FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => [])),
+      // date — день списания (выкупа), order_date — день заказа. Расход
+      // относим ко дню ЗАКАЗА (так видно, как реклама отработала в тот день);
+      // если день заказа неизвестен — ко дню списания.
+      timed('cpoOrders', query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense
+             FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon'
+              AND (date BETWEEN $2 AND $3 OR COALESCE(order_date, date) BETWEEN $2 AND $3)`, [cabinet, from, to])
+        .catch(() => query(`SELECT date::text AS date, NULL AS order_date, sku, promoted_sku, quantity, cost, expense
+             FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]))
+        .catch(() => [])),
       timed('cpoProducts', query(`SELECT sku, offer_id, enabled, available, bid_pct, bid_rub, checked_at
              FROM ad_cpo_products WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => [])),
     ]);
@@ -641,10 +648,15 @@ router.get('/stats', async (req, res) => {
     let cpoFrom = null, cpoTo = null;
     for (const r of cpoOrderRows) {
       const offerId = offerBySkuCat.get(String(r.promoted_sku || r.sku)) || offerBySkuCat.get(String(r.sku));
-      if (!cpoFrom || r.date < cpoFrom) cpoFrom = r.date;
-      if (!cpoTo || r.date > cpoTo) cpoTo = r.date;
-      if (!offerId) continue;
-      const k = `${offerId}|${r.date}`;
+      // Покрытие отчётом считаем по дню списания — чтобы не задвоить с
+      // расходом самой CPO-кампании, который Ozon тоже отдаёт по дню списания.
+      if (r.date >= from && r.date <= to) {
+        if (!cpoFrom || r.date < cpoFrom) cpoFrom = r.date;
+        if (!cpoTo || r.date > cpoTo) cpoTo = r.date;
+      }
+      const day = r.order_date || r.date;
+      if (!offerId || day < from || day > to) continue;
+      const k = `${offerId}|${day}`;
       const cur = cpoByOfferDate.get(k) || { expense: 0, orders: 0, revenue: 0 };
       cur.expense += Number(r.expense) || 0; cur.orders += Number(r.quantity) || 1; cur.revenue += Number(r.cost) || 0;
       cpoByOfferDate.set(k, cur);

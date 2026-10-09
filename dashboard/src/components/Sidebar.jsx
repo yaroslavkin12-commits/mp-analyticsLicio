@@ -28,7 +28,7 @@ export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
         }}>
           {cabinet === 'defly' ? (
             <>
-              <img src="/defly-logo.png" alt="Defly" style={{ height:48, width:'auto', maxWidth:150, borderRadius:6, flexShrink:0, display:'block' }} />
+              <img src="/defly-logo.png" alt="Defly" style={{ height:32, width:'auto', maxWidth:110, borderRadius:5, flexShrink:0, display:'block' }} />
               <span style={{ fontSize:10, color:'var(--text3)', marginLeft:'auto' }}>▾</span>
             </>
           ) : (

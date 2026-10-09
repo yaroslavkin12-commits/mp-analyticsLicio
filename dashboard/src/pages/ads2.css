@@ -181,3 +181,10 @@
 .ads2 .a-dt tr.tone-traffic .blk-l::before{background:var(--a-cpo)}
 .ads2 .a-dt tr.tone-conv .blk-l::before{background:var(--a-good)}
 .ads2 .a-dt tr.tone-spend .blk-l::before{background:var(--a-spend)}
+
+/* Склейка: итог «со склейкой» справа от основной цифры в KPI и в ячейках */
+.ads2 .a-valrow{display:flex;align-items:flex-end;justify-content:space-between;gap:10px}
+.ads2 .a-withassoc{display:flex;flex-direction:column;align-items:flex-end;line-height:1.15;padding-bottom:3px}
+.ads2 .a-withassoc small{font-size:11px;color:var(--a-ink3)}
+.ads2 .a-withassoc b{font-size:17px;font-weight:600;color:var(--a-accent)}
+.ads2 .a-assoc-total{color:var(--a-accent);font-weight:600}

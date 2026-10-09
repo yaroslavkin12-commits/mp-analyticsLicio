@@ -19,6 +19,18 @@ app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/ads', require('./routes/ads'));
 app.use('/api/discounts', require('./routes/discounts'));
 app.use('/api/tracked-articles', require('./routes/trackedArticles'));
+// Какие настройки заданы на ЭТОМ сервере (только да/нет, без значений) —
+// чтобы сравнить два сервиса Render между собой.
+app.get('/api/env-check', (req, res) => {
+  const has = k => !!(process.env[k] && String(process.env[k]).trim());
+  res.json({ success: true, data: {
+    service: process.env.RENDER_SERVICE_NAME || null,
+    ADS_SHEET_ID: has('ADS_SHEET_ID'), TELEGRAM_BOT_TOKEN: has('TELEGRAM_BOT_TOKEN'), TELEGRAM_CHAT_ID: has('TELEGRAM_CHAT_ID'),
+    DATABASE_URL: has('DATABASE_URL'), WB_TOKEN: has('WB_TOKEN'),
+    OZON_CLIENT_ID: has('OZON_CLIENT_ID'), DEFLY_OZON_CLIENT_ID: has('DEFLY_OZON_CLIENT_ID'),
+    OZON_SELLER_COOKIE: has('OZON_SELLER_COOKIE'),
+  } });
+});
 app.use('/api/netcheck', require('./routes/netcheck')); // ВРЕМЕННО: диагностика таймаутов Ozon 28.09, убрать после
 
 const distPath = path.join(__dirname, '../../dashboard/dist');

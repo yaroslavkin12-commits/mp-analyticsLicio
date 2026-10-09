@@ -71,7 +71,9 @@ const CPO_PRODUCTS_HEADERS = ['cabinet', 'sku', 'offer_id', 'enabled', 'availabl
 // пишет записи «ставка изменилась» в журнал.
 const CPC_BIDS_HEADERS = ['cabinet', 'campaign_id', 'sku', 'bid', 'checked_at'];
 // Отчёт по заказам «оплаты за заказ»: строка = заказ, с датой, SKU и списанной суммой.
-const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense'];
+// date — день СПИСАНИЯ (Ozon списывает «оплату за заказ» в момент выкупа),
+// order_date — день самого ЗАКАЗА (по номеру отправления из списка заказов).
+const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number'];
 
 const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name'];
 const ANALYTICS_HEADERS = ['cabinet', 'date', 'sku', 'hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
@@ -532,11 +534,12 @@ function parseCpoOrders_(cab, text, out) {
   Logger.log('CPO-отчёт: колонки ' + JSON.stringify(keys));
   const kDate = pickKey_(keys, [/^date$/, /дата/, /date/]);
   const kOrder = pickKey_(keys, [/orderid|order_id/, /id заказа/, /номер заказа|ordernumber/]);
+  const kOrderNum = pickKey_(keys, [/ordernumber|номер заказа|номер отправления|posting/]);
   const kPromo = pickKey_(keys, [/promot|advsku|продвига/]);
   const kSku = pickKey_(keys, [/^sku$/, /^sku\b/, /sku/], /promot|advsku|продвига/);
   const kOffer = pickKey_(keys, [/offer|артикул/]);
   const kQty = pickKey_(keys, [/quantity|количество|qty/]);
-  const kCost = pickKey_(keys, [/стоимость, ₽|^price$|cost|стоимость/], /продаж|sale|bid|ставк/);
+  const kCost = pickKey_(keys, [/^cost$/, /стоимость, ₽|cost|стоимость/, /^price$/], /продаж|sale|bid|ставк/);
   const kExp = pickKey_(keys, [/expense|moneyspent|расход|spent/]);
   if (!kDate || !kExp || !(kSku || kPromo)) { Logger.log('CPO-отчёт: не распознал колонки (дата/SKU/расход) — пришлите журнал Claude'); return 0; }
   let n = 0;
@@ -544,7 +547,8 @@ function parseCpoOrders_(cab, text, out) {
     const date = normDate_(r[kDate]);
     if (!date) return;
     out.push([cab.id, date, kOrder ? String(r[kOrder]) : '', kSku ? String(r[kSku] || '') : '', kPromo ? String(r[kPromo] || '') : '',
-      kOffer ? String(r[kOffer] || '') : '', kQty ? parseRuNumber_(r[kQty]) : 1, kCost ? parseRuNumber_(r[kCost]) : 0, parseRuNumber_(r[kExp])]);
+      kOffer ? String(r[kOffer] || '') : '', kQty ? parseRuNumber_(r[kQty]) : 1, kCost ? parseRuNumber_(r[kCost]) : 0, parseRuNumber_(r[kExp]),
+      '', kOrderNum ? String(r[kOrderNum] || '') : '']);
     n++;
   });
   return n;
@@ -552,6 +556,43 @@ function parseCpoOrders_(cab, text, out) {
 
 // Каждый час (триггер) — отчёт по заказам «оплаты за заказ» за 3 дня;
 // syncDaily дополнительно перезабирает 30 дней.
+// Дата заказа по номеру отправления/заказа — из списков FBO и FBS за 45
+// дней (товар выкупают обычно в пределах пары недель после заказа).
+function orderDatesMap_(cab) {
+  const headers = sellerHeaders_(cab);
+  const map = {};
+  if (!headers) return map;
+  const since = new Date(Date.now() - 45 * 86400000).toISOString();
+  const to = new Date().toISOString();
+  [['https://api-seller.ozon.ru/v2/posting/fbo/list', 'FBO'], ['https://api-seller.ozon.ru/v3/posting/fbs/list', 'FBS']].forEach(function (src) {
+    let offset = 0;
+    for (let guard = 0; guard < 40; guard++) {
+      let data;
+      try {
+        data = fetchJson_(src[0], {
+          method: 'post', contentType: 'application/json', headers: headers,
+          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset }),
+        }, 'Даты заказов ' + src[1]);
+      } catch (e) { Logger.log(e.message); break; }
+      let postings = data.result && data.result.postings;
+      if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
+      postings = postings || [];
+      postings.forEach(function (p) {
+        const iso = p.in_process_at || p.created_at;
+        if (!iso) return;
+        const d = Utilities.formatDate(new Date(iso), 'GMT+3', 'yyyy-MM-dd');
+        if (p.posting_number) map[String(p.posting_number)] = d;
+        if (p.order_number) map[String(p.order_number)] = d;
+        if (p.order_id) map[String(p.order_id)] = d;
+      });
+      if (postings.length < 1000) break;
+      offset += 1000;
+      Utilities.sleep(300);
+    }
+  });
+  return map;
+}
+
 function syncCpoOrders(days) {
   const window = typeof days === 'number' ? days : 3;
   const cabinets = getCabinets_();
@@ -561,7 +602,19 @@ function syncCpoOrders(days) {
     try {
       const text = runPerfReport_(cab, 'https://api-performance.ozon.ru/api/client/statistic/orders/generate/json',
         { from: mskDate_(window - 1) + 'T00:00:00Z', to: mskDate_(0) + 'T23:59:59Z' }, 'CPO-отчёт ' + cab.id);
+      const start = rows.length;
       Logger.log('CPO-отчёт ' + cab.id + ': строк ' + parseCpoOrders_(cab, text, rows));
+      if (rows.length > start) {
+        const dates = orderDatesMap_(cab);
+        let found = 0;
+        for (let i = start; i < rows.length; i++) {
+          const num = String(rows[i][10] || ''), id = String(rows[i][2] || '');
+          const d = dates[num] || dates[num.replace(/-\d+$/, '')] || dates[id] || '';
+          rows[i][9] = d;
+          if (d) found++;
+        }
+        Logger.log('CPO-отчёт ' + cab.id + ': дата заказа найдена для ' + found + ' из ' + (rows.length - start));
+      }
     } catch (e) { Logger.log('CPO-отчёт ' + cab.id + ': ' + e.message); }
   });
   // Заказ может прийти с одинаковым id для разных SKU — ключ: кабинет+заказ+sku+продвигаемый sku.
@@ -581,7 +634,11 @@ function writeRows_(sheetName, headers, rows) {
   const sh = getSheet_(sheetName);
   sh.clearContents();
   const all = [headers].concat(rows.map(function (r) {
-    return r.map(function (v) { return (v === null || v === undefined) ? '' : String(v); });
+    // Строки старого формата (меньше колонок) дополняем пустыми — иначе
+    // setValues падает при добавлении новой колонки в шапку.
+    const row = r.slice(0, headers.length);
+    while (row.length < headers.length) row.push('');
+    return row.map(function (v) { return (v === null || v === undefined) ? '' : String(v); });
   }));
   const range = sh.getRange(1, 1, all.length, headers.length);
   // Текстовый формат ДО записи значений — иначе Таблицы превратят длинные

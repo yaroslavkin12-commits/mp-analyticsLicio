@@ -593,3 +593,7 @@ CREATE TABLE IF NOT EXISTS ad_cpc_bids (
   checked_at TIMESTAMP DEFAULT NOW(),
   PRIMARY KEY (cabinet, platform, campaign_id, sku)
 );
+
+-- День самого заказа для "оплаты за заказ" (date — день списания, т.е. выкупа).
+ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_date DATE;
+ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(64);
