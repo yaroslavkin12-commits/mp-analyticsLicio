@@ -167,6 +167,33 @@ router.get('/overview', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// GET /api/discounts/history?cabinet=&days=30 — СПП по дням для графика:
+// по каждому товару последнее значение за день (и последнее до периода —
+// как стартовое). Сумму по фильтрам и группам считает страница.
+router.get('/history', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const days = Math.max(2, Math.min(90, parseInt(req.query.days, 10) || 30));
+    const from = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD');
+    const dates = [];
+    for (let d = dayjs(from); !d.isAfter(dayjs(), 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
+    const pc = `CASE WHEN marketing_seller_price > 0 THEN ROUND((marketing_seller_price - marketing_oa_price) / marketing_seller_price * 100, 2) END`;
+    const [rows, base] = await Promise.all([
+      query(`SELECT DISTINCT ON (offer_id, d) offer_id, to_char(collected_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') d, ozon_discount_pct pct, ${pc} pc
+               FROM product_discount_history WHERE cabinet = $1 AND source = 'seller_cabinet' AND collected_at >= $2::date - INTERVAL '3 hours'
+              ORDER BY offer_id, d, collected_at DESC`, [cabinet, from]),
+      query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct pct, ${pc} pc FROM product_discount_history
+              WHERE cabinet = $1 AND source = 'seller_cabinet' AND collected_at < $2::date - INTERVAL '3 hours' ORDER BY offer_id, collected_at DESC`, [cabinet, from]),
+    ]);
+    const di = new Map(dates.map((d, i) => [d, i]));
+    res.json({ success: true, data: {
+      dates,
+      rows: rows.filter(r => di.has(r.d)).map(r => [r.offer_id, di.get(r.d), Number(r.pct), r.pc !== null ? Number(r.pc) : null]),
+      base: base.map(r => [r.offer_id, Number(r.pct), r.pc !== null ? Number(r.pc) : null]),
+    } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 router.get('/', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'licio';

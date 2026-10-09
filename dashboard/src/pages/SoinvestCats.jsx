@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getDiscountOverview } from '../api';
-import { fmtInt, Delta, naturalCompare, shortModel, CAT_COLORS } from './AdsStats2';
+import { getDiscountOverview, getDiscountHistory, getAdsGroups, addAdsGroup, assignAdsGroup } from '../api';
+import { fmtInt, Delta, naturalCompare, shortModel, CAT_COLORS, ChartPane, niceScale, useTip, groupColorMap, AddToGroup } from './AdsStats2';
 import './ads2.css';
 import './sales.css';
 
@@ -16,7 +16,6 @@ import './sales.css';
 const SEP = ' / ';
 const OTHER = 'var(--a-ink3)';
 const pct = v => (v === null || v === undefined || !Number.isFinite(v)) ? '—' : `${v.toFixed(1).replace('.', ',')}%`;
-const BUCKETS = [[0, 0.05, '0%'], [0.05, 10, 'до 10%'], [10, 20, '10–20%'], [20, 30, '20–30%'], [30, 40, '30–40%'], [40, 50, '40–50%'], [50, 101, '50%+']];
 
 function stats(list) {
   // Два уровня: СПП по карте других банков (pct) и с Ozon Картой (pctCard).
@@ -38,6 +37,43 @@ function stats(list) {
   };
 }
 
+// График СПП по дням для выбранного набора товаров (среднее с весом по
+// выручке за 30 дней): две линии — с Ozon Картой и по картам других банков.
+function SppChart({ hist, list, tip }) {
+  const [hover, setHover] = useState(null);
+  const series = useMemo(() => {
+    if (!hist) return null;
+    const weight = new Map(list.map(a => [a.o, a.revenue30 || 1]));
+    const N = hist.dates.length;
+    const cur = new Map();
+    for (const [o, p, pc] of hist.base) if (weight.has(o)) cur.set(o, [p, pc]);
+    const byDay = Array.from({ length: N }, () => []);
+    for (const r of hist.rows) if (weight.has(r[0])) byDay[r[1]].push(r);
+    const card = [], bank = [];
+    for (let d = 0; d < N; d++) {
+      for (const [o, , p, pc] of byDay[d]) cur.set(o, [p, pc]);
+      let w = 0, sp = 0, sc = 0;
+      for (const [o, [p, pc]] of cur) { const k = weight.get(o); w += k; sp += k * p; sc += k * (pc ?? p); }
+      bank.push(w ? sp / w : null); card.push(w ? sc / w : null);
+    }
+    return { card, bank };
+  }, [hist, list]);
+  if (!series) return <div className="a-empty">Загрузка истории…</div>;
+  const nums = [...series.card, ...series.bank].filter(v => v !== null);
+  if (!nums.length) return <div className="a-empty">История появится после нескольких сборов цен расширением.</div>;
+  const scale = niceScale(Math.min(...nums), Math.max(...nums), true);
+  const S = [
+    { key: 'card', label: 'СПП с Ozon Картой', fmt: 'pct', color: 'var(--a-accent)', kind: 'line', side: 'left', values: series.card, scale },
+    { key: 'bank', label: 'СПП: другие банки', fmt: 'pct', color: 'var(--a-spend)', kind: 'line', side: 'left', values: series.bank, scale },
+  ];
+  return (
+    <>
+      <ChartPane dates={hist.dates} series={S} events={[]} tip={tip} height={220} showX onHover={setHover} hoverIdx={hover} />
+      <div className="s-legend">{S.map(x => <span key={x.key}><i style={{ background: x.color }} />{x.label}</span>)}</div>
+    </>
+  );
+}
+
 export default function SoinvestCats({ cabinet }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -45,6 +81,14 @@ export default function SoinvestCats({ cabinet }) {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(() => new Set());
   const [sort, setSort] = useState({ key: 'rev', dir: -1 });
+  const [hist, setHist] = useState(null);
+  const [histDays, setHistDays] = useState(30);
+  const [groupsData, setGroupsData] = useState({ groups: [], members: {} });
+  const [group, setGroup] = useState('');
+  const [newGroup, setNewGroup] = useState(null);
+  const tip = useTip();
+  useEffect(() => { setHist(null); getDiscountHistory(cabinet, histDays).then(r => setHist(r.data.data)).catch(() => setHist({ dates: [], rows: [], base: [] })); }, [cabinet, histDays]);
+  useEffect(() => { getAdsGroups(cabinet).then(r => setGroupsData(r.data.data || { groups: [], members: {} })).catch(() => {}); }, [cabinet]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -55,8 +99,10 @@ export default function SoinvestCats({ cabinet }) {
   const items = useMemo(() => (data?.items || []).map(a => ({ ...a, parts: a.cat.split(SEP), short: shortModel(a.n) || a.n })), [data]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter(a => (!sel || a.cat === sel || a.cat.startsWith(sel + SEP)) && (!q || a.o.toLowerCase().includes(q) || a.n.toLowerCase().includes(q)));
-  }, [items, sel, search]);
+    return items.filter(a => (!sel || a.cat === sel || a.cat.startsWith(sel + SEP)) && (!group || groupsData.members[a.o] === group)
+      && (!q || a.o.toLowerCase().includes(q) || a.n.toLowerCase().includes(q)));
+  }, [items, sel, search, group, groupsData]);
+  const groupColors = useMemo(() => groupColorMap(groupsData.groups), [groupsData]);
   const tops = useMemo(() => {
     // Тот же порядок (и цвета), что в «Аналитике продаж».
     const rank = new Map(['Чехлы', 'Дефлекторы', 'Утеплители', 'Аксессуары'].map((x, i) => [x, i]));
@@ -94,6 +140,7 @@ export default function SoinvestCats({ cabinet }) {
     }
   };
   const rows = [];
+  const sortArts = l => [...l].sort((x, y) => (sort.key === 'avg' ? y.pct - x.pct : sort.key === 'card' ? y.pctCard - x.pctCard : sort.key === 'd1' ? (y.c1 ?? -999) - (x.c1 ?? -999) : y.revenue30 - x.revenue30));
   const pushLevel = (list, d, prefix) => {
     const m = groupBy(list, d);
     const groups = [...m.entries()].map(([k, l]) => ({ k, l, st: stats(l) })).sort((x, y) => (sortVal(x.st) - sortVal(y.st)) * sort.dir);
@@ -117,10 +164,15 @@ export default function SoinvestCats({ cabinet }) {
       if (!isOpen) return;
       const deeper = l.some(a => a.parts.length > d + 1);
       if (deeper) pushLevel(l, d + 1, path);
-      else [...l].sort((x, y) => (sort.key === 'avg' ? y.pct - x.pct : sort.key === 'card' ? y.pctCard - x.pctCard : sort.key === 'd1' ? (y.c1 ?? -999) - (x.c1 ?? -999) : y.revenue30 - x.revenue30)).slice(0, 200).forEach(a => {
-        rows.push(
+      else sortArts(l).slice(0, 200).forEach(a => rows.push(artRow(a, (d - depth + 1) * 16 + 14)));
+    });
+  };
+  function artRow(a, indent, showCat) {
+    return (
           <tr key={'a' + a.o} className="s-art">
-            <td><div className="a-art" style={{ paddingLeft: (d - depth + 1) * 16 + 14 }}><div style={{ minWidth: 0 }}><div className="id">{a.o}</div><div className="model" title={a.n}>{a.short}</div></div></div></td>
+            <td><div className="a-art" style={{ paddingLeft: indent }}><div style={{ minWidth: 0 }}><div className="id">{a.o}
+              {groupsData.members[a.o] && <i className="s-dot" style={{ background: groupColors[groupsData.members[a.o]], marginLeft: 6 }} title={(groupsData.groups.find(g => g.id === groupsData.members[a.o]) || {}).name} />}</div>
+              <div className="model" title={a.n}>{showCat ? `${a.short} · ${a.cat}` : a.short}</div></div></div></td>
             <td className="r"><b className="n">{pct(a.pct)}</b></td>
             <td className="r"><b className="n sv-card">{pct(a.pctCard)}</b></td>
             <td className="r"><Delta value={a.c1} unit="pp" goodWhen="up" /></td>
@@ -132,14 +184,12 @@ export default function SoinvestCats({ cabinet }) {
             <td className="n r sv-card">{a.card ? fmtInt(a.card) : '—'}</td>
             <td className="r a-hint">{a.schema || ''}</td>
           </tr>
-        );
-      });
-    });
-  };
-  pushLevel(filtered, depth, sel);
+    );
+  }
+  // При поиске — сразу список найденных артикулов с ценами, без раскрытия категорий.
+  if (search.trim() || group) sortArts(filtered).slice(0, 300).forEach(a => rows.push(artRow(a, 0, true)));
+  else pushLevel(filtered, depth, sel);
 
-  const dist = BUCKETS.map(([lo, hi, label]) => ({ label, n: filtered.filter(a => a.pctCard >= lo && a.pctCard < hi).length }));
-  const distMax = Math.max(1, ...dist.map(x => x.n));
   const crumbs = sel ? sel.split(SEP) : [];
   const TH = (k, t) => <th className={`r ${k ? 'sortable' : ''} ${sort.key === k ? 'sorted' : ''}`} onClick={() => k && setSort(p => p.key === k ? { key: k, dir: -p.dir } : { key: k, dir: -1 })}>{t}{sort.key === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</th>;
 
@@ -174,6 +224,29 @@ export default function SoinvestCats({ cabinet }) {
         </div>
       )}
 
+      <div className="a-bar">
+        <div className="a-tabs">
+          <span className="a-hint" style={{ marginRight: 4 }}>Группы:</span>
+          <button type="button" className={`a-tab ${!group ? 'on' : ''}`} onClick={() => setGroup('')}>Все товары</button>
+          {groupsData.groups.map(g => (
+            <button key={g.id} type="button" className={`a-tab ${group === g.id ? 'on' : ''}`} onClick={() => setGroup(group === g.id ? '' : g.id)}>
+              <i className="s-dot" style={{ background: groupColors[g.id] }} />{g.name}<span className="c">{Object.values(groupsData.members).filter(x => x === g.id).length}</span>
+            </button>
+          ))}
+          {newGroup === null ? (
+            <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
+          ) : (
+            <form style={{ display: 'flex', gap: 6 }} onSubmit={e => { e.preventDefault(); const n = newGroup.trim(); if (!n) return; addAdsGroup(cabinet, n).then(r => { setGroupsData(r.data.data); setNewGroup(null); }).catch(err => window.alert(err.response?.data?.error || 'Не удалось создать группу')); }}>
+              <input className="a-input" autoFocus value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Название группы" onKeyDown={e => { if (e.key === 'Escape') setNewGroup(null); }} style={{ padding: '5px 10px' }} />
+              <button type="submit" className="a-btn" disabled={!newGroup.trim()}>Создать</button>
+            </form>
+          )}
+        </div>
+        {group && <AddToGroup catalog={items.map(a => ({ offerId: a.o, productName: a.n }))} exclude={Object.entries(groupsData.members).filter(([, g]) => g === group).map(([o]) => o)}
+          onPick={o => { setGroupsData(p => ({ ...p, members: { ...p.members, [o]: group } })); assignAdsGroup(cabinet, o, group).catch(() => {}); }} />}
+      </div>
+      <div className="a-hint" style={{ marginTop: -8 }}>Группы общие с вкладкой «Реклама»: созданная здесь группа появится и там.</div>
+
       <div className="a-kpis s-kpis">
         <div className="a-kpi"><span className="lbl">СПП с Ozon Картой (по выручке)</span><span className="val n sv-card">{pct(all.avgCardW)}</span>
           <span className="sub"><Delta value={all.c1} unit="pp" goodWhen="up" /> за сутки · <Delta value={all.c7} unit="pp" goodWhen="up" /> за неделю</span></div>
@@ -186,16 +259,12 @@ export default function SoinvestCats({ cabinet }) {
       </div>
 
       <div className="a-card" style={{ padding: 14 }}>
-        <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 14 }}>Распределение товаров по СПП с Ozon Картой</b></div>
-        <div className="sv-dist">
-          {dist.map(b => (
-            <div key={b.label} className="sv-col" title={`${b.label}: ${b.n} товаров`}>
-              <span className="n">{b.n}</span>
-              <div className="sv-bar"><i style={{ height: `${b.n / distMax * 100}%` }} /></div>
-              <span className="a-hint">{b.label}</span>
-            </div>
-          ))}
+        <div className="a-bar" style={{ marginBottom: 8 }}>
+          <b style={{ fontSize: 14 }}>Как менялся СПП{group ? ` · ${(groupsData.groups.find(g => g.id === group) || {}).name || ''}` : sel ? ` · ${sel.split(SEP).pop()}` : ''}</b>
+          <span className="a-hint">среднее по выбранным товарам с весом по выручке за 30 дней</span>
+          <span className="a-seg" style={{ marginLeft: 'auto' }}>{[7, 14, 30, 90].map(n => <button key={n} type="button" className={histDays === n ? 'on' : ''} onClick={() => setHistDays(n)}>{n} дн</button>)}</span>
         </div>
+        <SppChart hist={hist} list={filtered} tip={tip} />
       </div>
 
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>
@@ -209,6 +278,7 @@ export default function SoinvestCats({ cabinet }) {
           </table>
         </div>
       </div>
+      {tip.node}
       <div className="a-hint" style={{ lineHeight: 1.5 }}>
         СПП (Соинвест) = (цена продавца − цена для покупателя) / цена продавца, в двух уровнях: по картам других банков и с Ozon Картой.
         Цена берётся по схеме доставки, где товар в наличии (её и видит покупатель). В строках категорий — среднее с весом по выручке за 30 дней.

@@ -60,7 +60,10 @@ const REQUIRED_COLUMNS = {
   CpoProducts: ['enabled', 'bid_pct'],
   CpcBids: ['campaign_id', 'bid'],
   CpoOrders: ['order_id', 'promoted_sku', 'expense'],
-  GeoOrders: ['region', 'city', 'qty'],
+  GeoOrders: ['cluster', 'qty', 'revenue'],
+  Buyout: ['ordered', 'delivered', 'in_progress'],
+  Prices: ['pct_fbo', 'fbo_deliv', 'acquiring'],
+  Finance: ['name', 'amount', 'qty'],
 };
 
 async function fetchSheetRows(sheetName) {
@@ -321,9 +324,9 @@ async function syncGeoFromSheet(cabinet) {
   const map = new Map();
   for (const r of rows) {
     if (r.cabinet !== cabinet || !r.offer_id || !r.date) continue;
-    const reg = String(r.region || '').trim();
-    const region = (reg && reg !== 'Не указан' ? reg : (String(r.cluster || '').trim() || 'Не указан')).slice(0, 128);
-    const city = String(r.city || '').slice(0, 128);
+    // Только кластер доставки (регион/город Ozon отдаёт не всегда).
+    const region = (String(r.cluster || '').trim() || 'Кластер не указан').slice(0, 128);
+    const city = '';
     const date = String(r.date).slice(0, 10);
     const k = [date, r.offer_id, region, city].join('|');
     const cur = map.get(k) || [cabinet, date, r.offer_id, r.sku ? num(r.sku) || null : null, region, city, 0, 0, 0, new Date()];
@@ -339,16 +342,74 @@ async function syncGeoFromSheet(cabinet) {
   return { rows: saved };
 }
 
+// ── Выкуп, цены/комиссии и финансы (для «% выкупа», юнит-экономики и P&L) ──
+let finTablesReady = false;
+async function ensureFinTables() {
+  if (finTablesReady) return;
+  await query(`CREATE TABLE IF NOT EXISTS buyout_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, offer_id VARCHAR(128) NOT NULL, sku BIGINT,
+    ordered INT DEFAULT 0, delivered INT DEFAULT 0, cancelled INT DEFAULT 0, in_progress INT DEFAULT 0, PRIMARY KEY (cabinet, date, offer_id))`);
+  await query(`CREATE TABLE IF NOT EXISTS product_prices (cabinet VARCHAR(32) NOT NULL, offer_id VARCHAR(128) NOT NULL, product_id BIGINT,
+    price DECIMAL(12,2), seller_price DECIMAL(12,2), acquiring DECIMAL(12,2), pct_fbo DECIMAL(6,2), pct_fbs DECIMAL(6,2),
+    fbo_deliv DECIMAL(12,2), fbo_direct_max DECIMAL(12,2), fbo_return DECIMAL(12,2), fbs_deliv DECIMAL(12,2), fbs_direct_max DECIMAL(12,2), fbs_return DECIMAL(12,2),
+    checked_at TIMESTAMP, PRIMARY KEY (cabinet, offer_id))`);
+  await query(`CREATE TABLE IF NOT EXISTS finance_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, sku VARCHAR(32) NOT NULL DEFAULT '',
+    name VARCHAR(160) NOT NULL, amount DECIMAL(14,2) DEFAULT 0, qty DECIMAL(10,2) DEFAULT 0, PRIMARY KEY (cabinet, date, sku, name))`);
+  finTablesReady = true;
+}
+// Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
+async function replaceRange(table, cabinet, rows, columns, conflict) {
+  if (!rows.length) return 0;
+  const dates = rows.map(r => r[1]).sort();
+  await query(`DELETE FROM ${table} WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, dates[0], dates[dates.length - 1]]);
+  return bulkUpsert(table, columns, rows, conflict);
+}
+const lastHeavy = new Map();
+async function syncFinanceFromSheet(cabinet) {
+  // Тяжёлые вкладки — не чаще раза в час.
+  const k = 'fin:' + cabinet;
+  if (Date.now() - (lastHeavy.get(k) || 0) < 55 * 60000) return { rows: 0 };
+  await ensureFinTables();
+  let total = 0;
+  const buy = await fetchSheetRows('Buyout');
+  if (buy) {
+    const out = buy.filter(r => r.cabinet === cabinet && r.offer_id && r.date).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,
+      r.sku ? num(r.sku) || null : null, Math.round(num(r.ordered)), Math.round(num(r.delivered)), Math.round(num(r.cancelled)), Math.round(num(r.in_progress))]);
+    total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress'], ['cabinet', 'date', 'offer_id']);
+  }
+  const pr = await fetchSheetRows('Prices');
+  if (pr) {
+    const out = pr.filter(r => r.cabinet === cabinet && r.offer_id).map(r => [cabinet, r.offer_id, r.product_id ? num(r.product_id) || null : null,
+      num(r.price), num(r.seller_price), num(r.acquiring), num(r.pct_fbo), num(r.pct_fbs), num(r.fbo_deliv), num(r.fbo_direct_max), num(r.fbo_return),
+      num(r.fbs_deliv), num(r.fbs_direct_max), num(r.fbs_return), r.checked_at ? new Date(r.checked_at) : new Date()]);
+    total += await bulkUpsert('product_prices', ['cabinet', 'offer_id', 'product_id', 'price', 'seller_price', 'acquiring', 'pct_fbo', 'pct_fbs',
+      'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at'], out, ['cabinet', 'offer_id']);
+  }
+  const fin = await fetchSheetRows('Finance');
+  if (fin) {
+    const map = new Map();
+    for (const r of fin) {
+      if (r.cabinet !== cabinet || !r.date || !r.name) continue;
+      const row = [cabinet, String(r.date).slice(0, 10), String(r.sku || ''), String(r.name).slice(0, 160), num(r.amount), num(r.qty)];
+      const key = row.slice(1, 4).join('|');
+      const cur = map.get(key);
+      if (cur) { cur[4] += row[4]; cur[5] += row[5]; } else map.set(key, row);
+    }
+    total += await replaceRange('finance_daily', cabinet, [...map.values()], ['cabinet', 'date', 'sku', 'name', 'amount', 'qty'], ['cabinet', 'date', 'sku', 'name']);
+  }
+  lastHeavy.set(k, Date.now());
+  return { rows: total };
+}
+
 async function syncAdDetailsFromSheet(cabinet) {
   const parts = await Promise.allSettled([
     syncSkuStatsFromSheet(cabinet), syncCpoOrdersFromSheet(cabinet),
-    syncCpoProductsFromSheet(cabinet), syncCpcBidsFromSheet(cabinet), syncGeoFromSheet(cabinet),
+    syncCpoProductsFromSheet(cabinet), syncCpcBidsFromSheet(cabinet), syncGeoFromSheet(cabinet), syncFinanceFromSheet(cabinet),
   ]);
   let rows = 0;
   const errors = [];
   parts.forEach((p, i) => {
     if (p.status === 'fulfilled') rows += p.value?.rows || 0;
-    else errors.push(`${['SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids', 'GeoOrders'][i]}: ${p.reason?.message || p.reason}`);
+    else errors.push(`${['SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids', 'GeoOrders', 'Buyout/Prices/Finance'][i]}: ${p.reason?.message || p.reason}`);
   });
   if (errors.length) console.warn(`[SheetAdDetails:${cabinet}]`, errors.join('; '));
   return { rows, warning: errors.length ? errors.join('; ').slice(0, 300) : null };
@@ -371,6 +432,8 @@ async function cleanupSheetJunk() {
 
 module.exports = {
   syncGeoFromSheet,
+  syncFinanceFromSheet,
+  ensureFinTables,
   cleanupSheetJunk,
   sheetId,
   fetchSheetRows,

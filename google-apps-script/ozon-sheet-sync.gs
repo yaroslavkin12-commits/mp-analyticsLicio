@@ -57,6 +57,9 @@ const SHEET_NAMES = {
   cpcBids: 'CpcBids',
   cpoOrders: 'CpoOrders',
   geo: 'GeoOrders',
+  buyout: 'Buyout',
+  prices: 'Prices',
+  finance: 'Finance',
 };
 
 // Заказы (FBO+FBS) за последние 2 дня — для Telegram-уведомлений о новых
@@ -105,9 +108,18 @@ const STATS_WINDOW_DAYS_FULL = 30;
 const RETENTION_DAYS = 45;
 // География заказов: день × артикул × регион × город (по дню заказа, МСК).
 // qty/revenue — без отменённых, cancelled — отменённые штуки.
-// cluster — кластер доставки Ozon (financial_data.cluster_to): регион и город
-// Ozon в списках отправлений сейчас почти не отдаёт, а кластер есть всегда.
-const GEO_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled', 'cluster'];
+// География: день заказа × артикул × кластер доставки Ozon (financial_data.cluster_to —
+// он есть у всех заказов; регион и город Ozon отдаёт не всегда, поэтому их не берём).
+// qty/revenue — без отменённых, cancelled — отменённые штуки.
+const GEO_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'cluster', 'qty', 'revenue', 'cancelled'];
+// Выкуп: день заказа × артикул — заказано, доставлено (выкуплено), отменено, ещё в пути.
+// Цены, комиссии и тарифы логистики по товару (для юнит-экономики).
+const PRICES_HEADERS = ['cabinet', 'offer_id', 'product_id', 'price', 'seller_price', 'acquiring', 'pct_fbo', 'pct_fbs',
+  'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at'];
+// Финансы: день операции × SKU × статья (продажа, комиссия, каждая услуга
+// Ozon отдельно), сумма и штуки. Операции без товара (хранение и т.п.) — sku пустой.
+const FINANCE_HEADERS = ['cabinet', 'date', 'sku', 'name', 'amount', 'qty'];
+const BUYOUT_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress'];
 
 function getCabinets_() {
   const p = PropertiesService.getScriptProperties().getProperties();
@@ -629,10 +641,10 @@ function syncCpoOrders(days) {
 }
 function syncCpoOrdersFull() { syncCpoOrders(30); }
 
-// ---------- География заказов ----------
-// Все отправления FBO и FBS за N дней с регионом и городом доставки
-// (analytics_data), сложенные по дню заказа, артикулу, региону и городу.
-function collectGeo_(cab, days, agg) {
+// ---------- География заказов и выкуп ----------
+// Все отправления FBO и FBS за N дней: кластер доставки и статус, сложенные
+// по дню заказа и артикулу.
+function collectGeo_(cab, days, agg, buy) {
   const headers = sellerHeaders_(cab);
   if (!headers) return 0;
   const since = new Date(Date.now() - days * 86400000).toISOString();
@@ -645,32 +657,30 @@ function collectGeo_(cab, days, agg) {
       try {
         data = fetchJson_(src[0], {
           method: 'post', contentType: 'application/json', headers: headers,
-          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: true, financial_data: true } }),
+          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: false, financial_data: true } }),
         }, 'География ' + src[1]);
       } catch (e) { Logger.log(e.message); break; }
       let postings = data.result && data.result.postings;
       if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
       postings = postings || [];
-      if (offset === 0 && postings.length) {
-        const s0 = postings[0];
-        Logger.log('География ' + src[1] + ': пример analytics_data ' + JSON.stringify(s0.analytics_data || null).slice(0, 300)
-          + '; кластер ' + JSON.stringify(s0.financial_data ? { from: s0.financial_data.cluster_from, to: s0.financial_data.cluster_to } : null));
-      }
       postings.forEach(function (p) {
         const iso = p.in_process_at || p.created_at;
         if (!iso) return;
         const d = Utilities.formatDate(new Date(iso), 'GMT+3', 'yyyy-MM-dd');
-        const a = p.analytics_data || {};
-        const region = String(a.region || '').trim() || 'Не указан';
-        const city = String(a.city || '').trim();
-        const cluster = String((p.financial_data && p.financial_data.cluster_to) || '').trim();
-        const cancelled = /cancel/i.test(String(p.status || ''));
+        const cluster = String((p.financial_data && p.financial_data.cluster_to) || '').trim() || 'Кластер не указан';
+        const st = String(p.status || '');
+        const cancelled = /cancel/i.test(st);
+        const delivered = st === 'delivered';
         (p.products || []).forEach(function (prod) {
-          const key = [cab.id, d, prod.offer_id || '', region, city, cluster].join('|');
-          const r = agg[key] || (agg[key] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), region, city, 0, 0, 0, cluster]);
           const q = Number(prod.quantity) || 1;
-          if (cancelled) r[8] += q;
-          else { r[6] += q; r[7] += q * (parseRuNumber_(prod.price) || 0); }
+          const key = [cab.id, d, prod.offer_id || '', cluster].join('|');
+          const r = agg[key] || (agg[key] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), cluster, 0, 0, 0]);
+          if (cancelled) r[7] += q;
+          else { r[5] += q; r[6] += q * (parseRuNumber_(prod.price) || 0); }
+          const bk = [cab.id, d, prod.offer_id || ''].join('|');
+          const b = buy[bk] || (buy[bk] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), 0, 0, 0, 0]);
+          b[4] += q;
+          if (delivered) b[5] += q; else if (cancelled) b[6] += q; else b[7] += q;
           n++;
         });
       });
@@ -682,23 +692,132 @@ function collectGeo_(cab, days, agg) {
   return n;
 }
 
-// Каждые 3 часа — последние 7 дней (статусы и отмены успевают обновиться).
+// Даты окна заменяются целиком (а не дописываются) — без дублей.
+function replaceWindow_(sheetName, headers, rows, window, dateCol, keepRow) {
+  const from = mskDate_(window - 1);
+  const map = readSheetAsMap_(sheetName, headers.map(function (_, i) { return i; }));
+  const keep = Object.keys(map).map(function (k) { return map[k]; });
+  const cutoff = mskDate_(RETENTION_DAYS);
+  const old = keep.filter(function (r) {
+    const d = r[dateCol] instanceof Date ? Utilities.formatDate(r[dateCol], 'GMT+3', 'yyyy-MM-dd') : String(r[dateCol]).slice(0, 10);
+    return d < from && d >= cutoff && (!keepRow || keepRow(r));
+  });
+  writeRows_(sheetName, headers, old.concat(rows));
+  return old.length + rows.length;
+}
+
+// Каждые 3 часа — последние 10 дней (статусы и отмены успевают обновиться).
 // Первый раз запустите syncGeoFull вручную — заполнит 45 дней.
 function syncGeo(days) {
-  const window = typeof days === 'number' ? days : 7;
-  const agg = {};
+  const window = typeof days === 'number' ? days : 10;
+  const agg = {}, buy = {};
   getCabinets_().forEach(function (cab) {
-    try { Logger.log('География ' + cab.id + ': позиций ' + collectGeo_(cab, window, agg)); } catch (e) { Logger.log('География ' + cab.id + ': ' + e.message); }
+    try { Logger.log('География ' + cab.id + ': позиций ' + collectGeo_(cab, window, agg, buy)); } catch (e) { Logger.log('География ' + cab.id + ': ' + e.message); }
   });
-  const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[7] = Math.round(r[7] * 100) / 100; return r; });
-  mergeIntoSheet_(SHEET_NAMES.geo, GEO_HEADERS, rows, [0, 1, 2, 4, 5, 9], 1);
-  const regions = {};
+  const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[6] = Math.round(r[6] * 100) / 100; return r; });
+  const brows = Object.keys(buy).map(function (k) { return buy[k]; });
+  // Строки старого формата (10 колонок: регион, город, …, кластер) отбрасываем.
+  const total = replaceWindow_(SHEET_NAMES.geo, GEO_HEADERS, rows, window, 1, function (r) { return r.length < 9 || r[8] === '' || r[8] === undefined; });
+  const btotal = replaceWindow_(SHEET_NAMES.buyout, BUYOUT_HEADERS, brows, window, 1);
   const clusters = {};
-  rows.forEach(function (r) { regions[r[4]] = true; if (r[9]) clusters[r[9]] = true; });
-  Logger.log('syncGeo: строк ' + rows.length + ', регионов ' + Object.keys(regions).length + ', кластеров ' + Object.keys(clusters).length
-    + (Object.keys(clusters).length ? ' (' + Object.keys(clusters).slice(0, 8).join('; ') + ')' : ''));
+  rows.forEach(function (r) { clusters[r[4]] = true; });
+  Logger.log('syncGeo: строк за окно ' + rows.length + ' (всего ' + total + '), кластеров ' + Object.keys(clusters).length + '; выкуп: строк ' + brows.length + ' (всего ' + btotal + ')');
 }
 function syncGeoFull() { syncGeo(45); }
+
+// ---------- Цены, комиссии и тарифы ----------
+function collectPrices_(cab, out) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return;
+  let cursor = '';
+  const now = new Date().toISOString();
+  for (let guard = 0; guard < 40; guard++) {
+    const data = fetchJson_('https://api-seller.ozon.ru/v5/product/info/prices', {
+      method: 'post', contentType: 'application/json', headers: headers,
+      payload: JSON.stringify({ filter: { visibility: 'ALL' }, cursor: cursor, limit: 1000 }),
+    }, 'Цены и комиссии');
+    const items = data.items || [];
+    items.forEach(function (it) {
+      const c = it.commissions || {}, p = it.price || {};
+      out.push([cab.id, it.offer_id || '', String(it.product_id || ''), parseRuNumber_(p.price), parseRuNumber_(p.marketing_seller_price || p.price),
+        parseRuNumber_(it.acquiring), parseRuNumber_(c.sales_percent_fbo), parseRuNumber_(c.sales_percent_fbs),
+        parseRuNumber_(c.fbo_deliv_to_customer_amount), parseRuNumber_(c.fbo_direct_flow_trans_max_amount), parseRuNumber_(c.fbo_return_flow_amount),
+        parseRuNumber_(c.fbs_deliv_to_customer_amount), parseRuNumber_(c.fbs_direct_flow_trans_max_amount), parseRuNumber_(c.fbs_return_flow_amount), now]);
+    });
+    cursor = data.cursor || '';
+    if (!cursor || items.length < 1000) break;
+    Utilities.sleep(300);
+  }
+}
+function syncPrices() {
+  const rows = [];
+  getCabinets_().forEach(function (cab) { try { collectPrices_(cab, rows); } catch (e) { Logger.log('Цены ' + cab.id + ': ' + e.message); } });
+  if (rows.length) writeRows_(SHEET_NAMES.prices, PRICES_HEADERS, rows);
+  Logger.log('syncPrices: товаров ' + rows.length);
+}
+
+// ---------- Финансы (начисления и списания Ozon) ----------
+function collectFinance_(cab, days, agg, started) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return 0;
+  const from = mskDate_(days - 1) + 'T00:00:00.000Z', to = mskDate_(0) + 'T23:59:59.999Z';
+  const add = function (d, sku, name, amount, qty) {
+    if (!amount && !qty) return;
+    const k = [cab.id, d, sku, name].join('|');
+    const r = agg[k] || (agg[k] = [cab.id, d, sku, name, 0, 0]);
+    r[4] += amount; r[5] += qty;
+  };
+  let n = 0, names = {};
+  for (let page = 1; page <= 200; page++) {
+    if (Date.now() - started > 300000) { Logger.log('Финансы ' + cab.id + ': не успели все страницы, остальное — в следующий запуск'); break; }
+    const data = fetchJson_('https://api-seller.ozon.ru/v3/finance/transaction/list', {
+      method: 'post', contentType: 'application/json', headers: headers,
+      payload: JSON.stringify({ filter: { date: { from: from, to: to }, operation_type: [], posting_number: '', transaction_type: 'all' }, page: page, page_size: 1000 }),
+    }, 'Финансы');
+    const res = data.result || {};
+    const ops = res.operations || [];
+    ops.forEach(function (op) {
+      const d = Utilities.formatDate(new Date(String(op.operation_date).replace(' ', 'T') + '+03:00'), 'GMT+3', 'yyyy-MM-dd');
+      const skus = (op.items || []).map(function (i) { return String(i.sku || ''); }).filter(Boolean);
+      const parts = skus.length ? skus : [''];
+      const k = parts.length;
+      const accr = Number(op.accruals_for_sale) || 0, comm = Number(op.sale_commission) || 0;
+      let svcSum = 0;
+      const isReturn = op.type === 'returns';
+      parts.forEach(function (sku) {
+        if (accr) add(d, sku, isReturn ? 'Возврат выручки' : 'Продажа', accr / k, isReturn ? -1 : 1);
+        if (comm) add(d, sku, isReturn ? 'Возврат комиссии' : 'Комиссия', comm / k, 0);
+      });
+      (op.services || []).forEach(function (sv) {
+        const v = Number(sv.price) || 0; svcSum += v;
+        names[sv.name] = true;
+        parts.forEach(function (sku) { add(d, sku, sv.name, v / k, 0); });
+      });
+      const rest = (Number(op.amount) || 0) - accr - comm - svcSum;
+      if (Math.abs(rest) > 0.01) {
+        names[op.operation_type] = true;
+        parts.forEach(function (sku) { add(d, sku, op.operation_type || 'Прочее', rest / k, 0); });
+      }
+      n++;
+    });
+    if (page >= (res.page_count || 1) || !ops.length) break;
+    Utilities.sleep(200);
+  }
+  Logger.log('Финансы ' + cab.id + ': операций ' + n + '; статьи: ' + Object.keys(names).slice(0, 25).join(', '));
+  return n;
+}
+// Каждые 6 часов — последние 5 дней. Первый раз запустите syncFinanceFull
+// вручную — заполнит 30 дней (больше месяца Ozon за один запрос не отдаёт).
+function syncFinance(days) {
+  const window = typeof days === 'number' ? days : 5;
+  const started = Date.now();
+  const agg = {};
+  getCabinets_().forEach(function (cab) { try { collectFinance_(cab, window, agg, started); } catch (e) { Logger.log('Финансы ' + cab.id + ': ' + e.message); } });
+  const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[4] = Math.round(r[4] * 100) / 100; return r; });
+  const total = replaceWindow_(SHEET_NAMES.finance, FINANCE_HEADERS, rows, window, 1);
+  Logger.log('syncFinance: строк за окно ' + rows.length + ' (всего ' + total + ')');
+}
+function syncFinanceFull() { syncFinance(30); }
 
 // ---------- Запись в таблицу ----------
 function getSheet_(name) {
@@ -819,13 +938,14 @@ function syncDaily() {
   mergeIntoSheet_(SHEET_NAMES.campaigns, CAMPAIGNS_HEADERS, campaigns, [0, 1]);
   Logger.log('syncDaily: каталог ' + catalog.length + ', аналитика ' + analytics.length + ', кампании ' + campaigns.length + ', статистика ' + stats.length);
   try { syncCpoOrders(30); } catch (e) { Logger.log('CPO-отчёт (30 дн): ' + e.message); }
+  try { syncPrices(); } catch (e) { Logger.log('Цены и комиссии: ' + e.message); }
 }
 
 // Выполнить один раз вручную — поставит оба триггера по расписанию.
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
@@ -835,7 +955,8 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
   ScriptApp.newTrigger('syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
   ScriptApp.newTrigger('syncGeo').timeBased().everyHours(3).create();
-  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа.');
+  ScriptApp.newTrigger('syncFinance').timeBased().everyHours(6).create();
+  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, syncFinance каждые 6 часов.');
 }
 
 // ── История расхода «оплаты за клик» по каждому товару и дню ─────────────

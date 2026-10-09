@@ -72,3 +72,4 @@ export const getCostList = cabinet => api.get('/sales/costs', { params: { cabine
 export const saveCostList = (cabinet, items) => api.post('/sales/costs', { cabinet, items }, { timeout: 120000 });
 export const getSalesGeo = (cabinet, p) => api.get('/sales/geo', { params: { cabinet, ...p }, timeout: 90000 });
 export const getDiscountOverview = cabinet => api.get('/discounts/overview', { params: { cabinet } });
+export const getDiscountHistory = (cabinet, days) => api.get('/discounts/history', { params: { cabinet, days } });

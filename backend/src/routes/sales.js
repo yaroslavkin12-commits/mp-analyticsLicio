@@ -339,14 +339,14 @@ router.get('/geo', async (req, res) => {
     };
     // «Место» — город покупателя, если Ozon его передал (FBO), иначе кластер
     // доставки. Округ — по городу, а если город неизвестен — по кластеру.
-    const placeOf = (cluster, city) => {
-      const c = String(city || '').trim();
-      return c ? { key: 'c:' + c, name: c, district: districtOfCity(c) || districtOf(cluster), cluster }
-        : { key: 'k:' + cluster, name: `${cluster} · город не указан`, district: districtOf(cluster), cluster };
+    // Только кластер доставки Ozon — он есть у всех заказов.
+    const placeOf = (cluster) => {
+      const c = String(cluster || '').trim() || 'Кластер не указан';
+      return { key: c, name: c, district: districtOf(c), cluster: c };
     };
     const regions = [], ri = new Map();
-    const reg = (cluster, city) => {
-      const p = placeOf(cluster, city);
+    const reg = (cluster) => {
+      const p = placeOf(cluster);
       if (ri.has(p.key)) return ri.get(p.key);
       ri.set(p.key, regions.length);
       regions.push({ name: p.name, district: p.district });

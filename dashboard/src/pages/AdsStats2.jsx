@@ -75,7 +75,7 @@ export function shortModel(name) {
 // перестановке вкладок. Больше шести — нейтральный серый.
 export const CAT_COLORS = ['var(--s-c1)', 'var(--s-c2)', 'var(--s-c3)', 'var(--s-c4)', 'var(--s-c5)', 'var(--s-c6)'];
 const CAT_STEMS = [/чехл|чехол/i, /дефлект/i, /утепл|автоодеял/i, /аксесс/i];
-function groupColorMap(groups) {
+export function groupColorMap(groups) {
   // Цвета четырёх категорий закреплены за ними, новые группы берут следующие.
   const slot = {}, used = new Set(CAT_STEMS.map((_, i) => i));
   const byAge = [...groups].sort((x, y) => naturalCompare(String(x.id), String(y.id)));
@@ -278,7 +278,7 @@ function shortNum(v, fmt) {
   if (a >= 1000) return `${(v / 1000).toFixed(1).replace('.', ',')}к`;
   return String(Math.round(v));
 }
-function niceScale(min, max, free) {
+export function niceScale(min, max, free) {
   if (!Number.isFinite(min) || !Number.isFinite(max)) { min = 0; max = 1; }
   if (!free) min = Math.min(0, min);
   if (max === min) max = min + 1;
@@ -316,7 +316,7 @@ function useWidth(ref, fallback) {
   return w;
 }
 
-function ChartPane({ dates, series, events, tip, height, showX, onHover, hoverIdx }) {
+export function ChartPane({ dates, series, events, tip, height, showX, onHover, hoverIdx }) {
   // series: [{ key, label, fmt, color, kind: 'bar'|'line', side: 'left'|'right', values, scale }]
   const boxRef = useRef(null);
   const w = useWidth(boxRef, 680), h = height, pl = 48, pr = series.some(s => s.side === 'right') ? 48 : 12, pt = 26, pb = showX ? 22 : 8;
@@ -872,7 +872,7 @@ function Freshness({ status }) {
 }
 
 // ── Поиск артикула для добавления в группу ───────────────────────────────
-function AddToGroup({ catalog, exclude, onPick }) {
+export function AddToGroup({ catalog, exclude, onPick }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ex = new Set(exclude);
