@@ -54,3 +54,9 @@
 .mpui .c-table th:not(.r), .mpui .c-table td:not(.r), .mpui .s-slice th:not(.r), .mpui .s-slice td:not(.r){text-align:left}
 .mpui .c-table td{padding:6px 12px}
 .mpui table.a-t.s-slice{min-width:0}
+
+/* Доли: полоса 100% */
+.mpui .s-strip{display:flex;height:30px;border-radius:8px;overflow:hidden;gap:2px;background:var(--a-panel)}
+.mpui .s-strip>div{min-width:3px;display:flex;align-items:center;justify-content:center;cursor:default}
+.mpui .s-strip>div span{font-family:var(--a-num);font-size:11.5px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.45);white-space:nowrap}
+.mpui .s-part i{opacity:.85}

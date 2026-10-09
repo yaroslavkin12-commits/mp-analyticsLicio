@@ -166,7 +166,7 @@ const STACK_METRICS = [
   { key: 'revenue', label: 'Заказано, ₽' }, { key: 'orders', label: 'Заказы, шт' },
   { key: 'views', label: 'Показы' }, { key: 'spend', label: 'Расход на рекламу, ₽' },
 ];
-function StackChart({ buckets, groups, metric, tip, gran }) {
+function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
   const boxRef = useRef(null);
   const [w, setW] = useState(680);
   useEffect(() => {
@@ -183,9 +183,11 @@ function StackChart({ buckets, groups, metric, tip, gran }) {
     for (const i of b.idx) v += metric === 'spend' ? g.ag.s.spendCpc[i] + g.ag.s.spendCpo[i] : g.ag.s[metric][i];
     return v;
   };
-  const cols = buckets.map(b => groups.map(g => val(g, b)));
-  const max = Math.max(1, ...cols.map(c => c.reduce((s, v) => s + v, 0)));
-  const step = (() => { const raw = max / 4, p = Math.pow(10, Math.floor(Math.log10(raw))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw); })();
+  const raw = buckets.map(b => groups.map(g => val(g, b)));
+  // normalize — каждый столбец 100%: видно, как менялась доля, а не объём.
+  const cols = normalize ? raw.map(c => { const t = c.reduce((s, v) => s + v, 0); return c.map(v => t ? v / t * 100 : 0); }) : raw;
+  const max = normalize ? 100 : Math.max(1, ...cols.map(c => c.reduce((s, v) => s + v, 0)));
+  const step = normalize ? 25 : (() => { const r = max / 4, p = Math.pow(10, Math.floor(Math.log10(r))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(x => x >= r); })();
   const ticks = []; for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(v);
   const top = ticks[ticks.length - 1] || 1;
   const y = v => pt + ih - v / top * ih;
@@ -197,7 +199,7 @@ function StackChart({ buckets, groups, metric, tip, gran }) {
         {ticks.map(v => (
           <g key={v}>
             <line x1={pl} x2={w - pr} y1={y(v)} y2={y(v)} stroke="var(--a-grid)" />
-            <text x={pl - 6} y={y(v) + 3.5} textAnchor="end" fontSize="10" fill="var(--a-ink3)" fontFamily="JetBrains Mono, monospace">{fmtShort(v)}</text>
+            <text x={pl - 6} y={y(v) + 3.5} textAnchor="end" fontSize="10" fill="var(--a-ink3)" fontFamily="JetBrains Mono, monospace">{normalize ? `${v}%` : fmtShort(v)}</text>
           </g>
         ))}
         {buckets.map((b, i) => {
@@ -223,12 +225,12 @@ function StackChart({ buckets, groups, metric, tip, gran }) {
           <rect key={'h' + b.key} x={pl + i * bw} y={0} width={bw} height={h} fill="transparent"
             onMouseMove={e => {
               setHover(i);
-              const total = cols[i].reduce((s, v) => s + v, 0);
+              const total = raw[i].reduce((s, v) => s + v, 0);
               tip.show(e, (
                 <div>
                   <div style={{ color: 'var(--a-ink3)', marginBottom: 3 }}>{gran === 'day' ? dayjs(b.key).format('DD.MM.YYYY') : gran === 'week' ? `неделя с ${dayjs(b.key).format('DD.MM')}` : dayjs(b.key).format('MM.YYYY')}</div>
                   {groups.map((g, gi) => cols[i][gi] ? (
-                    <div key={g.key}><span style={{ color: g.color }}>■</span> {g.name}: <b>{fmtInt(cols[i][gi])}</b> <span style={{ color: 'var(--a-ink3)' }}>{total ? Math.round(cols[i][gi] / total * 100) : 0}%</span></div>
+                    <div key={g.key}><span style={{ color: g.color }}>■</span> {g.name}: <b>{fmtInt(raw[i][gi])}</b> <span style={{ color: 'var(--a-ink3)' }}>{total ? (raw[i][gi] / total * 100).toFixed(1).replace('.', ',') : 0}%</span></div>
                   ) : null)}
                   <div style={{ marginTop: 3 }}>Всего: <b>{fmtInt(total)}</b></div>
                 </div>
@@ -238,6 +240,109 @@ function StackChart({ buckets, groups, metric, tip, gran }) {
       </svg>
       <div className="s-legend">
         {groups.map(g => <span key={g.key}><i style={{ background: g.color }} />{g.name}</span>)}
+      </div>
+    </div>
+  );
+}
+
+// ── Доли: из чего складываются продажи выбранной категории ───────────────
+const ORIGINS = [
+  ['Японские', ['Toyota', 'Lexus', 'Honda', 'Nissan', 'Mitsubishi', 'Mazda', 'Subaru', 'Suzuki', 'Daihatsu', 'Infiniti', 'Isuzu']],
+  ['Китайские', ['Haval', 'Chery', 'Geely', 'Changan', 'Jetour', 'Exeed', 'Omoda', 'Tank', 'JAC', 'FAW', 'Great Wall', 'Lifan', 'Jaecoo', 'Livan', 'Belgee', 'Kaiyi', 'Dongfeng', 'GAC', 'BYD', 'Hongqi', 'Zeekr', 'Li Auto', 'Voyah']],
+  ['Корейские', ['Hyundai', 'Kia', 'SsangYong', 'Daewoo', 'Genesis']],
+  ['Европейские', ['Volkswagen', 'Skoda', 'Renault', 'BMW', 'Audi', 'Mercedes', 'Opel', 'Peugeot', 'Citroen', 'Volvo', 'Land Rover', 'Porsche']],
+  ['Американские', ['Ford', 'Chevrolet', 'Jeep', 'Cadillac']],
+  ['Отечественные', ['Лада', 'УАЗ', 'ГАЗ', 'Нива', 'Москвич']],
+];
+const ORIGIN_OF = new Map(ORIGINS.flatMap(([o, bs]) => bs.map(b => [b, o])));
+const NO_BRAND = 'Без марки';
+const SHARE_DIMS = [['cat', 'Подкатегории'], ['origin', 'Страна марки'], ['brand', 'Марки авто'], ['top', 'Артикулы']];
+
+function SharesCard({ node, kids, colorNode, brandRank, dates, buckets, gran, tip, agOf, onPickCat, onPickBrand, cabinet }) {
+  const [dim, setDim] = useState('cat');
+  const [metric, setMetric] = useState('revenue');
+  const [showTrend, setShowTrend] = useState(true);
+  const dims = SHARE_DIMS.filter(([k]) => cabinet === 'defly' || (k !== 'origin' && k !== 'brand'));
+  const d = dim === 'cat' && !kids.length ? 'top' : dim;
+  const val = a => metric === 'revenue' ? a.tRevenue : a.tOrders;
+  const pval = a => a.prev ? (metric === 'revenue' ? a.prev.revenue : a.prev.orders) : 0;
+
+  const groups = useMemo(() => {
+    let list;
+    if (d === 'cat') {
+      list = kids.map(k => ({ key: k.path, name: k.name, arts: k.arts, color: CAT_COLORS[colorNode?.children?.get(k.name)?.slot] || OTHER_COLOR, pick: () => onPickCat(k.path) }));
+    } else if (d === 'origin') {
+      const m = new Map();
+      for (const a of node.arts) { const o = a.brand ? (ORIGIN_OF.get(a.brand) || 'Другие') : NO_BRAND; if (!m.has(o)) m.set(o, []); m.get(o).push(a); }
+      const order = [...ORIGINS.map(x => x[0]), 'Другие', NO_BRAND];
+      list = order.filter(o => m.has(o)).map(o => ({ key: o, name: o, arts: m.get(o), color: CAT_COLORS[ORIGINS.findIndex(x => x[0] === o)] || OTHER_COLOR }));
+    } else {
+      const m = new Map();
+      for (const a of node.arts) {
+        const k = d === 'brand' ? (a.brand || NO_BRAND) : a.o;
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(a);
+      }
+      const all = [...m.entries()].map(([k, arts]) => ({ k, arts, v: arts.reduce((s, a) => s + val(a), 0) })).sort((x, y) => y.v - x.v);
+      const top = all.filter(x => x.k !== NO_BRAND).slice(0, 8);
+      const rest = all.filter(x => !top.includes(x));
+      // Цвет марки — по её месту в общем рейтинге кабинета, а не в текущем фильтре.
+      list = top.map((x, i) => ({
+        key: x.k, name: d === 'brand' ? x.k : `${x.k} · ${x.arts[0].short}`, arts: x.arts,
+        color: d === 'brand' ? (CAT_COLORS[brandRank.get(x.k)] || OTHER_COLOR) : (CAT_COLORS[i] || OTHER_COLOR),
+        pick: d === 'brand' ? () => onPickBrand(x.k) : null,
+      }));
+      if (rest.length) list.push({ key: '__rest', name: `Остальные (${rest.length})`, arts: rest.flatMap(x => x.arts), color: OTHER_COLOR });
+    }
+    const tot = list.reduce((s, g) => s + g.arts.reduce((x, a) => x + val(a), 0), 0);
+    const ptot = list.reduce((s, g) => s + g.arts.reduce((x, a) => x + pval(a), 0), 0);
+    return list.map(g => {
+      const v = g.arts.reduce((x, a) => x + val(a), 0), pv = g.arts.reduce((x, a) => x + pval(a), 0);
+      const share = tot ? v / tot * 100 : null, pshare = ptot ? pv / ptot * 100 : null;
+      return { ...g, v, pv, share, pshare, delta: share !== null && pshare !== null ? share - pshare : null, ag: agOf(g.arts) };
+    });
+  }, [d, metric, node, kids, colorNode, brandRank, agOf]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fmtV = v => metric === 'revenue' ? `${fmtInt(v)} ₽` : `${fmtInt(v)} шт`;
+  return (
+    <div className="a-card" style={{ padding: 14 }}>
+      <div className="a-bar" style={{ marginBottom: 12 }}>
+        <b style={{ fontSize: 14 }}>Доли{node.path ? ` · ${node.name}` : ''}</b>
+        <span className="a-seg">{dims.map(([k, l]) => <button key={k} type="button" className={d === k ? 'on' : ''} onClick={() => setDim(k)} disabled={k === 'cat' && !kids.length}>{l}</button>)}</span>
+        <span className="a-seg">{[['revenue', 'по сумме заказов'], ['orders', 'по штукам']].map(([k, l]) => <button key={k} type="button" className={metric === k ? 'on' : ''} onClick={() => setMetric(k)}>{l}</button>)}</span>
+        <button type="button" className="a-toggle" style={{ marginLeft: 'auto' }} onClick={() => setShowTrend(v => !v)}><span className={`a-sw ${showTrend ? 'on' : ''}`} />Как менялась доля</button>
+      </div>
+      <div className="s-strip">
+        {groups.filter(g => g.share > 0).map(g => (
+          <div key={g.key} style={{ flexGrow: g.share, background: g.color }} title={`${g.name}: ${fmtPct(g.share)}`}
+            onMouseMove={e => tip.show(e, <div><b>{g.name}</b><div>{fmtPct(g.share)} · {fmtV(g.v)}</div></div>)} onMouseLeave={tip.hide}>
+            {g.share >= 6 && <span>{g.share.toFixed(g.share < 10 ? 1 : 0).replace('.', ',')}%</span>}
+          </div>
+        ))}
+      </div>
+      <div className={showTrend ? 's-two' : ''} style={{ marginTop: 12 }}>
+        <div className="a-scroll">
+          <table className="a-t s-slice">
+            <thead><tr><th>{SHARE_DIMS.find(x => x[0] === d)[1]}</th><th className="r">{metric === 'revenue' ? 'Заказано, ₽' : 'Заказы, шт'}</th><th className="r">Доля</th><th className="r">Была</th><th className="r">Изменение</th></tr></thead>
+            <tbody>
+              {groups.map(g => (
+                <tr key={g.key} className={g.pick ? 'row' : ''} onClick={g.pick || undefined} title={g.pick ? 'Показать только это' : ''}>
+                  <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}><i className="s-dot" style={{ background: g.color }} />{g.name}</span></td>
+                  <td className="n r">{fmtInt(g.v)}</td>
+                  <td className="r"><span className="s-part"><i style={{ width: `${Math.min(100, g.share || 0)}%`, background: g.color }} /><b className="n">{fmtPct(g.share)}</b></span></td>
+                  <td className="n r muted">{fmtPct(g.pshare)}</td>
+                  <td className="r"><Delta value={g.delta} unit="pp" goodWhen="neutral" title="Изменение доли к прошлому периоду той же длины, в процентных пунктах" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {showTrend && (
+          <div>
+            <div className="a-hint" style={{ marginBottom: 4 }}>Доля по {gran === 'day' ? 'дням' : gran === 'week' ? 'неделям' : 'месяцам'} (каждый столбец — 100%)</div>
+            <StackChart buckets={buckets} groups={groups} metric={metric} tip={tip} gran={gran} normalize />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -362,6 +467,7 @@ export default function SalesAnalytics({ cabinet }) {
     for (const a of all) if (a.brand) m.set(a.brand, (m.get(a.brand) || 0) + a.tRevenue);
     return [...m.entries()].sort((x, y) => y[1] - x[1]).map(([b]) => b);
   }, [all]);
+  const brandRank = useMemo(() => new Map(brands.slice(0, 6).map((b, i) => [b, i])), [brands]);
 
   // Фильтры (марка, поиск) действуют на всё — дерево строится уже по ним.
   const filtered = useMemo(() => {
@@ -467,16 +573,20 @@ export default function SalesAnalytics({ cabinet }) {
   ];
   const clickSort = k => k && setSort(p => p.key === k ? { key: k, dir: -p.dir } : { key: k, dir: k === 'days' ? 1 : -1 });
   const toggle = path => setOpen(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
-  const metricCells = (st) => {
+  // Доля — от родителя: подкатегория от категории, артикул от своей
+  // подкатегории (в подсказке — доля от всего выбранного).
+  const metricCells = (st, base) => {
     const t = st.t;
-    const share = totalRev > 0 ? t.revenue / totalRev * 100 : null;
+    const b = base === undefined ? totalRev : base;
+    const share = b > 0 ? t.revenue / b * 100 : null;
+    const shareAll = totalRev > 0 ? t.revenue / totalRev * 100 : null;
     const daysCls = st.g.stockNow === null ? '' : st.sd !== null && st.sd < 7 ? 'b' : st.sd !== null && st.sd < 14 ? 'w' : '';
     return (
       <>
         <td><SparkBars values={st.spark} /></td>
         <td className="n r">{fmtInt(t.revenue)}</td>
         <td className="r"><Delta value={st.p ? changePct(t.revenue, st.p.revenue) : null} /></td>
-        <td className="r"><span className="s-part"><i style={{ width: `${Math.min(100, share || 0)}%` }} /><b className="n">{share === null ? '—' : fmtPct(share)}</b></span></td>
+        <td className="r" title={base !== undefined && shareAll !== null ? `${fmtPct(shareAll)} от всего выбранного` : ''}><span className="s-part"><i style={{ width: `${Math.min(100, share || 0)}%` }} /><b className="n">{share === null ? '—' : fmtPct(share)}</b></span></td>
         <td className="n r">{fmtInt(t.orders)}</td>
         <td className="n r">{t.orders ? fmtInt(t.revenue / t.orders) : '—'}</td>
         <td className="n r">{fmtInt(t.views)}</td>
@@ -491,7 +601,7 @@ export default function SalesAnalytics({ cabinet }) {
     );
   };
   const treeRows = [];
-  const pushNode = (nd, depth, forceOpen) => {
+  const pushNode = (nd, depth, forceOpen, parentRev) => {
     const st = statsOf(nd.arts, 'c' + nd.path);
     const isOpen = forceOpen || open.has(nd.path);
     treeRows.push(
@@ -505,13 +615,13 @@ export default function SalesAnalytics({ cabinet }) {
             <button type="button" className="s-focus" title="Показать только эту категорию" onClick={e => { e.stopPropagation(); setSel(nd.path); }}>⌕</button>
           </div>
         </td>
-        {metricCells(st)}
+        {metricCells(st, parentRev)}
       </tr>
     );
     if (!isOpen) return;
     if (nd.kids.length) {
       const ks = nd.kids.map(k => ({ k, v: sortVal(statsOf(k.arts, 'c' + k.path)) })).sort((x, y) => (x.v - y.v) * sort.dir);
-      ks.forEach(({ k }) => pushNode(k, depth + 1));
+      ks.forEach(({ k }) => pushNode(k, depth + 1, false, st.t.revenue));
       return;
     }
     const arts = nd.arts.map(a => ({ a, st: statsOf([a], 'a' + a.o) })).sort((x, y) => (sortVal(x.st) - sortVal(y.st)) * sort.dir);
@@ -529,7 +639,7 @@ export default function SalesAnalytics({ cabinet }) {
               </div>
             </div>
           </td>
-          {metricCells(st)}
+          {metricCells(st, nd.arts.length > 1 ? statsOf(nd.arts, 'c' + nd.path).t.revenue : undefined)}
         </tr>
       );
       if (isArt) treeRows.push(
@@ -736,6 +846,9 @@ export default function SalesAnalytics({ cabinet }) {
           : <DualChart dates={buckets.map(b => b.key)} byDate={model.byDate} events={[]} tip={tip} mode="all"
               metricsList={SALES_CHART_METRICS} storeKey="mp-sales-chart" defaults={{ left: 'revenue', right: 'orders' }} />}
       </div>
+
+      <SharesCard node={node} kids={kids} colorNode={colorNode} brandRank={brandRank} dates={dates} buckets={buckets} gran={gran} tip={tip}
+        agOf={agOf} cabinet={cabinet} onPickCat={setSel} onPickBrand={setBrand} />
 
       <div className={`a-card ${loading ? 'a-loading' : ''}`} id="s-tree">
         <div className="a-bar" style={{ padding: '12px 14px 0' }}>
