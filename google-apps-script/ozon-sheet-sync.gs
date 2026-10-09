@@ -436,3 +436,55 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
   Logger.log('Триггеры поставлены: syncRecent каждые 15 мин, syncDaily раз в сутки в 4:00.');
 }
+
+// ── Разведка: отчёт по заказам "Оплата за заказ" (CPO) ─────────────────────
+// Ozon не отдаёт список товаров мультитоварной РК "Оплата за заказ: выбранные
+// товары" (v2/products → 400), поэтому её расход нельзя разнести по
+// артикулам. В Performance API есть асинхронный отчёт по заказам
+// (POST /api/client/statistic/orders/generate/json) — по нему каждая строка
+// должна быть заказом с SKU и списанной суммой. Формат строк заранее не
+// известен, поэтому эта функция просто заказывает отчёт за последние 7 дней,
+// ждёт готовности и складывает СЫРОЙ ответ во вкладку CpoOrdersRaw + первые
+// 3000 символов в журнал выполнения — по ним backend научится его разбирать.
+// Запускать вручную из редактора: probeCpoOrders.
+function probeCpoOrders() {
+  const cab = getCabinets_().filter(function (c) { return c.id === 'defly'; })[0] || getCabinets_()[0];
+  const headers = perfHeaders_(cab);
+  if (!headers) throw new Error('Нет ключей Performance API для кабинета ' + cab.id);
+  const from = mskDate_(7) + 'T00:00:00Z';
+  const to = mskDate_(0) + 'T00:00:00Z';
+
+  const gen = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistic/orders/generate/json', {
+    method: 'post', muteHttpExceptions: true, contentType: 'application/json', headers: headers,
+    payload: JSON.stringify({ from: from, to: to }),
+  });
+  Logger.log('generate: HTTP ' + gen.getResponseCode() + ' ' + gen.getContentText().slice(0, 500));
+  const genData = JSON.parse(gen.getContentText() || '{}');
+  const uuid = genData.UUID || genData.uuid;
+  if (!uuid) throw new Error('Отчёт не заказался — см. ответ выше');
+
+  let state = '', link = '';
+  for (let i = 0; i < 24; i++) { // до ~4 минут
+    Utilities.sleep(10000);
+    const st = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistics/' + uuid,
+      { method: 'get', muteHttpExceptions: true, headers: perfHeaders_(cab) });
+    const stData = JSON.parse(st.getContentText() || '{}');
+    state = stData.state || '';
+    link = stData.link || '';
+    Logger.log('статус ' + (i + 1) + ': ' + st.getContentText().slice(0, 300));
+    if (state === 'OK' || state === 'ERROR') break;
+  }
+  if (state !== 'OK') throw new Error('Отчёт не готов: ' + state);
+
+  const rep = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistics/report?UUID=' + uuid,
+    { method: 'get', muteHttpExceptions: true, headers: perfHeaders_(cab) });
+  const text = rep.getContentText();
+  Logger.log('report: HTTP ' + rep.getResponseCode() + ', ' + text.length + ' символов');
+  Logger.log(text.slice(0, 3000));
+
+  const sheet = getSheet_('CpoOrdersRaw');
+  sheet.clear();
+  const chunks = [];
+  for (let p = 0; p < text.length && chunks.length < 200; p += 45000) chunks.push([text.slice(p, p + 45000)]);
+  sheet.getRange(1, 1, chunks.length, 1).setValues(chunks);
+}

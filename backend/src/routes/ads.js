@@ -340,7 +340,7 @@ router.get('/stats', async (req, res) => {
       query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT date::text as date, campaign_id, spend, clicks
+      query(`SELECT date::text as date, campaign_id, spend, clicks, views, orders, orders_money
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]),
       query(`SELECT date::text as date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
@@ -412,9 +412,17 @@ router.get('/stats', async (req, res) => {
 
     const spendByKey = new Map(); // campaignId|date -> spend
     const clicksByKey = new Map(); // campaignId|date -> clicks
+    // Метрики САМОЙ рекламы (а не всего товара): показы рекламы, заказы и
+    // выручка, которые Ozon атрибутирует рекламной кампании. Нужны для
+    // "рекламного" ДРР (расход / выручка с рекламы) рядом с общим.
+    const adViewsByKey = new Map(), adOrdersByKey = new Map(), adRevenueByKey = new Map();
     for (const r of adRows) {
-      spendByKey.set(`${r.campaign_id}|${r.date}`, Number(r.spend) || 0);
-      clicksByKey.set(`${r.campaign_id}|${r.date}`, Number(r.clicks) || 0);
+      const k = `${r.campaign_id}|${r.date}`;
+      spendByKey.set(k, Number(r.spend) || 0);
+      clicksByKey.set(k, Number(r.clicks) || 0);
+      adViewsByKey.set(k, Number(r.views) || 0);
+      adOrdersByKey.set(k, Number(r.orders) || 0);
+      adRevenueByKey.set(k, Number(r.orders_money) || 0);
     }
 
     const nameByOfferId = new Map(catalogRows.map(r => [r.offer_id, r.product_name]));
@@ -525,19 +533,30 @@ router.get('/stats', async (req, res) => {
       const splitCount = multiOfferIds.length > 1 ? multiOfferIds.length : 1;
       for (const offerId of targetOfferIds) {
         const sku = splitCount > 1 ? (skuByOfferId.get(offerId) || null) : camp.matched_sku;
-        const article = getArticle(offerId, sku);
         const byDate = {};
-        let totalSpend = 0, totalClicks = 0;
+        let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
         for (const date of dates) {
-          const spend = (spendByKey.get(`${camp.campaign_id}|${date}`) || 0) / splitCount;
-          const clicks = (clicksByKey.get(`${camp.campaign_id}|${date}`) || 0) / splitCount;
-          totalSpend += spend;
-          totalClicks += clicks;
+          const k = `${camp.campaign_id}|${date}`;
+          const spend = (spendByKey.get(k) || 0) / splitCount;
+          const clicks = (clicksByKey.get(k) || 0) / splitCount;
+          const adViews = (adViewsByKey.get(k) || 0) / splitCount;
+          const adOrders = (adOrdersByKey.get(k) || 0) / splitCount;
+          const adRevenue = (adRevenueByKey.get(k) || 0) / splitCount;
+          totalSpend += spend; totalClicks += clicks;
+          totalAdViews += adViews; totalAdOrders += adOrders; totalAdRevenue += adRevenue;
           // Средняя цена клика за день — расход / клики (клики собираются
           // отдельно через collectors/ads/ozonClicks.js, т.к. эндпоинт расхода
           // их не отдаёт). 0, если кликов не было — не делить на 0.
-          byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0 };
+          byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0, adViews, adOrders, adRevenue };
         }
+        // Кампании без единого рубля расхода за период — VK/блогерские
+        // реф-ссылки, архивные, завершённые — раньше уходили на фронт с
+        // полной историей по дням (≈780 из 920 штук, 2,5 МБ ответа) и только
+        // мешали. Оставляем лишь ЗАПУЩЕННЫЕ товарные РК без расхода (только
+        // что включили — пусть будут видны в карточке артикула).
+        const isProductAd = ['SKU', 'SEARCH_PROMO'].includes(String(camp.adv_object_type || '').toUpperCase());
+        if (totalSpend <= 0 && !(camp.state === 'CAMPAIGN_STATE_RUNNING' && isProductAd)) continue;
+        const article = getArticle(offerId, sku);
         article.campaigns.push({
           campaignId: camp.campaign_id,
           title: camp.title,
@@ -549,6 +568,9 @@ router.get('/stats', async (req, res) => {
           expenseStrategy: camp.expense_strategy,
           totalSpend,
           totalClicks,
+          totalAdViews,
+          totalAdOrders,
+          totalAdRevenue,
           avgCpc: totalClicks > 0 ? totalSpend / totalClicks : 0,
           // Фронту — чтобы показать "расход поделен поровну на N товаров
           // кампании" вместо того, чтобы молча выдавать точную с виду цифру.
@@ -578,6 +600,7 @@ router.get('/stats', async (req, res) => {
     for (const [, article] of byArticle) {
       const byDate = {};
       let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0, totalSpend = 0;
+      let totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
       for (const date of dates) {
         // У артикула без своей РК (добавлен в группу вручную, см. forced-
         // include выше) нет sku из ad_campaigns — тогда берём ту же
@@ -596,6 +619,9 @@ router.get('/stats', async (req, res) => {
         const mpSpend = article.campaigns.reduce((s, c) => s + (c.byDate[date]?.spend || 0), 0);
         const mpClicks = article.campaigns.reduce((s, c) => s + (c.byDate[date]?.clicks || 0), 0);
         const mpAvgCpc = mpClicks > 0 ? mpSpend / mpClicks : 0;
+        const sumCamp = key => article.campaigns.reduce((s, c) => s + (c.byDate[date]?.[key] || 0), 0);
+        const adViews = sumCamp('adViews'), adOrders = sumCamp('adOrders'), adRevenue = sumCamp('adRevenue');
+        totalClicks += mpClicks; totalAdViews += adViews; totalAdOrders += adOrders; totalAdRevenue += adRevenue;
 
         // Приоритет всегда у данных с маркетплейса — ручное значение
         // подставляется, только если Ozon для этой даты/метрики отдал 0
@@ -645,6 +671,8 @@ router.get('/stats', async (req, res) => {
           position: position.value,
           spend: spend.value,
           avgCpc: avgCpc.value,
+          clicks: mpClicks,
+          adViews, adOrders, adRevenue,
           stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
@@ -663,6 +691,7 @@ router.get('/stats', async (req, res) => {
         camp.drr = totalRevenue > 0 ? camp.totalSpend / totalRevenue * 100 : (camp.totalSpend > 0 ? 100 : 0);
       }
       const totalDrr = totalRevenue > 0 ? totalSpend / totalRevenue * 100 : (totalSpend > 0 ? 100 : 0);
+      const stock = article.offerId ? computeStock(article.offerId) : null;
 
       // Общая конверсия за весь период (не среднее по дням — сумма/сумма,
       // это корректнее на низких абсолютных числах).
@@ -701,9 +730,26 @@ router.get('/stats', async (req, res) => {
           revenue: totalRevenue, orders: totalOrders, views: totalViews, pdpViews: totalPdpViews, cart: totalCart,
           spend: totalSpend, drr: totalDrr,
           ctr: totalCtr, crToCart: totalCrToCart, crToOrder: totalCrToOrder,
+          clicks: totalClicks, adViews: totalAdViews, adOrders: totalAdOrders, adRevenue: totalAdRevenue,
+          // Рекламный ДРР — расход / выручка, которую Ozon отнёс к рекламе.
+          // null, если рекламной выручки не было (делить не на что).
+          adDrr: totalAdRevenue > 0 ? totalSpend / totalAdRevenue * 100 : null,
+          adCtr: totalAdViews > 0 ? totalClicks / totalAdViews * 100 : null,
         },
         campaigns: article.campaigns,
-        stock: article.offerId ? computeStock(article.offerId) : null,
+        stock,
+        // На сколько дней хватит текущего остатка при темпе заказов последних
+        // 7 полных дней периода (сегодняшний неполный день не считаем).
+        // null — заказов не было, оценить нельзя.
+        stockDays: (() => {
+          if (!stock) return null;
+          const today = dayjs().format('YYYY-MM-DD');
+          const full = dates.filter(d => d < today).slice(-7);
+          if (!full.length) return null;
+          const perDay = full.reduce((acc, d) => acc + (byDate[d]?.orders || 0), 0) / full.length;
+          if (perDay <= 0) return null;
+          return (stock.fboPresent + stock.fbsPresent) / perDay;
+        })(),
         associated,
       });
     }
@@ -722,180 +768,5 @@ router.get('/stats', async (req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
-
-// ВРЕМЕННЫЙ диагностический роут — понять, почему у Defly почти всё "без
-// привязки к артикулу" и все метрики нулевые. Удалить после диагностики.
-router.get('/debug-raw', async (req, res) => {
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const [catalogCount, campCount, campSample, statsCount, statsSample, analyticsCount, analyticsSample, campTitles, runRows] = await Promise.all([
-      query(`SELECT COUNT(*)::int as n FROM ad_product_catalog WHERE cabinet = $1`, [cabinet]),
-      query(`SELECT COUNT(*)::int as n FROM ad_campaigns WHERE cabinet = $1`, [cabinet]),
-      query(`SELECT campaign_id, title, state, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 ORDER BY updated_at DESC LIMIT 10`, [cabinet]),
-      query(`SELECT COUNT(*)::int as n FROM ad_stats_daily WHERE cabinet = $1`, [cabinet]),
-      query(`SELECT * FROM ad_stats_daily WHERE cabinet = $1 ORDER BY collected_at DESC LIMIT 10`, [cabinet]),
-      query(`SELECT COUNT(*)::int as n FROM product_analytics_daily WHERE cabinet = $1`, [cabinet]),
-      query(`SELECT * FROM product_analytics_daily WHERE cabinet = $1 ORDER BY collected_at DESC LIMIT 10`, [cabinet]),
-      query(`SELECT title FROM ad_campaigns WHERE cabinet = $1 AND matched_offer_id IS NULL AND title IS NOT NULL LIMIT 30`, [cabinet]),
-      query(`SELECT * FROM ad_job_status WHERE cabinet = $1 ORDER BY job`, [cabinet]),
-    ]);
-    // ВРЕМЕННО: кампании без matched_offer_id, у которых есть расход за
-    // последние 3 дня — чтобы найти "потерянные" свежие кампании, чей
-    // заголовок не совпал по подстроке ни с одним offer_id (диагностика
-    // вопроса "расход не отображается по новым артикулам").
-    const recentUnmatchedSpend = await query(
-      `SELECT c.campaign_id, c.title, c.state, c.adv_object_type, c.payment_type, SUM(s.spend) AS spend3d, MAX(s.date) AS last_date
-         FROM ad_stats_daily s
-         JOIN ad_campaigns c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.campaign_id = s.campaign_id
-        WHERE s.cabinet = $1 AND c.matched_offer_id IS NULL AND s.date >= (CURRENT_DATE - INTERVAL '3 days')
-        GROUP BY c.campaign_id, c.title, c.state, c.adv_object_type, c.payment_type
-        ORDER BY spend3d DESC
-        LIMIT 20`,
-      [cabinet]);
-    res.json({
-      success: true,
-      data: {
-        catalogRows: catalogCount[0]?.n,
-        campaignsTotal: campCount[0]?.n,
-        campaignSample: campSample,
-        adStatsDailyTotal: statsCount[0]?.n,
-        adStatsDailySample: statsSample,
-        productAnalyticsDailyTotal: analyticsCount[0]?.n,
-        productAnalyticsDailySample: analyticsSample,
-        unmatchedTitlesSample: campTitles.map(r => r.title),
-        recentUnmatchedSpend,
-        jobStatus: runRows,
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ВРЕМЕННО: прямой запрос списка товаров кампании (api-performance v2/products)
-// для диагностики — используется ли эта конкретная кампания несколькими
-// артикулами сразу (кампании "Оплата за заказ: выбранные товары" и т.п.
-// могут продвигать сразу пачку SKU, а не один).
-router.get('/debug-campaign-products', async (req, res) => {
-  try {
-    const axios = require('axios');
-    const { perfHeaders } = require('../collectors/ads/ozonHttp');
-    const cabinet = req.query.cabinet || 'defly';
-    const campaignId = req.query.campaignId;
-    if (!campaignId) return res.status(400).json({ success: false, error: 'campaignId required' });
-    const headers = await perfHeaders(cabinet);
-    if (!headers) return res.status(400).json({ success: false, error: 'Performance API не настроен' });
-    const data = await axios.get(
-      `https://api-performance.ozon.ru/api/client/campaign/${campaignId}/v2/products`,
-      { headers, timeout: 20000 }).then(r => r.data);
-    const skus = (data?.products || []).map(p => String(p.sku)).filter(Boolean);
-    const catalogRows = skus.length
-      ? await query(`SELECT offer_id, sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku = ANY($2::text[])`, [cabinet, skus])
-      : [];
-    res.json({ success: true, data: { skuCount: skus.length, skus, matchedOfferIds: catalogRows, raw: data } });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ВРЕМЕННО: принудительно создать ad_campaign_skus прямо сейчас, не дожидаясь
-// следующего рестарта процесса (initSchema() на старте почему-то не создала
-// таблицу — возможна была гонка CREATE TABLE IF NOT EXISTS при параллельном
-// старте нескольких запросов к БД).
-router.get('/debug-ensure-campaign-skus-table', async (req, res) => {
-  try {
-    await query(`CREATE TABLE IF NOT EXISTS ad_campaign_skus (
-      id BIGSERIAL PRIMARY KEY,
-      cabinet VARCHAR(32) NOT NULL,
-      platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
-      campaign_id VARCHAR(64) NOT NULL,
-      sku BIGINT NOT NULL,
-      updated_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(cabinet, platform, campaign_id, sku)
-    )`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_ad_campaign_skus_campaign ON ad_campaign_skus(cabinet, platform, campaign_id)`);
-    const check = await query(`SELECT COUNT(*)::int as n FROM ad_campaign_skus`);
-    res.json({ success: true, data: { rows: check[0]?.n } });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ВРЕМЕННО: что УЖЕ сохранено в ad_campaign_skus по кампании (из БД, без
-// похода в Ozon — быстро, не висит на таймауте).
-router.get('/debug-campaign-skus-db', async (req, res) => {
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const campaignId = req.query.campaignId;
-    if (!campaignId) return res.status(400).json({ success: false, error: 'campaignId required' });
-    const rows = await query(
-      `SELECT cs.sku, c.offer_id FROM ad_campaign_skus cs
-         LEFT JOIN ad_product_catalog c ON c.cabinet = cs.cabinet AND c.platform = cs.platform AND c.sku = cs.sku
-        WHERE cs.cabinet = $1 AND cs.campaign_id = $2`,
-      [cabinet, campaignId]);
-    res.json({ success: true, data: rows });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ВРЕМЕННЫЙ debug-роут: сырой ответ Ozon Seller Analytics API для Defly —
-// понять, почему product_analytics_daily пустая (0 строк).
-// ВРЕМЕННЫЙ диагностический зонд для переделки сбора Defly: проверяет на
-// живом API, какие эндпоинты и лимиты реально работают (аналитика одним
-// запросом на все метрики, окно лимита /v1/analytics/data, синхронная
-// дневная статистика Performance API, заказы по отправлениям для сверки).
-// Запускается в фоне (POST-подобно через ?start=1), результат читается GET-ом
-// — длинные ожидания лимита не держат HTTP-соединение.
-const probeState = { running: false, startedAt: null, steps: [] };
-router.get('/debug-probe', async (req, res) => {
-  if (req.query.start && !probeState.running) {
-    probeState.running = true; probeState.startedAt = new Date().toISOString(); probeState.steps = [];
-    runProbe(req.query.cabinet || 'defly')
-      .catch(e => probeState.steps.push({ step: 'fatal', error: e.message }))
-      .finally(() => { probeState.running = false; });
-  }
-  res.json({ success: true, data: probeState });
-});
-
-async function runProbe(cabinet) {
-  const axios = require('axios');
-  const dayjs = require('dayjs');
-  const { getCabinet } = require('../config/cabinets');
-  const cfg = getCabinet(cabinet);
-  const delay = ms => new Promise(r => setTimeout(r, ms));
-  const push = o => probeState.steps.push({ at: new Date().toISOString(), ...o });
-  const sh = { 'Client-Id': cfg.ozonClientId, 'Api-Key': cfg.ozonApiKey, 'Content-Type': 'application/json' };
-  const y = dayjs().add(3, 'hour').subtract(1, 'day').format('YYYY-MM-DD');
-  const METRICS = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'ordered_units', 'revenue', 'position_category'];
-  // Проверка стабильности постраничной выдачи при разных сортировках.
-  const variants = [
-    ['no_sort', undefined],
-    ['sort_sku_asc', [{ key: 'sku', order: 'ASC' }]],
-    ['sort_views_desc', [{ key: 'hits_view', order: 'DESC' }]],
-    ['sort_orders_desc', [{ key: 'ordered_units', order: 'DESC' }]],
-  ];
-  for (const [label, sort] of variants) {
-    try {
-      const seen = new Map(); let raw = 0, totals = null, pages = 0;
-      for (let offset = 0; offset < 5000; offset += 1000) {
-        const body = { date_from: y, date_to: y, metrics: METRICS, dimension: ['sku', 'day'], limit: 1000, offset };
-        if (sort) body.sort = sort;
-        const { data } = await axios.post('https://api-seller.ozon.ru/v1/analytics/data', body, { headers: sh, timeout: 60000 });
-        const rows = data?.result?.data || []; pages++;
-        totals = totals || data?.result?.totals;
-        for (const r of rows) { raw++; seen.set(r.dimensions[0].id, r.metrics); }
-        if (rows.length < 1000) break;
-        await delay(300);
-      }
-      let ou = 0, tc = 0, hv = 0;
-      for (const m of seen.values()) { ou += Number(m[4]) || 0; tc += Number(m[3]) || 0; hv += Number(m[0]) || 0; }
-      push({ step: label, ok: true, pages, rawRows: raw, uniqueSkus: seen.size, dup: raw - seen.size,
-        uniqOrders: ou, totalOrders: totals?.[4], uniqCart: tc, totalCart: totals?.[3], uniqViews: hv, totalViews: totals?.[0] });
-    } catch (e) { push({ step: label, ok: false, status: e.response?.status, body: e.response?.data || e.message }); }
-    await delay(1000);
-  }
-  push({ step: 'done' });
-}
 
 module.exports = router;
