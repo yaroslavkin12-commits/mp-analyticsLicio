@@ -305,7 +305,23 @@ async function syncAdDetailsFromSheet(cabinet) {
   return { rows, warning: errors.length ? errors.join('; ').slice(0, 300) : null };
 }
 
+// Разовая чистка 09.10.2026: до проверки обязательных колонок (см.
+// REQUIRED_COLUMNS) сбор в 10:40 UTC прочитал вкладку Analytics вместо ещё не
+// созданных SkuStats/CpoOrders/CpoProducts — всё, что попало в эти таблицы до
+// 10:50 UTC, мусор (настоящие данные появятся только после обновления
+// Google-скрипта). Безопасно запускать при каждом старте.
+async function cleanupSheetJunk() {
+  const cutoff = '2026-10-09 10:50:00';
+  for (const [table, col] of [['ad_sku_stats_daily', 'updated_at'], ['ad_cpo_orders', 'updated_at'], ['ad_cpo_products', 'checked_at'], ['ad_cpc_bids', 'checked_at']]) {
+    try {
+      const r = await query(`DELETE FROM ${table} WHERE ${col} < $1 RETURNING 1`, [cutoff]);
+      if (r.length) console.log(`[Cleanup] ${table}: удалено ${r.length} ошибочных строк`);
+    } catch (e) { /* таблицы может не быть — не страшно */ }
+  }
+}
+
 module.exports = {
+  cleanupSheetJunk,
   sheetId,
   fetchSheetRows,
   syncCatalogFromSheet,

@@ -731,7 +731,8 @@ router.get('/stats', async (req, res) => {
       const [offerId] = k.split('|');
       cpoTotalsByOffer.set(offerId, (cpoTotalsByOffer.get(offerId) || 0) + v.expense);
     }
-    for (const [offerId] of cpoTotalsByOffer) {
+    for (const [offerId, cpoTotal] of cpoTotalsByOffer) {
+      if (!(cpoTotal > 0)) continue; // без списаний — не заводим строку и карточку
       const byDate = {};
       let totalSpend = 0, totalAdOrders = 0, totalAdRevenue = 0;
       for (const date of dates) {

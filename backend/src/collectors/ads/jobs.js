@@ -15,6 +15,7 @@ const {
   syncStatsFromSheet,
   syncCampaignSkusFromSheet,
   syncAdDetailsFromSheet,
+  cleanupSheetJunk,
 } = require('./sheetSync');
 const { collectDiscounts } = require('./ozonDiscounts');
 const { getSettings } = require('./discountSettings');
@@ -351,7 +352,8 @@ let started = false;
 function startAdsJobs() {
   if (started) return;
   started = true;
-  setTimeout(() => tick().catch(() => {}), 10 * 1000);
+  // Чистка ДО первого тика — чтобы следующий сбор не сравнивал новые данные с мусором.
+  setTimeout(() => cleanupSheetJunk().catch(() => {}).finally(() => tick().catch(() => {})), 10 * 1000);
   setInterval(() => tick().catch(() => {}), 5 * MIN);
   console.log(`⏰ Сбор кабинетов (${adsCabinets().join(', ') || 'нет'}): проверка каждые 5 мин`);
   console.log(`⏰ Соинвест/СПП (${discountCabinets().join(', ') || 'нет'}): проверка каждые 5 мин`);
