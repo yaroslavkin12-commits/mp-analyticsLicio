@@ -199,6 +199,9 @@ router.get('/data', async (req, res) => {
     for (const r of anRows) {
       const o = offerOf(r); const d = di.get(r.date);
       if (!o || d === undefined) continue;
+      // Пустые строки (товар без показов и заказов) не передаём — иначе
+      // всплывают сотни архивных SKU, которых уже нет в каталоге.
+      if (!num(r.hits_view) && !num(r.hits_view_pdp) && !num(r.hits_tocart) && !num(r.orders_item) && !num(r.revenue)) continue;
       const x = row(art(o, '', r.sku), d);
       x[2] += num(r.hits_view); x[3] += num(r.hits_view_pdp); x[4] += num(r.hits_tocart);
       x[5] += num(r.orders_item); x[6] += num(r.revenue);
@@ -236,6 +239,7 @@ router.get('/data', async (req, res) => {
     // последнее известное вперёд).
     const stockBy = new Map(); // ai -> Map(date -> v)
     for (const r of stockRows) {
+      if (!idx.has(r.offer_id) && !num(r.v)) continue;
       const ai = art(r.offer_id, '', null);
       if (!stockBy.has(ai)) stockBy.set(ai, new Map());
       stockBy.get(ai).set(r.date, num(r.v));
@@ -253,21 +257,22 @@ router.get('/data', async (req, res) => {
         if (v !== last) { stock.push([ai, i, v]); last = v; }
       }
     }
-    for (const r of stockNowRows) articles[art(r.offer_id, '', null)].st = num(r.v);
+    for (const r of stockNowRows) { if (idx.has(r.offer_id) || num(r.v)) articles[art(r.offer_id, '', null)].st = num(r.v); }
 
     // Прошлый период — итоги по артикулу: [ai, views, pdp, cart, orders, revenue, spend, adOrders]
     let prev = null;
     if (compare) {
       const acc = new Map();
       for (const r of prevAnRows) {
-        const o = offerOf(r); if (!o) continue;
-        const ai = art(o, '', r.sku);
+        const o = offerOf(r); if (!o || !idx.has(o)) continue;
+        const ai = idx.get(o);
         const p = acc.get(ai) || [ai, 0, 0, 0, 0, 0, 0, 0];
         p[1] += num(r.v); p[2] += num(r.pv); p[3] += num(r.c); p[4] += num(r.o); p[5] += num(r.r);
         acc.set(ai, p);
       }
       for (const [o, v] of prevSpend) {
-        const ai = art(o, '', null);
+        if (!idx.has(o)) continue;
+        const ai = idx.get(o);
         const p = acc.get(ai) || [ai, 0, 0, 0, 0, 0, 0, 0];
         p[6] += v.s; p[7] += v.ao;
         acc.set(ai, p);
