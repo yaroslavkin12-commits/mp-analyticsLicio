@@ -29,7 +29,10 @@ function ensureLatest() {
     latestReady = query(`CREATE TABLE IF NOT EXISTS product_discount_latest (
       cabinet VARCHAR(32) NOT NULL, offer_id VARCHAR(128) NOT NULL, product_id BIGINT,
       price DECIMAL(12,2), old_price DECIMAL(12,2), seller_price DECIMAL(12,2), site_price DECIMAL(12,2), card_price DECIMAL(12,2),
-      pct DECIMAL(6,2), checked_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (cabinet, offer_id))`).catch(e => { latestReady = null; throw e; });
+      pct DECIMAL(6,2), checked_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (cabinet, offer_id))`)
+      .then(() => query(`ALTER TABLE product_discount_latest ADD COLUMN IF NOT EXISTS pct_card DECIMAL(6,2)`))
+      .then(() => query(`ALTER TABLE product_discount_latest ADD COLUMN IF NOT EXISTS schema VARCHAR(8)`))
+      .catch(e => { latestReady = null; throw e; });
   }
   return latestReady;
 }
@@ -61,7 +64,9 @@ router.post('/ingest', async (req, res) => {
     if (!COMPANY_IDS[cabinet] || !Array.isArray(items)) return res.status(400).json({ success: false, error: 'Нужны cabinet и items' });
     const map = await productMap(cabinet);
     const offerByProduct = new Map(map.map(r => [String(r.product_id), r.offer_id]));
-    const prevRows = await query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct, source FROM product_discount_history
+    const prevRows = await query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct, source,
+                                   CASE WHEN marketing_seller_price > 0 THEN ROUND((marketing_seller_price - marketing_oa_price) / marketing_seller_price * 100, 2) END AS card_pct
+                                   FROM product_discount_history
                                    WHERE cabinet = $1 AND platform = 'ozon' ORDER BY offer_id, collected_at DESC`, [cabinet]);
     const prev = new Map(prevRows.map(r => [r.offer_id, r]));
     const n = v => { const x = Number(String(v ?? '').replace(',', '.')); return Number.isFinite(x) ? x : 0; };
@@ -74,14 +79,22 @@ router.post('/ingest', async (req, res) => {
       if (!offer) continue;
       matched++;
       const price = n(it.price), oldPrice = n(it.old_price ?? it.oldPrice);
-      const seller = n(it.marketing_seller_price ?? it.marketingSellerPrice) || price;
-      const site = n(it.marketing_price ?? it.marketingPrice) || seller;
-      const card = n(it.marketing_oa_price ?? it.marketingOaPrice);
+      // Покупатель видит цену той схемы доставки, где товар в наличии
+      // (если таких несколько — самую низкую). Общая цена в ответе кабинета
+      // бывает от другой схемы.
+      const schemas = (it.by_delivery_schema || []).filter(x => x && x.in_stock && n(x.marketing_price) > 0)
+        .sort((a, b) => n(a.marketing_price) - n(b.marketing_price));
+      const src = schemas[0] || it;
+      const seller = n(src.marketing_seller_price ?? it.marketing_seller_price) || price;
+      const site = n(src.marketing_price ?? it.marketing_price) || seller;
+      const card = n(src.marketing_oa_price ?? it.marketing_oa_price) || site;
       const pct = seller > 0 ? Math.max(0, Math.round((seller - site) / seller * 10000) / 100) : 0;
-      latest.push([cabinet, offer, Number(pid), price, oldPrice, seller, site, card, pct, now]);
+      const pctCard = seller > 0 ? Math.max(0, Math.round((seller - card) / seller * 10000) / 100) : 0;
+      latest.push([cabinet, offer, Number(pid), price, oldPrice, seller, site, card, pct, now, pctCard, schemas[0] ? String(schemas[0].delivery_schema || '').slice(0, 8) : null]);
       const p = prev.get(offer);
       const pp = p ? Number(p.ozon_discount_pct) : null;
-      if (pp === null || p.source !== 'seller_cabinet' || Math.abs(pp - pct) >= 0.1) {
+      const pcard = p ? Number(p.card_pct) : null;
+      if (pp === null || p.source !== 'seller_cabinet' || Math.abs(pp - pct) >= 0.1 || (pcard !== null && Math.abs(pcard - pctCard) >= 0.1)) {
         hist.push([cabinet, 'ozon', offer, Number(pid), price, oldPrice, site, seller, card, pct, 'seller_cabinet', now]);
         if (pp !== null && p.source === 'seller_cabinet' && Math.abs(pp - pct) >= THRESHOLD) changed.push({ offerId: offer, prevPct: pp, pct, marketingPrice: site, price });
       }
@@ -89,10 +102,10 @@ router.post('/ingest', async (req, res) => {
     for (let i = 0; i < latest.length; i += 500) {
       const part = latest.slice(i, i + 500);
       const params = [], vals = part.map(r => `(${r.map(v => { params.push(v); return '$' + params.length; }).join(',')})`);
-      await query(`INSERT INTO product_discount_latest (cabinet, offer_id, product_id, price, old_price, seller_price, site_price, card_price, pct, checked_at)
+      await query(`INSERT INTO product_discount_latest (cabinet, offer_id, product_id, price, old_price, seller_price, site_price, card_price, pct, checked_at, pct_card, schema)
                    VALUES ${vals.join(',')} ON CONFLICT (cabinet, offer_id) DO UPDATE SET product_id = EXCLUDED.product_id, price = EXCLUDED.price,
                    old_price = EXCLUDED.old_price, seller_price = EXCLUDED.seller_price, site_price = EXCLUDED.site_price,
-                   card_price = EXCLUDED.card_price, pct = EXCLUDED.pct, checked_at = EXCLUDED.checked_at`, params);
+                   card_price = EXCLUDED.card_price, pct = EXCLUDED.pct, checked_at = EXCLUDED.checked_at, pct_card = EXCLUDED.pct_card, schema = EXCLUDED.schema`, params);
     }
     for (let i = 0; i < hist.length; i += 500) {
       const part = hist.slice(i, i + 500);
@@ -118,9 +131,13 @@ router.get('/overview', async (req, res) => {
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
       query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]).catch(() => []),
       query(`SELECT offer_id, sku, SUM(orders_item) o, SUM(revenue) r FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id, sku`, [cabinet, since30]),
-      query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct pct FROM product_discount_history
+      query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct pct,
+                CASE WHEN marketing_seller_price > 0 THEN (marketing_seller_price - marketing_oa_price) / marketing_seller_price * 100 END AS pc
+              FROM product_discount_history
               WHERE cabinet = $1 AND source = 'seller_cabinet' AND collected_at <= NOW() - INTERVAL '24 hours' ORDER BY offer_id, collected_at DESC`, [cabinet]),
-      query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct pct FROM product_discount_history
+      query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct pct,
+                CASE WHEN marketing_seller_price > 0 THEN (marketing_seller_price - marketing_oa_price) / marketing_seller_price * 100 END AS pc
+              FROM product_discount_history
               WHERE cabinet = $1 AND source = 'seller_cabinet' AND collected_at <= NOW() - INTERVAL '7 days' ORDER BY offer_id, collected_at DESC`, [cabinet]),
     ]);
     const names = new Map(catalog.map(r => [r.offer_id, r.product_name || '']));
@@ -129,12 +146,17 @@ router.get('/overview', async (req, res) => {
     const sale = new Map();
     for (const r of sales) { const o = r.offer_id || offerBySku.get(String(r.sku)); if (!o) continue; const x = sale.get(o) || { o: 0, r: 0 }; x.o += Number(r.o) || 0; x.r += Number(r.r) || 0; sale.set(o, x); }
     const d1 = new Map(h1.map(r => [r.offer_id, Number(r.pct)])), d7 = new Map(h7.map(r => [r.offer_id, Number(r.pct)]));
+    const c1 = new Map(h1.filter(r => r.pc !== null).map(r => [r.offer_id, Number(r.pc)])), c7 = new Map(h7.filter(r => r.pc !== null).map(r => [r.offer_id, Number(r.pc)]));
+    const dd = (m, id, cur) => (m.has(id) ? Math.round((cur - m.get(id)) * 100) / 100 : null);
     const items = latest.map(r => {
       const n0 = names.get(r.offer_id) || '';
       const s = sale.get(r.offer_id) || { o: 0, r: 0 };
       return {
         o: r.offer_id, n: n0, cat: ov.get(r.offer_id) || autoPath(cabinet, n0, r.offer_id).join(' / '),
         seller: Number(r.seller_price), site: Number(r.site_price), card: Number(r.card_price), pct: Number(r.pct),
+        pctCard: r.pct_card !== null ? Number(r.pct_card) : (Number(r.seller_price) > 0 ? Math.round((Number(r.seller_price) - Number(r.card_price)) / Number(r.seller_price) * 10000) / 100 : 0),
+        schema: r.schema || null,
+        c1: dd(c1, r.offer_id, r.pct_card !== null ? Number(r.pct_card) : 0), c7: dd(c7, r.offer_id, r.pct_card !== null ? Number(r.pct_card) : 0),
         d1: d1.has(r.offer_id) ? Math.round((Number(r.pct) - d1.get(r.offer_id)) * 100) / 100 : null,
         d7: d7.has(r.offer_id) ? Math.round((Number(r.pct) - d7.get(r.offer_id)) * 100) / 100 : null,
         orders30: s.o, revenue30: Math.round(s.r), checkedAt: r.checked_at,

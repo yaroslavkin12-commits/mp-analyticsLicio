@@ -271,7 +271,7 @@ export default function Geography({ cabinet }) {
           <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
             <div className="a-kpi"><span className="lbl">{metric === 'revenue' ? 'Заказано, ₽' : 'Заказы, шт'}</span><span className="val n">{fmtV(view.tot)}</span>
               <span className="sub"><Delta value={view.totPrev ? (view.tot - view.totPrev) / view.totPrev * 100 : null} /> к прошлому периоду</span></div>
-            <div className="a-kpi"><span className="lbl">Кластеров с заказами</span><span className="val n">{view.regions.filter(g => g.v > 0).length}</span>
+            <div className="a-kpi"><span className="lbl">Городов с заказами</span><span className="val n">{view.regions.filter(g => g.v > 0).length}</span>
               <span className="sub">{view.districts.length} округов и стран</span></div>
             <div className="a-kpi"><span className="lbl">Москва и область</span><span className="val n">{pct1(view.tot ? moscow / view.tot * 100 : null)}</span>
               <span className="sub">доля в выбранном</span></div>
@@ -281,11 +281,11 @@ export default function Geography({ cabinet }) {
 
           <div className={`a-card ${loading ? 'a-loading' : ''}`}>
             <div className="a-hint" style={{ padding: '12px 14px 0', lineHeight: 1.5 }}>
-              Регион покупателя Ozon в заказах почти не передаёт, поэтому география строится по кластеру доставки Ozon (куда везли заказ).
-              Кластер «Москва, МО и Дальние регионы» включает и удалённые регионы, которые Ozon обслуживает со складов Москвы.
+              Город покупателя Ozon передаёт в заказах со своих складов (FBO). Для заказов с вашего склада (FBS) известен только кластер доставки Ozon —
+              такие строки подписаны «город не указан». Округ определяется по городу, а если его нет — по кластеру.
             </div>
             <div className="a-bar" style={{ padding: '8px 14px 0' }}>
-              <b style={{ fontSize: 14 }}>Округа и кластеры</b>
+              <b style={{ fontSize: 14 }}>Округа и города</b>
               <span className="a-hint">клик по округу — регионы, по региону — что там покупают{view.filtered ? ' · индекс > 1 — выбранное здесь продаётся лучше, чем в среднем по стране' : ''}</span>
               <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                 <button type="button" className="a-btn ghost" onClick={() => setOpen(new Set(view.districts.map(d => d.name)))}>Раскрыть всё</button>
@@ -295,7 +295,7 @@ export default function Geography({ cabinet }) {
             <div className="a-scroll">
               <table className="a-t s-tree">
                 <thead><tr>
-                  <th>Округ / кластер</th><th className="r">{metric === 'revenue' ? 'Заказано, ₽' : 'Заказы, шт'}</th><th className="r">Доля</th><th className="r">Δ доли</th>
+                  <th>Округ / город</th><th className="r">{metric === 'revenue' ? 'Заказано, ₽' : 'Заказы, шт'}</th><th className="r">Доля</th><th className="r">Δ доли</th>
                   <th className="r">Заказы, шт</th><th className="r">Ср. чек</th><th className="r">Отмены</th><th className="r" title="Доля региона в выбранных товарах ÷ его доля во всех продажах">Индекс</th>
                 </tr></thead>
                 <tbody>
@@ -317,7 +317,7 @@ export default function Geography({ cabinet }) {
                           {region === g.i && regionInfo && (
                             <tr className="a-detail"><td colSpan={8}>
                               <div className="a-dwrap" style={{ gridTemplateColumns: 'repeat(3, minmax(0,1fr))' }}>
-                                {[['Что покупают', regionInfo.kids], ['Марки авто', regionInfo.brands], ['Города', regionInfo.cities]].map(([title, list]) => (
+                                {[['Что покупают', regionInfo.kids], ['Марки авто', regionInfo.brands], ['Кластер доставки Ozon', regionInfo.cities]].map(([title, list]) => (
                                   <div key={title} className="a-box">
                                     <h4>{title}</h4>
                                     {list.map(([name, v]) => (
@@ -347,7 +347,7 @@ export default function Geography({ cabinet }) {
 
           <div className="a-card" style={{ padding: 14 }}>
             <div className="a-bar" style={{ marginBottom: 10 }}>
-              <b style={{ fontSize: 14 }}>Что где покупают · топ-20 кластеров</b>
+              <b style={{ fontSize: 14 }}>Что где покупают · топ-20 городов</b>
               <span className="a-seg">{[['cat', kidNames.length ? 'Подкатегории' : 'Категория'], ['origin', 'Страна марки'], ['brand', 'Марки авто']].filter(([k]) => cabinet === 'defly' || k === 'cat').map(([k, l]) => (
                 <button key={k} type="button" className={mDim === k ? 'on' : ''} onClick={() => setMDim(k)}>{l}</button>
               ))}</span>
@@ -355,7 +355,7 @@ export default function Geography({ cabinet }) {
             </div>
             <div className="a-days">
               <table className="a-dt a-matrix">
-                <thead><tr><th className="lbl">Кластер</th><th className="tot">Всего</th>
+                <thead><tr><th className="lbl">Город</th><th className="tot">Всего</th>
                   {mCols.map((c, ci) => matrix.colShare[ci] > 0 ? <th key={c.key}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><i className="s-dot" style={{ background: c.color }} />{c.name}</span></th> : null)}
                 </tr></thead>
                 <tbody>

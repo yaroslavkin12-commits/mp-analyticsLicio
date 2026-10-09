@@ -3,7 +3,7 @@ const router = express.Router();
 const dayjs = require('dayjs');
 const { query } = require('../db');
 const { autoPath, carBrand, ORDER } = require('../lib/categories');
-const { districtOf, DISTRICT_ORDER } = require('../lib/regions');
+const { districtOf, districtOfCity, DISTRICT_ORDER } = require('../lib/regions');
 
 // ─────────────────────────────────────────────────────────────────────────
 // «Аналитика продаж» — все артикулы кабинета по дням, с категориями.
@@ -319,11 +319,11 @@ router.get('/geo', async (req, res) => {
       query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]),
       query(`SELECT offer_id, region, city, SUM(qty)::int q, SUM(revenue) r, SUM(cancelled)::int c FROM sales_geo_daily
               WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region, city`, [cabinet, from, to]),
-      query(`SELECT date::text AS date, region, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
-              WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, region`, [cabinet, from, to]),
+      query(`SELECT date::text AS date, region, city, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
+              WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, region, city`, [cabinet, from, to]),
       req.query.compare === '1'
-        ? query(`SELECT offer_id, region, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
-                  WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region`, [cabinet, pFrom, pTo])
+        ? query(`SELECT offer_id, region, city, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
+                  WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region, city`, [cabinet, pFrom, pTo])
         : Promise.resolve([]),
       query(`SELECT MIN(date)::text AS min, MAX(date)::text AS max FROM sales_geo_daily WHERE cabinet = $1`, [cabinet]),
     ]);
@@ -337,20 +337,29 @@ router.get('/geo', async (req, res) => {
       articles.push({ o, n, cat: override.get(o) || autoPath(cabinet, n, o).join(' / '), brand: cabinet === 'defly' ? carBrand(n) : null });
       return articles.length - 1;
     };
+    // «Место» — город покупателя, если Ozon его передал (FBO), иначе кластер
+    // доставки. Округ — по городу, а если город неизвестен — по кластеру.
+    const placeOf = (cluster, city) => {
+      const c = String(city || '').trim();
+      return c ? { key: 'c:' + c, name: c, district: districtOfCity(c) || districtOf(cluster), cluster }
+        : { key: 'k:' + cluster, name: `${cluster} · город не указан`, district: districtOf(cluster), cluster };
+    };
     const regions = [], ri = new Map();
-    const reg = r => {
-      if (ri.has(r)) return ri.get(r);
-      ri.set(r, regions.length);
-      regions.push({ name: r, district: districtOf(r) });
+    const reg = (cluster, city) => {
+      const p = placeOf(cluster, city);
+      if (ri.has(p.key)) return ri.get(p.key);
+      ri.set(p.key, regions.length);
+      regions.push({ name: p.name, district: p.district });
       return regions.length - 1;
     };
     const cities = [], ci = new Map();
     const city = c => { const k = c || ''; if (!ci.has(k)) { ci.set(k, cities.length); cities.push(k); } return ci.get(k); };
     const r2x = v => Math.round(Number(v) * 100) / 100;
-    const rows = curRows.map(r => [art(r.offer_id), reg(r.region), city(r.city), num(r.q), r2x(r.r), num(r.c)]);
+    // В третьей колонке строки — кластер доставки (для карточки места).
+    const rows = curRows.map(r => [art(r.offer_id), reg(r.region, r.city), city(r.region), num(r.q), r2x(r.r), num(r.c)]);
     const di = new Map(dates.map((d, i) => [d, i]));
-    const days = dayRows.filter(r => di.has(r.date)).map(r => [reg(r.region), di.get(r.date), num(r.q), r2x(r.r)]);
-    const prev = prevRows.map(r => [art(r.offer_id), reg(r.region), num(r.q), r2x(r.r)]);
+    const days = dayRows.filter(r => di.has(r.date)).map(r => [reg(r.region, r.city), di.get(r.date), num(r.q), r2x(r.r)]);
+    const prev = prevRows.map(r => [art(r.offer_id), reg(r.region, r.city), num(r.q), r2x(r.r)]);
     res.json({ success: true, data: {
       dates, articles, regions, cities, rows, days, prev: req.query.compare === '1' ? prev : null,
       districts: DISTRICT_ORDER, order: ORDER[cabinet] || [], available: range[0] || null,

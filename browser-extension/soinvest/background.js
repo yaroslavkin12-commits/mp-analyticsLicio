@@ -90,6 +90,11 @@ async function run(reason) {
         for (const it of (data.items || [])) items.push({
           item_id: it.item_id, price: it.price, old_price: it.old_price, marketing_price: it.marketing_price,
           marketing_oa_price: it.marketing_oa_price, marketing_seller_price: it.marketing_seller_price,
+          // Цены по схемам доставки: покупатель видит цену той схемы, где товар в наличии.
+          by_delivery_schema: (it.by_delivery_schema || []).map(x => ({
+            delivery_schema: x.delivery_schema, in_stock: x.in_stock, marketing_price: x.marketing_price,
+            marketing_oa_price: x.marketing_oa_price, marketing_seller_price: x.marketing_seller_price,
+          })),
         });
         await sleep(700);
       }

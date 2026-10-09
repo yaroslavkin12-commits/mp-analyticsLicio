@@ -16,20 +16,25 @@ import './sales.css';
 const SEP = ' / ';
 const OTHER = 'var(--a-ink3)';
 const pct = v => (v === null || v === undefined || !Number.isFinite(v)) ? '—' : `${v.toFixed(1).replace('.', ',')}%`;
-const BUCKETS = [[0, 0.05, '0%'], [0.05, 5, 'до 5%'], [5, 10, '5–10%'], [10, 20, '10–20%'], [20, 30, '20–30%'], [30, 101, '30%+']];
+const BUCKETS = [[0, 0.05, '0%'], [0.05, 10, 'до 10%'], [10, 20, '10–20%'], [20, 30, '20–30%'], [30, 40, '30–40%'], [40, 50, '40–50%'], [50, 101, '50%+']];
 
 function stats(list) {
-  let w = 0, ws = 0, s = 0, n = 0, d1w = 0, d1n = 0, d7w = 0, d7n = 0, min = Infinity, max = -Infinity, rev = 0, up = 0, down = 0;
+  // Два уровня: СПП по карте других банков (pct) и с Ozon Картой (pctCard).
+  let w = 0, ws = 0, wc = 0, s0 = 0, sc = 0, n = 0, d1 = 0, d1n = 0, c1 = 0, c1n = 0, c7 = 0, c7n = 0, d7 = 0, d7n = 0;
+  let min = Infinity, max = -Infinity, rev = 0, up = 0, down = 0;
   for (const a of list) {
     const weight = a.revenue30 || 0;
-    w += weight; ws += weight * a.pct; s += a.pct; n++; rev += weight;
-    if (a.pct < min) min = a.pct; if (a.pct > max) max = a.pct;
-    if (a.d1 !== null) { d1w += a.d1; d1n++; if (a.d1 >= 0.5) up++; if (a.d1 <= -0.5) down++; }
-    if (a.d7 !== null) { d7w += a.d7; d7n++; }
+    w += weight; ws += weight * a.pct; wc += weight * a.pctCard; s0 += a.pct; sc += a.pctCard; n++; rev += weight;
+    if (a.pctCard < min) min = a.pctCard; if (a.pctCard > max) max = a.pctCard;
+    if (a.d1 !== null) { d1 += a.d1; d1n++; }
+    if (a.d7 !== null) { d7 += a.d7; d7n++; }
+    if (a.c1 !== null) { c1 += a.c1; c1n++; if (a.c1 >= 0.5) up++; if (a.c1 <= -0.5) down++; }
+    if (a.c7 !== null) { c7 += a.c7; c7n++; }
   }
   return {
-    n, rev, avgW: w ? ws / w : (n ? s / n : null), avg: n ? s / n : null,
-    d1: d1n ? d1w / d1n : null, d7: d7n ? d7w / d7n : null, min: n ? min : null, max: n ? max : null, up, down,
+    n, rev, avgW: w ? ws / w : (n ? s0 / n : null), avgCardW: w ? wc / w : (n ? sc / n : null), avg: n ? s0 / n : null, avgCard: n ? sc / n : null,
+    d1: d1n ? d1 / d1n : null, d7: d7n ? d7 / d7n : null, c1: c1n ? c1 / c1n : null, c7: c7n ? c7 / c7n : null,
+    min: n ? min : null, max: n ? max : null, up, down,
   };
 }
 
@@ -84,7 +89,7 @@ export default function SoinvestCats({ cabinet }) {
   };
   const sortVal = (st, a) => {
     switch (sort.key) {
-      case 'avg': return st.avgW ?? -1; case 'd1': return st.d1 ?? -999; case 'd7': return st.d7 ?? -999; case 'n': return st.n;
+      case 'avg': return st.avgW ?? -1; case 'card': return st.avgCardW ?? -1; case 'd1': return st.c1 ?? -999; case 'd7': return st.c7 ?? -999; case 'n': return st.n;
       default: return st.rev + (a ? 0 : 0);
     }
   };
@@ -101,30 +106,31 @@ export default function SoinvestCats({ cabinet }) {
           <td><div className="a-art" style={{ paddingLeft: (d - depth) * 16 }}><span className="a-chev">▶</span>{color && <i className="s-dot" style={{ background: color }} />}<span className="s-cname">{k}</span><span className="a-hint">{l.length}</span>
             <button type="button" className="s-focus" title="Показать только эту категорию" onClick={e => { e.stopPropagation(); setSel(path); }}>⌕</button></div></td>
           <td className="r"><b className="n">{pct(st.avgW)}</b></td>
-          <td className="n r muted">{pct(st.avg)}</td>
-          <td className="r"><Delta value={st.d1} unit="pp" goodWhen="up" /></td>
-          <td className="r"><Delta value={st.d7} unit="pp" goodWhen="up" /></td>
+          <td className="r"><b className="n sv-card">{pct(st.avgCardW)}</b></td>
+          <td className="r"><Delta value={st.c1} unit="pp" goodWhen="up" /></td>
+          <td className="r"><Delta value={st.c7} unit="pp" goodWhen="up" /></td>
           <td className="n r muted">{pct(st.min)} – {pct(st.max)}</td>
           <td className="n r">{fmtInt(st.rev)}</td>
-          <td colSpan={3} />
+          <td colSpan={4} />
         </tr>
       );
       if (!isOpen) return;
       const deeper = l.some(a => a.parts.length > d + 1);
       if (deeper) pushLevel(l, d + 1, path);
-      else [...l].sort((x, y) => (sort.key === 'avg' ? y.pct - x.pct : sort.key === 'd1' ? (y.d1 ?? -999) - (x.d1 ?? -999) : y.revenue30 - x.revenue30)).slice(0, 200).forEach(a => {
+      else [...l].sort((x, y) => (sort.key === 'avg' ? y.pct - x.pct : sort.key === 'card' ? y.pctCard - x.pctCard : sort.key === 'd1' ? (y.c1 ?? -999) - (x.c1 ?? -999) : y.revenue30 - x.revenue30)).slice(0, 200).forEach(a => {
         rows.push(
           <tr key={'a' + a.o} className="s-art">
             <td><div className="a-art" style={{ paddingLeft: (d - depth + 1) * 16 + 14 }}><div style={{ minWidth: 0 }}><div className="id">{a.o}</div><div className="model" title={a.n}>{a.short}</div></div></div></td>
             <td className="r"><b className="n">{pct(a.pct)}</b></td>
-            <td />
-            <td className="r"><Delta value={a.d1} unit="pp" goodWhen="up" /></td>
-            <td className="r"><Delta value={a.d7} unit="pp" goodWhen="up" /></td>
+            <td className="r"><b className="n sv-card">{pct(a.pctCard)}</b></td>
+            <td className="r"><Delta value={a.c1} unit="pp" goodWhen="up" /></td>
+            <td className="r"><Delta value={a.c7} unit="pp" goodWhen="up" /></td>
             <td />
             <td className="n r">{fmtInt(a.revenue30)}</td>
             <td className="n r">{fmtInt(a.seller)}</td>
             <td className="n r">{fmtInt(a.site)}</td>
-            <td className="n r">{a.card ? fmtInt(a.card) : '—'}</td>
+            <td className="n r sv-card">{a.card ? fmtInt(a.card) : '—'}</td>
+            <td className="r a-hint">{a.schema || ''}</td>
           </tr>
         );
       });
@@ -132,7 +138,7 @@ export default function SoinvestCats({ cabinet }) {
   };
   pushLevel(filtered, depth, sel);
 
-  const dist = BUCKETS.map(([lo, hi, label]) => ({ label, n: filtered.filter(a => a.pct >= lo && a.pct < hi).length }));
+  const dist = BUCKETS.map(([lo, hi, label]) => ({ label, n: filtered.filter(a => a.pctCard >= lo && a.pctCard < hi).length }));
   const distMax = Math.max(1, ...dist.map(x => x.n));
   const crumbs = sel ? sel.split(SEP) : [];
   const TH = (k, t) => <th className={`r ${k ? 'sortable' : ''} ${sort.key === k ? 'sorted' : ''}`} onClick={() => k && setSort(p => p.key === k ? { key: k, dir: -p.dir } : { key: k, dir: -1 })}>{t}{sort.key === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</th>;
@@ -169,18 +175,18 @@ export default function SoinvestCats({ cabinet }) {
       )}
 
       <div className="a-kpis s-kpis">
-        <div className="a-kpi"><span className="lbl">Средний Соинвест (по выручке)</span><span className="val n">{pct(all.avgW)}</span>
-          <span className="sub"><Delta value={all.d1} unit="pp" goodWhen="up" /> за сутки · <Delta value={all.d7} unit="pp" goodWhen="up" /> за неделю</span></div>
-        <div className="a-kpi"><span className="lbl">Простое среднее по товарам</span><span className="val n">{pct(all.avg)}</span>
-          <span className="sub">разброс {pct(all.min)} – {pct(all.max)}</span></div>
-        <div className="a-kpi"><span className="lbl">Товаров с Соинвестом</span><span className="val n">{fmtInt(filtered.filter(a => a.pct >= 0.05).length)} <small className="s-of">из {fmtInt(filtered.length)}</small></span>
-          <span className="sub">у остальных Ozon не доплачивает</span></div>
+        <div className="a-kpi"><span className="lbl">СПП с Ozon Картой (по выручке)</span><span className="val n sv-card">{pct(all.avgCardW)}</span>
+          <span className="sub"><Delta value={all.c1} unit="pp" goodWhen="up" /> за сутки · <Delta value={all.c7} unit="pp" goodWhen="up" /> за неделю</span></div>
+        <div className="a-kpi"><span className="lbl">СПП по картам других банков</span><span className="val n">{pct(all.avgW)}</span>
+          <span className="sub"><Delta value={all.d1} unit="pp" goodWhen="up" /> за сутки · простое среднее {pct(all.avg)}</span></div>
+        <div className="a-kpi"><span className="lbl">Товаров с СПП</span><span className="val n">{fmtInt(filtered.filter(a => a.pctCard >= 0.05).length)} <small className="s-of">из {fmtInt(filtered.length)}</small></span>
+          <span className="sub">разброс (Ozon Карта) {pct(all.min)} – {pct(all.max)}</span></div>
         <div className="a-kpi"><span className="lbl">Изменилось за сутки</span><span className="val n">{fmtInt(all.up + all.down)}</span>
           <span className="sub"><span style={{ color: 'var(--a-good)' }}>▲ {all.up}</span> · <span style={{ color: 'var(--a-bad)' }}>▼ {all.down}</span> (на 0,5 п.п. и больше)</span></div>
       </div>
 
       <div className="a-card" style={{ padding: 14 }}>
-        <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 14 }}>Распределение товаров по Соинвесту</b></div>
+        <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 14 }}>Распределение товаров по СПП с Ozon Картой</b></div>
         <div className="sv-dist">
           {dist.map(b => (
             <div key={b.label} className="sv-col" title={`${b.label}: ${b.n} товаров`}>
@@ -196,14 +202,18 @@ export default function SoinvestCats({ cabinet }) {
         <div className="a-scroll">
           <table className="a-t s-tree">
             <thead><tr>
-              <th>Категория / артикул</th>{TH('avg', 'Соинвест')}{TH(null, 'Среднее')}{TH('d1', 'За сутки')}{TH('d7', 'За неделю')}{TH(null, 'Разброс')}
-              {TH('rev', 'Выручка 30 дн, ₽')}{TH(null, 'Цена продавца')}{TH(null, 'На сайте')}{TH(null, 'С Ozon Картой')}
+              <th>Категория / артикул</th>{TH('avg', 'СПП: другие банки')}{TH('card', 'СПП: Ozon Карта')}{TH('d1', 'За сутки')}{TH('d7', 'За неделю')}{TH(null, 'Разброс')}
+              {TH('rev', 'Выручка 30 дн, ₽')}{TH(null, 'Цена продавца')}{TH(null, 'Цена: другие банки')}{TH(null, 'Цена: Ozon Карта')}{TH(null, 'Схема')}
             </tr></thead>
             <tbody>{rows}</tbody>
           </table>
         </div>
       </div>
-      <div className="a-hint">Соинвест = (цена продавца − цена на сайте) / цена продавца. «Соинвест» в строках категорий — среднее с весом по выручке за 30 дней.</div>
+      <div className="a-hint" style={{ lineHeight: 1.5 }}>
+        СПП (Соинвест) = (цена продавца − цена для покупателя) / цена продавца, в двух уровнях: по картам других банков и с Ozon Картой.
+        Цена берётся по схеме доставки, где товар в наличии (её и видит покупатель). В строках категорий — среднее с весом по выручке за 30 дней.
+        На сайте цена может отличаться на ~0,5–1% в зависимости от адреса доставки покупателя.
+      </div>
     </div>
   );
 }
