@@ -17,24 +17,24 @@ export const getOzonAnalytics   = p => api.get('/analytics/ozon',         { para
 export const getOzonFunnel      = p => api.get('/analytics/ozon/funnel',  { params: p });
 export const getOzonCategories  = p => api.get('/analytics/ozon/categories', { params: p });
 
-export const getAdsCabinets = () => api.get('/ads/cabinets');
-export const collectAds     = (cabinet, days) => api.post('/ads/collect', {}, { params: { cabinet, days } });
-export const getAdsDataStatus = cabinet => api.get('/ads/data-status', { params: { cabinet } });
-export const getAdsStats    = (cabinet, params) => api.get('/ads/stats', { params: { cabinet, ...params } });
+export const getAdsCabinets = () => api.get('/promo/cabinets');
+export const collectAds     = (cabinet, days) => api.post('/promo/collect', {}, { params: { cabinet, days } });
+export const getAdsDataStatus = cabinet => api.get('/promo/data-status', { params: { cabinet } });
+export const getAdsStats    = (cabinet, params) => api.get('/promo/stats', { params: { cabinet, ...params } });
 export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
-  api.post('/ads/manual', { cabinet, offerId, date, metric, value });
+  api.post('/promo/manual', { cabinet, offerId, date, metric, value });
 export const saveManualStock = (cabinet, offerId, metric, value) =>
-  api.post('/ads/manual-stock', { cabinet, offerId, metric, value });
-export const getAdsOrder  = cabinet => api.get('/ads/order', { params: { cabinet } });
-export const saveAdsOrder = (cabinet, order) => api.post('/ads/order', { cabinet, order });
-export const getAdsGroups    = cabinet => api.get('/ads/groups', { params: { cabinet } });
-export const addAdsGroup     = (cabinet, name) => api.post('/ads/groups', { cabinet, name });
+  api.post('/promo/manual-stock', { cabinet, offerId, metric, value });
+export const getAdsOrder  = cabinet => api.get('/promo/order', { params: { cabinet } });
+export const saveAdsOrder = (cabinet, order) => api.post('/promo/order', { cabinet, order });
+export const getAdsGroups    = cabinet => api.get('/promo/groups', { params: { cabinet } });
+export const addAdsGroup     = (cabinet, name) => api.post('/promo/groups', { cabinet, name });
 export const removeAdsGroup  = (cabinet, id) => api.delete(`/ads/groups/${id}`, { params: { cabinet } });
-export const assignAdsGroup  = (cabinet, offerId, groupId) => api.post('/ads/groups/assign', { cabinet, offerId, groupId });
-export const getSiblingClusters = cabinet => api.get('/ads/sibling-clusters', { params: { cabinet } });
-export const addAdsGroupFromCluster = (cabinet, name, offerIds) => api.post('/ads/groups/from-cluster', { cabinet, name, offerIds });
-export const reorderAdsGroups = (cabinet, order) => api.post('/ads/groups/reorder', { cabinet, order });
-export const getAdsCatalog = cabinet => api.get('/ads/catalog', { params: { cabinet } });
+export const assignAdsGroup  = (cabinet, offerId, groupId) => api.post('/promo/groups/assign', { cabinet, offerId, groupId });
+export const getSiblingClusters = cabinet => api.get('/promo/sibling-clusters', { params: { cabinet } });
+export const addAdsGroupFromCluster = (cabinet, name, offerIds) => api.post('/promo/groups/from-cluster', { cabinet, name, offerIds });
+export const reorderAdsGroups = (cabinet, order) => api.post('/promo/groups/reorder', { cabinet, order });
+export const getAdsCatalog = cabinet => api.get('/promo/catalog', { params: { cabinet } });
 // /api/discounts (не /api/ads/discounts): путь с "/ads/" у части пользователей
 // режется блокировщиками рекламы прямо в браузере (см. комментарий в
 // backend/src/routes/discounts.js), поэтому вынесен на отдельный путь.
@@ -59,8 +59,8 @@ export const addTrackedGroup = (cabinet, name) =>
 export const removeTrackedGroup = (cabinet, id) =>
   api.delete(`/tracked-articles/groups/${id}`, { params: { cabinet } });
 
-export const getAdsEvents   = (cabinet, dateFrom, dateTo) => api.get('/ads/events', { params: { cabinet, dateFrom, dateTo } });
-export const addAdsEvent    = (cabinet, offerId, date, text) => api.post('/ads/events', { cabinet, offerId, date, text });
+export const getAdsEvents   = (cabinet, dateFrom, dateTo) => api.get('/promo/events', { params: { cabinet, dateFrom, dateTo } });
+export const addAdsEvent    = (cabinet, offerId, date, text) => api.post('/promo/events', { cabinet, offerId, date, text });
 export const deleteAdsEvent = (cabinet, id) => api.delete(`/ads/events/${id}`, { params: { cabinet } });
 export const getNotificationsHealth = cabinet => api.get('/tracked-articles/health', { params: { cabinet } });
 export const testTelegram = () => api.post('/tracked-articles/test-telegram');

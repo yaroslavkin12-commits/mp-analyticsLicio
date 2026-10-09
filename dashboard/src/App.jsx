@@ -19,7 +19,7 @@ const PAGES = { sales: SalesAnalytics, costs: Costs, dashboard: Dashboard, stock
 // "Уведомления" — отслеживание артикулов + Telegram-алерты о новых заказах,
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
-  licio: ['sales', 'dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings', 'costs'],
+  licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
   defly: ['sales', 'ads', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 
@@ -27,7 +27,11 @@ const THEME_KEY = 'mp-theme';
 const CABINET_KEY = 'mp-cabinet';
 
 export default function App() {
-  const [page, setPage]     = useState('sales');
+  const [page, setPage]     = useState(() => {
+    let cab = 'licio';
+    try { cab = localStorage.getItem(CABINET_KEY) || 'licio'; } catch (e) { /* ignore */ }
+    return (PAGES_BY_CABINET[cab] || PAGES_BY_CABINET.licio)[0];
+  });
   const [platform, setPlatform] = useState('all');
   const [cabinet, setCabinet] = useState(() => {
     try { return localStorage.getItem(CABINET_KEY) || 'licio'; } catch(e) { return 'licio'; }

@@ -19,10 +19,10 @@ app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISO
 // обновляются раз в несколько минут.
 const reportCache = new Map();
 const CACHE_TTL = 3 * 60 * 1000;
-const CACHED = ['/api/ads/stats', '/api/sales/data', '/api/sales/costs'];
+const CACHED = ['/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs'];
 app.use((req, res, next) => {
   if (req.method !== 'GET') {
-    if (req.path.startsWith('/api/ads') || req.path.startsWith('/api/sales') || req.path.startsWith('/api/settings')) reportCache.clear();
+    if (req.path.startsWith('/api/ads') || req.path.startsWith('/api/promo') || req.path.startsWith('/api/sales') || req.path.startsWith('/api/settings')) reportCache.clear();
     return next();
   }
   if (!CACHED.includes(req.path) || req.query.fresh) return next();
@@ -43,7 +43,10 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/settings',  require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));
 
-app.use('/api/ads', require('./routes/ads'));
+// /api/promo — то же, что /api/ads: блокировщики рекламы режут запросы с «/ads/» в адресе.
+const adsRouter = require('./routes/ads');
+app.use('/api/ads', adsRouter);
+app.use('/api/promo', adsRouter);
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/discounts', require('./routes/discounts'));
 app.use('/api/tracked-articles', require('./routes/trackedArticles'));
