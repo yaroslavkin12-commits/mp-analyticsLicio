@@ -411,8 +411,7 @@ function collectSkuStats_(cab, campaigns, out, days) {
   const headers = perfHeaders_(cab);
   if (!headers || !campaigns || !campaigns.length) return;
   const cpc = campaigns.filter(function (c) { return c.paymentType.toUpperCase() !== 'CPO'; }).map(function (c) { return c.id; });
-  // Обычно — вчера и сегодня; раз в сутки (syncDaily) — 30 дней, чтобы
-  // закрыть историю. Если Ozon не даст длинный период, в журнале будет ошибка.
+  // Метод отдаёт только вчера и сегодня; прошлые дни — syncSkuHistory.
   const from = mskDate_((days || 2) - 1), to = mskDate_(0);
   for (let i = 0; i < cpc.length; i += 10) {
     const chunk = cpc.slice(i, i + 10);
@@ -737,10 +736,7 @@ function syncDaily() {
     try { collectAnalyticsWindow_(cab, fromA, toA, analytics); } catch (e) { Logger.log('Аналитика(полная) ' + cab.id + ': ' + e.message); }
     let withSpend = null;
     try { withSpend = collectCampaignsAndStats_(cab, fromS, toS, campaigns, stats); } catch (e) { Logger.log('Кампании(полные) ' + cab.id + ': ' + e.message); }
-    try { collectSkuStats_(cab, withSpend, skuStatsFull, 30); } catch (e) { Logger.log('Статистика по товарам (30 дн) ' + cab.id + ': ' + e.message); }
   });
-  mergeIntoSheet_(SHEET_NAMES.skuStats, SKU_STATS_HEADERS, skuStatsFull, [0, 1, 2, 3], 1);
-  Logger.log('syncDaily: статистика по товарам за 30 дней — строк ' + skuStatsFull.length);
   mergeIntoSheet_(SHEET_NAMES.analytics, ANALYTICS_HEADERS, analytics, [0, 1, 2], 1);
   mergeIntoSheet_(SHEET_NAMES.stats, STATS_HEADERS, stats, [0, 1, 2], 1);
   mergeIntoSheet_(SHEET_NAMES.campaigns, CAMPAIGNS_HEADERS, campaigns, [0, 1]);
@@ -752,7 +748,7 @@ function syncDaily() {
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
@@ -760,20 +756,105 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncRecent').timeBased().everyMinutes(30).create();
   ScriptApp.newTrigger('syncCpoOrders').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
-  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily раз в сутки в 4:00.');
+  ScriptApp.newTrigger('syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
+  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00.');
 }
 
-// Ручная проверка: статистика «оплаты за клик» по каждому товару за 30 дней
-// (точный расход по артикулам за прошлые дни). Запустить вручную: syncSkuStats30.
-function syncSkuStats30() {
+// ── История расхода «оплаты за клик» по каждому товару и дню ─────────────
+// Быстрый метод statistics/products/sku отдаёт только вчера и сегодня
+// (Ozon: "date range must contain only today or yesterday"). За прошлые дни —
+// асинхронный отчёт по кампаниям (POST /api/client/statistics/json,
+// groupBy=DATE, до 62 дней): в нём строки по каждому товару за каждый день.
+// Запускается раз в сутки (триггер syncSkuHistory) и вручную.
+function parseCampaignReport_(cab, text, out) {
+  let obj;
+  try { obj = JSON.parse(text); } catch (e) { Logger.log('Отчёт по кампаниям: не JSON. Начало: ' + text.slice(0, 300)); return 0; }
+  // Ожидаем {"<id кампании>": {"report": {"rows": [...]}}}; на всякий случай
+  // ищем массив строк и в других местах.
+  const groups = [];
+  Object.keys(obj || {}).forEach(function (k) {
+    const v = obj[k];
+    if (v && typeof v === 'object' && v.report && Array.isArray(v.report.rows)) groups.push([k, v.report.rows]);
+  });
+  if (!groups.length) { const rows = findRows_(obj, 0); if (rows) groups.push(['', rows]); }
+  let n = 0, logged = false;
+  groups.forEach(function (g) {
+    const rows = g[1];
+    if (!rows.length) return;
+    const keys = Object.keys(rows[0]);
+    if (!logged) { Logger.log('Отчёт по кампаниям: колонки ' + JSON.stringify(keys)); logged = true; }
+    const kDate = pickKey_(keys, [/^date$/, /дата/, /date/]);
+    const kSku = pickKey_(keys, [/^sku$/, /sku/]);
+    const kExp = pickKey_(keys, [/moneyspent/, /expense/, /расход/, /spent/]);
+    const kViews = pickKey_(keys, [/^views$/, /показ/, /views/]);
+    const kClicks = pickKey_(keys, [/^clicks$/, /клик/, /clicks/]);
+    const kCart = pickKey_(keys, [/tocart/, /корзин/, /cart/]);
+    const kOrders = pickKey_(keys, [/^orders$/, /^заказы/, /orders/], /money|руб|sum|стоим/);
+    const kSales = pickKey_(keys, [/ordersmoney/, /sales/, /выручк|заказы, ₽|стоимость заказов/]);
+    const kCamp = pickKey_(keys, [/campaignid|campaign_id/, /кампан/]);
+    if (!kDate || !kSku || !kExp) { Logger.log('Отчёт по кампаниям: не распознал колонки — пришлите журнал Claude'); return; }
+    rows.forEach(function (r) {
+      const date = normDate_(r[kDate]);
+      if (!date || !r[kSku]) return;
+      const clicks = kClicks ? parseRuNumber_(r[kClicks]) : 0, exp = parseRuNumber_(r[kExp]);
+      out.push([cab.id, date, String(g[0] || (kCamp ? r[kCamp] : '') || ''), String(r[kSku]),
+        kViews ? parseRuNumber_(r[kViews]) : 0, clicks, kCart ? parseRuNumber_(r[kCart]) : 0,
+        kOrders ? parseRuNumber_(r[kOrders]) : 0, kSales ? parseRuNumber_(r[kSales]) : 0, exp, clicks > 0 ? exp / clicks : 0]);
+      n++;
+    });
+  });
+  return n;
+}
+
+// Если кампаний много и не успели за один запуск (лимит Apps Script 6 мин),
+// продолжение запускается само через минуту с того же места.
+function syncSkuHistoryContinue() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'syncSkuHistoryContinue') ScriptApp.deleteTrigger(t);
+  });
+  syncSkuHistory(30, true);
+}
+
+function syncSkuHistory(days, resume) {
+  const window = typeof days === 'number' ? days : 30;
+  const props = PropertiesService.getScriptProperties();
+  if (!resume) props.deleteProperty('SKU_HIST_PROGRESS');
+  const progress = JSON.parse(props.getProperty('SKU_HIST_PROGRESS') || '{}');
+  const started = Date.now();
+  let outOfTime = false;
   const rows = [];
   getCabinets_().forEach(function (cab) {
+    if (outOfTime || !perfHeaders_(cab) || progress[cab.id] >= 1e9) return;
     let withSpend = null;
-    try { withSpend = collectCampaignsAndStats_(cab, mskDate_(29), mskDate_(0), [], []); } catch (e) { Logger.log('Кампании ' + cab.id + ': ' + e.message); }
-    try { collectSkuStats_(cab, withSpend, rows, 30); } catch (e) { Logger.log('Статистика по товарам ' + cab.id + ': ' + e.message); }
+    try { withSpend = collectCampaignsAndStats_(cab, mskDate_(window - 1), mskDate_(0), [], []); } catch (e) { Logger.log('Кампании ' + cab.id + ': ' + e.message); return; }
+    const cpc = (withSpend || []).filter(function (c) { return c.paymentType.toUpperCase() !== 'CPO'; }).map(function (c) { return c.id; });
+    Logger.log('История по товарам ' + cab.id + ': кампаний с расходом ' + cpc.length);
+    // По 10 кампаний в отчёте, отчёты — по очереди (Ozon не любит параллельные).
+    for (let i = progress[cab.id] || 0; i < cpc.length; i += 10) {
+      if (Date.now() - started > 240000) {
+        progress[cab.id] = i;
+        outOfTime = true;
+        break;
+      }
+      const chunk = cpc.slice(i, i + 10);
+      try {
+        const text = runPerfReport_(cab, 'https://api-performance.ozon.ru/api/client/statistics/json',
+          { campaigns: chunk, dateFrom: mskDate_(window - 1), dateTo: mskDate_(0), groupBy: 'DATE' }, 'Отчёт по кампаниям ' + cab.id);
+        Logger.log('Отчёт по кампаниям ' + cab.id + ' (' + chunk.length + ' РК): строк ' + parseCampaignReport_(cab, text, rows));
+      } catch (e) { Logger.log('Отчёт по кампаниям ' + cab.id + ': ' + e.message); }
+    }
+    if (!outOfTime) progress[cab.id] = 1e9; // кабинет готов
   });
+  if (outOfTime) {
+    props.setProperty('SKU_HIST_PROGRESS', JSON.stringify(progress));
+    ScriptApp.newTrigger('syncSkuHistoryContinue').timeBased().after(60 * 1000).create();
+    Logger.log('syncSkuHistory: не успели всё за один запуск — продолжу автоматически через минуту.');
+  } else {
+    props.deleteProperty('SKU_HIST_PROGRESS');
+  }
   mergeIntoSheet_(SHEET_NAMES.skuStats, SKU_STATS_HEADERS, rows, [0, 1, 2, 3], 1);
-  const days = {};
-  rows.forEach(function (r) { days[r[1]] = true; });
-  Logger.log('syncSkuStats30: строк ' + rows.length + ', дней с данными ' + Object.keys(days).length + ' (' + Object.keys(days).sort().slice(0, 1) + ' … ' + Object.keys(days).sort().slice(-1) + ')');
+  const ds = {};
+  rows.forEach(function (r) { ds[r[1]] = true; });
+  const list = Object.keys(ds).sort();
+  Logger.log('syncSkuHistory: строк ' + rows.length + ', дней ' + list.length + (list.length ? ' (' + list[0] + ' … ' + list[list.length - 1] + ')' : ''));
 }
