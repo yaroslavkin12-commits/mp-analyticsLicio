@@ -149,7 +149,9 @@ function Delta({ value, unit = '%', goodWhen = 'up', title }) {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
   const flat = Math.abs(value) < 0.5;
   const cls = goodWhen === 'neutral' || flat ? 'flat' : (value > 0) === (goodWhen === 'up') ? 'good' : 'bad';
-  const txt = unit === 'pp' ? `${Math.abs(value).toFixed(1).replace('.', ',')} п.п.` : `${Math.abs(value).toFixed(0)}%`;
+  // Рост больше чем в 4 раза (новый товар, сезон) — "в N раз" читается лучше, чем "+5004%".
+  const txt = unit === 'pp' ? `${Math.abs(value).toFixed(1).replace('.', ',')} п.п.`
+    : value > 300 ? `в ${Math.round(1 + value / 100)} раз` : `${Math.abs(value).toFixed(0)}%`;
   return <span className={`delta ${cls}`} title={title}>{flat ? '•' : value > 0 ? '▲' : '▼'} {txt}</span>;
 }
 
@@ -506,8 +508,8 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
         <h4>Воронка за период {mode === 'ads' && <span className="tag off">только реклама</span>}</h4>
         <Funnel totals={t} prev={model.prev} mode={mode} />
         <div className="a-kv">
-          <span>Расход: оплата за клик</span><b className="n">{fmtInt(t.spendCpc)} ₽</b>
-          <span>Расход: оплата за заказ</span><b className="n">{t.spendCpo ? `${fmtInt(t.spendCpo)} ₽` : '—'}</b>
+          <span>Расход за клик</span><b className="n">{fmtInt(t.spendCpc)} ₽</b>
+          <span>Расход за заказ</span><b className="n">{t.spendCpo ? `${fmtInt(t.spendCpo)} ₽` : '—'}</b>
           <span>Рекламный ДРР</span><b className="n">{fmtPct(adDrr)}</b>
           <span>CTR рекламы</span><b className="n">{fmtPct(adCtr)}</b>
           <span>Оплата за заказ (ОЗЗ)</span><span>нет данных — подключаем</span>
