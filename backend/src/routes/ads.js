@@ -674,7 +674,8 @@ router.get('/stats', async (req, res) => {
           : /рекоменд|полк/.test(titleLc) ? 'rec'
           : /поиск/.test(titleLc) ? 'search'
           : placementUc.includes('CATEGORY') || placementUc.includes('RECOMM') ? 'rec'
-          : placementUc.includes('SEARCH') ? 'search' : null;
+          // PLACEMENT_TOP_PROMOTION — продвижение в поиске ("Поиск" в кабинете).
+          : placementUc.includes('SEARCH') || placementUc.includes('TOP_PROMOTION') ? 'search' : null;
         let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
         let splitDays = 0;
         for (const date of dates) {
