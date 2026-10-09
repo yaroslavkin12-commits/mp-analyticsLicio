@@ -325,11 +325,19 @@ router.get('/costs', async (req, res) => {
     const [catalogRows, overrideRows, costRows, salesRows] = await Promise.all([
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
       query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]),
-      query(`SELECT article, platform, cost_price, updated_at, cabinet FROM product_costs`),
+      query(`SELECT article, platform, product_name, cost_price, updated_at, cabinet FROM product_costs`),
       query(`SELECT offer_id, sku, SUM(orders_item) o, SUM(revenue) r FROM product_analytics_daily
               WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id, sku`, [cabinet, since]),
     ]);
     const override = new Map(overrideRows.map(r => [r.offer_id, r.path]));
+    // Каталога кабинета в базе ещё нет (Licio: товары пока не собираются
+    // через таблицу) — берём старый каталог Ozon и уже введённые артикулы.
+    if (!catalogRows.length) {
+      const seen = new Set();
+      const legacy = await query(`SELECT offer_id, product_name FROM ozon_catalog`).catch(() => []);
+      for (const r of legacy) { if (!seen.has(r.offer_id)) { seen.add(r.offer_id); catalogRows.push({ offer_id: r.offer_id, sku: null, product_name: r.product_name }); } }
+      for (const r of costRows) { if ((!r.cabinet || r.cabinet === cabinet) && !seen.has(r.article)) { seen.add(r.article); catalogRows.push({ offer_id: r.article, sku: null, product_name: r.product_name || '' }); } }
+    }
     // Одна себестоимость на артикул: берём самую свежую из записей WB/Ozon.
     const cost = new Map();
     for (const r of costRows) {

@@ -400,6 +400,20 @@ export default function SalesAnalytics({ cabinet }) {
   if (loading && !data) return <div className="ads2"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
   if (error && !data) return <div className="ads2"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить данные: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
 
+  if (!all.length) {
+    return (
+      <div className="ads2 sa-page">
+        <div className="a-top"><h1>Аналитика продаж</h1></div>
+        <div className="a-card" style={{ padding: 24, lineHeight: 1.6 }}>
+          <b>По этому кабинету в базе пока нет данных о товарах.</b><br />
+          Каталог, заказы по товарам и остатки собирает Google-скрипт в таблицу. Чтобы он начал собирать их и по этому кабинету,
+          в «Свойствах скрипта» нужны ключи Seller API Ozon этого кабинета (<code>{String(cabinet).toUpperCase()}_SELLER_CLIENT_ID</code> и <code>{String(cabinet).toUpperCase()}_SELLER_API_KEY</code>).
+          После следующего запуска <code>syncDaily</code> вкладка заполнится сама.
+        </div>
+      </div>
+    );
+  }
+
   // ── KPI ──
   const T = model.totals, P = model.prev;
   const dayT = dayModel.totals;
