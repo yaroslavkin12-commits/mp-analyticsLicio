@@ -612,7 +612,7 @@ export default function Discounts({ cabinet }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginBottom: 16 }}>
+      <div className="page-sticky"><div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>Соинвест Ozon</h2>
         <div style={{ display: 'flex', gap: 4 }}>
           {TABS.map(([id, label]) => (
@@ -623,7 +623,7 @@ export default function Discounts({ cabinet }) {
             }}>{label}</button>
           ))}
         </div>
-      </div>
+      </div></div>
 
       {tab === 'articles' && <ArticlesTab cabinet={cabinet} days={days} setDays={setDays} />}
       {tab === 'feed' && <FeedTab cabinet={cabinet} days={days} setDays={setDays} />}

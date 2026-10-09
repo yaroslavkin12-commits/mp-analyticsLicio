@@ -19,3 +19,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);font-
 input,select{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:13px;outline:none;font-family:inherit}
 input:focus,select:focus{border-color:var(--accent-wb)}
 button{font-family:inherit;cursor:pointer}
+
+/* Закреплённая шапка раздела (название, даты, фильтры) — остаётся сверху при прокрутке. */
+.page-sticky{position:sticky;top:-18px;z-index:30;background:var(--bg);margin:-18px -18px 16px;padding:18px 18px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:10px}
+.mpui > .page-sticky{margin-bottom:0}

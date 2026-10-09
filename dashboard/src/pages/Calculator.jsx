@@ -109,7 +109,7 @@ export default function Calculator() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+      <div className="page-sticky">
         <h2 style={{ margin: 0, fontSize: 18 }}>Калькулятор юнит-экономики</h2>
       </div>
       <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 16, lineHeight: 1.5, maxWidth: 720 }}>

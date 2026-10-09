@@ -613,6 +613,7 @@ export default function SalesAnalytics({ cabinet }) {
 
   return (
     <div className="mpui sa-page">
+      <div className="page-sticky">
       <div className="a-top">
         <h1>Аналитика продаж</h1>
         <span className="a-seg">{[7, 14, 30, 90].map(periodBtn)}</span>
@@ -650,6 +651,8 @@ export default function SalesAnalytics({ cabinet }) {
           {kids.map(k => <button key={k.path} type="button" className="s-chip" onClick={() => setSel(k.path)}>{k.name} <span className="a-hint">{k.arts.length}</span></button>)}
         </div>
       )}
+
+      </div>
 
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         <div className="a-kpi">

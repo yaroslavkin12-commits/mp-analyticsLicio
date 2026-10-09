@@ -1181,7 +1181,7 @@ export default function AdsStats2({ cabinet }) {
 
   return (
     <div className="mpui">
-      <div className="a-top">
+      <div className="page-sticky"><div className="a-top">
         <h1>Реклама</h1>
         <span className="a-seg">
           {[7, 14, 30].map(n => {
@@ -1197,7 +1197,7 @@ export default function AdsStats2({ cabinet }) {
         </span>
         <Freshness status={status} />
         <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>
-      </div>
+      </div></div>
 
       <div className={`a-kpis ${loading ? 'a-loading' : ''}`}>
         <div className="a-kpi">

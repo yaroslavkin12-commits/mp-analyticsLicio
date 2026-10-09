@@ -13,6 +13,32 @@ app.use(require('compression')());
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+// Короткий кэш тяжёлых отчётов (вкладки «Реклама» и «Аналитика продаж»):
+// повторное открытие раздела отдаётся сразу. Любое изменение (POST/PUT/
+// DELETE) в этих разделах кэш сбрасывает; данные с маркетплейса и так
+// обновляются раз в несколько минут.
+const reportCache = new Map();
+const CACHE_TTL = 3 * 60 * 1000;
+const CACHED = ['/api/ads/stats', '/api/sales/data', '/api/sales/costs'];
+app.use((req, res, next) => {
+  if (req.method !== 'GET') {
+    if (req.path.startsWith('/api/ads') || req.path.startsWith('/api/sales') || req.path.startsWith('/api/settings')) reportCache.clear();
+    return next();
+  }
+  if (!CACHED.includes(req.path) || req.query.fresh) return next();
+  const key = req.originalUrl;
+  const hit = reportCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL) { res.set('X-Cache', 'hit'); return res.type('json').send(hit.body); }
+  const json = res.json.bind(res);
+  res.json = body => {
+    if (res.statusCode === 200 && body && body.success) {
+      if (reportCache.size > 60) reportCache.clear();
+      reportCache.set(key, { at: Date.now(), body: JSON.stringify(body) });
+    }
+    return json(body);
+  };
+  next();
+});
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/settings',  require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));

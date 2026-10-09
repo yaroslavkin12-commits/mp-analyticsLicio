@@ -6,7 +6,7 @@ const NAV_BY_CABINET = {
 };
 const CABINETS = [['licio','Licio'],['defly','Defly']];
 
-export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
+export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCabinet }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -80,7 +80,15 @@ export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
           </button>
         ))}
       </nav>
-      <div style={{ padding:12, fontSize:11, color:'var(--text3)', borderTop:'1px solid var(--border)' }}>v1.4</div>
+      <div style={{ padding:'10px 12px', borderTop:'1px solid var(--border)', display:'flex', alignItems:'center', gap:8 }}>
+        <button onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} title="Переключить тему" style={{
+          display:'flex', alignItems:'center', gap:8, padding:'7px 10px', borderRadius:8, border:'1px solid var(--border)',
+          background:'var(--surface2)', color:'var(--text2)', fontSize:12.5, cursor:'pointer',
+        }}>
+          <span style={{ fontSize:14 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>{theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+        </button>
+        <span style={{ marginLeft:'auto', fontSize:11, color:'var(--text3)' }}>v1.5</span>
+      </div>
     </div>
   );
 }

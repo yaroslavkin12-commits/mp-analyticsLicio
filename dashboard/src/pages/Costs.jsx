@@ -160,6 +160,7 @@ export default function Costs({ cabinet }) {
 
   return (
     <div className="mpui sa-costs">
+      <div className="page-sticky">
       <div className="a-top">
         <h1>Себестоимость</h1>
         <span className="a-hint">{fmtInt(filled)} из {fmtInt(items.length)} артикулов заполнено · из продававшихся за 30 дней — {fmtInt(soldFilled)} из {fmtInt(soldItems.length)}</span>
@@ -169,6 +170,7 @@ export default function Costs({ cabinet }) {
           <button type="button" className="a-btn primary" onClick={() => fileRef.current?.click()}>Загрузить из Excel</button>
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={onFile} />
         </span>
+      </div>
       </div>
 
       <div className="c-note">

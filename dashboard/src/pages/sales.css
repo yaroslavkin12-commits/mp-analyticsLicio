@@ -59,3 +59,4 @@
 .mpui .c-msg.bad{background:var(--a-bad-soft);color:var(--a-bad)}
 .mpui .c-table th:not(.r), .mpui .c-table td:not(.r), .mpui .s-slice th:not(.r), .mpui .s-slice td:not(.r){text-align:left}
 .mpui .c-table td{padding:6px 12px}
+.mpui table.a-t.s-slice{min-width:0}

@@ -205,7 +205,7 @@ export default function TrackedArticles({ cabinet }) {
 
   return (
     <div>
-      <h2 style={{ margin: '0 0 16px', fontSize: 20 }}>Уведомления о заказах</h2>
+      <div className="page-sticky"><h2 style={{ margin: 0, fontSize: 20 }}>Уведомления о заказах</h2></div>
       <HealthBar cabinet={cabinet} />
 
       <div style={{ display: 'flex', gap: 3, background: 'var(--surface2)', borderRadius: 8, padding: 3, width: 'fit-content', marginBottom: 18 }}>
