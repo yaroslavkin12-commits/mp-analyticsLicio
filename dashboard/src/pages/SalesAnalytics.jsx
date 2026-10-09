@@ -397,12 +397,12 @@ export default function SalesAnalytics({ cabinet }) {
     } catch (e) { window.alert('Не удалось сохранить категорию.'); }
   }
 
-  if (loading && !data) return <div className="ads2"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
-  if (error && !data) return <div className="ads2"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить данные: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
+  if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
+  if (error && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить данные: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
 
   if (!all.length) {
     return (
-      <div className="ads2 sa-page">
+      <div className="mpui sa-page">
         <div className="a-top"><h1>Аналитика продаж</h1></div>
         <div className="a-card" style={{ padding: 24, lineHeight: 1.6 }}>
           <b>По этому кабинету в базе пока нет данных о товарах.</b><br />
@@ -615,7 +615,7 @@ export default function SalesAnalytics({ cabinet }) {
   };
 
   return (
-    <div className="ads2 sa-page">
+    <div className="mpui sa-page">
       <div className="a-top">
         <h1>Аналитика продаж</h1>
         <span className="a-seg">{[7, 14, 30, 90].map(periodBtn)}</span>

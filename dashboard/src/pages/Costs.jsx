@@ -159,7 +159,7 @@ export default function Costs({ cabinet }) {
   const TH = ([k, t, r]) => <th key={t} className={`sortable ${sort.key === k ? 'sorted' : ''} ${r ? 'r' : ''}`} onClick={() => clickSort(k)}>{t}{sort.key === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</th>;
 
   return (
-    <div className="ads2 sa-costs">
+    <div className="mpui sa-costs">
       <div className="a-top">
         <h1>Себестоимость</h1>
         <span className="a-hint">{fmtInt(filled)} из {fmtInt(items.length)} артикулов заполнено · из продававшихся за 30 дней — {fmtInt(soldFilled)} из {fmtInt(soldItems.length)}</span>

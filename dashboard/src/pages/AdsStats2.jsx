@@ -1071,7 +1071,7 @@ export default function AdsStats2({ cabinet }) {
     deleteAdsEvent(cabinet, id).catch(console.error);
   }
 
-  if (loading && !data) return <div className="ads2"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
+  if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
 
   // ── KPI ──
   const T = total.totals, P = total.prev;
@@ -1180,7 +1180,7 @@ export default function AdsStats2({ cabinet }) {
   }
 
   return (
-    <div className="ads2">
+    <div className="mpui">
       <div className="a-top">
         <h1>Реклама</h1>
         <span className="a-seg">
