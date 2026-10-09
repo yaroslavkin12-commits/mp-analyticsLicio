@@ -777,13 +777,17 @@ function parseCampaignReport_(cab, text, out) {
     if (v && typeof v === 'object' && v.report && Array.isArray(v.report.rows)) groups.push([k, v.report.rows]);
   });
   if (!groups.length) { const rows = findRows_(obj, 0); if (rows) groups.push(['', rows]); }
-  let n = 0, logged = false;
+  // В отчёте строка на каждый поисковый запрос, поэтому на один товар за
+  // день по одной кампании строк бывает несколько — складываем их.
+  const agg = {};
+  let logged = false, campsWithRows = 0;
   groups.forEach(function (g) {
     const rows = g[1];
     if (!rows.length) return;
+    campsWithRows++;
     const keys = Object.keys(rows[0]);
     if (!logged) { Logger.log('Отчёт по кампаниям: колонки ' + JSON.stringify(keys)); logged = true; }
-    const kDate = pickKey_(keys, [/^date$/, /дата/, /date/]);
+    const kDate = pickKey_(keys, [/^date$/, /дата/, /date/], /created/);
     const kSku = pickKey_(keys, [/^sku$/, /sku/]);
     const kExp = pickKey_(keys, [/moneyspent/, /expense/, /расход/, /spent/]);
     const kViews = pickKey_(keys, [/^views$/, /показ/, /views/]);
@@ -796,13 +800,26 @@ function parseCampaignReport_(cab, text, out) {
     rows.forEach(function (r) {
       const date = normDate_(r[kDate]);
       if (!date || !r[kSku]) return;
-      const clicks = kClicks ? parseRuNumber_(r[kClicks]) : 0, exp = parseRuNumber_(r[kExp]);
-      out.push([cab.id, date, String(g[0] || (kCamp ? r[kCamp] : '') || ''), String(r[kSku]),
-        kViews ? parseRuNumber_(r[kViews]) : 0, clicks, kCart ? parseRuNumber_(r[kCart]) : 0,
-        kOrders ? parseRuNumber_(r[kOrders]) : 0, kSales ? parseRuNumber_(r[kSales]) : 0, exp, clicks > 0 ? exp / clicks : 0]);
-      n++;
+      const camp = String(g[0] || (kCamp ? r[kCamp] : '') || '');
+      const key = date + '|' + camp + '|' + r[kSku];
+      const a = agg[key] || (agg[key] = { date: date, camp: camp, sku: String(r[kSku]), v: 0, c: 0, t: 0, o: 0, s: 0, e: 0 });
+      a.v += kViews ? parseRuNumber_(r[kViews]) : 0;
+      a.c += kClicks ? parseRuNumber_(r[kClicks]) : 0;
+      a.t += kCart ? parseRuNumber_(r[kCart]) : 0;
+      a.o += kOrders ? parseRuNumber_(r[kOrders]) : 0;
+      a.s += kSales ? parseRuNumber_(r[kSales]) : 0;
+      a.e += parseRuNumber_(r[kExp]);
     });
   });
+  let n = 0, noCamp = 0, spend = 0;
+  Object.keys(agg).forEach(function (k) {
+    const a = agg[k];
+    if (!a.camp) noCamp++;
+    spend += a.e;
+    out.push([cab.id, a.date, a.camp, a.sku, a.v, a.c, a.t, a.o, a.s, Math.round(a.e * 100) / 100, a.c > 0 ? Math.round(a.e / a.c * 100) / 100 : 0]);
+    n++;
+  });
+  Logger.log('  кампаний со строками ' + campsWithRows + ', товаро-дней ' + n + ', расход ' + Math.round(spend) + ' ₽' + (noCamp ? ', БЕЗ id кампании: ' + noCamp : ''));
   return n;
 }
 
