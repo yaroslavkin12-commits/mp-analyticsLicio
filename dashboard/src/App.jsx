@@ -27,7 +27,7 @@ const THEME_KEY = 'mp-theme';
 const CABINET_KEY = 'mp-cabinet';
 
 export default function App() {
-  const [page, setPage]     = useState('dashboard');
+  const [page, setPage]     = useState('sales');
   const [platform, setPlatform] = useState('all');
   const [cabinet, setCabinet] = useState(() => {
     try { return localStorage.getItem(CABINET_KEY) || 'licio'; } catch(e) { return 'licio'; }

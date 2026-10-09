@@ -462,7 +462,7 @@ export default function SalesAnalytics({ cabinet }) {
         <td><SparkBars values={st.spark} /></td>
         <td className="n r">{fmtInt(t.revenue)}</td>
         <td className="r"><Delta value={st.p ? changePct(t.revenue, st.p.revenue) : null} /></td>
-        <td className="r"><span className="s-share"><i style={{ width: `${Math.min(100, share || 0)}%` }} /><b className="n">{share === null ? '—' : fmtPct(share)}</b></span></td>
+        <td className="r"><span className="s-part"><i style={{ width: `${Math.min(100, share || 0)}%` }} /><b className="n">{share === null ? '—' : fmtPct(share)}</b></span></td>
         <td className="n r">{fmtInt(t.orders)}</td>
         <td className="n r">{t.orders ? fmtInt(t.revenue / t.orders) : '—'}</td>
         <td className="n r">{fmtInt(t.views)}</td>
@@ -601,7 +601,7 @@ export default function SalesAnalytics({ cabinet }) {
   };
 
   return (
-    <div className="ads2 sales">
+    <div className="ads2 sa-page">
       <div className="a-top">
         <h1>Аналитика продаж</h1>
         <span className="a-seg">{[7, 14, 30, 90].map(periodBtn)}</span>
