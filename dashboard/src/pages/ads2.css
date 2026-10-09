@@ -188,3 +188,5 @@
 .ads2 .a-withassoc small{font-size:11px;color:var(--a-ink3)}
 .ads2 .a-withassoc b{font-size:17px;font-weight:600;color:var(--a-accent)}
 .ads2 .a-assoc-total{color:var(--a-accent);font-weight:600}
+/* Расход ОЗЗ без найденной даты заказа */
+.ads2 .a-undated{display:inline-block;margin-left:4px;width:13px;height:13px;line-height:13px;border-radius:50%;font-size:9.5px;font-weight:700;text-align:center;background:var(--a-warn-soft);color:var(--a-warn);vertical-align:1px;cursor:help;font-family:var(--a-ui)}

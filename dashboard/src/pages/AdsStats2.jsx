@@ -82,8 +82,8 @@ const drrClass = v => v === null || v === undefined || !Number.isFinite(v) ? 'm'
 
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
 const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'clicks', 'adViews', 'adOrders', 'adRevenue',
-  'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec'];
-const zoneRaw = d => ({ spendSearch: d.spendSearch || 0, clicksSearch: d.clicksSearch || 0, spendRec: d.spendRec || 0, clicksRec: d.clicksRec || 0 });
+  'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCpoUndated'];
+const zoneRaw = d => ({ spendSearch: d.spendSearch || 0, clicksSearch: d.clicksSearch || 0, spendRec: d.spendRec || 0, clicksRec: d.clicksRec || 0, spendCpoUndated: d.spendCpoUndated || 0 });
 
 // Значения дня с учётом режима: "all" — общая аналитика товара, "ads" —
 // только то, что Ozon отнёс к рекламе (корзин в рекламной статистике нет).
@@ -561,6 +561,15 @@ function DaysTable({ dates, model, mode, editable, onManualSave }) {
                   if (editable && row.editable && onManualSave) {
                     return <EditCell key={d} value={v} fmt={row.fmt} bg={bg} manual={!!model.byDate[d]?.manual?.[row.key]}
                       onSave={val => onManualSave(d, row.key, val)} />;
+                  }
+                  const und = row.key === 'spendCpo' ? (model.byDate[d]?.spendCpoUndated || 0) : 0;
+                  if (und > 0) {
+                    return (
+                      <td key={d} style={{ background: bg, position: 'relative' }}
+                        title={`${fmtInt(und)} ₽ из ${fmtInt(v)} ₽: дата заказа не определилась — учтено по дню списания (выкупа). Как только дата найдётся, расход сам переедет на день заказа, без задвоения.`}>
+                        {fmtBy(v, row.fmt)}<span className="a-undated">!</span>
+                      </td>
+                    );
                   }
                   return <td key={d} style={{ background: bg }}>{fmtBy(v, row.fmt)}</td>;
                 })}
@@ -1147,7 +1156,9 @@ export default function AdsStats2({ cabinet }) {
           </td>
           <td className="n">
             {fmtInt(m.totals.spend)}{split && <span className="a-approx" title="Часть расхода — мультитоварная РК, поделена поровну между её артикулами">≈</span>}
-            <span className="a-spendsub">клик {fmtInt(m.totals.spendCpc)} · заказ {m.totals.spendCpo ? fmtInt(m.totals.spendCpo) : '—'}</span>
+            <span className="a-spendsub">клик {fmtInt(m.totals.spendCpc)} · заказ {m.totals.spendCpo ? fmtInt(m.totals.spendCpo) : '—'}
+              {m.totals.spendCpoUndated > 0 && <span className="a-undated" title={`${fmtInt(m.totals.spendCpoUndated)} ₽ расхода за заказ без найденной даты заказа — стоит на дне списания`}>!</span>}
+            </span>
           </td>
           <td><span className={`pill ${drrClass(m.totals.drr)}`}>{m.totals.drr === null ? (m.totals.spend > 0 ? '×' : '—') : fmtPct(m.totals.drr)}</span></td>
           <td>{a.cpo

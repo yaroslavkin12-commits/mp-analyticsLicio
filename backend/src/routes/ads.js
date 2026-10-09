@@ -657,8 +657,10 @@ router.get('/stats', async (req, res) => {
       const day = r.order_date || r.date;
       if (!offerId || day < from || day > to) continue;
       const k = `${offerId}|${day}`;
-      const cur = cpoByOfferDate.get(k) || { expense: 0, orders: 0, revenue: 0 };
+      const cur = cpoByOfferDate.get(k) || { expense: 0, orders: 0, revenue: 0, undated: 0 };
       cur.expense += Number(r.expense) || 0; cur.orders += Number(r.quantity) || 1; cur.revenue += Number(r.cost) || 0;
+      // День заказа не нашёлся — расход стоит на дне списания; фронт подсветит.
+      if (!r.order_date) cur.undated += Number(r.expense) || 0;
       cpoByOfferDate.set(k, cur);
     }
     const cpoCovers = date => cpoFrom && date >= cpoFrom && date <= cpoTo;
@@ -763,8 +765,8 @@ router.get('/stats', async (req, res) => {
       const byDate = {};
       let totalSpend = 0, totalAdOrders = 0, totalAdRevenue = 0;
       for (const date of dates) {
-        const v = cpoByOfferDate.get(`${offerId}|${date}`) || { expense: 0, orders: 0, revenue: 0 };
-        byDate[date] = { spend: v.expense, spendCpo: v.expense, clicks: 0, avgCpc: 0, adViews: 0, adOrders: v.orders, adRevenue: v.revenue, adToCart: null };
+        const v = cpoByOfferDate.get(`${offerId}|${date}`) || { expense: 0, orders: 0, revenue: 0, undated: 0 };
+        byDate[date] = { spend: v.expense, spendCpo: v.expense, spendCpoUndated: v.undated, clicks: 0, avgCpc: 0, adViews: 0, adOrders: v.orders, adRevenue: v.revenue, adToCart: null };
         totalSpend += v.expense; totalAdOrders += v.orders; totalAdRevenue += v.revenue;
       }
       const article = getArticle(offerId, skuByOfferId.get(offerId) || null);
@@ -831,7 +833,7 @@ router.get('/stats', async (req, res) => {
         // нет ни у одной РК за день, оставляем null ("нет данных"), а не 0.
         const toCartKnown = article.campaigns.some(c => c.byDate[date]?.adToCart !== null && c.byDate[date]?.adToCart !== undefined);
         const adToCart = toCartKnown ? sumCamp('adToCart') : null;
-        const spendCpc = sumCamp('spendCpc'), spendCpo = sumCamp('spendCpo');
+        const spendCpc = sumCamp('spendCpc'), spendCpo = sumCamp('spendCpo'), spendCpoUndated = sumCamp('spendCpoUndated');
         const spendSearch = sumCamp('spendSearch'), clicksSearch = sumCamp('clicksSearch');
         const spendRec = sumCamp('spendRec'), clicksRec = sumCamp('clicksRec');
         totalSpendCpc += spendCpc; totalSpendCpo += spendCpo;
@@ -886,7 +888,7 @@ router.get('/stats', async (req, res) => {
           spend: spend.value,
           avgCpc: avgCpc.value,
           clicks: mpClicks,
-          adViews, adOrders, adRevenue, adToCart, spendCpc, spendCpo,
+          adViews, adOrders, adRevenue, adToCart, spendCpc, spendCpo, spendCpoUndated,
           spendSearch, clicksSearch, spendRec, clicksRec,
           stock: stockOnDate(article.offerId, date),
           manual: {

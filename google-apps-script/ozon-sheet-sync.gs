@@ -27,8 +27,8 @@
  *     их в чат.
  *  3. Выполнить функцию setupTriggers (из выпадающего списка функций вверху,
  *     кнопка "Выполнить") — она поставит расписание: заказы для уведомлений
- *     каждые 5 минут, свежие данные каждые 15 минут, отчёт «оплата за заказ»
- *     каждый час и раз в сутки докачку истории + каталог.
+ *     каждые 10 минут, свежие данные каждые 30 минут, отчёт «оплата за заказ»
+ *     каждые 3 часа и раз в сутки докачку истории + каталог.
  *     После обновления этого файла setupTriggers нужно выполнить ещё раз.
  *     При первом запуске Google спросит разрешения — это нормально,
  *     разрешите (скрипт же ваш собственный).
@@ -407,11 +407,13 @@ function syncOrders() {
 
 // ---------- Реклама: точные данные по товарам ----------
 // Статистика «оплаты за клик» по товарам и дням (не тратит лимиты API).
-function collectSkuStats_(cab, campaigns, out) {
+function collectSkuStats_(cab, campaigns, out, days) {
   const headers = perfHeaders_(cab);
   if (!headers || !campaigns || !campaigns.length) return;
   const cpc = campaigns.filter(function (c) { return c.paymentType.toUpperCase() !== 'CPO'; }).map(function (c) { return c.id; });
-  const from = mskDate_(1), to = mskDate_(0);
+  // Обычно — вчера и сегодня; раз в сутки (syncDaily) — 30 дней, чтобы
+  // закрыть историю. Если Ozon не даст длинный период, в журнале будет ошибка.
+  const from = mskDate_((days || 2) - 1), to = mskDate_(0);
   for (let i = 0; i < cpc.length; i += 10) {
     const chunk = cpc.slice(i, i + 10);
     try {
@@ -677,6 +679,15 @@ function mergeIntoSheet_(sheetName, headers, newRows, keyCols, dateCol) {
   writeRows_(sheetName, headers, rows);
 }
 
+// true, если с прошлого раза прошло не меньше hours часов (и отмечает запуск).
+function dueEvery_(key, hours) {
+  const props = PropertiesService.getScriptProperties();
+  const last = Number(props.getProperty('last_' + key) || 0);
+  if (Date.now() - last < hours * 3600 * 1000) return false;
+  props.setProperty('last_' + key, String(Date.now()));
+  return true;
+}
+
 // ---------- Точки входа ----------
 function syncRecent() {
   const cabinets = getCabinets_();
@@ -690,8 +701,12 @@ function syncRecent() {
     let withSpend = null;
     try { withSpend = collectCampaignsAndStats_(cab, from, to, campaigns, stats, campaignSkus); } catch (e) { Logger.log('Кампании/расход ' + cab.id + ': ' + e.message); }
     try { collectSkuStats_(cab, withSpend, skuStats); } catch (e) { Logger.log('Статистика по товарам ' + cab.id + ': ' + e.message); }
-    try { collectCpoProducts_(cab, cpoProducts); } catch (e) { Logger.log('Оплата за заказ (товары) ' + cab.id + ': ' + e.message); }
-    try { collectCpcBids_(cab, withSpend, cpcBids); } catch (e) { Logger.log('Ставки ' + cab.id + ': ' + e.message); }
+    // Статус ОЗЗ и ставки меняются редко — проверяем раз в 2 часа (экономим
+    // суточный лимит времени работы скрипта у Google).
+    if (dueEvery_('slow_' + cab.id, 2)) {
+      try { collectCpoProducts_(cab, cpoProducts); } catch (e) { Logger.log('Оплата за заказ (товары) ' + cab.id + ': ' + e.message); }
+      try { collectCpcBids_(cab, withSpend, cpcBids); } catch (e) { Logger.log('Ставки ' + cab.id + ': ' + e.message); }
+    }
   });
   mergeIntoSheet_(SHEET_NAMES.skuStats, SKU_STATS_HEADERS, skuStats, [0, 1, 2, 3], 1);
   if (cpoProducts.length) writeRows_(SHEET_NAMES.cpoProducts, CPO_PRODUCTS_HEADERS, cpoProducts);
@@ -715,13 +730,17 @@ function syncDaily() {
   });
   if (catalog.length) writeRows_(SHEET_NAMES.catalog, CATALOG_HEADERS, catalog);
 
-  const analytics = [], stats = [], campaigns = [];
+  const analytics = [], stats = [], campaigns = [], skuStatsFull = [];
   const fromA = mskDate_(ANALYTICS_WINDOW_DAYS_FULL - 1), toA = mskDate_(0);
   const fromS = mskDate_(STATS_WINDOW_DAYS_FULL - 1), toS = mskDate_(0);
   cabinets.forEach(function (cab) {
     try { collectAnalyticsWindow_(cab, fromA, toA, analytics); } catch (e) { Logger.log('Аналитика(полная) ' + cab.id + ': ' + e.message); }
-    try { collectCampaignsAndStats_(cab, fromS, toS, campaigns, stats); } catch (e) { Logger.log('Кампании(полные) ' + cab.id + ': ' + e.message); }
+    let withSpend = null;
+    try { withSpend = collectCampaignsAndStats_(cab, fromS, toS, campaigns, stats); } catch (e) { Logger.log('Кампании(полные) ' + cab.id + ': ' + e.message); }
+    try { collectSkuStats_(cab, withSpend, skuStatsFull, 30); } catch (e) { Logger.log('Статистика по товарам (30 дн) ' + cab.id + ': ' + e.message); }
   });
+  mergeIntoSheet_(SHEET_NAMES.skuStats, SKU_STATS_HEADERS, skuStatsFull, [0, 1, 2, 3], 1);
+  Logger.log('syncDaily: статистика по товарам за 30 дней — строк ' + skuStatsFull.length);
   mergeIntoSheet_(SHEET_NAMES.analytics, ANALYTICS_HEADERS, analytics, [0, 1, 2], 1);
   mergeIntoSheet_(SHEET_NAMES.stats, STATS_HEADERS, stats, [0, 1, 2], 1);
   mergeIntoSheet_(SHEET_NAMES.campaigns, CAMPAIGNS_HEADERS, campaigns, [0, 1]);
@@ -735,9 +754,26 @@ function setupTriggers() {
     const fn = t.getHandlerFunction();
     if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('syncOrders').timeBased().everyMinutes(5).create();
-  ScriptApp.newTrigger('syncRecent').timeBased().everyMinutes(15).create();
-  ScriptApp.newTrigger('syncCpoOrders').timeBased().everyHours(1).create();
+  // У бесплатного аккаунта Google суммарное время работы триггеров
+  // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
+  ScriptApp.newTrigger('syncOrders').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('syncRecent').timeBased().everyMinutes(30).create();
+  ScriptApp.newTrigger('syncCpoOrders').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
-  Logger.log('Триггеры поставлены: syncOrders каждые 5 мин, syncRecent каждые 15 мин, syncCpoOrders каждый час, syncDaily раз в сутки в 4:00.');
+  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily раз в сутки в 4:00.');
+}
+
+// Ручная проверка: статистика «оплаты за клик» по каждому товару за 30 дней
+// (точный расход по артикулам за прошлые дни). Запустить вручную: syncSkuStats30.
+function syncSkuStats30() {
+  const rows = [];
+  getCabinets_().forEach(function (cab) {
+    let withSpend = null;
+    try { withSpend = collectCampaignsAndStats_(cab, mskDate_(29), mskDate_(0), [], []); } catch (e) { Logger.log('Кампании ' + cab.id + ': ' + e.message); }
+    try { collectSkuStats_(cab, withSpend, rows, 30); } catch (e) { Logger.log('Статистика по товарам ' + cab.id + ': ' + e.message); }
+  });
+  mergeIntoSheet_(SHEET_NAMES.skuStats, SKU_STATS_HEADERS, rows, [0, 1, 2, 3], 1);
+  const days = {};
+  rows.forEach(function (r) { days[r[1]] = true; });
+  Logger.log('syncSkuStats30: строк ' + rows.length + ', дней с данными ' + Object.keys(days).length + ' (' + Object.keys(days).sort().slice(0, 1) + ' … ' + Object.keys(days).sort().slice(-1) + ')');
 }
