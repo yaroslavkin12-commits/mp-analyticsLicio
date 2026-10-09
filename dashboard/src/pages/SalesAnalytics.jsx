@@ -559,9 +559,6 @@ export default function SalesAnalytics({ cabinet }) {
     ? kids.map(k => ({ key: k.path, label: k.name, sub: `${k.arts.length} арт.`, arts: k.arts }))
     : [...node.arts].sort((x, y) => y.tRevenue - x.tRevenue).slice(0, 40).map(a => ({ key: a.o, label: a.o, sub: a.short, title: a.n, arts: [a] })))
     .map(r => ({ ...r, m: toModel(agOf(r.arts), buckets) })));
-  const mVals = [];
-  for (const r of matrixRows) for (const b of buckets) { const v = r.m.byDate[b.key]?.[matrixMetric]; if (v !== null && v !== undefined && Number.isFinite(v)) mVals.push(v); }
-  const mMin = mVals.length ? Math.min(...mVals) : 0, mMax = mVals.length ? Math.max(...mVals) : 0;
   const mGood = matrixMetric === 'drr' ? 'down' : 'up';
   const mTotal = r => matrixMetric === 'stock' ? r.m.stockNow : r.m.totals[matrixMetric];
 
@@ -776,7 +773,12 @@ export default function SalesAnalytics({ cabinet }) {
                     {r.label} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{r.sub}</span>
                   </td>
                   <td className="tot">{fmtBy(mTotal(r), mCfg[2])}</td>
-                  {buckets.map(b => { const v = r.m.byDate[b.key]?.[matrixMetric]; return <td key={b.key} style={{ background: heatColor(v, mMin, mMax, mGood) }}>{fmtBy(v, mCfg[2])}</td>; })}
+                  {(() => {
+                    // Цвет — относительно своей строки: категории разного размера иначе не сравнить.
+                    const vs = buckets.map(b => r.m.byDate[b.key]?.[matrixMetric]).filter(v => v !== null && v !== undefined && Number.isFinite(v));
+                    const lo = vs.length ? Math.min(...vs) : 0, hi = vs.length ? Math.max(...vs) : 0;
+                    return buckets.map(b => { const v = r.m.byDate[b.key]?.[matrixMetric]; return <td key={b.key} style={{ background: heatColor(v, lo, hi, mGood) }}>{fmtBy(v, mCfg[2])}</td>; });
+                  })()}
                 </tr>
               ))}
             </tbody>
