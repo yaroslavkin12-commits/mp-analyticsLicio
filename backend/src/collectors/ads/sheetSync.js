@@ -44,6 +44,23 @@ function parseCsv(text) {
   return rows.filter(r => !(r.length === 1 && r[0] === ''));
 }
 
+// Обязательные колонки каждой вкладки. ВАЖНО: если вкладки с таким именем
+// ещё нет, Google отдаёт по ссылке ПЕРВУЮ вкладку таблицы — без этой
+// проверки мы прочитали бы, например, Analytics вместо CpoProducts.
+const REQUIRED_COLUMNS = {
+  Catalog: ['offer_id', 'sku'],
+  Analytics: ['date', 'sku', 'hits_view'],
+  Stocks: ['offer_id', 'fbo_present'],
+  Campaigns: ['campaign_id', 'title'],
+  Stats: ['campaign_id', 'spend'],
+  CampaignSkus: ['campaign_id', 'checked_at'],
+  Orders: ['posting_number', 'created_at'],
+  SkuStats: ['campaign_id', 'expense', 'to_cart'],
+  CpoProducts: ['enabled', 'bid_pct'],
+  CpcBids: ['campaign_id', 'bid'],
+  CpoOrders: ['order_id', 'promoted_sku', 'expense'],
+};
+
 async function fetchSheetRows(sheetName) {
   const id = sheetId();
   if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
@@ -51,6 +68,11 @@ async function fetchSheetRows(sheetName) {
   const rows = parseCsv(String(resp.data));
   if (!rows.length) return [];
   const headers = rows[0];
+  const required = REQUIRED_COLUMNS[sheetName] || [];
+  if (required.some(c => !headers.includes(c))) {
+    // Вкладки ещё нет (скрипт не обновлён) — Google подсунул другую.
+    return null;
+  }
   return rows.slice(1).map(r => {
     const obj = {};
     headers.forEach((h, i) => { obj[h] = r[i] !== undefined ? r[i] : ''; });

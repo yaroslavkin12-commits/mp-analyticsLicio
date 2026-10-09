@@ -30,7 +30,7 @@ function HealthBar({ cabinet }) {
       background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
       <span style={ok(h.telegramConfigured)}>● Telegram {h.telegramConfigured ? 'подключён' : 'не настроен (нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID на сервере)'}</span>
       <span style={ok(sheetOk && h.ordersSheet.rows > 0)}>
-        ● Заказы Ozon из таблицы: {h.ordersSheet.error ? `ошибка (${h.ordersSheet.error})` : h.ordersSheet.rows === null ? 'таблица не подключена'
+        ● Заказы Ozon из таблицы: {h.ordersSheet.error ? `ошибка (${h.ordersSheet.error})` : h.ordersSheet.rows === null ? 'вкладки Orders ещё нет — обновите Google-скрипт и выполните setupTriggers'
           : h.ordersSheet.rows === 0 ? 'пока пусто — обновите Google-скрипт и выполните setupTriggers' : `${h.ordersSheet.rows} строк, последний заказ ${h.ordersSheet.newestOrderAt ? fmtDateTime(h.ordersSheet.newestOrderAt) : '—'}`}
       </span>
       <span>Проверка заказов: {last ? fmtDateTime(last) : 'ещё не было'}</span>
