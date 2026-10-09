@@ -406,62 +406,66 @@ router.get('/stats', async (req, res) => {
       const t = Date.now();
       return promise.then(r => { timings.push(`${name};dur=${Date.now() - t}`); return r; });
     };
-    let qi = 0;
-    const qNames = ['campaigns', 'adstats', 'analytics', 'catalog', 'manual', 'stock', 'stockManual', 'campaignSkus', 'stockHistory'];
-    const tq = (...args) => timed(qNames[qi++] || `q${qi}`, query(...args));
-    const [campaigns, adRows, analyticsRows, catalogRows, manualRows, stockRows, stockManualRows, campaignSkuRows, stockHistoryRows] = await Promise.all([
-      tq(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
+    // Два шага. Сначала лёгкие справочники (кампании, каталог, товары
+    // мультитоварных РК, группы) — по ним понятно, какие артикулы вообще
+    // попадут на страницу. Затем тяжёлые таблицы по дням — только по этим
+    // артикулам, а не по всем ~1800 товарам кабинета (раньше аналитика одна
+    // тянула ~27 тыс. строк и занимала больше 2 секунд).
+    const [campaigns, catalogRows, campaignSkuRows, groupsInfo] = await Promise.all([
+      timed('campaigns', query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
-             FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      tq(`SELECT date::text as date, campaign_id, spend, clicks, views, orders, orders_money
+             FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet])),
+      timed('catalog', query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet])),
+      // Товары мультитоварных кампаний — одна РК продвигает сразу несколько
+      // SKU (см. ad_campaign_skus в init.sql и split ниже).
+      timed('campaignSkus', query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, [cabinet])),
+      timed('groups', loadAdsGroups(cabinet)),
+    ]);
+
+    const offerBySkuPre = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
+    const neededOffers = new Set();
+    for (const c of campaigns) if (c.matched_offer_id) neededOffers.add(c.matched_offer_id);
+    for (const r of campaignSkuRows) { const o = offerBySkuPre.get(String(r.sku)); if (o) neededOffers.add(o); }
+    for (const o of Object.keys(groupsInfo.members || {})) neededOffers.add(o);
+    for (const o of [...neededOffers]) for (const a of getAssociatedOfferIds(cabinet, o)) neededOffers.add(a);
+    const neededSkus = new Set();
+    for (const r of catalogRows) if (r.sku != null && neededOffers.has(r.offer_id)) neededSkus.add(String(r.sku));
+    for (const c of campaigns) if (c.matched_sku) neededSkus.add(String(c.matched_sku));
+    const offerArr = [...neededOffers];
+    const skuArr = [...neededSkus].map(Number).filter(Number.isFinite);
+
+    const [adRows, analyticsRows, manualRows, stockRows, stockManualRows, stockHistoryRows] = await Promise.all([
+      timed('adstats', query(`SELECT date::text as date, campaign_id, spend, clicks, views, orders, orders_money
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
-             [cabinet, from, to]),
-      tq(`SELECT date::text as date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
+             [cabinet, from, to])),
+      timed('analytics', query(`SELECT date::text as date, sku, offer_id, hits_view, hits_view_search, hits_view_pdp,
                     hits_tocart, orders_item, revenue, position_category
-             FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
-             [cabinet, from, to]),
-      tq(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`,
-             [cabinet]),
+             FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
+              AND (sku = ANY($4::bigint[]) OR offer_id = ANY($5::text[]))`,
+             [cabinet, from, to, skuArr, offerArr])),
       // Ручные значения — на случай, если сбор с Ozon для каких-то дат/
       // метрик так и не дал данных (см. product_analytics_manual в
-      // init.sql). Приоритет всегда у данных с маркетплейса: ручное
-      // значение подставляется только там, где собранное значение пустое
-      // или равно нулю (см. merge ниже).
-      tq(`SELECT date::text as date, offer_id, metric, value
+      // init.sql). Приоритет всегда у данных с маркетплейса.
+      timed('manual', query(`SELECT date::text as date, offer_id, metric, value
              FROM product_analytics_manual WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
-             [cabinet, from, to]),
-      // Текущие остатки FBO/FBS — последний собранный снепшот по кабинету
-      // (см. collectors/ads/ozonProductStocks.js). Не зависит от выбранного
-      // периода — это "сейчас", а не история.
-      tq(`SELECT offer_id, fbo_present, fbo_reserved, fbs_present, fbs_reserved
+             [cabinet, from, to])),
+      // Текущие остатки FBO/FBS — последний собранный снепшот по кабинету.
+      timed('stock', query(`SELECT offer_id, fbo_present, fbo_reserved, fbs_present, fbs_reserved
              FROM ad_product_stocks
-             WHERE cabinet = $1 AND platform = 'ozon'
+             WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = ANY($2::text[])
                AND snapshot_date = (SELECT MAX(snapshot_date) FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon')`,
-             [cabinet]),
-      // Ручные остатки — подстраховка на случай, если сбор остатков с Ozon
-      // не работает (см. manual-stock выше). Без периода — это "текущее"
-      // значение, а не история по дням.
-      tq(`SELECT offer_id, metric, value FROM ad_stock_manual WHERE cabinet = $1 AND platform = 'ozon'`,
-             [cabinet]),
-      // Товары мультитоварных кампаний ("Оплата за заказ: выбранные товары"
-      // и подобные) — одна РК продвигает сразу несколько SKU, и расход по
-      // ней нужно поделить между всеми её артикулами, а не отнести целиком
-      // одному (см. ad_campaign_skus в init.sql и split ниже).
-      tq(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`,
-             [cabinet]),
-      // История остатков по дням (FBO+FBS) за период — чтобы в таблицах "по
-      // дням" можно было показать, сколько товара было на складе В ТОТ
-      // конкретный день, а не только "сейчас" (см. stockByOfferId выше,
-      // который остаётся для "текущего" остатка в карточке артикула).
-      // Берём с запасом на 30 дней раньше периода — если в какой-то день
-      // сбор не сработал, подставляем последний известный снепшот ДО этой
-      // даты (см. stockOnDate ниже), а не дыру в таблице.
-      tq(`SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
+             [cabinet, offerArr])),
+      // Ручные остатки — подстраховка, без периода ("текущее" значение).
+      timed('stockManual', query(`SELECT offer_id, metric, value FROM ad_stock_manual WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet])),
+      // История остатков по дням (FBO+FBS) — с запасом на 30 дней раньше
+      // периода: на день без снепшота переносим последний известный.
+      timed('stockHistory', query(`SELECT snapshot_date::text as date, offer_id, fbo_present, fbs_present
              FROM ad_product_stocks
-             WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date BETWEEN $2 AND $3
+             WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date BETWEEN $2 AND $3 AND offer_id = ANY($4::text[])
              ORDER BY offer_id, snapshot_date`,
-             [cabinet, dayjs(from).subtract(30, 'day').format('YYYY-MM-DD'), to]),
+             [cabinet, dayjs(from).subtract(30, 'day').format('YYYY-MM-DD'), to, offerArr])),
     ]);
+    const tQueries = Date.now();
 
     const dates = [];
     for (let d = dayjs(from); !d.isAfter(to, 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
@@ -665,7 +669,7 @@ router.get('/stats', async (req, res) => {
     // и фолбэк на него в цикле ниже, т.к. у такого артикула нет sku из
     // ad_campaigns). Без этого "+ Добавить артикул" мог отнести артикул,
     // который потом просто не появлялся бы в списке группы.
-    const { members: groupMembersForStats } = await loadAdsGroups(cabinet);
+    const groupMembersForStats = groupsInfo.members || {};
     for (const offerId of Object.keys(groupMembersForStats)) {
       if (!byArticle.has(offerId)) getArticle(offerId, null);
     }
@@ -853,7 +857,8 @@ router.get('/stats', async (req, res) => {
         timed('prevAnalytics', query(
           `SELECT sku, offer_id, SUM(hits_view) v, SUM(hits_view_pdp) pv, SUM(hits_tocart) c, SUM(orders_item) o, SUM(revenue) r
              FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
-            GROUP BY sku, offer_id`, [cabinet, pFrom, pTo])),
+              AND (sku = ANY($4::bigint[]) OR offer_id = ANY($5::text[]))
+            GROUP BY sku, offer_id`, [cabinet, pFrom, pTo, skuArr, offerArr])),
         timed('prevAdstats', query(
           `SELECT campaign_id, SUM(spend) s, SUM(clicks) cl, SUM(views) av, SUM(orders) ao, SUM(orders_money) ar
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
@@ -883,6 +888,7 @@ router.get('/stats', async (req, res) => {
       }
     }
 
+    timings.push(`compute;dur=${Date.now() - tQueries}`);
     timings.push(`total;dur=${Date.now() - tStart}`);
     res.set('Server-Timing', timings.join(', '));
     res.json({ success: true, data: { dates, articles: articlesOut } });
