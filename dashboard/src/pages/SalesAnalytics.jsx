@@ -499,6 +499,7 @@ export default function SalesAnalytics({ cabinet }) {
         <td>
           <div className="a-art" style={{ paddingLeft: depth * 16 }}>
             <span className="a-chev">▶</span>
+            {depth === 0 && <i className="s-dot" style={{ background: CAT_COLORS[(kids.length ? colorNode : fullTree.byPath.get(nd.parent?.path ?? ''))?.children?.get(nd.name)?.slot] || OTHER_COLOR }} />}
             <span className="s-cname">{nd.name}</span>
             <span className="a-hint">{nd.arts.length}</span>
             <button type="button" className="s-focus" title="Показать только эту категорию" onClick={e => { e.stopPropagation(); setSel(nd.path); }}>⌕</button>
@@ -648,7 +649,14 @@ export default function SalesAnalytics({ cabinet }) {
             </React.Fragment>
           ))}
           {kids.length > 0 && <span className="a-hint" style={{ marginLeft: 8 }}>подкатегории:</span>}
-          {kids.map(k => <button key={k.path} type="button" className="s-chip" onClick={() => setSel(k.path)}>{k.name} <span className="a-hint">{k.arts.length}</span></button>)}
+          {kids.map(k => {
+            const slot = colorNode?.children?.get(k.name)?.slot;
+            return (
+              <button key={k.path} type="button" className="s-chip" onClick={() => setSel(k.path)}>
+                <i className="s-dot" style={{ background: CAT_COLORS[slot] || OTHER_COLOR }} />{k.name} <span className="a-hint">{k.arts.length}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -773,6 +781,7 @@ export default function SalesAnalytics({ cabinet }) {
               {matrixRows.map(r => (
                 <tr key={r.key}>
                   <td className="lbl" title={r.title || ''} style={{ cursor: kids.length ? 'pointer' : 'default' }} onClick={() => kids.length && setSel(r.key)}>
+                    {kids.length > 0 && <i className="s-dot" style={{ background: CAT_COLORS[colorNode?.children?.get(r.label)?.slot] || OTHER_COLOR, marginRight: 6 }} />}
                     {r.label} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{r.sub}</span>
                   </td>
                   <td className="tot">{fmtBy(mTotal(r), mCfg[2])}</td>

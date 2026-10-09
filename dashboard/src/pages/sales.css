@@ -1,11 +1,5 @@
 /* «Аналитика продаж» и «Себестоимость» — дополнения к ads2.css. */
-.mpui.sa-page, .mpui.sa-costs{
-  /* Цвета категорий: проверены валидатором (светлая и тёмная тема отдельно). */
-  --s-c1:#3987e5; --s-c2:#d95926; --s-c3:#199e70; --s-c4:#c98500; --s-c5:#d55181; --s-c6:#9085e9;
-}
-[data-theme="light"] .mpui.sa-page, [data-theme="light"] .mpui.sa-costs{
-  --s-c1:#2a78d6; --s-c2:#eb6834; --s-c3:#1baf7a; --s-c4:#eda100; --s-c5:#e87ba4; --s-c6:#4a3aa7;
-}
+
 .mpui .s-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
 @media (max-width:1100px){.mpui .s-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .mpui .s-of{font-size:13px;color:var(--a-ink3);font-weight:500}
@@ -19,7 +13,7 @@
 .mpui .s-crumb{border:0;background:transparent;color:var(--a-ink2);cursor:pointer;padding:3px 4px;font-size:13px;border-radius:6px}
 .mpui .s-crumb.on{color:var(--a-ink);font-weight:600}
 .mpui .s-crumb:hover{background:var(--a-panel2)}
-.mpui .s-chip{border:1px solid var(--a-line);background:var(--a-panel);color:var(--a-ink);border-radius:999px;padding:4px 11px;font-size:12.5px;cursor:pointer}
+.mpui .s-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--a-line);background:var(--a-panel);color:var(--a-ink);border-radius:999px;padding:4px 11px;font-size:12.5px;cursor:pointer}
 .mpui .s-chip:hover{border-color:var(--a-accent)}
 
 .mpui .s-tree th.r, .mpui .s-tree td.r, .mpui .s-slice th.r, .mpui .s-slice td.r{text-align:right}

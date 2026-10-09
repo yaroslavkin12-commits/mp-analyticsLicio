@@ -69,6 +69,30 @@ export function shortModel(name) {
   for (const p of parts.slice(1)) { if (/^\d{3,5}$/.test(p)) out.push(p); else break; }
   return out.join(', ');
 }
+// Цвет группы — как у категории во вкладке «Аналитика продаж» (Чехлы —
+// синий, Дефлекторы — оранжевый…). Группа без категории в названии берёт
+// следующий свободный цвет по порядку создания, чтобы цвет не прыгал при
+// перестановке вкладок. Больше шести — нейтральный серый.
+export const CAT_COLORS = ['var(--s-c1)', 'var(--s-c2)', 'var(--s-c3)', 'var(--s-c4)', 'var(--s-c5)', 'var(--s-c6)'];
+const CAT_STEMS = [/чехл|чехол/i, /дефлект/i, /утепл|автоодеял/i, /аксесс/i];
+function groupColorMap(groups) {
+  // Цвета четырёх категорий закреплены за ними, новые группы берут следующие.
+  const slot = {}, used = new Set(CAT_STEMS.map((_, i) => i));
+  const byAge = [...groups].sort((x, y) => naturalCompare(String(x.id), String(y.id)));
+  for (const g of byAge) {
+    const i = CAT_STEMS.findIndex(re => re.test(g.name || ''));
+    if (i >= 0) { slot[g.id] = i; used.add(i); }
+  }
+  let next = 0;
+  for (const g of byAge) {
+    if (slot[g.id] !== undefined) continue;
+    while (used.has(next)) next++;
+    slot[g.id] = next; used.add(next);
+  }
+  const out = {};
+  for (const g of groups) out[g.id] = CAT_COLORS[slot[g.id]] || 'var(--a-ink3)';
+  return out;
+}
 const isCpoCampaign = c => String(c.paymentType || '').toUpperCase() === 'CPO';
 function cpoText(cpo) {
   if (!cpo) return 'нет данных';
@@ -927,6 +951,7 @@ export default function AdsStats2({ cabinet }) {
   const groups = groupsData.groups;
   const members = groupsData.members;
   const activeGroup = tab !== 'all' ? groups.find(g => g.id === tab) : null;
+  const groupColors = useMemo(() => groupColorMap(groups), [groups]);
   useEffect(() => { if (tab !== 'all' && !groups.find(g => g.id === tab)) setTab('all'); }, [groups, tab]);
 
   function selectTab(id) {
@@ -1258,6 +1283,7 @@ export default function AdsStats2({ cabinet }) {
                 onDrop={e => { e.preventDefault(); reorderTabs(dragTab, g.id); setDragTab(null); setOverTab(null); }}
                 onDragEnd={() => { setDragTab(null); setOverTab(null); }}
                 title={g.name}>
+                <i className="s-dot" style={{ background: groupColors[g.id] }} />
                 {g.name.length > 28 ? g.name.slice(0, 27) + '…' : g.name}<span className="c">{cnt}</span>
                 <button type="button" className="x" title="Удалить группу" onClick={e => { e.stopPropagation(); removeGroup(g.id); }}>×</button>
               </span>
