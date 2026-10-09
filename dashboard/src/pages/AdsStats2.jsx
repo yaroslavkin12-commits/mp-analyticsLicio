@@ -18,10 +18,10 @@ import './ads2.css';
 // рекламных кампаний (adViews/clicks/adOrders/adRevenue).
 // ─────────────────────────────────────────────────────────────────────────
 
-const fmtInt = v => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Math.round(v).toLocaleString('ru-RU');
-const fmtMoney2 = v => v ? v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
-const fmtPct = v => (v === null || v === undefined || !Number.isFinite(v)) ? '—' : v.toFixed(1).replace('.', ',') + '%';
-function fmtBy(v, fmt) {
+export const fmtInt = v => (v === null || v === undefined || Number.isNaN(v)) ? '—' : Math.round(v).toLocaleString('ru-RU');
+export const fmtMoney2 = v => v ? v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+export const fmtPct = v => (v === null || v === undefined || !Number.isFinite(v)) ? '—' : v.toFixed(1).replace('.', ',') + '%';
+export function fmtBy(v, fmt) {
   if (v === null || v === undefined || (typeof v === 'number' && !Number.isFinite(v))) return '—';
   switch (fmt) {
     case 'money': case 'int': return fmtInt(v);
@@ -32,14 +32,14 @@ function fmtBy(v, fmt) {
     default: return String(v);
   }
 }
-function heatColor(v, min, max, direction) {
+export function heatColor(v, min, max, direction) {
   if (v === null || v === undefined || max === min || direction === 'neutral') return 'transparent';
   let t = (v - min) / (max - min);
   if (direction === 'down') t = 1 - t;
   t = Math.max(0, Math.min(1, t));
   return `hsla(${120 * t}, 62%, 42%, 0.32)`;
 }
-function naturalCompare(a, b) {
+export function naturalCompare(a, b) {
   const re = /(\d+)|(\D+)/g;
   const pa = String(a || '').match(re) || [], pb = String(b || '').match(re) || [];
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
@@ -56,12 +56,12 @@ function naturalCompare(a, b) {
 // "Дефлекторы окон 2D Haval Jolion, 2020-н.в., комплект 6 шт." → "Haval Jolion",
 // "Дефлекторы окон "PSA" для ВАЗ 2109, 21099, 2114, 2115" → "ВАЗ 2109, 21099, 2114, 2115".
 // Полное название — во всплывающей подсказке (title).
-function shortModel(name) {
+export function shortModel(name) {
   if (!name) return '';
   const s = String(name).trim();
   if (/^Утеплитель двигателя/i.test(s)) return s.replace(/^Утеплитель двигателя,\s*автоодеяло\s*/i, '').slice(0, 40);
   if (/^Рамка для номера/i.test(s)) return s.split(',').map(x => x.trim()).slice(-2).join(', ').slice(0, 40);
-  let r = s.replace(/^(Дефлекторы окон|Дефлекторы капота|Дефлектор[а-я]*|Чехлы на сиденья|Чехлы|Утеплитель радиатора|Брызговики универсальные|Брызговики|Коврики[а-я ]*)\s*/i, '');
+  let r = s.replace(/^(Дефлектор[а-я]* (?:окон|капота|люка)|Дефлектор[а-я]*|Чехлы на сиденья|Чехлы|Утеплитель радиатора|Брызговики универсальные|Брызговики|Коврики[а-я ]*)\s*/i, '');
   for (let i = 0; i < 4; i++) r = r.replace(/^(2D|3D|"[^"]{1,12}"|«[^»]{1,12}»|Defly)\s*,?\s*/i, '').replace(/^для\s+/i, '');
   const parts = r.split(',').map(x => x.trim()).filter(Boolean);
   if (!parts.length) return s.slice(0, 40);
@@ -78,7 +78,7 @@ function cpoText(cpo) {
   const rub = cpo.bidRub ? ` (${fmtInt(cpo.bidRub)} ₽)` : '';
   return `включена${bid ? ` · ставка ${bid}${rub}` : ''}`;
 }
-const drrClass = v => v === null || v === undefined || !Number.isFinite(v) ? 'm' : v < 15 ? 'g' : v <= 30 ? 'w' : 'b';
+export const drrClass = v => v === null || v === undefined || !Number.isFinite(v) ? 'm' : v < 15 ? 'g' : v <= 30 ? 'w' : 'b';
 
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
 const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'clicks', 'adViews', 'adOrders', 'adRevenue',
@@ -100,7 +100,7 @@ function dayRaw(day, mode) {
     spend: d.spend || 0, spendCpc: d.spendCpc || 0, spendCpo: d.spendCpo || 0, clicks: d.clicks || 0, ...zoneRaw(d),
   };
 }
-function derive(r, mode) {
+export function derive(r, mode) {
   const out = { ...r };
   out.ctr = r.views > 0 ? r.pdpViews / r.views * 100 : null;
   if (mode === 'ads' && (r.cart === null || r.cart === undefined)) {
@@ -164,12 +164,12 @@ function buildModel(articles, dates, mode) {
   return { byDate, totals, prev, stockNow: hasStock ? stockNow : null };
 }
 
-function changePct(cur, prev) {
+export function changePct(cur, prev) {
   if (prev === null || prev === undefined || cur === null || cur === undefined) return null;
   if (prev === 0) return cur === 0 ? 0 : null;
   return (cur - prev) / prev * 100;
 }
-function Delta({ value, unit = '%', goodWhen = 'up', title }) {
+export function Delta({ value, unit = '%', goodWhen = 'up', title }) {
   if (value === null || value === undefined || !Number.isFinite(value)) return null;
   const flat = Math.abs(value) < 0.5;
   const cls = goodWhen === 'neutral' || flat ? 'flat' : (value > 0) === (goodWhen === 'up') ? 'good' : 'bad';
@@ -180,7 +180,7 @@ function Delta({ value, unit = '%', goodWhen = 'up', title }) {
 }
 
 // ── Мелкие графики ────────────────────────────────────────────────────────
-function AreaSpark({ values, color }) {
+export function AreaSpark({ values, color }) {
   const w = 240, h = 34;
   const vals = values.map(v => (v === null || !Number.isFinite(v)) ? 0 : v);
   const max = Math.max(...vals) || 1;
@@ -196,7 +196,7 @@ function AreaSpark({ values, color }) {
     </svg>
   );
 }
-function SparkBars({ values, w = 96, h = 24 }) {
+export function SparkBars({ values, w = 96, h = 24 }) {
   const n = values.length || 1, max = Math.max(1, ...values), bw = w / n;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true" style={{ display: 'block', marginLeft: 'auto' }}>
@@ -210,7 +210,7 @@ function SparkBars({ values, w = 96, h = 24 }) {
 }
 
 // ── Общая всплывашка ──────────────────────────────────────────────────────
-function useTip() {
+export function useTip() {
   const [tip, setTip] = useState(null);
   const show = useCallback((e, content) => setTip({ x: e.clientX + 14, y: e.clientY + 14, content }), []);
   const hide = useCallback(() => setTip(null), []);
@@ -224,7 +224,7 @@ function useTip() {
 // графика друг под другом». Подписи значений — только у максимума,
 // минимума и последнего дня (при коротком периоде — у всех точек), чтобы
 // график не превращался в кашу; остальное — во всплывашке.
-const CHART_METRICS = [
+export const CHART_METRICS = [
   { key: 'revenue', label: 'Заказано, ₽', fmt: 'int' },
   { key: 'orders', label: 'Заказы, шт', fmt: 'int' },
   { key: 'stock', label: 'Остаток, шт', fmt: 'int' },
@@ -379,14 +379,14 @@ function ChartPane({ dates, series, events, tip, height, showX, onHover, hoverId
   );
 }
 
-function DualChart({ dates, byDate, events, tip, mode }) {
+export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults }) {
   const [cfg, setCfg] = useState(() => {
-    try { return { left: 'revenue', right: 'spend', type: 'combo', ...JSON.parse(localStorage.getItem(CHART_STORE) || '{}') }; }
+    try { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}), ...JSON.parse(localStorage.getItem(storeKey) || '{}') }; }
     catch (e) { return { left: 'revenue', right: 'spend', type: 'combo' }; }
   });
   const [hover, setHover] = useState(null);
-  useEffect(() => { try { localStorage.setItem(CHART_STORE, JSON.stringify(cfg)); } catch (e) { /* ignore */ } }, [cfg]);
-  const metrics = CHART_METRICS.filter(m => !(mode === 'ads' && (m.key === 'position')));
+  useEffect(() => { try { localStorage.setItem(storeKey, JSON.stringify(cfg)); } catch (e) { /* ignore */ } }, [cfg, storeKey]);
+  const metrics = (metricsList || CHART_METRICS).filter(m => !(mode === 'ads' && (m.key === 'position')));
   const mk = (key, side) => {
     const m = metrics.find(x => x.key === key) || metrics[0];
     const values = dates.map(d => { const v = byDate[d]?.[m.key]; return v === undefined ? null : v; });
@@ -431,7 +431,7 @@ function DualChart({ dates, byDate, events, tip, mode }) {
 }
 
 // ── Воронка с динамикой к прошлому периоду ───────────────────────────────
-function Funnel({ totals, prev, mode }) {
+export function Funnel({ totals, prev, mode }) {
   const steps = mode === 'ads'
     ? (totals.cart !== null && totals.cart !== undefined
       ? [['Показы рекламы', 'views'], ['Клики', 'pdpViews'], ['Корзины с рекламы', 'cart'], ['Заказы с рекламы', 'orders']]
@@ -525,11 +525,11 @@ function EditCell({ value, fmt, bg, manual, onSave }) {
   );
 }
 
-function DaysTable({ dates, model, mode, editable, onManualSave }) {
+export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys }) {
   const ref = useRef(null);
   const today = dayjs().format('YYYY-MM-DD');
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
-  const rows = DAY_ROWS.filter(r => r.block || !(mode === 'ads' && r.onlyAll));
+  const rows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))));
   return (
     <div className="a-days" ref={ref}>
       <table className="a-dt">

@@ -597,3 +597,14 @@ CREATE TABLE IF NOT EXISTS ad_cpc_bids (
 -- День самого заказа для "оплаты за заказ" (date — день списания, т.е. выкупа).
 ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_date DATE;
 ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(64);
+
+-- Ручная категория артикула для «Аналитики продаж» (иначе — по правилам из
+-- backend/src/lib/categories.js). path — «Чехлы / Чехлы на сиденья / Жаккард».
+CREATE TABLE IF NOT EXISTS product_category_override (
+  cabinet VARCHAR(32) NOT NULL,
+  offer_id VARCHAR(128) NOT NULL,
+  path VARCHAR(256) NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, offer_id)
+);
+ALTER TABLE product_costs ADD COLUMN IF NOT EXISTS cabinet VARCHAR(32);

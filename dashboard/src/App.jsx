@@ -7,8 +7,10 @@ import Discounts from './pages/Discounts';
 import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
 import TrackedArticles from './pages/TrackedArticles';
+import SalesAnalytics from './pages/SalesAnalytics';
+import Costs from './pages/Costs';
 
-const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { sales: SalesAnalytics, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
@@ -17,8 +19,8 @@ const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: 
 // "Уведомления" — отслеживание артикулов + Telegram-алерты о новых заказах,
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
-  licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['ads', 'discounts', 'notifications', 'calculator'],
+  licio: ['sales', 'dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings', 'costs'],
+  defly: ['sales', 'ads', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 
 const THEME_KEY = 'mp-theme';
@@ -55,7 +57,7 @@ export default function App() {
         <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 18px',
           borderBottom:'1px solid var(--border)', background:'var(--surface)', flexShrink:0 }}>
           {/* Переключатель площадок — не нужен на «Рекламе» (там только Ozon) */}
-          {page !== 'ads' && <div style={{ display:'flex', gap:3, background:'var(--surface2)', borderRadius:8, padding:3 }}>
+          {!['ads', 'sales', 'costs'].includes(page) && <div style={{ display:'flex', gap:3, background:'var(--surface2)', borderRadius:8, padding:3 }}>
             {[['all','Все'],['wb','WB'],['ozon','Ozon']].map(([v,l])=>(
               <button key={v} onClick={()=>setPlatform(v)} style={{
                 padding:'5px 14px', borderRadius:6, border:'none', fontSize:13, fontWeight:500, transition:'all .15s',

@@ -9,6 +9,7 @@ const app  = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
+app.use(require('compression')());
 app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
@@ -17,6 +18,7 @@ app.use('/api/settings',  require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));
 
 app.use('/api/ads', require('./routes/ads'));
+app.use('/api/sales', require('./routes/sales'));
 app.use('/api/discounts', require('./routes/discounts'));
 app.use('/api/tracked-articles', require('./routes/trackedArticles'));
 // Какие настройки заданы на ЭТОМ сервере (только да/нет, без значений) —

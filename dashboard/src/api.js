@@ -64,3 +64,9 @@ export const addAdsEvent    = (cabinet, offerId, date, text) => api.post('/ads/e
 export const deleteAdsEvent = (cabinet, id) => api.delete(`/ads/events/${id}`, { params: { cabinet } });
 export const getNotificationsHealth = cabinet => api.get('/tracked-articles/health', { params: { cabinet } });
 export const testTelegram = () => api.post('/tracked-articles/test-telegram');
+
+// «Аналитика продаж» и «Себестоимость»
+export const getSalesData = (cabinet, p) => api.get('/sales/data', { params: { cabinet, ...p }, timeout: 90000 });
+export const setSalesCategory = (cabinet, offerIds, path) => api.post('/sales/category', { cabinet, offerIds, path });
+export const getCostList = cabinet => api.get('/sales/costs', { params: { cabinet }, timeout: 60000 });
+export const saveCostList = (cabinet, items) => api.post('/sales/costs', { cabinet, items }, { timeout: 120000 });

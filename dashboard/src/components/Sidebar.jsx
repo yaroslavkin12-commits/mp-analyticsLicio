@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 const NAV_BY_CABINET = {
-  licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
-  defly: [['ads','📣','Реклама'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор']],
+  licio: [['sales','📈','Аналитика продаж'],['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки'],['costs','🧾','Себестоимость']],
+  defly: [['sales','📈','Аналитика продаж'],['ads','📣','Реклама'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Себестоимость']],
 };
 const CABINETS = [['licio','Licio'],['defly','Defly']];
 
