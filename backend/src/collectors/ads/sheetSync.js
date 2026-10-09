@@ -304,8 +304,6 @@ async function syncCpcBidsFromSheet(cabinet) {
 }
 
 // География заказов (вкладка GeoOrders): день × артикул × регион × город.
-// Обычно обновляем последние 8 дней (скрипт пересчитывает неделю), а если
-// в базе по кабинету пусто — грузим всё, что есть в таблице.
 let geoTableReady = false;
 async function syncGeoFromSheet(cabinet) {
   if (!geoTableReady) {
@@ -317,11 +315,25 @@ async function syncGeoFromSheet(cabinet) {
   }
   const rows = await fetchSheetRows('GeoOrders');
   if (rows === null) return { rows: 0 };
-  const [{ n }] = await query(`SELECT COUNT(*)::int AS n FROM sales_geo_daily WHERE cabinet = $1`, [cabinet]);
-  const since = n ? new Date(Date.now() - 8 * 86400000).toISOString().slice(0, 10) : '0000';
-  const out = rows.filter(r => r.cabinet === cabinet && r.offer_id && r.date && String(r.date).slice(0, 10) >= since)
-    .map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id, r.sku ? num(r.sku) || null : null, String(r.region || 'Не указан').slice(0, 128),
-      String(r.city || '').slice(0, 128), Math.round(num(r.qty)), num(r.revenue), Math.round(num(r.cancelled)), new Date()]);
+  // Регион Ozon в списках отправлений почти всегда пустой — тогда берём
+  // кластер доставки. Таблица хранит полные данные за свои 45 дней, поэтому
+  // диапазон дат из неё заменяем целиком (без дублей и «хвостов» после отмен).
+  const map = new Map();
+  for (const r of rows) {
+    if (r.cabinet !== cabinet || !r.offer_id || !r.date) continue;
+    const reg = String(r.region || '').trim();
+    const region = (reg && reg !== 'Не указан' ? reg : (String(r.cluster || '').trim() || 'Не указан')).slice(0, 128);
+    const city = String(r.city || '').slice(0, 128);
+    const date = String(r.date).slice(0, 10);
+    const k = [date, r.offer_id, region, city].join('|');
+    const cur = map.get(k) || [cabinet, date, r.offer_id, r.sku ? num(r.sku) || null : null, region, city, 0, 0, 0, new Date()];
+    cur[6] += Math.round(num(r.qty)); cur[7] += num(r.revenue); cur[8] += Math.round(num(r.cancelled));
+    map.set(k, cur);
+  }
+  const out = [...map.values()];
+  if (!out.length) return { rows: 0 };
+  const dates = out.map(r => r[1]).sort();
+  await query(`DELETE FROM sales_geo_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, dates[0], dates[dates.length - 1]]);
   const saved = await bulkUpsert('sales_geo_daily', ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled', 'updated_at'],
     out, ['cabinet', 'date', 'offer_id', 'region', 'city']);
   return { rows: saved };

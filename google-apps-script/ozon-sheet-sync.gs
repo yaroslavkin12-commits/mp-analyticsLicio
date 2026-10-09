@@ -105,7 +105,9 @@ const STATS_WINDOW_DAYS_FULL = 30;
 const RETENTION_DAYS = 45;
 // География заказов: день × артикул × регион × город (по дню заказа, МСК).
 // qty/revenue — без отменённых, cancelled — отменённые штуки.
-const GEO_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled'];
+// cluster — кластер доставки Ozon (financial_data.cluster_to): регион и город
+// Ozon в списках отправлений сейчас почти не отдаёт, а кластер есть всегда.
+const GEO_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled', 'cluster'];
 
 function getCabinets_() {
   const p = PropertiesService.getScriptProperties().getProperties();
@@ -643,12 +645,17 @@ function collectGeo_(cab, days, agg) {
       try {
         data = fetchJson_(src[0], {
           method: 'post', contentType: 'application/json', headers: headers,
-          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: true } }),
+          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: true, financial_data: true } }),
         }, 'География ' + src[1]);
       } catch (e) { Logger.log(e.message); break; }
       let postings = data.result && data.result.postings;
       if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
       postings = postings || [];
+      if (offset === 0 && postings.length) {
+        const s0 = postings[0];
+        Logger.log('География ' + src[1] + ': пример analytics_data ' + JSON.stringify(s0.analytics_data || null).slice(0, 300)
+          + '; кластер ' + JSON.stringify(s0.financial_data ? { from: s0.financial_data.cluster_from, to: s0.financial_data.cluster_to } : null));
+      }
       postings.forEach(function (p) {
         const iso = p.in_process_at || p.created_at;
         if (!iso) return;
@@ -656,10 +663,11 @@ function collectGeo_(cab, days, agg) {
         const a = p.analytics_data || {};
         const region = String(a.region || '').trim() || 'Не указан';
         const city = String(a.city || '').trim();
+        const cluster = String((p.financial_data && p.financial_data.cluster_to) || '').trim();
         const cancelled = /cancel/i.test(String(p.status || ''));
         (p.products || []).forEach(function (prod) {
-          const key = [cab.id, d, prod.offer_id || '', region, city].join('|');
-          const r = agg[key] || (agg[key] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), region, city, 0, 0, 0]);
+          const key = [cab.id, d, prod.offer_id || '', region, city, cluster].join('|');
+          const r = agg[key] || (agg[key] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), region, city, 0, 0, 0, cluster]);
           const q = Number(prod.quantity) || 1;
           if (cancelled) r[8] += q;
           else { r[6] += q; r[7] += q * (parseRuNumber_(prod.price) || 0); }
@@ -683,10 +691,12 @@ function syncGeo(days) {
     try { Logger.log('География ' + cab.id + ': позиций ' + collectGeo_(cab, window, agg)); } catch (e) { Logger.log('География ' + cab.id + ': ' + e.message); }
   });
   const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[7] = Math.round(r[7] * 100) / 100; return r; });
-  mergeIntoSheet_(SHEET_NAMES.geo, GEO_HEADERS, rows, [0, 1, 2, 4, 5], 1);
+  mergeIntoSheet_(SHEET_NAMES.geo, GEO_HEADERS, rows, [0, 1, 2, 4, 5, 9], 1);
   const regions = {};
-  rows.forEach(function (r) { regions[r[4]] = true; });
-  Logger.log('syncGeo: строк ' + rows.length + ', регионов ' + Object.keys(regions).length);
+  const clusters = {};
+  rows.forEach(function (r) { regions[r[4]] = true; if (r[9]) clusters[r[9]] = true; });
+  Logger.log('syncGeo: строк ' + rows.length + ', регионов ' + Object.keys(regions).length + ', кластеров ' + Object.keys(clusters).length
+    + (Object.keys(clusters).length ? ' (' + Object.keys(clusters).slice(0, 8).join('; ') + ')' : ''));
 }
 function syncGeoFull() { syncGeo(45); }
 
