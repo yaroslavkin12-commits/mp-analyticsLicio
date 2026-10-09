@@ -3,6 +3,7 @@ const router = express.Router();
 const dayjs = require('dayjs');
 const { query } = require('../db');
 const { autoPath, carBrand, ORDER } = require('../lib/categories');
+const { districtOf, DISTRICT_ORDER } = require('../lib/regions');
 
 // ─────────────────────────────────────────────────────────────────────────
 // «Аналитика продаж» — все артикулы кабинета по дням, с категориями.
@@ -291,6 +292,69 @@ router.get('/data', async (req, res) => {
         order: ORDER[cabinet] || [],
       },
     });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /api/sales/geo?cabinet=defly&dateFrom=&dateTo=&compare=1 — география
+// заказов: суммы за период по артикулу × региону × городу, по дням по
+// регионам и прошлый период для сравнения долей.
+router.get('/geo', async (req, res) => {
+  try {
+    await ensureSchema();
+    await query(`CREATE TABLE IF NOT EXISTS sales_geo_daily (
+      cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, offer_id VARCHAR(128) NOT NULL, sku BIGINT,
+      region VARCHAR(128) NOT NULL, city VARCHAR(128) NOT NULL DEFAULT '', qty INT DEFAULT 0, revenue DECIMAL(14,2) DEFAULT 0,
+      cancelled INT DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (cabinet, date, offer_id, region, city))`);
+    const cabinet = req.query.cabinet || 'defly';
+    const { from, to } = period(req.query);
+    const dates = [];
+    for (let d = dayjs(from); !d.isAfter(to, 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
+    const pFrom = dayjs(from).subtract(dates.length, 'day').format('YYYY-MM-DD');
+    const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
+    const [catalogRows, overrideRows, curRows, dayRows, prevRows, range] = await Promise.all([
+      query(`SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
+      query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]),
+      query(`SELECT offer_id, region, city, SUM(qty)::int q, SUM(revenue) r, SUM(cancelled)::int c FROM sales_geo_daily
+              WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region, city`, [cabinet, from, to]),
+      query(`SELECT date::text AS date, region, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
+              WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, region`, [cabinet, from, to]),
+      req.query.compare === '1'
+        ? query(`SELECT offer_id, region, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
+                  WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region`, [cabinet, pFrom, pTo])
+        : Promise.resolve([]),
+      query(`SELECT MIN(date)::text AS min, MAX(date)::text AS max FROM sales_geo_daily WHERE cabinet = $1`, [cabinet]),
+    ]);
+    const override = new Map(overrideRows.map(r => [r.offer_id, r.path]));
+    const names = new Map(catalogRows.map(r => [r.offer_id, r.product_name || '']));
+    const articles = [], ai = new Map();
+    const art = o => {
+      if (ai.has(o)) return ai.get(o);
+      const n = names.get(o) || '';
+      ai.set(o, articles.length);
+      articles.push({ o, n, cat: override.get(o) || autoPath(cabinet, n, o).join(' / '), brand: cabinet === 'defly' ? carBrand(n) : null });
+      return articles.length - 1;
+    };
+    const regions = [], ri = new Map();
+    const reg = r => {
+      if (ri.has(r)) return ri.get(r);
+      ri.set(r, regions.length);
+      regions.push({ name: r, district: districtOf(r) });
+      return regions.length - 1;
+    };
+    const cities = [], ci = new Map();
+    const city = c => { const k = c || ''; if (!ci.has(k)) { ci.set(k, cities.length); cities.push(k); } return ci.get(k); };
+    const r2x = v => Math.round(Number(v) * 100) / 100;
+    const rows = curRows.map(r => [art(r.offer_id), reg(r.region), city(r.city), num(r.q), r2x(r.r), num(r.c)]);
+    const di = new Map(dates.map((d, i) => [d, i]));
+    const days = dayRows.filter(r => di.has(r.date)).map(r => [reg(r.region), di.get(r.date), num(r.q), r2x(r.r)]);
+    const prev = prevRows.map(r => [art(r.offer_id), reg(r.region), num(r.q), r2x(r.r)]);
+    res.json({ success: true, data: {
+      dates, articles, regions, cities, rows, days, prev: req.query.compare === '1' ? prev : null,
+      districts: DISTRICT_ORDER, order: ORDER[cabinet] || [], available: range[0] || null,
+    } });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, error: e.message });

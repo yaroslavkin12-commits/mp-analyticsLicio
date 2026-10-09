@@ -608,3 +608,18 @@ CREATE TABLE IF NOT EXISTS product_category_override (
   PRIMARY KEY (cabinet, offer_id)
 );
 ALTER TABLE product_costs ADD COLUMN IF NOT EXISTS cabinet VARCHAR(32);
+
+-- География заказов: день × артикул × регион × город (из вкладки GeoOrders Google-таблицы).
+CREATE TABLE IF NOT EXISTS sales_geo_daily (
+  cabinet VARCHAR(32) NOT NULL,
+  date DATE NOT NULL,
+  offer_id VARCHAR(128) NOT NULL,
+  sku BIGINT,
+  region VARCHAR(128) NOT NULL,
+  city VARCHAR(128) NOT NULL DEFAULT '',
+  qty INT DEFAULT 0,
+  revenue DECIMAL(14,2) DEFAULT 0,
+  cancelled INT DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, date, offer_id, region, city)
+);

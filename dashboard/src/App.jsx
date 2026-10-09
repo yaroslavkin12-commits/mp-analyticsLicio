@@ -9,8 +9,9 @@ import Settings from './pages/Settings';
 import TrackedArticles from './pages/TrackedArticles';
 import SalesAnalytics from './pages/SalesAnalytics';
 import Costs from './pages/Costs';
+import Geography from './pages/Geography';
 
-const PAGES = { sales: SalesAnalytics, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { sales: SalesAnalytics, geo: Geography, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
@@ -20,7 +21,7 @@ const PAGES = { sales: SalesAnalytics, costs: Costs, dashboard: Dashboard, stock
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
   licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['sales', 'ads', 'discounts', 'notifications', 'calculator', 'costs'],
+  defly: ['sales', 'geo', 'ads', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 
 const THEME_KEY = 'mp-theme';

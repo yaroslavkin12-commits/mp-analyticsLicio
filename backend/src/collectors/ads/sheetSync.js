@@ -60,6 +60,7 @@ const REQUIRED_COLUMNS = {
   CpoProducts: ['enabled', 'bid_pct'],
   CpcBids: ['campaign_id', 'bid'],
   CpoOrders: ['order_id', 'promoted_sku', 'expense'],
+  GeoOrders: ['region', 'city', 'qty'],
 };
 
 async function fetchSheetRows(sheetName) {
@@ -302,16 +303,40 @@ async function syncCpcBidsFromSheet(cabinet) {
   return { rows: saved };
 }
 
+// География заказов (вкладка GeoOrders): день × артикул × регион × город.
+// Обычно обновляем последние 8 дней (скрипт пересчитывает неделю), а если
+// в базе по кабинету пусто — грузим всё, что есть в таблице.
+let geoTableReady = false;
+async function syncGeoFromSheet(cabinet) {
+  if (!geoTableReady) {
+    await query(`CREATE TABLE IF NOT EXISTS sales_geo_daily (
+      cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, offer_id VARCHAR(128) NOT NULL, sku BIGINT,
+      region VARCHAR(128) NOT NULL, city VARCHAR(128) NOT NULL DEFAULT '', qty INT DEFAULT 0, revenue DECIMAL(14,2) DEFAULT 0,
+      cancelled INT DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (cabinet, date, offer_id, region, city))`);
+    geoTableReady = true;
+  }
+  const rows = await fetchSheetRows('GeoOrders');
+  if (rows === null) return { rows: 0 };
+  const [{ n }] = await query(`SELECT COUNT(*)::int AS n FROM sales_geo_daily WHERE cabinet = $1`, [cabinet]);
+  const since = n ? new Date(Date.now() - 8 * 86400000).toISOString().slice(0, 10) : '0000';
+  const out = rows.filter(r => r.cabinet === cabinet && r.offer_id && r.date && String(r.date).slice(0, 10) >= since)
+    .map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id, r.sku ? num(r.sku) || null : null, String(r.region || 'Не указан').slice(0, 128),
+      String(r.city || '').slice(0, 128), Math.round(num(r.qty)), num(r.revenue), Math.round(num(r.cancelled)), new Date()]);
+  const saved = await bulkUpsert('sales_geo_daily', ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled', 'updated_at'],
+    out, ['cabinet', 'date', 'offer_id', 'region', 'city']);
+  return { rows: saved };
+}
+
 async function syncAdDetailsFromSheet(cabinet) {
   const parts = await Promise.allSettled([
     syncSkuStatsFromSheet(cabinet), syncCpoOrdersFromSheet(cabinet),
-    syncCpoProductsFromSheet(cabinet), syncCpcBidsFromSheet(cabinet),
+    syncCpoProductsFromSheet(cabinet), syncCpcBidsFromSheet(cabinet), syncGeoFromSheet(cabinet),
   ]);
   let rows = 0;
   const errors = [];
   parts.forEach((p, i) => {
     if (p.status === 'fulfilled') rows += p.value?.rows || 0;
-    else errors.push(`${['SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids'][i]}: ${p.reason?.message || p.reason}`);
+    else errors.push(`${['SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids', 'GeoOrders'][i]}: ${p.reason?.message || p.reason}`);
   });
   if (errors.length) console.warn(`[SheetAdDetails:${cabinet}]`, errors.join('; '));
   return { rows, warning: errors.length ? errors.join('; ').slice(0, 300) : null };
@@ -333,6 +358,7 @@ async function cleanupSheetJunk() {
 }
 
 module.exports = {
+  syncGeoFromSheet,
   cleanupSheetJunk,
   sheetId,
   fetchSheetRows,

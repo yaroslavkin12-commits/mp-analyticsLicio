@@ -91,7 +91,7 @@ function aggregate(list, n) {
 
 // Модель в формате компонентов «Рекламы» (byDate, totals, prev), с
 // разбивкой по дням, неделям или месяцам.
-function bucketsOf(dates, gran) {
+export function bucketsOf(dates, gran) {
   if (gran === 'day') return dates.map((d, i) => ({ key: d, idx: [i] }));
   const map = new Map();
   dates.forEach((d, i) => {
@@ -166,7 +166,7 @@ const STACK_METRICS = [
   { key: 'revenue', label: 'Заказано, ₽' }, { key: 'orders', label: 'Заказы, шт' },
   { key: 'views', label: 'Показы' }, { key: 'spend', label: 'Расход на рекламу, ₽' },
 ];
-function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
+export function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
   const boxRef = useRef(null);
   const [w, setW] = useState(680);
   useEffect(() => {
@@ -246,7 +246,7 @@ function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
 }
 
 // ── Доли: из чего складываются продажи выбранной категории ───────────────
-const ORIGINS = [
+export const ORIGINS = [
   ['Японские', ['Toyota', 'Lexus', 'Honda', 'Nissan', 'Mitsubishi', 'Mazda', 'Subaru', 'Suzuki', 'Daihatsu', 'Infiniti', 'Isuzu']],
   ['Китайские', ['Haval', 'Chery', 'Geely', 'Changan', 'Jetour', 'Exeed', 'Omoda', 'Tank', 'JAC', 'FAW', 'Great Wall', 'Lifan', 'Jaecoo', 'Livan', 'Belgee', 'Kaiyi', 'Dongfeng', 'GAC', 'BYD', 'Hongqi', 'Zeekr', 'Li Auto', 'Voyah']],
   ['Корейские', ['Hyundai', 'Kia', 'SsangYong', 'Daewoo', 'Genesis']],
@@ -254,7 +254,7 @@ const ORIGINS = [
   ['Американские', ['Ford', 'Chevrolet', 'Jeep', 'Cadillac']],
   ['Отечественные', ['Лада', 'УАЗ', 'ГАЗ', 'Нива', 'Москвич']],
 ];
-const ORIGIN_OF = new Map(ORIGINS.flatMap(([o, bs]) => bs.map(b => [b, o])));
+export const ORIGIN_OF = new Map(ORIGINS.flatMap(([o, bs]) => bs.map(b => [b, o])));
 const NO_BRAND = 'Без марки';
 const SHARE_DIMS = [['cat', 'Подкатегории'], ['origin', 'Страна марки'], ['brand', 'Марки авто'], ['top', 'Артикулы']];
 

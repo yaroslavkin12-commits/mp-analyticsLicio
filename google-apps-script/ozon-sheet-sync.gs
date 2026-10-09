@@ -56,6 +56,7 @@ const SHEET_NAMES = {
   cpoProducts: 'CpoProducts',
   cpcBids: 'CpcBids',
   cpoOrders: 'CpoOrders',
+  geo: 'GeoOrders',
 };
 
 // Заказы (FBO+FBS) за последние 2 дня — для Telegram-уведомлений о новых
@@ -102,6 +103,9 @@ const STATS_WINDOW_DAYS_FULL = 30;
 // Сколько дней истории держим во вкладках Analytics/Stats, чтобы таблица не
 // росла бесконечно (более старые данные на Render и так уже есть).
 const RETENTION_DAYS = 45;
+// География заказов: день × артикул × регион × город (по дню заказа, МСК).
+// qty/revenue — без отменённых, cancelled — отменённые штуки.
+const GEO_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled'];
 
 function getCabinets_() {
   const p = PropertiesService.getScriptProperties().getProperties();
@@ -623,6 +627,69 @@ function syncCpoOrders(days) {
 }
 function syncCpoOrdersFull() { syncCpoOrders(30); }
 
+// ---------- География заказов ----------
+// Все отправления FBO и FBS за N дней с регионом и городом доставки
+// (analytics_data), сложенные по дню заказа, артикулу, региону и городу.
+function collectGeo_(cab, days, agg) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return 0;
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const to = new Date().toISOString();
+  let n = 0;
+  [['https://api-seller.ozon.ru/v2/posting/fbo/list', 'FBO'], ['https://api-seller.ozon.ru/v3/posting/fbs/list', 'FBS']].forEach(function (src) {
+    let offset = 0;
+    for (let guard = 0; guard < 60; guard++) {
+      let data;
+      try {
+        data = fetchJson_(src[0], {
+          method: 'post', contentType: 'application/json', headers: headers,
+          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: true } }),
+        }, 'География ' + src[1]);
+      } catch (e) { Logger.log(e.message); break; }
+      let postings = data.result && data.result.postings;
+      if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
+      postings = postings || [];
+      postings.forEach(function (p) {
+        const iso = p.in_process_at || p.created_at;
+        if (!iso) return;
+        const d = Utilities.formatDate(new Date(iso), 'GMT+3', 'yyyy-MM-dd');
+        const a = p.analytics_data || {};
+        const region = String(a.region || '').trim() || 'Не указан';
+        const city = String(a.city || '').trim();
+        const cancelled = /cancel/i.test(String(p.status || ''));
+        (p.products || []).forEach(function (prod) {
+          const key = [cab.id, d, prod.offer_id || '', region, city].join('|');
+          const r = agg[key] || (agg[key] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), region, city, 0, 0, 0]);
+          const q = Number(prod.quantity) || 1;
+          if (cancelled) r[8] += q;
+          else { r[6] += q; r[7] += q * (parseRuNumber_(prod.price) || 0); }
+          n++;
+        });
+      });
+      if (postings.length < 1000) break;
+      offset += 1000;
+      Utilities.sleep(300);
+    }
+  });
+  return n;
+}
+
+// Каждые 3 часа — последние 7 дней (статусы и отмены успевают обновиться).
+// Первый раз запустите syncGeoFull вручную — заполнит 45 дней.
+function syncGeo(days) {
+  const window = typeof days === 'number' ? days : 7;
+  const agg = {};
+  getCabinets_().forEach(function (cab) {
+    try { Logger.log('География ' + cab.id + ': позиций ' + collectGeo_(cab, window, agg)); } catch (e) { Logger.log('География ' + cab.id + ': ' + e.message); }
+  });
+  const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[7] = Math.round(r[7] * 100) / 100; return r; });
+  mergeIntoSheet_(SHEET_NAMES.geo, GEO_HEADERS, rows, [0, 1, 2, 4, 5], 1);
+  const regions = {};
+  rows.forEach(function (r) { regions[r[4]] = true; });
+  Logger.log('syncGeo: строк ' + rows.length + ', регионов ' + Object.keys(regions).length);
+}
+function syncGeoFull() { syncGeo(45); }
+
 // ---------- Запись в таблицу ----------
 function getSheet_(name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -748,7 +815,7 @@ function syncDaily() {
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
@@ -757,7 +824,8 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncCpoOrders').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
   ScriptApp.newTrigger('syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
-  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00.');
+  ScriptApp.newTrigger('syncGeo').timeBased().everyHours(3).create();
+  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа.');
 }
 
 // ── История расхода «оплаты за клик» по каждому товару и дню ─────────────
