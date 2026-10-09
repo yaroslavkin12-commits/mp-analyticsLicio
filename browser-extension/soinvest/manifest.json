@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "MP Analytics — Соинвест Ozon",
+  "version": "1.0.0",
+  "description": "Раз в час берёт цены на витрине (с Соинвестом) из кабинета seller.ozon.ru, где вы уже вошли, и отправляет их в сервис аналитики.",
+  "permissions": ["alarms", "storage", "scripting", "tabs"],
+  "host_permissions": ["https://seller.ozon.ru/*", "https://mp-analyticslicio-1.onrender.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Соинвест Ozon" }
+}

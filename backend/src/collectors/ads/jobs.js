@@ -339,7 +339,8 @@ async function tick() {
   await Promise.all([
     ...adsCabinets().map(c => tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message))),
     ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
-    ...discountCabinets().map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
+    // Дайджест Соинвеста работает по данным из расширения — для всех кабинетов.
+    ...Object.keys(CABINETS).map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
     ...ordersCabinets().map(c => tickOrders(c).catch(e => console.error(`[Orders:${c}]`, e.message))),
   ]);
 }

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import SoinvestCats from './SoinvestCats';
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
 } from 'recharts';
@@ -20,7 +21,7 @@ import {
 // /discounts/settings, collectors/ads/discountSettings.js).
 
 const DAYS_OPTIONS = [['1', '1 д'], ['7', '7 д'], ['30', '30 д'], ['90', '90 д']];
-const TABS = [['articles', 'Мои артикулы'], ['feed', 'Уведомления'], ['settings', 'Настройки']];
+const TABS = [['cats', 'По категориям'], ['articles', 'Мои артикулы'], ['feed', 'Уведомления'], ['settings', 'Настройки']];
 const SORT_OPTIONS = [
   ['pct_desc', 'Соинвест ↓'],
   ['pct_asc', 'Соинвест ↑'],
@@ -607,7 +608,7 @@ function SettingsTab({ cabinet }) {
 }
 
 export default function Discounts({ cabinet }) {
-  const [tab, setTab] = useState('articles');
+  const [tab, setTab] = useState('cats');
   const [days, setDays] = useState('30');
 
   return (
@@ -625,6 +626,7 @@ export default function Discounts({ cabinet }) {
         </div>
       </div></div>
 
+      {tab === 'cats' && <SoinvestCats cabinet={cabinet} />}
       {tab === 'articles' && <ArticlesTab cabinet={cabinet} days={days} setDays={setDays} />}
       {tab === 'feed' && <FeedTab cabinet={cabinet} days={days} setDays={setDays} />}
       {tab === 'settings' && <SettingsTab cabinet={cabinet} />}

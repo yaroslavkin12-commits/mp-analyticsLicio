@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(require('compression')());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 // Короткий кэш тяжёлых отчётов (вкладки «Реклама» и «Аналитика продаж»):
