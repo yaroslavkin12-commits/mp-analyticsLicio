@@ -7,10 +7,9 @@
  *    выход Render (см. /api/netcheck) — Google он не блокирует.
  *  - Скрипт кладёт результат во вкладки этой же таблицы (Catalog, Analytics,
  *    Stocks, Campaigns, Stats).
- *  - Backend на Render читает эти вкладки как обычный CSV по ссылке —
- *    только когда прямой запрос к Ozon не проходит (см. backend/src/
- *    collectors/ads/sheetSync.js и jobs.js). Как только сеть разблокируется,
- *    всё само вернётся на прямой сбор.
+ *  - Backend на Render читает эти вкладки как обычный CSV по ссылке (см.
+ *    backend/src/collectors/ads/sheetSync.js и jobs.js). Это ОСНОВНОЙ путь
+ *    данных Ozon: сам Render в Ozon не ходит.
  *
  * Настройка (один раз):
  *  1. Создать новую Google Таблицу, Расширения -> Apps Script, вставить сюда
@@ -27,8 +26,10 @@
  *     Ключи храните только здесь, в Свойствах скрипта — никогда не вставляйте
  *     их в чат.
  *  3. Выполнить функцию setupTriggers (из выпадающего списка функций вверху,
- *     кнопка "Выполнить") — она поставит сама себя собирать данные каждые
- *     15 минут (свежие данные) и раз в сутки (докачка истории + каталог).
+ *     кнопка "Выполнить") — она поставит расписание: заказы для уведомлений
+ *     каждые 5 минут, свежие данные каждые 15 минут, отчёт «оплата за заказ»
+ *     каждый час и раз в сутки докачку истории + каталог.
+ *     После обновления этого файла setupTriggers нужно выполнить ещё раз.
  *     При первом запуске Google спросит разрешения — это нормально,
  *     разрешите (скрипт же ваш собственный).
  *  4. Таблицу -> кнопка "Настройки доступа" (Share) -> "Общий доступ" ->
@@ -50,7 +51,27 @@ const SHEET_NAMES = {
   campaigns: 'Campaigns',
   stats: 'Stats',
   campaignSkus: 'CampaignSkus',
+  orders: 'Orders',
+  skuStats: 'SkuStats',
+  cpoProducts: 'CpoProducts',
+  cpcBids: 'CpcBids',
+  cpoOrders: 'CpoOrders',
 };
+
+// Заказы (FBO+FBS) за последние 2 дня — для Telegram-уведомлений о новых
+// заказах по отслеживаемым артикулам (вкладка «Уведомления» в сервисе).
+const ORDERS_HEADERS = ['cabinet', 'posting_number', 'sku', 'offer_id', 'name', 'price', 'quantity', 'status', 'warehouse', 'created_at', 'scheme'];
+const ORDERS_KEEP_DAYS = 3;
+// Статистика «оплаты за клик» по каждому товару и дню — точный расход по
+// артикулу даже в кампаниях на несколько товаров, плюс рекламная воронка.
+const SKU_STATS_HEADERS = ['cabinet', 'date', 'campaign_id', 'sku', 'views', 'clicks', 'to_cart', 'orders', 'sales', 'expense', 'avg_cpc'];
+// «Оплата за заказ»: включена ли на товаре и какая ставка (снимок).
+const CPO_PRODUCTS_HEADERS = ['cabinet', 'sku', 'offer_id', 'enabled', 'available', 'bid_pct', 'bid_rub', 'previous_bid', 'checked_at'];
+// Ставки за клик по товарам кампаний (снимок) — по изменениям сервис сам
+// пишет записи «ставка изменилась» в журнал.
+const CPC_BIDS_HEADERS = ['cabinet', 'campaign_id', 'sku', 'bid', 'checked_at'];
+// Отчёт по заказам «оплаты за заказ»: строка = заказ, с датой, SKU и списанной суммой.
+const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense'];
 
 const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name'];
 const ANALYTICS_HEADERS = ['cabinet', 'date', 'sku', 'hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
@@ -255,7 +276,7 @@ function getCampaignProducts_(campaignId, headers) {
 // ---------- Кампании + расход/клики ----------
 function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campaignSkusOut) {
   const headers = perfHeaders_(cab);
-  if (!headers) return;
+  if (!headers) return null;
   const listData = fetchJson_('https://api-performance.ozon.ru/api/client/campaign', { method: 'get', headers: headers }, 'Список кампаний');
   const campaigns = listData.list || [];
   campaigns.forEach(function (c) {
@@ -331,7 +352,222 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campai
       Utilities.sleep(250);
     });
   }
+  // Для детальной статистики по товарам и снимка ставок — только кампании,
+  // по которым в окне был расход (их немного, укладываемся по времени).
+  return campaigns.filter(function (c) { return campaignHasSpend[String(c.id)]; }).map(function (c) {
+    return { id: String(c.id), paymentType: String(c.PaymentType || c.paymentType || ''), advObjectType: String(c.advObjectType || ''), state: c.state || '' };
+  });
 }
+
+// ---------- Заказы для уведомлений ----------
+function collectPostings_(cab, url, scheme, since, out) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return;
+  let offset = 0;
+  for (let guard = 0; guard < 30; guard++) {
+    const data = fetchJson_(url, {
+      method: 'post', contentType: 'application/json', headers: headers,
+      payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: new Date().toISOString(), status: '' }, limit: 100, offset: offset, with: { analytics_data: true } }),
+    }, 'Заказы ' + scheme);
+    let postings = data.result && data.result.postings;
+    if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
+    postings = postings || [];
+    postings.forEach(function (p) {
+      (p.products || []).forEach(function (prod) {
+        out.push([cab.id, p.posting_number, prod.sku || '', prod.offer_id || '', String(prod.name || '').slice(0, 200),
+          prod.price || '', prod.quantity || 1, p.status || '', (p.analytics_data && p.analytics_data.warehouse_name) || '',
+          p.in_process_at || p.created_at || '', scheme]);
+      });
+    });
+    if (postings.length < 100) break;
+    offset += 100;
+    Utilities.sleep(300);
+  }
+}
+
+// Каждые 5 минут (триггер) — заказы за 2 дня по всем кабинетам.
+function syncOrders() {
+  const cabinets = getCabinets_();
+  const since = new Date(Date.now() - 2 * 86400000).toISOString();
+  const rows = [];
+  cabinets.forEach(function (cab) {
+    try { collectPostings_(cab, 'https://api-seller.ozon.ru/v2/posting/fbo/list', 'fbo', since, rows); } catch (e) { Logger.log('Заказы FBO ' + cab.id + ': ' + e.message); }
+    try { collectPostings_(cab, 'https://api-seller.ozon.ru/v3/posting/fbs/list', 'fbs', since, rows); } catch (e) { Logger.log('Заказы FBS ' + cab.id + ': ' + e.message); }
+  });
+  const map = readSheetAsMap_(SHEET_NAMES.orders, [0, 1, 2]);
+  rows.forEach(function (r) { map[[r[0], r[1], r[2]].join('|')] = r; });
+  const cutoff = new Date(Date.now() - ORDERS_KEEP_DAYS * 86400000).toISOString();
+  const all = Object.keys(map).map(function (k) { return map[k]; })
+    .filter(function (r) { return !r[9] || String(r[9]) >= cutoff; });
+  writeRows_(SHEET_NAMES.orders, ORDERS_HEADERS, all);
+  Logger.log('syncOrders: новых/обновлённых строк ' + rows.length + ', всего ' + all.length);
+}
+
+// ---------- Реклама: точные данные по товарам ----------
+// Статистика «оплаты за клик» по товарам и дням (не тратит лимиты API).
+function collectSkuStats_(cab, campaigns, out) {
+  const headers = perfHeaders_(cab);
+  if (!headers || !campaigns || !campaigns.length) return;
+  const cpc = campaigns.filter(function (c) { return c.paymentType.toUpperCase() !== 'CPO'; }).map(function (c) { return c.id; });
+  const from = mskDate_(1), to = mskDate_(0);
+  for (let i = 0; i < cpc.length; i += 10) {
+    const chunk = cpc.slice(i, i + 10);
+    try {
+      const data = fetchJson_('https://api-performance.ozon.ru/api/client/statistics/products/sku', {
+        method: 'post', contentType: 'application/json', headers: headers,
+        payload: JSON.stringify({ campaignIds: chunk, dateFrom: from, dateTo: to }),
+      }, 'Статистика по товарам');
+      (data.rows || []).forEach(function (r) {
+        if (!r.sku || !r.date) return;
+        out.push([cab.id, String(r.date).slice(0, 10), String(r.campaignId || ''), String(r.sku), parseRuNumber_(r.views), parseRuNumber_(r.clicks),
+          parseRuNumber_(r.toCart), parseRuNumber_(r.orders), parseRuNumber_(r.sales), parseRuNumber_(r.expense), parseRuNumber_(r.avgCpc)]);
+      });
+    } catch (e) { Logger.log('Статистика по товарам ' + cab.id + ': ' + e.message); }
+    Utilities.sleep(300);
+  }
+}
+
+// «Оплата за заказ»: на каких товарах включена и какая ставка.
+function collectCpoProducts_(cab, out) {
+  const headers = perfHeaders_(cab);
+  if (!headers) return;
+  const nowIso = new Date().toISOString();
+  for (let page = 1; page <= 50; page++) {
+    const data = fetchJson_('https://api-performance.ozon.ru/api/client/campaign/search_promo/v2/products', {
+      method: 'post', contentType: 'application/json', headers: headers,
+      payload: JSON.stringify({ page: page, pageSize: 100 }),
+    }, 'Товары оплаты за заказ');
+    const products = data.products || [];
+    products.forEach(function (p) {
+      const prev = p.previousBid && typeof p.previousBid === 'object' ? (p.previousBid.bid || '') : (p.previousBid || '');
+      out.push([cab.id, String(p.sku || ''), String(p.sourceSku || ''), p.searchPromoStatus ? 1 : 0, p.isSearchPromoAvailable === false ? 0 : 1,
+        p.bid || '', p.bidPrice || '', prev, nowIso]);
+    });
+    if (products.length < 100) break;
+    Utilities.sleep(300);
+  }
+}
+
+// Ставки за клик по товарам кампаний с расходом (снимок).
+function collectCpcBids_(cab, campaigns, out) {
+  const headers = perfHeaders_(cab);
+  if (!headers || !campaigns) return;
+  const nowIso = new Date().toISOString();
+  campaigns.filter(function (c) { return c.paymentType.toUpperCase() !== 'CPO' && c.state === 'CAMPAIGN_STATE_RUNNING'; }).forEach(function (c) {
+    try {
+      const data = fetchJson_('https://api-performance.ozon.ru/api/client/campaign/' + c.id + '/v2/products',
+        { method: 'get', headers: headers }, 'Ставки РК ' + c.id);
+      (data.products || []).forEach(function (p) {
+        if (p.sku && p.bid !== undefined && p.bid !== null && p.bid !== '') out.push([cab.id, c.id, String(p.sku), p.bid, nowIso]);
+      });
+    } catch (e) { Logger.log('Ставки РК ' + c.id + ': ' + e.message); }
+    Utilities.sleep(250);
+  });
+}
+
+// ---------- Асинхронные отчёты Performance API ----------
+function runPerfReport_(cab, url, payload, label) {
+  const gen = fetchJson_(url, { method: 'post', contentType: 'application/json', headers: perfHeaders_(cab), payload: JSON.stringify(payload) }, label + ': заказ отчёта');
+  const uuid = gen.UUID || gen.uuid;
+  if (!uuid) throw new Error(label + ': нет UUID в ответе');
+  for (let i = 0; i < 18; i++) { // до ~3 минут
+    Utilities.sleep(10000);
+    const st = fetchJson_('https://api-performance.ozon.ru/api/client/statistics/' + uuid, { method: 'get', headers: perfHeaders_(cab) }, label + ': статус');
+    if (st.state === 'OK') {
+      const resp = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistics/report?UUID=' + uuid,
+        { method: 'get', headers: perfHeaders_(cab), muteHttpExceptions: true });
+      return resp.getContentText();
+    }
+    if (st.state === 'ERROR') throw new Error(label + ': Ozon вернул ошибку формирования отчёта');
+  }
+  throw new Error(label + ': отчёт не успел сформироваться');
+}
+
+// Ищет в разобранном JSON первый массив объектов-строк (структура ответа
+// отчёта Ozon документирована не полностью).
+function findRows_(obj, depth) {
+  if (depth > 5 || obj === null || typeof obj !== 'object') return null;
+  if (Array.isArray(obj)) return obj.length && typeof obj[0] === 'object' ? obj : null;
+  const keys = Object.keys(obj);
+  for (let i = 0; i < keys.length; i++) {
+    const r = findRows_(obj[keys[i]], depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+function pickKey_(keys, patterns, exclude) {
+  for (let p = 0; p < patterns.length; p++) {
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i].toLowerCase();
+      if (exclude && exclude.test(k)) continue;
+      if (patterns[p].test(k)) return keys[i];
+    }
+  }
+  return null;
+}
+function normDate_(v) {
+  const s = String(v || '');
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+  if (m) return m[3] + '-' + m[2] + '-' + m[1];
+  return '';
+}
+function parseCpoOrders_(cab, text, out) {
+  let rows = null;
+  try { rows = findRows_(JSON.parse(text), 0); } catch (e) { rows = null; }
+  if (!rows) {
+    // CSV-вариант: разделитель «;», шапка — строка, где есть SKU.
+    const lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
+    const hi = lines.findIndex(function (l) { return /sku/i.test(l); });
+    if (hi === -1) { Logger.log('CPO-отчёт: не нашёл строк. Начало ответа: ' + text.slice(0, 500)); return 0; }
+    const head = lines[hi].split(';').map(function (h) { return h.replace(/^"|"$/g, '').trim(); });
+    rows = lines.slice(hi + 1).map(function (l) {
+      const cells = l.split(';').map(function (c) { return c.replace(/^"|"$/g, '').trim(); });
+      const o = {}; head.forEach(function (h, i) { o[h] = cells[i]; }); return o;
+    });
+  }
+  if (!rows.length) return 0;
+  const keys = Object.keys(rows[0]);
+  Logger.log('CPO-отчёт: колонки ' + JSON.stringify(keys));
+  const kDate = pickKey_(keys, [/^date$/, /дата/, /date/]);
+  const kOrder = pickKey_(keys, [/orderid|order_id/, /id заказа/, /номер заказа|ordernumber/]);
+  const kPromo = pickKey_(keys, [/promot|advsku|продвига/]);
+  const kSku = pickKey_(keys, [/^sku$/, /^sku\b/, /sku/], /promot|advsku|продвига/);
+  const kOffer = pickKey_(keys, [/offer|артикул/]);
+  const kQty = pickKey_(keys, [/quantity|количество|qty/]);
+  const kCost = pickKey_(keys, [/стоимость, ₽|^price$|cost|стоимость/], /продаж|sale|bid|ставк/);
+  const kExp = pickKey_(keys, [/expense|moneyspent|расход|spent/]);
+  if (!kDate || !kExp || !(kSku || kPromo)) { Logger.log('CPO-отчёт: не распознал колонки (дата/SKU/расход) — пришлите журнал Claude'); return 0; }
+  let n = 0;
+  rows.forEach(function (r) {
+    const date = normDate_(r[kDate]);
+    if (!date) return;
+    out.push([cab.id, date, kOrder ? String(r[kOrder]) : '', kSku ? String(r[kSku] || '') : '', kPromo ? String(r[kPromo] || '') : '',
+      kOffer ? String(r[kOffer] || '') : '', kQty ? parseRuNumber_(r[kQty]) : 1, kCost ? parseRuNumber_(r[kCost]) : 0, parseRuNumber_(r[kExp])]);
+    n++;
+  });
+  return n;
+}
+
+// Каждый час (триггер) — отчёт по заказам «оплаты за заказ» за 3 дня;
+// syncDaily дополнительно перезабирает 30 дней.
+function syncCpoOrders(days) {
+  const window = typeof days === 'number' ? days : 3;
+  const cabinets = getCabinets_();
+  const rows = [];
+  cabinets.forEach(function (cab) {
+    if (!perfHeaders_(cab)) return;
+    try {
+      const text = runPerfReport_(cab, 'https://api-performance.ozon.ru/api/client/statistic/orders/generate/json',
+        { from: mskDate_(window - 1) + 'T00:00:00Z', to: mskDate_(0) + 'T23:59:59Z' }, 'CPO-отчёт ' + cab.id);
+      Logger.log('CPO-отчёт ' + cab.id + ': строк ' + parseCpoOrders_(cab, text, rows));
+    } catch (e) { Logger.log('CPO-отчёт ' + cab.id + ': ' + e.message); }
+  });
+  // Заказ может прийти с одинаковым id для разных SKU — ключ: кабинет+заказ+sku+продвигаемый sku.
+  mergeIntoSheet_(SHEET_NAMES.cpoOrders, CPO_ORDERS_HEADERS, rows, [0, 2, 3, 4, 1], 1);
+}
+function syncCpoOrdersFull() { syncCpoOrders(30); }
 
 // ---------- Запись в таблицу ----------
 function getSheet_(name) {
@@ -389,18 +625,27 @@ function syncRecent() {
   const cabinets = getCabinets_();
   if (!cabinets.length) { Logger.log('Нет настроенных кабинетов — проверьте Свойства скрипта.'); return; }
   const analytics = [], stocks = [], campaigns = [], stats = [], campaignSkus = [];
+  const skuStats = [], cpoProducts = [], cpcBids = [];
   const from = mskDate_(ANALYTICS_WINDOW_DAYS_RECENT - 1), to = mskDate_(0);
   cabinets.forEach(function (cab) {
     try { collectAnalyticsWindow_(cab, from, to, analytics); } catch (e) { Logger.log('Аналитика ' + cab.id + ': ' + e.message); }
     try { collectStocks_(cab, stocks); } catch (e) { Logger.log('Остатки ' + cab.id + ': ' + e.message); }
-    try { collectCampaignsAndStats_(cab, from, to, campaigns, stats, campaignSkus); } catch (e) { Logger.log('Кампании/расход ' + cab.id + ': ' + e.message); }
+    let withSpend = null;
+    try { withSpend = collectCampaignsAndStats_(cab, from, to, campaigns, stats, campaignSkus); } catch (e) { Logger.log('Кампании/расход ' + cab.id + ': ' + e.message); }
+    try { collectSkuStats_(cab, withSpend, skuStats); } catch (e) { Logger.log('Статистика по товарам ' + cab.id + ': ' + e.message); }
+    try { collectCpoProducts_(cab, cpoProducts); } catch (e) { Logger.log('Оплата за заказ (товары) ' + cab.id + ': ' + e.message); }
+    try { collectCpcBids_(cab, withSpend, cpcBids); } catch (e) { Logger.log('Ставки ' + cab.id + ': ' + e.message); }
   });
+  mergeIntoSheet_(SHEET_NAMES.skuStats, SKU_STATS_HEADERS, skuStats, [0, 1, 2, 3], 1);
+  if (cpoProducts.length) writeRows_(SHEET_NAMES.cpoProducts, CPO_PRODUCTS_HEADERS, cpoProducts);
+  if (cpcBids.length) writeRows_(SHEET_NAMES.cpcBids, CPC_BIDS_HEADERS, cpcBids);
   mergeIntoSheet_(SHEET_NAMES.analytics, ANALYTICS_HEADERS, analytics, [0, 1, 2], 1);
   if (stocks.length) writeRows_(SHEET_NAMES.stocks, STOCKS_HEADERS, stocks); // текущий снэпшот — перезаписываем целиком
   mergeIntoSheet_(SHEET_NAMES.campaigns, CAMPAIGNS_HEADERS, campaigns, [0, 1]);
   mergeIntoSheet_(SHEET_NAMES.stats, STATS_HEADERS, stats, [0, 1, 2], 1);
   mergeIntoSheet_(SHEET_NAMES.campaignSkus, CAMPAIGN_SKUS_HEADERS, campaignSkus, [0, 1, 2]);
-  Logger.log('syncRecent: аналитика ' + analytics.length + ', остатки ' + stocks.length + ', кампании ' + campaigns.length + ', статистика ' + stats.length + ', товары РК ' + campaignSkus.length);
+  Logger.log('syncRecent: аналитика ' + analytics.length + ', остатки ' + stocks.length + ', кампании ' + campaigns.length + ', статистика ' + stats.length + ', товары РК ' + campaignSkus.length
+    + ', по товарам ' + skuStats.length + ', оплата за заказ ' + cpoProducts.length + ', ставки ' + cpcBids.length);
 }
 
 function syncDaily() {
@@ -424,67 +669,18 @@ function syncDaily() {
   mergeIntoSheet_(SHEET_NAMES.stats, STATS_HEADERS, stats, [0, 1, 2], 1);
   mergeIntoSheet_(SHEET_NAMES.campaigns, CAMPAIGNS_HEADERS, campaigns, [0, 1]);
   Logger.log('syncDaily: каталог ' + catalog.length + ', аналитика ' + analytics.length + ', кампании ' + campaigns.length + ', статистика ' + stats.length);
+  try { syncCpoOrders(30); } catch (e) { Logger.log('CPO-отчёт (30 дн): ' + e.message); }
 }
 
 // Выполнить один раз вручную — поставит оба триггера по расписанию.
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (fn === 'syncRecent' || fn === 'syncDaily') ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
+  ScriptApp.newTrigger('syncOrders').timeBased().everyMinutes(5).create();
   ScriptApp.newTrigger('syncRecent').timeBased().everyMinutes(15).create();
+  ScriptApp.newTrigger('syncCpoOrders').timeBased().everyHours(1).create();
   ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
-  Logger.log('Триггеры поставлены: syncRecent каждые 15 мин, syncDaily раз в сутки в 4:00.');
-}
-
-// ── Разведка: отчёт по заказам "Оплата за заказ" (CPO) ─────────────────────
-// Ozon не отдаёт список товаров мультитоварной РК "Оплата за заказ: выбранные
-// товары" (v2/products → 400), поэтому её расход нельзя разнести по
-// артикулам. В Performance API есть асинхронный отчёт по заказам
-// (POST /api/client/statistic/orders/generate/json) — по нему каждая строка
-// должна быть заказом с SKU и списанной суммой. Формат строк заранее не
-// известен, поэтому эта функция просто заказывает отчёт за последние 7 дней,
-// ждёт готовности и складывает СЫРОЙ ответ во вкладку CpoOrdersRaw + первые
-// 3000 символов в журнал выполнения — по ним backend научится его разбирать.
-// Запускать вручную из редактора: probeCpoOrders.
-function probeCpoOrders() {
-  const cab = getCabinets_().filter(function (c) { return c.id === 'defly'; })[0] || getCabinets_()[0];
-  const headers = perfHeaders_(cab);
-  if (!headers) throw new Error('Нет ключей Performance API для кабинета ' + cab.id);
-  const from = mskDate_(7) + 'T00:00:00Z';
-  const to = mskDate_(0) + 'T00:00:00Z';
-
-  const gen = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistic/orders/generate/json', {
-    method: 'post', muteHttpExceptions: true, contentType: 'application/json', headers: headers,
-    payload: JSON.stringify({ from: from, to: to }),
-  });
-  Logger.log('generate: HTTP ' + gen.getResponseCode() + ' ' + gen.getContentText().slice(0, 500));
-  const genData = JSON.parse(gen.getContentText() || '{}');
-  const uuid = genData.UUID || genData.uuid;
-  if (!uuid) throw new Error('Отчёт не заказался — см. ответ выше');
-
-  let state = '', link = '';
-  for (let i = 0; i < 24; i++) { // до ~4 минут
-    Utilities.sleep(10000);
-    const st = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistics/' + uuid,
-      { method: 'get', muteHttpExceptions: true, headers: perfHeaders_(cab) });
-    const stData = JSON.parse(st.getContentText() || '{}');
-    state = stData.state || '';
-    link = stData.link || '';
-    Logger.log('статус ' + (i + 1) + ': ' + st.getContentText().slice(0, 300));
-    if (state === 'OK' || state === 'ERROR') break;
-  }
-  if (state !== 'OK') throw new Error('Отчёт не готов: ' + state);
-
-  const rep = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistics/report?UUID=' + uuid,
-    { method: 'get', muteHttpExceptions: true, headers: perfHeaders_(cab) });
-  const text = rep.getContentText();
-  Logger.log('report: HTTP ' + rep.getResponseCode() + ', ' + text.length + ' символов');
-  Logger.log(text.slice(0, 3000));
-
-  const sheet = getSheet_('CpoOrdersRaw');
-  sheet.clear();
-  const chunks = [];
-  for (let p = 0; p < text.length && chunks.length < 200; p += 45000) chunks.push([text.slice(p, p + 45000)]);
-  sheet.getRange(1, 1, chunks.length, 1).setValues(chunks);
+  Logger.log('Триггеры поставлены: syncOrders каждые 5 мин, syncRecent каждые 15 мин, syncCpoOrders каждый час, syncDaily раз в сутки в 4:00.');
 }

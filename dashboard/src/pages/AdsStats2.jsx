@@ -61,6 +61,14 @@ function shortModel(name) {
   return s.replace(/^Утеплитель двигателя,\s*автоодеяло\s*/i, '').slice(0, 40);
 }
 const isCpoCampaign = c => String(c.paymentType || '').toUpperCase() === 'CPO';
+function cpoText(cpo) {
+  if (!cpo) return 'нет данных';
+  if (!cpo.available) return 'недоступна для товара';
+  if (!cpo.enabled) return 'выключена';
+  const bid = cpo.bidPct !== null ? `${String(cpo.bidPct).replace('.', ',')}%` : '';
+  const rub = cpo.bidRub ? ` (${fmtInt(cpo.bidRub)} ₽)` : '';
+  return `включена${bid ? ` · ставка ${bid}${rub}` : ''}`;
+}
 const drrClass = v => v === null || v === undefined || !Number.isFinite(v) ? 'm' : v < 15 ? 'g' : v <= 30 ? 'w' : 'b';
 
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
@@ -72,7 +80,7 @@ function dayRaw(day, mode) {
   const d = day || {};
   if (mode === 'ads') {
     return {
-      views: d.adViews || 0, pdpViews: d.clicks || 0, cart: null, orders: d.adOrders || 0, revenue: d.adRevenue || 0,
+      views: d.adViews || 0, pdpViews: d.clicks || 0, cart: d.adToCart ?? null, orders: d.adOrders || 0, revenue: d.adRevenue || 0,
       spend: d.spend || 0, spendCpc: d.spendCpc || 0, spendCpo: d.spendCpo || 0, clicks: d.clicks || 0,
     };
   }
@@ -84,9 +92,10 @@ function dayRaw(day, mode) {
 function derive(r, mode) {
   const out = { ...r };
   out.ctr = r.views > 0 ? r.pdpViews / r.views * 100 : null;
-  if (mode === 'ads') {
+  if (mode === 'ads' && (r.cart === null || r.cart === undefined)) {
+    // Корзин из рекламы нет (статистика по товарам ещё не пришла) — считаем клик → заказ.
     out.crToCart = null;
-    out.crToOrder = r.pdpViews > 0 ? r.orders / r.pdpViews * 100 : null; // клик → заказ
+    out.crToOrder = r.pdpViews > 0 ? r.orders / r.pdpViews * 100 : null;
   } else {
     out.crToCart = r.pdpViews > 0 ? r.cart / r.pdpViews * 100 : null;
     out.crToOrder = r.cart > 0 ? r.orders / r.cart * 100 : null;
@@ -256,7 +265,9 @@ function RevenueSpendChart({ dates, byDate, events, tip }) {
 // ── Воронка с динамикой к прошлому периоду ───────────────────────────────
 function Funnel({ totals, prev, mode }) {
   const steps = mode === 'ads'
-    ? [['Показы рекламы', 'views'], ['Клики', 'pdpViews'], ['Заказы с рекламы', 'orders']]
+    ? (totals.cart !== null && totals.cart !== undefined
+      ? [['Показы рекламы', 'views'], ['Клики', 'pdpViews'], ['Корзины с рекламы', 'cart'], ['Заказы с рекламы', 'orders']]
+      : [['Показы рекламы', 'views'], ['Клики', 'pdpViews'], ['Заказы с рекламы', 'orders']])
     : [['Показы', 'views'], ['Переходы', 'pdpViews'], ['Корзины', 'cart'], ['Заказы', 'orders']];
   const first = totals[steps[0][1]] || 1;
   return (
@@ -292,11 +303,11 @@ const DAY_ROWS = [
   { key: 'position', label: 'Позиция в поиске', fmt: 'pos', good: 'down', editable: true, total: 'avg', onlyAll: true },
   { key: 'views', label: 'Показы', fmt: 'int', good: 'up', editable: true },
   { key: 'pdpViews', label: 'Переходы на карточку', adsLabel: 'Клики', fmt: 'int', good: 'up', editable: true },
-  { key: 'cart', label: 'Корзины', fmt: 'int', good: 'up', editable: true, onlyAll: true },
+  { key: 'cart', label: 'Корзины', fmt: 'int', good: 'up', editable: true },
   { block: 'Конверсии' },
   { key: 'ctr', label: 'CTR (карточка / показ)', adsLabel: 'CTR (клик / показ)', fmt: 'pct', good: 'up' },
-  { key: 'crToCart', label: 'CR в корзину', fmt: 'pct', good: 'up', onlyAll: true },
-  { key: 'crToOrder', label: 'CR в заказ', adsLabel: 'CR клик → заказ', fmt: 'pct', good: 'up' },
+  { key: 'crToCart', label: 'CR в корзину', fmt: 'pct', good: 'up' },
+  { key: 'crToOrder', label: 'CR в заказ', fmt: 'pct', good: 'up' },
   { block: 'Расход и ДРР' },
   { key: 'avgCpc', label: 'Ср. цена клика, ₽', fmt: 'money2', good: 'down', editable: true },
   { key: 'spend', label: 'Расход общий, ₽', fmt: 'money0', good: 'up', editable: true },
@@ -413,7 +424,7 @@ function Journal({ events, offerId, onAdd, onDelete }) {
         <input className="a-input" value={text} onChange={e => setText(e.target.value)} placeholder="Что сделали: снизил ставку, сменил фото…" />
         <button type="submit" className="a-btn" disabled={saving || !text.trim()}>Добавить</button>
       </form>
-      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок и включение оплаты за заказ будут появляться здесь сами с пометкой «авто» — после подключения истории ставок Ozon.</div>
+      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ) и включение/выключение оплаты за заказ появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия.</div>
     </div>
   );
 }
@@ -512,7 +523,7 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
           <span>Расход за заказ</span><b className="n">{t.spendCpo ? `${fmtInt(t.spendCpo)} ₽` : '—'}</b>
           <span>Рекламный ДРР</span><b className="n">{fmtPct(adDrr)}</b>
           <span>CTR рекламы</span><b className="n">{fmtPct(adCtr)}</b>
-          <span>Оплата за заказ (ОЗЗ)</span><span>нет данных — подключаем</span>
+          <span>Оплата за заказ (ОЗЗ)</span><span>{cpoText(isAggregate ? null : a?.cpo)}</span>
           {!isAggregate && offerId && groups && (
             <>
               <span>Группа</span>
@@ -939,7 +950,11 @@ export default function AdsStats2({ cabinet, onOldView }) {
             <span className="a-spendsub">клик {fmtInt(m.totals.spendCpc)} · заказ {m.totals.spendCpo ? fmtInt(m.totals.spendCpo) : '—'}</span>
           </td>
           <td><span className={`pill ${drrClass(m.totals.drr)}`}>{m.totals.drr === null ? (m.totals.spend > 0 ? '×' : '—') : fmtPct(m.totals.drr)}</span></td>
-          <td>{hasCpo ? <span className="tag on">вкл</span> : <span className="tag off" title="Статус оплаты за заказ по товару подключаем">—</span>}</td>
+          <td>{a.cpo
+            ? (a.cpo.enabled
+              ? <span className="tag on" title={cpoText(a.cpo)}>вкл{a.cpo.bidPct !== null ? ` · ${String(a.cpo.bidPct).replace('.', ',')}%` : ''}</span>
+              : <span className="tag off" title={cpoText(a.cpo)}>выкл</span>)
+            : (hasCpo ? <span className="tag on">вкл</span> : <span className="tag off" title="Нет данных по оплате за заказ">—</span>)}</td>
           <td className="n muted">{a.campaigns.filter(c => c.state === 'CAMPAIGN_STATE_RUNNING').length}/{a.campaigns.length}</td>
         </tr>
         {isOpen && (

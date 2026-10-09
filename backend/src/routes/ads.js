@@ -411,7 +411,7 @@ router.get('/stats', async (req, res) => {
     // попадут на страницу. Затем тяжёлые таблицы по дням — только по этим
     // артикулам, а не по всем ~1800 товарам кабинета (раньше аналитика одна
     // тянула ~27 тыс. строк и занимала больше 2 секунд).
-    const [campaigns, catalogRows, campaignSkuRows, groupsInfo] = await Promise.all([
+    const [campaigns, catalogRows, campaignSkuRows, groupsInfo, extraSkuRows] = await Promise.all([
       timed('campaigns', query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet])),
@@ -420,6 +420,11 @@ router.get('/stats', async (req, res) => {
       // SKU (см. ad_campaign_skus в init.sql и split ниже).
       timed('campaignSkus', query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, [cabinet])),
       timed('groups', loadAdsGroups(cabinet)),
+      // Товары, по которым есть точная рекламная статистика или заказы
+      // "оплаты за заказ" — их аналитику тоже нужно подтянуть.
+      timed('extraSkus', query(`SELECT sku::text AS sku FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
+             UNION SELECT COALESCE(NULLIF(promoted_sku, ''), sku) FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
+             [cabinet, from, to]).catch(() => [])),
     ]);
 
     const offerBySkuPre = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
@@ -427,6 +432,7 @@ router.get('/stats', async (req, res) => {
     for (const c of campaigns) if (c.matched_offer_id) neededOffers.add(c.matched_offer_id);
     for (const r of campaignSkuRows) { const o = offerBySkuPre.get(String(r.sku)); if (o) neededOffers.add(o); }
     for (const o of Object.keys(groupsInfo.members || {})) neededOffers.add(o);
+    for (const r of extraSkuRows) { const o = offerBySkuPre.get(String(r.sku)); if (o) neededOffers.add(o); }
     for (const o of [...neededOffers]) for (const a of getAssociatedOfferIds(cabinet, o)) neededOffers.add(a);
     const neededSkus = new Set();
     for (const r of catalogRows) if (r.sku != null && neededOffers.has(r.offer_id)) neededSkus.add(String(r.sku));
@@ -434,7 +440,7 @@ router.get('/stats', async (req, res) => {
     const offerArr = [...neededOffers];
     const skuArr = [...neededSkus].map(Number).filter(Number.isFinite);
 
-    const [adRows, analyticsRows, manualRows, stockRows, stockManualRows, stockHistoryRows] = await Promise.all([
+    const [adRows, analyticsRows, manualRows, stockRows, stockManualRows, stockHistoryRows, skuStatRows, cpoOrderRows, cpoProductRows] = await Promise.all([
       timed('adstats', query(`SELECT date::text as date, campaign_id, spend, clicks, views, orders, orders_money
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to])),
@@ -464,6 +470,15 @@ router.get('/stats', async (req, res) => {
              WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date BETWEEN $2 AND $3 AND offer_id = ANY($4::text[])
              ORDER BY offer_id, snapshot_date`,
              [cabinet, dayjs(from).subtract(30, 'day').format('YYYY-MM-DD'), to, offerArr])),
+      // Точные данные по товарам (Google-скрипт): расход за клик по SKU и
+      // дню, заказы "оплаты за заказ" и её статус/ставка. Таблиц может ещё не
+      // быть (до первого обновления скрипта) — тогда просто пусто.
+      timed('skuStats', query(`SELECT date::text AS date, campaign_id, sku, views, clicks, to_cart, orders, sales, expense
+             FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => [])),
+      timed('cpoOrders', query(`SELECT date::text AS date, sku, promoted_sku, quantity, cost, expense
+             FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => [])),
+      timed('cpoProducts', query(`SELECT sku, offer_id, enabled, available, bid_pct, bid_rub, checked_at
+             FROM ad_cpo_products WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => [])),
     ]);
     const tQueries = Date.now();
 
@@ -599,6 +614,43 @@ router.get('/stats', async (req, res) => {
       campaignOfferIds.get(r.campaign_id).add(offerId);
     }
 
+    // Точный расход за клик по артикулу: если Google-скрипт уже прислал
+    // статистику по товарам за (кампания, день) — берём её вместо деления
+    // поровну. skuCovered — какие (кампания, день) покрыты этими данными.
+    const skuCovered = new Set();
+    const skuByCampDateOffer = new Map(); // campaign|date|offer -> {expense, clicks, views, toCart, orders, sales}
+    for (const r of skuStatRows) {
+      const offerId = offerBySkuCat.get(String(r.sku));
+      const ck = `${r.campaign_id}|${r.date}`;
+      skuCovered.add(ck);
+      if (!offerId) continue;
+      const k = `${ck}|${offerId}`;
+      const cur = skuByCampDateOffer.get(k) || { expense: 0, clicks: 0, views: 0, toCart: 0, orders: 0, sales: 0 };
+      cur.expense += Number(r.expense) || 0; cur.clicks += Number(r.clicks) || 0; cur.views += Number(r.views) || 0;
+      cur.toCart += Number(r.to_cart) || 0; cur.orders += Number(r.orders) || 0; cur.sales += Number(r.sales) || 0;
+      skuByCampDateOffer.set(k, cur);
+      // Товар мог попасть в РК, но не в ad_campaign_skus — добавим.
+      if (!campaignOfferIds.has(r.campaign_id)) campaignOfferIds.set(r.campaign_id, new Set());
+      campaignOfferIds.get(r.campaign_id).add(offerId);
+    }
+
+    // "Оплата за заказ" по заказам: точный расход по продвигаемому товару и
+    // дню. Пока эти данные есть, сами CPO-кампании в расход не считаем
+    // (иначе задвоили бы) — только в пределах дат, покрытых отчётом.
+    const cpoByOfferDate = new Map(); // offer|date -> {expense, orders, revenue}
+    let cpoFrom = null, cpoTo = null;
+    for (const r of cpoOrderRows) {
+      const offerId = offerBySkuCat.get(String(r.promoted_sku || r.sku)) || offerBySkuCat.get(String(r.sku));
+      if (!cpoFrom || r.date < cpoFrom) cpoFrom = r.date;
+      if (!cpoTo || r.date > cpoTo) cpoTo = r.date;
+      if (!offerId) continue;
+      const k = `${offerId}|${r.date}`;
+      const cur = cpoByOfferDate.get(k) || { expense: 0, orders: 0, revenue: 0 };
+      cur.expense += Number(r.expense) || 0; cur.orders += Number(r.quantity) || 1; cur.revenue += Number(r.cost) || 0;
+      cpoByOfferDate.set(k, cur);
+    }
+    const cpoCovers = date => cpoFrom && date >= cpoFrom && date <= cpoTo;
+
     for (const camp of campaigns) {
       const multiOfferIds = [...(campaignOfferIds.get(camp.campaign_id) || [])];
       // >1 — реально мультитоварная кампания, делим расход поровну между
@@ -613,19 +665,30 @@ router.get('/stats', async (req, res) => {
         const byDate = {};
         const isCpo = String(camp.payment_type || '').toUpperCase() === 'CPO';
         let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
+        let splitDays = 0;
         for (const date of dates) {
           const k = `${camp.campaign_id}|${date}`;
-          const spend = (spendByKey.get(k) || 0) / splitCount;
-          const clicks = (clicksByKey.get(k) || 0) / splitCount;
-          const adViews = (adViewsByKey.get(k) || 0) / splitCount;
-          const adOrders = (adOrdersByKey.get(k) || 0) / splitCount;
-          const adRevenue = (adRevenueByKey.get(k) || 0) / splitCount;
+          let spend, clicks, adViews, adOrders, adRevenue, adToCart = null;
+          if (isCpo && cpoCovers(date)) {
+            // Расход этой РК за день уже разнесён по товарам из отчёта по заказам.
+            spend = 0; clicks = 0; adViews = 0; adOrders = 0; adRevenue = 0;
+          } else if (skuCovered.has(k)) {
+            const x = skuByCampDateOffer.get(`${k}|${offerId}`) || { expense: 0, clicks: 0, views: 0, toCart: 0, orders: 0, sales: 0 };
+            spend = x.expense; clicks = x.clicks; adViews = x.views; adOrders = x.orders; adRevenue = x.sales; adToCart = x.toCart;
+          } else {
+            spend = (spendByKey.get(k) || 0) / splitCount;
+            clicks = (clicksByKey.get(k) || 0) / splitCount;
+            adViews = (adViewsByKey.get(k) || 0) / splitCount;
+            adOrders = (adOrdersByKey.get(k) || 0) / splitCount;
+            adRevenue = (adRevenueByKey.get(k) || 0) / splitCount;
+            if (splitCount > 1 && (spendByKey.get(k) || 0) > 0) splitDays++;
+          }
           totalSpend += spend; totalClicks += clicks;
           totalAdViews += adViews; totalAdOrders += adOrders; totalAdRevenue += adRevenue;
           // Средняя цена клика за день — расход / клики (клики собираются
           // отдельно через collectors/ads/ozonClicks.js, т.к. эндпоинт расхода
           // их не отдаёт). 0, если кликов не было — не делить на 0.
-          byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0, adViews, adOrders, adRevenue };
+          byDate[date] = { spend, clicks, avgCpc: clicks > 0 ? spend / clicks : 0, adViews, adOrders, adRevenue, adToCart };
           // Тип оплаты кампании — чтобы показывать расход отдельно "за клик"
           // и "за заказ" (CPO: "Оплата за заказ"), а не только общей суммой.
           if (isCpo) byDate[date].spendCpo = spend; else byDate[date].spendCpc = spend;
@@ -655,10 +718,44 @@ router.get('/stats', async (req, res) => {
           avgCpc: totalClicks > 0 ? totalSpend / totalClicks : 0,
           // Фронту — чтобы показать "расход поделен поровну на N товаров
           // кампании" вместо того, чтобы молча выдавать точную с виду цифру.
-          splitAcross: splitCount > 1 ? splitCount : null,
+          splitAcross: splitCount > 1 && splitDays > 0 ? splitCount : null,
           byDate,
         });
       }
+    }
+
+    // Расход "оплаты за заказ" по товарам — отдельной строкой-кампанией у
+    // каждого артикула (точные суммы из отчёта по заказам).
+    const cpoTotalsByOffer = new Map();
+    for (const [k, v] of cpoByOfferDate) {
+      const [offerId] = k.split('|');
+      cpoTotalsByOffer.set(offerId, (cpoTotalsByOffer.get(offerId) || 0) + v.expense);
+    }
+    for (const [offerId] of cpoTotalsByOffer) {
+      const byDate = {};
+      let totalSpend = 0, totalAdOrders = 0, totalAdRevenue = 0;
+      for (const date of dates) {
+        const v = cpoByOfferDate.get(`${offerId}|${date}`) || { expense: 0, orders: 0, revenue: 0 };
+        byDate[date] = { spend: v.expense, spendCpo: v.expense, clicks: 0, avgCpc: 0, adViews: 0, adOrders: v.orders, adRevenue: v.revenue, adToCart: null };
+        totalSpend += v.expense; totalAdOrders += v.orders; totalAdRevenue += v.revenue;
+      }
+      const article = getArticle(offerId, skuByOfferId.get(offerId) || null);
+      article.campaigns.push({
+        campaignId: `cpo:${offerId}`, title: 'Оплата за заказ (по заказам)', state: 'CAMPAIGN_STATE_RUNNING',
+        advObjectType: 'SEARCH_PROMO', paymentType: 'CPO', totalSpend, totalClicks: 0, totalAdViews: 0,
+        totalAdOrders, totalAdRevenue, avgCpc: 0, splitAcross: null, byDate,
+      });
+    }
+
+    // Статус "оплаты за заказ" на товаре и текущая ставка.
+    const cpoStatusByOffer = new Map();
+    for (const r of cpoProductRows) {
+      const offerId = offerBySkuCat.get(String(r.sku)) || r.offer_id;
+      if (offerId) cpoStatusByOffer.set(offerId, {
+        enabled: !!r.enabled, available: r.available !== false,
+        bidPct: r.bid_pct !== null ? Number(r.bid_pct) : null, bidRub: r.bid_rub !== null ? Number(r.bid_rub) : null,
+        checkedAt: r.checked_at,
+      });
     }
 
     // Принудительно заводим карточки для артикулов без единой РК (значит,
@@ -702,6 +799,10 @@ router.get('/stats', async (req, res) => {
         const mpAvgCpc = mpClicks > 0 ? mpSpend / mpClicks : 0;
         const sumCamp = key => article.campaigns.reduce((s, c) => s + (c.byDate[date]?.[key] || 0), 0);
         const adViews = sumCamp('adViews'), adOrders = sumCamp('adOrders'), adRevenue = sumCamp('adRevenue');
+        // Корзины из рекламы есть только в статистике по товарам — если её
+        // нет ни у одной РК за день, оставляем null ("нет данных"), а не 0.
+        const toCartKnown = article.campaigns.some(c => c.byDate[date]?.adToCart !== null && c.byDate[date]?.adToCart !== undefined);
+        const adToCart = toCartKnown ? sumCamp('adToCart') : null;
         const spendCpc = sumCamp('spendCpc'), spendCpo = sumCamp('spendCpo');
         totalSpendCpc += spendCpc; totalSpendCpo += spendCpo;
         totalClicks += mpClicks; totalAdViews += adViews; totalAdOrders += adOrders; totalAdRevenue += adRevenue;
@@ -755,7 +856,7 @@ router.get('/stats', async (req, res) => {
           spend: spend.value,
           avgCpc: avgCpc.value,
           clicks: mpClicks,
-          adViews, adOrders, adRevenue, spendCpc, spendCpo,
+          adViews, adOrders, adRevenue, adToCart, spendCpc, spendCpo,
           stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
@@ -823,6 +924,7 @@ router.get('/stats', async (req, res) => {
         },
         campaigns: article.campaigns,
         stock,
+        cpo: article.offerId ? (cpoStatusByOffer.get(article.offerId) || null) : null,
         // На сколько дней хватит текущего остатка при темпе заказов последних
         // 7 полных дней периода (сегодняшний неполный день не считаем).
         // null — заказов не было, оценить нельзя.

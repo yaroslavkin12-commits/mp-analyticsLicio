@@ -14,11 +14,12 @@ const {
   syncCampaignsFromSheet,
   syncStatsFromSheet,
   syncCampaignSkusFromSheet,
+  syncAdDetailsFromSheet,
 } = require('./sheetSync');
 const { collectDiscounts } = require('./ozonDiscounts');
 const { getSettings } = require('./discountSettings');
 const { sendDiscountDigest } = require('../../telegram');
-const { pollOzonForCabinet } = require('../trackedOrdersPoll');
+const { pollOrdersFromSheet } = require('../trackedOrdersPoll');
 const dayjs = require('dayjs');
 const dayjsUtc = require('dayjs/plugin/utc');
 const dayjsTz = require('dayjs/plugin/timezone');
@@ -58,7 +59,10 @@ const RETRY_AFTER_FAIL = 10 * MIN;
 // умолчанию. Если сеть когда-нибудь починят — достаточно поставить обратно
 // "false" в Render (Environment), код менять не нужно, прямой сбор включится
 // автоматически.
-const DIRECT_DISABLED = process.env.ADS_DIRECT_DISABLED === 'true';
+// С 09.10.2026 — по умолчанию ВСЕГДА через Google Таблицу (решение
+// владельца: Render в Ozon не ходит вообще, все данные Ozon собирает
+// Google-скрипт). Прямой сбор включается только явным ADS_DIRECT_DISABLED=false.
+const DIRECT_DISABLED = process.env.ADS_DIRECT_DISABLED !== 'false';
 
 // Подстраховка: axios'овский timeout иногда не покрывает зависший DNS/TCP-
 // коннект (бывает на части сетей Render) — запрос к Google может висеть
@@ -88,14 +92,21 @@ async function withSheetFallback(cabinet, label, primary, fallback) {
   }
 }
 
+// Реклама из Google Таблицы: кампании, расход/клики, товары мультитоварных
+// РК, а также точные данные по товарам (расход за клик по SKU, заказы
+// "оплаты за заказ", её статус и ставки — с авто-записями в журнал).
+function perfFromSheet(c) {
+  return Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c), syncCampaignSkusFromSheet(c), syncAdDetailsFromSheet(c)])
+    .then(([a, b, s, d]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) + (d.rows || 0), warning: d.warning || null }));
+}
+
 // Порядок важен: каталог нужен раньше всех (SKU -> артикул).
 const JOBS = [
   { id: 'catalog', every: 6 * HOUR, run: c => withSheetFallback(c, 'catalog',
       () => collectCatalog(c), () => syncCatalogFromSheet(c)) },
   { id: 'perf', every: 30 * MIN, run: c => withSheetFallback(c, 'perf',
       () => collectAdStats(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }),
-      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c), syncCampaignSkusFromSheet(c)])
-        .then(([a, b, s]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) }))) },
+      () => perfFromSheet(c)) },
   { id: 'clicks', every: 30 * MIN, run: c => withSheetFallback(c, 'clicks',
       () => collectClicks(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }),
       () => syncStatsFromSheet(c)) },
@@ -108,24 +119,33 @@ const JOBS = [
   // заказы/выручку (отмены, поздние данные), и так же закрываются любые дыры.
   { id: 'perf_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'perf_full',
       () => collectAdStats(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
-      () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c), syncCampaignSkusFromSheet(c)])
-        .then(([a, b, s]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) }))) },
+      () => perfFromSheet(c)) },
   { id: 'clicks_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'clicks_full',
       () => collectClicks(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncStatsFromSheet(c)) },
   { id: 'analytics_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'analytics_full',
       () => collectProductAnalytics(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncAnalyticsFromSheet(c)) },
-  // Вкладка "Уведомления" (отслеживание артикулов) для кабинетов без общего
-  // сбора заказов — см. collectors/trackedOrdersPoll.js. ВАЖНО: добавлен в
-  // конец массива, а не куда-то в середину — "ручной" план обновления выше
-  // (forced.get) ссылается на JOBS[0..4] по индексу, и сдвиг этих индексов
-  // его сломает.
-  // У этой задачи нет фоллбека через Google Таблицу (заказы туда не
-  // выгружаются) — при отключённом прямом сборе просто не дёргаем Ozon
-  // понапрасну (всё равно таймаут), тихо возвращаем 0 без ошибки в статусе.
-  { id: 'tracked_orders', every: 10 * MIN, run: c => DIRECT_DISABLED ? Promise.resolve(0) : pollOzonForCabinet(c) },
 ];
+
+// Уведомления о новых заказах (вкладка «Уведомления») — для ВСЕХ кабинетов
+// (Licio и Defly), заказы берутся из вкладки Orders Google-таблицы (её
+// каждые 5 минут обновляет Google-скрипт, функция syncOrders).
+const ORDERS_JOB = { id: 'tracked_orders', every: 4 * MIN, run: c => pollOrdersFromSheet(c) };
+function ordersCabinets() {
+  return Object.keys(CABINETS);
+}
+const ordersBusy = new Set();
+async function tickOrders(cabinet) {
+  if (ordersBusy.has(cabinet)) return;
+  ordersBusy.add(cabinet);
+  try {
+    const st = await getStatus(cabinet);
+    if (isDue(ORDERS_JOB, st.get(ORDERS_JOB.id), Date.now())) await runJobGuarded(cabinet, ORDERS_JOB);
+  } finally {
+    ordersBusy.delete(cabinet);
+  }
+}
 
 function adsCabinets() {
   return Object.entries(CABINETS)
@@ -286,8 +306,7 @@ async function tickCabinet(cabinet) {
         ...(catalogAge > HOUR ? [[JOBS[0], null]] : []),
         [JOBS[1], c => withSheetFallback(c, 'perf(forced)',
             () => collectAdStats(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) }),
-            () => Promise.all([syncCampaignsFromSheet(c), syncStatsFromSheet(c), syncCampaignSkusFromSheet(c)])
-              .then(([a, b, s]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) })))],
+            () => perfFromSheet(c))],
         [JOBS[2], c => withSheetFallback(c, 'clicks(forced)',
             () => collectClicks(c, { dateFrom: mskDate(days - 1), dateTo: mskDate(0) }),
             () => syncStatsFromSheet(c))],
@@ -316,6 +335,7 @@ async function tick() {
     ...adsCabinets().map(c => tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message))),
     ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
     ...discountCabinets().map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
+    ...ordersCabinets().map(c => tickOrders(c).catch(e => console.error(`[Orders:${c}]`, e.message))),
   ]);
 }
 

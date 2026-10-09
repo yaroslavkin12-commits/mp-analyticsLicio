@@ -62,3 +62,5 @@ export const removeTrackedGroup = (cabinet, id) =>
 export const getAdsEvents   = (cabinet, dateFrom, dateTo) => api.get('/ads/events', { params: { cabinet, dateFrom, dateTo } });
 export const addAdsEvent    = (cabinet, offerId, date, text) => api.post('/ads/events', { cabinet, offerId, date, text });
 export const deleteAdsEvent = (cabinet, id) => api.delete(`/ads/events/${id}`, { params: { cabinet } });
+export const getNotificationsHealth = cabinet => api.get('/tracked-articles/health', { params: { cabinet } });
+export const testTelegram = () => api.post('/tracked-articles/test-telegram');

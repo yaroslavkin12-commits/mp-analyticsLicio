@@ -104,4 +104,41 @@ async function pollOzonForCabinet(cabinet) {
   return newOrders.length;
 }
 
-module.exports = { pollOzonForCabinet };
+// Основной путь (Render в Ozon не ходит): заказы за 2 дня кладёт во вкладку
+// Orders Google-скрипт (syncOrders, каждые 5 минут), здесь только читаем
+// таблицу, отсеиваем уже виденные (tracked_orders_seen) и шлём уведомления.
+// Уведомляем только о заказах не старше NOTIFY_MAX_AGE_HOURS — иначе при
+// первом запуске пришли бы уведомления по всем заказам за 2 дня разом.
+const NOTIFY_MAX_AGE_HOURS = 3;
+async function pollOrdersFromSheet(cabinet) {
+  const tracked = await getActiveTracked(cabinet, 'ozon').catch(() => []);
+  if (!tracked.length) return 0;
+  const { fetchSheetRows } = require('./ads/sheetSync');
+  const rows = await fetchSheetRows('Orders');
+  if (!rows) return 0;
+  const cutoff = Date.now() - NOTIFY_MAX_AGE_HOURS * 3600 * 1000;
+  const newOrders = [];
+  for (const r of rows) {
+    if (r.cabinet !== cabinet || !r.posting_number) continue;
+    if (String(r.status).toLowerCase() === 'cancelled') continue;
+    const sku = Number(r.sku) || 0;
+    let inserted;
+    try {
+      inserted = await query(
+        `INSERT INTO tracked_orders_seen (cabinet, posting_number, sku) VALUES (?,?,?)
+         ON CONFLICT (cabinet, posting_number, sku) DO NOTHING RETURNING id`,
+        [cabinet, r.posting_number, sku]);
+    } catch (e) { continue; }
+    if (!inserted.length) continue;
+    const created = r.created_at ? new Date(r.created_at).getTime() : Date.now();
+    if (Number.isFinite(created) && created < cutoff) continue; // старый заказ — просто запомнили
+    newOrders.push({
+      offer_id: r.offer_id, sku, productName: r.name, price: parseFloat(r.price) || 0,
+      warehouse: r.warehouse || null, orderRef: `${r.posting_number}:${sku}`,
+    });
+  }
+  if (newOrders.length) await checkAndNotify(cabinet, 'ozon', newOrders);
+  return newOrders.length;
+}
+
+module.exports = { pollOzonForCabinet, pollOrdersFromSheet };

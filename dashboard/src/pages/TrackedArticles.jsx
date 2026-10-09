@@ -2,7 +2,45 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   getTrackedArticles, getTrackedArticlesFeed, addTrackedArticle, removeTrackedArticle,
   moveTrackedArticle, getTrackedGroups, addTrackedGroup, removeTrackedGroup,
+  getNotificationsHealth, testTelegram,
 } from '../api';
+
+// Строка состояния: настроен ли Telegram, приходят ли заказы из
+// Google-таблицы (вкладка Orders, её обновляет скрипт каждые 5 минут) и
+// когда их последний раз проверяли. Плюс кнопка пробного сообщения.
+function HealthBar({ cabinet }) {
+  const [h, setH] = useState(null);
+  const [testMsg, setTestMsg] = useState('');
+  useEffect(() => {
+    getNotificationsHealth(cabinet).then(r => setH(r.data.data)).catch(() => setH(null));
+  }, [cabinet]);
+  async function onTest() {
+    setTestMsg('Отправляю…');
+    try {
+      const r = await testTelegram();
+      setTestMsg(r.data.data.sent ? 'Отправлено — проверьте Telegram' : 'Telegram не настроен на сервере');
+    } catch (e) { setTestMsg(`Ошибка: ${e.response?.data?.error || e.message}`); }
+  }
+  if (!h) return null;
+  const ok = c => ({ color: c ? 'var(--ok)' : 'var(--danger)' });
+  const sheetOk = h.ordersSheet.rows !== null && !h.ordersSheet.error;
+  const last = h.lastCheck?.last_success_at;
+  return (
+    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 12.5, color: 'var(--text2)',
+      background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
+      <span style={ok(h.telegramConfigured)}>● Telegram {h.telegramConfigured ? 'подключён' : 'не настроен (нужны TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID на сервере)'}</span>
+      <span style={ok(sheetOk && h.ordersSheet.rows > 0)}>
+        ● Заказы Ozon из таблицы: {h.ordersSheet.error ? `ошибка (${h.ordersSheet.error})` : h.ordersSheet.rows === null ? 'таблица не подключена'
+          : h.ordersSheet.rows === 0 ? 'пока пусто — обновите Google-скрипт и выполните setupTriggers' : `${h.ordersSheet.rows} строк, последний заказ ${h.ordersSheet.newestOrderAt ? fmtDateTime(h.ordersSheet.newestOrderAt) : '—'}`}
+      </span>
+      <span>Проверка заказов: {last ? fmtDateTime(last) : 'ещё не было'}</span>
+      <button onClick={onTest} style={{ marginLeft: 'auto', padding: '5px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 12.5 }}>
+        Проверить Telegram
+      </button>
+      {testMsg && <span>{testMsg}</span>}
+    </div>
+  );
+}
 
 // Вкладка "Уведомления": добавляешь артикул — как только по нему поступает
 // новый заказ (WB и/или Ozon), в Telegram приходит сообщение (см. backend
@@ -168,6 +206,7 @@ export default function TrackedArticles({ cabinet }) {
   return (
     <div>
       <h2 style={{ margin: '0 0 16px', fontSize: 20 }}>Уведомления о заказах</h2>
+      <HealthBar cabinet={cabinet} />
 
       <div style={{ display: 'flex', gap: 3, background: 'var(--surface2)', borderRadius: 8, padding: 3, width: 'fit-content', marginBottom: 18 }}>
         {TABS.map(([v, l]) => (

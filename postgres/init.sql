@@ -532,3 +532,64 @@ CREATE TABLE IF NOT EXISTS ad_events (
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_ad_events_lookup ON ad_events(cabinet, platform, date);
+
+-- Статистика "оплаты за клик" по товару и дню (Performance API
+-- statistics/products/sku через Google-скрипт) — точный расход по артикулу
+-- даже в кампаниях на несколько товаров, плюс рекламная воронка.
+CREATE TABLE IF NOT EXISTS ad_sku_stats_daily (
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  date DATE NOT NULL,
+  campaign_id VARCHAR(64) NOT NULL,
+  sku BIGINT NOT NULL,
+  views BIGINT DEFAULT 0,
+  clicks BIGINT DEFAULT 0,
+  to_cart BIGINT DEFAULT 0,
+  orders INT DEFAULT 0,
+  sales DECIMAL(14,2) DEFAULT 0,
+  expense DECIMAL(12,2) DEFAULT 0,
+  avg_cpc DECIMAL(10,2) DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, platform, date, campaign_id, sku)
+);
+
+-- Заказы "оплаты за заказ": строка = заказ, с датой, SKU и списанной суммой.
+CREATE TABLE IF NOT EXISTS ad_cpo_orders (
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  date DATE NOT NULL,
+  order_id VARCHAR(64) NOT NULL DEFAULT '',
+  sku VARCHAR(32) NOT NULL DEFAULT '',
+  promoted_sku VARCHAR(32) NOT NULL DEFAULT '',
+  offer_id VARCHAR(128),
+  quantity INT DEFAULT 1,
+  cost DECIMAL(12,2) DEFAULT 0,
+  expense DECIMAL(12,2) DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, platform, order_id, sku, promoted_sku, date)
+);
+
+-- Снимок "оплаты за заказ" по товару: включена ли и какая ставка.
+CREATE TABLE IF NOT EXISTS ad_cpo_products (
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  sku BIGINT NOT NULL,
+  offer_id VARCHAR(128),
+  enabled BOOLEAN DEFAULT false,
+  available BOOLEAN DEFAULT true,
+  bid_pct DECIMAL(8,2),
+  bid_rub DECIMAL(12,2),
+  checked_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, platform, sku)
+);
+
+-- Снимок ставок за клик по товарам кампаний.
+CREATE TABLE IF NOT EXISTS ad_cpc_bids (
+  cabinet VARCHAR(32) NOT NULL,
+  platform VARCHAR(16) NOT NULL DEFAULT 'ozon',
+  campaign_id VARCHAR(64) NOT NULL,
+  sku BIGINT NOT NULL,
+  bid DECIMAL(12,2),
+  checked_at TIMESTAMP DEFAULT NOW(),
+  PRIMARY KEY (cabinet, platform, campaign_id, sku)
+);

@@ -175,6 +175,114 @@ async function syncCampaignSkusFromSheet(cabinet) {
   return { rows: saved };
 }
 
+// ── Точные рекламные данные по товарам (см. google-apps-script) ──────────
+async function syncSkuStatsFromSheet(cabinet) {
+  const rows = await fetchSheetRows('SkuStats');
+  if (rows === null) return { rows: 0 };
+  const out = rows.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}-\d{2}$/.test(r.date))
+    .map(r => [cabinet, 'ozon', r.date, r.campaign_id || '', num(r.sku), num(r.views), num(r.clicks), num(r.to_cart),
+      num(r.orders), num(r.sales), num(r.expense), num(r.avg_cpc), new Date()]);
+  const saved = await bulkUpsert('ad_sku_stats_daily',
+    ['cabinet', 'platform', 'date', 'campaign_id', 'sku', 'views', 'clicks', 'to_cart', 'orders', 'sales', 'expense', 'avg_cpc', 'updated_at'],
+    out, ['cabinet', 'platform', 'date', 'campaign_id', 'sku']);
+  return { rows: saved };
+}
+
+async function syncCpoOrdersFromSheet(cabinet) {
+  const rows = await fetchSheetRows('CpoOrders');
+  if (rows === null) return { rows: 0 };
+  const out = rows.filter(r => r.cabinet === cabinet && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && (r.sku || r.promoted_sku))
+    .map(r => [cabinet, 'ozon', r.date, String(r.order_id || ''), String(r.sku || ''), String(r.promoted_sku || ''),
+      r.offer_id || null, num(r.quantity) || 1, num(r.cost), num(r.expense), new Date()]);
+  const saved = await bulkUpsert('ad_cpo_orders',
+    ['cabinet', 'platform', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'updated_at'],
+    out, ['cabinet', 'platform', 'order_id', 'sku', 'promoted_sku', 'date']);
+  return { rows: saved };
+}
+
+// Запись в журнал (ad_events) при реальном изменении — кто бы ни менял:
+// продавец в личном кабинете или автостратегия Ozon.
+async function addAutoEvent(cabinet, offerId, kind, text, oldValue, newValue) {
+  await query(
+    `INSERT INTO ad_events (cabinet, platform, offer_id, date, kind, text, old_value, new_value, auto)
+     VALUES ($1, 'ozon', $2, (NOW() AT TIME ZONE 'Europe/Moscow')::date, $3, $4, $5, $6, true)`,
+    [cabinet, offerId, kind, text, oldValue === null || oldValue === undefined ? null : String(oldValue), newValue === null || newValue === undefined ? null : String(newValue)]);
+}
+const fmtRub = v => `${Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
+
+async function syncCpoProductsFromSheet(cabinet) {
+  const rows = await fetchSheetRows('CpoProducts');
+  if (rows === null) return { rows: 0 };
+  const list = rows.filter(r => r.cabinet === cabinet && r.sku);
+  if (!list.length) return { rows: 0 };
+  const prev = await query(`SELECT sku, offer_id, enabled, bid_pct FROM ad_cpo_products WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
+  const prevBySku = new Map(prev.map(r => [String(r.sku), r]));
+  const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
+  const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+  const out = [];
+  for (const r of list) {
+    const enabled = String(r.enabled) === '1' || String(r.enabled).toLowerCase() === 'true';
+    const bidPct = r.bid_pct === '' ? null : num(r.bid_pct);
+    const offerId = offerBySku.get(String(r.sku)) || r.offer_id || null;
+    out.push([cabinet, 'ozon', num(r.sku), offerId, enabled, String(r.available) !== '0', bidPct, r.bid_rub === '' ? null : num(r.bid_rub), new Date()]);
+    const p = prevBySku.get(String(r.sku));
+    if (p && offerId) {
+      if (p.enabled !== enabled) {
+        await addAutoEvent(cabinet, offerId, enabled ? 'cpo_on' : 'cpo_off', enabled ? 'Оплата за заказ включена' : 'Оплата за заказ выключена', p.enabled, enabled);
+      } else if (enabled && bidPct !== null && p.bid_pct !== null && Math.abs(Number(p.bid_pct) - bidPct) >= 0.01) {
+        await addAutoEvent(cabinet, offerId, 'bid_cpo', `Ставка за заказ ${Number(p.bid_pct)}% → ${bidPct}%`, p.bid_pct, bidPct);
+      }
+    }
+  }
+  const saved = await bulkUpsert('ad_cpo_products',
+    ['cabinet', 'platform', 'sku', 'offer_id', 'enabled', 'available', 'bid_pct', 'bid_rub', 'checked_at'],
+    out, ['cabinet', 'platform', 'sku']);
+  return { rows: saved };
+}
+
+// Ставка за клик в Performance API приходит в миллионных долях рубля
+// (15000000 = 15 ₽) — переводим в рубли, если число явно такое.
+const bidToRub = v => { const n = num(v); return n > 10000 ? n / 1e6 : n; };
+
+async function syncCpcBidsFromSheet(cabinet) {
+  const rows = await fetchSheetRows('CpcBids');
+  if (rows === null) return { rows: 0 };
+  const list = rows.filter(r => r.cabinet === cabinet && r.sku && r.campaign_id);
+  if (!list.length) return { rows: 0 };
+  const prev = await query(`SELECT campaign_id, sku, bid FROM ad_cpc_bids WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
+  const prevByKey = new Map(prev.map(r => [`${r.campaign_id}|${r.sku}`, r]));
+  const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
+  const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+  const out = [];
+  for (const r of list) {
+    const bid = bidToRub(r.bid);
+    out.push([cabinet, 'ozon', String(r.campaign_id), num(r.sku), bid, new Date()]);
+    const p = prevByKey.get(`${r.campaign_id}|${num(r.sku)}`);
+    const offerId = offerBySku.get(String(r.sku));
+    if (p && offerId && p.bid !== null && Math.abs(Number(p.bid) - bid) >= 0.01) {
+      await addAutoEvent(cabinet, offerId, 'bid_cpc', `Ставка за клик ${fmtRub(p.bid)} → ${fmtRub(bid)} (РК ${r.campaign_id})`, p.bid, bid);
+    }
+  }
+  const saved = await bulkUpsert('ad_cpc_bids', ['cabinet', 'platform', 'campaign_id', 'sku', 'bid', 'checked_at'],
+    out, ['cabinet', 'platform', 'campaign_id', 'sku']);
+  return { rows: saved };
+}
+
+async function syncAdDetailsFromSheet(cabinet) {
+  const parts = await Promise.allSettled([
+    syncSkuStatsFromSheet(cabinet), syncCpoOrdersFromSheet(cabinet),
+    syncCpoProductsFromSheet(cabinet), syncCpcBidsFromSheet(cabinet),
+  ]);
+  let rows = 0;
+  const errors = [];
+  parts.forEach((p, i) => {
+    if (p.status === 'fulfilled') rows += p.value?.rows || 0;
+    else errors.push(`${['SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids'][i]}: ${p.reason?.message || p.reason}`);
+  });
+  if (errors.length) console.warn(`[SheetAdDetails:${cabinet}]`, errors.join('; '));
+  return { rows, warning: errors.length ? errors.join('; ').slice(0, 300) : null };
+}
+
 module.exports = {
   sheetId,
   fetchSheetRows,
@@ -184,4 +292,5 @@ module.exports = {
   syncCampaignsFromSheet,
   syncStatsFromSheet,
   syncCampaignSkusFromSheet,
+  syncAdDetailsFromSheet,
 };
