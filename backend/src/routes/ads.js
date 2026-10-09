@@ -664,6 +664,17 @@ router.get('/stats', async (req, res) => {
         const sku = splitCount > 1 ? (skuByOfferId.get(offerId) || null) : camp.matched_sku;
         const byDate = {};
         const isCpo = String(camp.payment_type || '').toUpperCase() === 'CPO';
+        // Зона показа — для отдельной средней цены клика: в поиске ставка
+        // всегда выше, в "поиск + рекомендации" (полки) ниже. Сначала по
+        // названию кампании (там пишут "поиск" или "поиск + рекомендации"),
+        // затем по полю placement.
+        const titleLc = String(camp.title || '').toLowerCase();
+        const placementUc = String(camp.placement || '').toUpperCase();
+        const zone = isCpo ? null
+          : /рекоменд|полк/.test(titleLc) ? 'rec'
+          : /поиск/.test(titleLc) ? 'search'
+          : placementUc.includes('CATEGORY') || placementUc.includes('RECOMM') ? 'rec'
+          : placementUc.includes('SEARCH') ? 'search' : null;
         let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
         let splitDays = 0;
         for (const date of dates) {
@@ -692,6 +703,8 @@ router.get('/stats', async (req, res) => {
           // Тип оплаты кампании — чтобы показывать расход отдельно "за клик"
           // и "за заказ" (CPO: "Оплата за заказ"), а не только общей суммой.
           if (isCpo) byDate[date].spendCpo = spend; else byDate[date].spendCpc = spend;
+          if (zone === 'search') { byDate[date].spendSearch = spend; byDate[date].clicksSearch = clicks; }
+          if (zone === 'rec') { byDate[date].spendRec = spend; byDate[date].clicksRec = clicks; }
         }
         // Кампании без единого рубля расхода за период — VK/блогерские
         // реф-ссылки, архивные, завершённые — раньше уходили на фронт с
@@ -719,6 +732,7 @@ router.get('/stats', async (req, res) => {
           // Фронту — чтобы показать "расход поделен поровну на N товаров
           // кампании" вместо того, чтобы молча выдавать точную с виду цифру.
           splitAcross: splitCount > 1 && splitDays > 0 ? splitCount : null,
+          zone,
           byDate,
         });
       }
@@ -805,6 +819,8 @@ router.get('/stats', async (req, res) => {
         const toCartKnown = article.campaigns.some(c => c.byDate[date]?.adToCart !== null && c.byDate[date]?.adToCart !== undefined);
         const adToCart = toCartKnown ? sumCamp('adToCart') : null;
         const spendCpc = sumCamp('spendCpc'), spendCpo = sumCamp('spendCpo');
+        const spendSearch = sumCamp('spendSearch'), clicksSearch = sumCamp('clicksSearch');
+        const spendRec = sumCamp('spendRec'), clicksRec = sumCamp('clicksRec');
         totalSpendCpc += spendCpc; totalSpendCpo += spendCpo;
         totalClicks += mpClicks; totalAdViews += adViews; totalAdOrders += adOrders; totalAdRevenue += adRevenue;
 
@@ -858,6 +874,7 @@ router.get('/stats', async (req, res) => {
           avgCpc: avgCpc.value,
           clicks: mpClicks,
           adViews, adOrders, adRevenue, adToCart, spendCpc, spendCpo,
+          spendSearch, clicksSearch, spendRec, clicksRec,
           stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,

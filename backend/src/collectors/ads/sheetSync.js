@@ -149,15 +149,21 @@ async function syncCampaignsFromSheet(cabinet) {
   // кампании (дорого делать из Apps Script на весь список кампаний).
   const catalogRows = await query(`SELECT offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
   const offerIds = catalogRows.map(r => String(r.offer_id).toLowerCase()).filter(o => o && o.length >= 4);
+  const ids = [], matches = [];
   for (const r of filtered) {
     if (!r.title) continue;
     const t = String(r.title).trim().toLowerCase();
     const match = offerIds.find(o => t.includes(o));
-    if (match) {
-      await query(
-        `UPDATE ad_campaigns SET matched_offer_id = COALESCE(matched_offer_id, $3) WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id = $2`,
-        [cabinet, r.campaign_id, match]);
-    }
+    if (match) { ids.push(String(r.campaign_id)); matches.push(match); }
+  }
+  // Одним запросом, а не по UPDATE на каждую из ~900 кампаний (это одно
+  // занимало десятки секунд и роняло задачу по таймауту).
+  if (ids.length) {
+    await query(
+      `UPDATE ad_campaigns c SET matched_offer_id = COALESCE(c.matched_offer_id, m.offer_id)
+         FROM unnest($2::text[], $3::text[]) AS m(campaign_id, offer_id)
+        WHERE c.cabinet = $1 AND c.platform = 'ozon' AND c.campaign_id = m.campaign_id`,
+      [cabinet, ids, matches]);
   }
   console.log(`[SheetCampaigns:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };

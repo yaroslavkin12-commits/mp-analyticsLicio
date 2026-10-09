@@ -2,22 +2,11 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
-import AdsStatsOld from './pages/AdsStats';
-import AdsStats2 from './pages/AdsStats2';
+import AdsStats from './pages/AdsStats2';
 import Discounts from './pages/Discounts';
 import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
 import TrackedArticles from './pages/TrackedArticles';
-
-// Реклама: новый вид по умолчанию, старый — по кнопке (пока новый согласуем).
-// Выбор запоминается в браузере.
-function AdsStats(props) {
-  const [view, setView] = useState(() => { try { return localStorage.getItem('mp-ads-view') || 'new'; } catch (e) { return 'new'; } });
-  const choose = v => { setView(v); try { localStorage.setItem('mp-ads-view', v); } catch (e) { /* ignore */ } };
-  return view === 'old'
-    ? <AdsStatsOld {...props} onNewView={() => choose('new')} />
-    : <AdsStats2 {...props} onOldView={() => choose('old')} />;
-}
 
 const PAGES = { dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 

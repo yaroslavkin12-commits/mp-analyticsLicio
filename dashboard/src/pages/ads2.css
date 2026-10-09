@@ -170,3 +170,14 @@
 @media (max-width:900px){.ads2 .a-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.ads2 .a-dwrap{grid-template-columns:1fr}}
 /* перекрыть щель между закреплёнными колонками, через которую видно прокрученные даты */
 .ads2 .a-dt .tot,.ads2 .a-matrix .stk{box-shadow:-2px 0 0 var(--a-panel)}
+
+/* Группы показателей в таблице по дням — цветная метка слева и отступ сверху,
+   чтобы блоки «Заказы и остаток / Трафик и позиции / Конверсии / Расход и
+   ДРР» читались отдельно. */
+.ads2 .a-dt tr.blk td{padding-top:12px;border-top:6px solid var(--a-panel)}
+.ads2 .a-dt tr.blk .blk-l{display:inline-flex;align-items:center;gap:7px;color:var(--a-ink2)}
+.ads2 .a-dt tr.blk .blk-l::before{content:"";width:4px;height:13px;border-radius:2px;background:var(--a-ink3)}
+.ads2 .a-dt tr.tone-rev .blk-l::before{background:var(--a-rev)}
+.ads2 .a-dt tr.tone-traffic .blk-l::before{background:var(--a-cpo)}
+.ads2 .a-dt tr.tone-conv .blk-l::before{background:var(--a-good)}
+.ads2 .a-dt tr.tone-spend .blk-l::before{background:var(--a-spend)}

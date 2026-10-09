@@ -26,18 +26,27 @@ export default function Sidebar({ page, setPage, theme, cabinet, setCabinet }) {
           display:'flex', alignItems:'center', gap:10, width:'100%', background:'transparent', border:'none',
           padding:0, cursor:'pointer', textAlign:'left', color:'var(--text)',
         }}>
-          <img
-            src="/logo.png"
-            alt="Кабинет"
-            style={{ height:26, width:'auto', flexShrink:0, filter: theme === 'dark' ? 'invert(1)' : 'none' }}
-          />
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:15, fontWeight:700, display:'flex', alignItems:'center', gap:5 }}>
-              {cabinetLabel}
-              <span style={{ fontSize:10, color:'var(--text3)' }}>▾</span>
-            </div>
-            <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>WB + Ozon</div>
-          </div>
+          {cabinet === 'defly' ? (
+            <>
+              <img src="/defly-logo.png" alt="Defly" style={{ height:48, width:'auto', maxWidth:150, borderRadius:6, flexShrink:0, display:'block' }} />
+              <span style={{ fontSize:10, color:'var(--text3)', marginLeft:'auto' }}>▾</span>
+            </>
+          ) : (
+            <>
+              <img
+                src="/logo.png"
+                alt="Кабинет"
+                style={{ height:26, width:'auto', flexShrink:0, filter: theme === 'dark' ? 'invert(1)' : 'none' }}
+              />
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:15, fontWeight:700, display:'flex', alignItems:'center', gap:5 }}>
+                  {cabinetLabel}
+                  <span style={{ fontSize:10, color:'var(--text3)' }}>▾</span>
+                </div>
+                <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>WB + Ozon</div>
+              </div>
+            </>
+          )}
         </button>
 
         {open && (
