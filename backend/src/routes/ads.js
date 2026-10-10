@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { campLabel } = require('../lib/adZone');
 const dayjs = require('dayjs');
 const { query } = require('../db');
 const { listCabinets } = require('../config/cabinets');
@@ -55,8 +56,12 @@ router.get('/events', async (req, res) => {
       `SELECT id, offer_id, date::text AS date, kind, text, old_value, new_value, auto, created_at
          FROM ad_events WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
         ORDER BY date DESC, id DESC`, [cabinet, from, to]);
+    // Старые записи «(РК 123)» дополняем зоной показа: поиск / поиск + рекомендации.
+    const camps = await query(`SELECT campaign_id, title, placement, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
+    const campById = new Map(camps.map(c => [String(c.campaign_id), c]));
+    const enrich = t => String(t || '').replace(/\(РК (\d+)\)/g, (m, id) => `(${campLabel(campById.get(id), id)})`);
     res.json({ success: true, data: rows.map(r => ({
-      id: String(r.id), offerId: r.offer_id, date: r.date, kind: r.kind, text: r.text,
+      id: String(r.id), offerId: r.offer_id, date: r.date, kind: r.kind, text: enrich(r.text),
       oldValue: r.old_value, newValue: r.new_value, auto: r.auto, createdAt: r.created_at,
     })) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }

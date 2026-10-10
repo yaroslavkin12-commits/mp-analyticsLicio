@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { clusterOfWarehouse } = require('../../lib/warehouses');
+const { campLabel } = require('../../lib/adZone');
 const { query } = require('../../db');
 const { bulkUpsert, bulkInsert } = require('./ozonHttp');
 
@@ -66,9 +67,11 @@ const REQUIRED_COLUMNS = {
   Prices: ['pct_fbo', 'fbo_deliv', 'acquiring'],
   Finance: ['name', 'amount', 'qty'],
   StocksWh: ['warehouse', 'available', 'transit'],
+  Queries: ['query', 'position', 'searches'],
+  AnalyticsMonthly: ['month', 'revenue', 'orders'],
 };
 
-const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices', 'StocksWh'];
+const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices', 'StocksWh', 'Queries', 'AnalyticsMonthly'];
 async function fetchSheetRows(sheetName) {
   const id = sheetId();
   if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
@@ -294,6 +297,8 @@ async function syncCpcBidsFromSheet(cabinet) {
   const prevByKey = new Map(prev.map(r => [`${r.campaign_id}|${r.sku}`, r]));
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
   const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+  const camps = await query(`SELECT campaign_id, title, placement, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
+  const campById = new Map(camps.map(c => [String(c.campaign_id), c]));
   const out = [];
   for (const r of list) {
     const bid = bidToRub(r.bid);
@@ -301,7 +306,7 @@ async function syncCpcBidsFromSheet(cabinet) {
     const p = prevByKey.get(`${r.campaign_id}|${num(r.sku)}`);
     const offerId = offerBySku.get(String(r.sku));
     if (p && offerId && p.bid !== null && Math.abs(Number(p.bid) - bid) >= 0.01) {
-      await addAutoEvent(cabinet, offerId, 'bid_cpc', `Ставка за клик ${fmtRub(p.bid)} → ${fmtRub(bid)} (РК ${r.campaign_id})`, p.bid, bid);
+      await addAutoEvent(cabinet, offerId, 'bid_cpc', `Ставка за клик ${fmtRub(p.bid)} → ${fmtRub(bid)} (${campLabel(campById.get(String(r.campaign_id)), r.campaign_id)})`, p.bid, bid);
     }
   }
   const saved = await bulkUpsert('ad_cpc_bids', ['cabinet', 'platform', 'campaign_id', 'sku', 'bid', 'checked_at'],
@@ -362,6 +367,11 @@ async function ensureFinTables() {
   await query(`CREATE TABLE IF NOT EXISTS stock_cluster_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, offer_id VARCHAR(128) NOT NULL,
     warehouse VARCHAR(160) NOT NULL, cluster VARCHAR(160), sku BIGINT, available INT DEFAULT 0, transit INT DEFAULT 0, reserved INT DEFAULT 0,
     ads DECIMAL(10,3), idc DECIMAL(10,1), PRIMARY KEY (cabinet, date, offer_id, warehouse))`);
+  await query(`CREATE TABLE IF NOT EXISTS search_query_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, sku BIGINT NOT NULL, query VARCHAR(200) NOT NULL,
+    position DECIMAL(8,2), searches INT DEFAULT 0, views INT DEFAULT 0, clicks INT DEFAULT 0, orders INT DEFAULT 0, revenue DECIMAL(14,2) DEFAULT 0, conversion DECIMAL(8,3),
+    PRIMARY KEY (cabinet, date, sku, query))`);
+  await query(`CREATE TABLE IF NOT EXISTS analytics_monthly (cabinet VARCHAR(32) NOT NULL, month CHAR(7) NOT NULL, sku BIGINT NOT NULL,
+    revenue DECIMAL(16,2) DEFAULT 0, orders INT DEFAULT 0, PRIMARY KEY (cabinet, month, sku))`);
   finTablesReady = true;
 }
 // Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
@@ -377,6 +387,26 @@ async function syncFinanceFromSheet(cabinet) {
   await ensureFinTables();
   let total = 0;
   total += (await syncGeoFromSheet(cabinet)).rows || 0;
+  // Поисковые запросы по дням.
+  const qs = await fetchSheetRows('Queries');
+  if (qs) {
+    const map = new Map();
+    for (const r of qs) {
+      if (r.cabinet !== cabinet || !r.sku || !r.query || !r.date) continue;
+      const row = [cabinet, String(r.date).slice(0, 10), num(r.sku), String(r.query).slice(0, 200), r.position === '' ? null : num(r.position),
+        Math.round(num(r.searches)), Math.round(num(r.views)), Math.round(num(r.clicks)), Math.round(num(r.orders)), num(r.revenue), r.conversion === '' ? null : num(r.conversion)];
+      map.set(row.slice(1, 4).join('|'), row);
+    }
+    total += await replaceRange('search_query_daily', cabinet, [...map.values()],
+      ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], ['cabinet', 'date', 'sku', 'query']);
+  }
+  // Продажи по месяцам (сезонность).
+  const mon = await fetchSheetRows('AnalyticsMonthly');
+  if (mon) {
+    const out = mon.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}/.test(String(r.month)))
+      .map(r => [cabinet, String(r.month).slice(0, 7), num(r.sku), num(r.revenue), Math.round(num(r.orders))]);
+    if (out.length) total += await bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku']);
+  }
   // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
   const wh = await fetchSheetRows('StocksWh');
   if (wh) {

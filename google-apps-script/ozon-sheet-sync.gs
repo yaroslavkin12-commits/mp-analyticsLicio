@@ -58,6 +58,8 @@ const SHEET_NAMES = {
   cpoOrders: 'CpoOrders',
   geo: 'GeoOrders',
   stocksWh: 'StocksWh',
+  queries: 'Queries',
+  monthly: 'AnalyticsMonthly',
   buyout: 'Buyout',
   prices: 'Prices',
   finance: 'Finance',
@@ -83,6 +85,10 @@ const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku'
 const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name'];
 const ANALYTICS_HEADERS = ['cabinet', 'date', 'sku', 'hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
 const STOCKS_HEADERS = ['cabinet', 'product_id', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'];
+// Поисковые запросы по товарам (позиция, частота) — по дням.
+const QUERIES_HEADERS = ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'];
+// Продажи по месяцам за 2 года — для сезонности.
+const MONTHLY_HEADERS = ['cabinet', 'month', 'sku', 'revenue', 'orders'];
 // Остатки FBO по складам и кластерам (для вкладки «Остатки» и поставок).
 const STOCKS_WH_HEADERS = ['cabinet', 'sku', 'offer_id', 'cluster', 'warehouse', 'available', 'transit', 'reserved', 'ads', 'idc', 'checked_at'];
 const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy'];
@@ -838,10 +844,130 @@ function collectStocksWh_(cab, out) {
 }
 function syncStocksWh() {
   const rows = [];
-  getCabinets_().forEach(function (cab) { try { Logger.log('Остатки по складам ' + cab.id + ': ' + collectStocksWh_(cab, rows)); } catch (e) { Logger.log('Остатки по складам ' + cab.id + ': ' + e.message); } });
+  getCabinets_().forEach(function (cab) { try { Logger.log('Остатки ' + cab.id + ': строк ' + collectStocksWh_(cab, rows)); } catch (e) { Logger.log('Остатки по складам ' + cab.id + ': ' + e.message); } });
   if (rows.length) writeRows_(SHEET_NAMES.stocksWh, STOCKS_WH_HEADERS, rows);
   Logger.log('syncStocksWh: строк ' + rows.length);
 }
+
+
+// ---------- Поисковые запросы (позиции в поиске) ----------
+// /v1/analytics/product-queries/details — топ запросов по каждому товару за
+// день: средняя позиция, сколько людей искали, клики, заказы. Нужна подписка
+// Premium. Собираем по дням (каждый день — отдельный запрос), чтобы видеть динамику.
+function skusOf_(cab) {
+  const headers = sellerHeaders_(cab);
+  const skus = {};
+  let cursor = '';
+  for (let guard = 0; guard < 40; guard++) {
+    const data = fetchJson_('https://api-seller.ozon.ru/v4/product/info/stocks', {
+      method: 'post', contentType: 'application/json', headers: headers,
+      payload: JSON.stringify({ cursor: cursor, filter: { visibility: 'ALL' }, limit: 1000 }),
+    }, 'SKU');
+    (data.items || []).forEach(function (it) { (it.stocks || []).forEach(function (s) { if (s.sku) skus[s.sku] = it.offer_id; }); });
+    cursor = data.cursor || '';
+    if (!cursor || !(data.items || []).length) break;
+  }
+  return skus;
+}
+function postRetry_(url, headers, body, label) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const resp = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', headers: headers, muteHttpExceptions: true, payload: JSON.stringify(body) });
+    const code = resp.getResponseCode();
+    if (code === 429 || code >= 500) { Utilities.sleep(3000 * (attempt + 1)); continue; }
+    if (code >= 400) throw new Error(label + ': HTTP ' + code + ' ' + resp.getContentText().slice(0, 300));
+    return JSON.parse(resp.getContentText() || '{}');
+  }
+  throw new Error(label + ': Ozon просит реже (429)');
+}
+function collectQueries_(cab, dates, out, started) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return 0;
+  const skuMap = skusOf_(cab), skus = Object.keys(skuMap);
+  let n = 0, sampled = false;
+  for (let di = 0; di < dates.length; di++) {
+    const d = dates[di];
+    for (let i = 0; i < skus.length; i += 100) {
+      if (Date.now() - started > 300000) { Logger.log('Запросы ' + cab.id + ': время вышло на ' + d); return n; }
+      for (let page = 0; page < 20; page++) {
+        const data = postRetry_('https://api-seller.ozon.ru/v1/analytics/product-queries/details', headers,
+          { date_from: d + 'T00:00:00Z', date_to: d + 'T23:59:59Z', skus: skus.slice(i, i + 100), limit_by_sku: 15, page: page, page_size: 1000 }, 'Запросы ' + d);
+        const items = data.queries || data.items || (data.result && (data.result.queries || data.result.items)) || [];
+        if (!sampled && items.length) { sampled = true; Logger.log('Запросы ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 600)); }
+        items.forEach(function (q) {
+          out.push([cab.id, d, String(q.sku || ''), String(q.query || q.search_query || q.text || '').slice(0, 200),
+            Number(q.position != null ? q.position : q.avg_position) || '', Number(q.unique_search_users != null ? q.unique_search_users : q.searches) || 0,
+            Number(q.unique_view_users != null ? q.unique_view_users : q.views) || 0, Number(q.clicks != null ? q.clicks : q.to_pdp) || 0,
+            Number(q.order_count != null ? q.order_count : q.orders) || 0, Number(q.gmv != null ? q.gmv : q.revenue) || 0, Number(q.view_conversion != null ? q.view_conversion : q.conversion) || 0]);
+          n++;
+        });
+        const pages = data.page_count || (data.result && data.result.page_count) || 0;
+        if (!items.length || (pages && page + 1 >= pages) || items.length < 1000) break;
+      }
+      Utilities.sleep(700);
+    }
+  }
+  return n;
+}
+function syncQueries(days) {
+  const window = typeof days === 'number' ? days : 2;
+  const dates = []; for (let i = window; i >= 1; i--) dates.push(mskDate_(i)); // полные дни, без сегодня
+  const started = Date.now();
+  const rows = [];
+  getCabinets_().forEach(function (cab) { try { Logger.log('Запросы ' + cab.id + ': строк ' + collectQueries_(cab, dates, rows, started)); } catch (e) { Logger.log('Запросы ' + cab.id + ': ' + e.message); } });
+  const done = {}; rows.forEach(function (r) { done[r[1]] = true; });
+  const total = replaceDates_(SHEET_NAMES.queries, QUERIES_HEADERS, rows, done, 1);
+  Logger.log('syncQueries: строк ' + rows.length + ' (всего во вкладке ' + total + ')');
+}
+function syncQueriesFull() { syncQueries(14); }
+
+// ---------- Продажи по месяцам (сезонность) ----------
+function collectMonthly_(cab, from, to, out) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return 0;
+  let n = 0;
+  for (let offset = 0, guard = 0; guard < 200; guard++) {
+    const data = postRetry_('https://api-seller.ozon.ru/v1/analytics/data', headers,
+      { date_from: from, date_to: to, metrics: ['revenue', 'ordered_units'], dimension: ['sku', 'month'], limit: 1000, offset: offset }, 'Месяцы ' + from);
+    const rows = (data.result && data.result.data) || [];
+    rows.forEach(function (r) {
+      const dims = r.dimensions || [];
+      const sku = dims[0] && dims[0].id, m = String(dims[1] && dims[1].id || '');
+      if (!sku || !m) return;
+      const month = /^\d{4}-\d{2}/.test(m) ? m.slice(0, 7) : m;
+      out.push([cab.id, month, sku, Number(r.metrics[0]) || 0, Number(r.metrics[1]) || 0]);
+      n++;
+    });
+    if (rows.length < 1000) break;
+    offset += 1000;
+    Utilities.sleep(400);
+  }
+  return n;
+}
+// Раз в сутки — текущий и прошлый месяц; первый раз syncMonthlyFull — 2 года.
+function syncMonthly(months) {
+  const back = typeof months === 'number' ? months : 2;
+  const now = new Date();
+  const fromD = new Date(now.getFullYear(), now.getMonth() - back + 1, 1);
+  const from = Utilities.formatDate(fromD, 'GMT+3', 'yyyy-MM-dd'), to = mskDate_(0);
+  const rows = [];
+  getCabinets_().forEach(function (cab) {
+    try {
+      // По году за запрос — у Ozon ограничение на длину периода.
+      for (let y = new Date(fromD); y <= now; y = new Date(y.getFullYear() + 1, y.getMonth(), 1)) {
+        const f = Utilities.formatDate(y, 'GMT+3', 'yyyy-MM-dd');
+        const tEnd = new Date(y.getFullYear() + 1, y.getMonth(), 0);
+        const t = tEnd > now ? to : Utilities.formatDate(tEnd, 'GMT+3', 'yyyy-MM-dd');
+        Logger.log('Месяцы ' + cab.id + ' ' + f + '..' + t + ': ' + collectMonthly_(cab, f, t, rows));
+      }
+    } catch (e) { Logger.log('Месяцы ' + cab.id + ': ' + e.message); }
+  });
+  if (!rows.length) return;
+  const map = readSheetAsMap_(SHEET_NAMES.monthly, [0, 1, 2]);
+  rows.forEach(function (r) { map[[r[0], r[1], r[2]].join('|')] = r; });
+  writeRows_(SHEET_NAMES.monthly, MONTHLY_HEADERS, Object.keys(map).map(function (k) { return map[k]; }));
+  Logger.log('syncMonthly: строк ' + rows.length + ' (всего во вкладке ' + Object.keys(map).length + ')');
+}
+function syncMonthlyFull() { syncMonthly(25); }
 
 // ---------- Финансы (начисления и списания Ozon) ----------
 // Ozon отключил /v3/finance/transaction/list (сентябрь 2026). Теперь —
@@ -1148,7 +1274,7 @@ function syncDaily() {
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh', 'syncQueries', 'syncMonthly'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
@@ -1160,6 +1286,8 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncGeo').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('syncFinance').timeBased().everyHours(6).create();
   ScriptApp.newTrigger('syncStocksWh').timeBased().everyHours(2).create();
+  ScriptApp.newTrigger('syncQueries').timeBased().atHour(6).everyDays(1).create();
+  ScriptApp.newTrigger('syncMonthly').timeBased().atHour(7).everyDays(1).create();
   Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, syncFinance каждые 6 часов.');
 }
 

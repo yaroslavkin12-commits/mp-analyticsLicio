@@ -48,6 +48,8 @@ export default function AvgCheck({ cabinet }) {
   const [base, setBase] = useState('orders');
   const [gran, setGran] = useState('day');
   const [split, setSplit] = useState(true);
+  // На графике: одна база по подкатегориям или сразу несколько линий (чек заказа, выкупа, поступление).
+  const [multi, setMulti] = useState(false);
   const tip = useTip();
   const grp = useGroups(cabinet);
 
@@ -134,8 +136,13 @@ export default function AvgCheck({ cabinet }) {
     const s = s0 || sumOf(items);
     series.push({ key, label, fmt: 'int', kind: 'line', side: 'left', color, values: buckets.map(b => metricsOf(s, b.idx)[base]) });
   };
-  mk('total', sel ? `${sel.split(SEP).slice(-1)[0]} — всего` : 'Все товары', null, 'var(--a-ink)', S);
-  if (split) kids.slice(0, 6).forEach((k, i) => mk(k, k, list.arts.filter(a => a.parts[depth] === k), depth === 0 ? (CAT_COLORS[cats.topSlot(k)] || OTHER) : (CAT_COLORS[i] || OTHER)));
+  const LINE_COLORS = { orders: 'var(--a-rev)', sales: 'var(--s-c3)', payout: 'var(--a-spend)' };
+  if (multi) {
+    for (const [k, l] of [['orders', 'Чек заказа'], ['sales', 'Чек выкупа'], ['payout', 'Поступление на 1 выкуп']]) {
+      series.push({ key: k, label: l, fmt: 'int', kind: 'line', side: 'left', color: LINE_COLORS[k], values: buckets.map(b => metricsOf(S, b.idx)[k]) });
+    }
+  } else mk('total', sel ? `${sel.split(SEP).slice(-1)[0]} — всего` : 'Все товары', null, 'var(--a-ink)', S);
+  if (split && !multi) kids.slice(0, 6).forEach((k, i) => mk(k, k, list.arts.filter(a => a.parts[depth] === k), depth === 0 ? (CAT_COLORS[cats.topSlot(k)] || OTHER) : (CAT_COLORS[i] || OTHER)));
   const allV = series.flatMap(s => s.values).filter(v => v !== null && Number.isFinite(v));
   const sc = niceScale(allV.length ? Math.min(...allV) : 0, allV.length ? Math.max(...allV) : 1, true);
   series.forEach(s => { s.scale = sc; });
@@ -169,8 +176,9 @@ export default function AvgCheck({ cabinet }) {
 
       <div className={`a-card s-card ${loading ? 'a-loading' : ''}`}>
         <div className="a-bar" style={{ marginBottom: 8 }}>
-          <b style={{ fontSize: 14 }}>Средний чек {baseLabel}</b>
-          {kids.length > 0 && <label className="sw"><input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} /><i />по подкатегориям</label>}
+          <b style={{ fontSize: 14 }}>{multi ? 'Чек заказа, чек выкупа и поступление на счёт' : `Средний чек ${baseLabel}`}</b>
+          <label className="sw" title="Три линии на одном графике: чек заказа, чек выкупа и среднее поступление на счёт"><input type="checkbox" checked={multi} onChange={e => setMulti(e.target.checked)} /><i />все три линии</label>
+          {kids.length > 0 && !multi && <label className="sw"><input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} /><i />по подкатегориям</label>}
           <span className="a-seg" style={{ marginLeft: 'auto' }}>{[['day', 'Дни'], ['week', 'Недели'], ['month', 'Месяцы']].map(([v, l]) => <button key={v} type="button" className={gran === v ? 'on' : ''} onClick={() => setGran(v)}>{l}</button>)}</span>
         </div>
         <ChartPane dates={bdates} series={series} events={[]} tip={tip} height={240} showX onHover={() => {}} hoverIdx={null} />

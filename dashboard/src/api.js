@@ -84,3 +84,8 @@ export const getDigestSettings = cabinet => api.get('/digest/settings', { params
 export const saveDigestSettings = (cabinet, s) => api.post('/digest/settings', { cabinet, ...s });
 export const previewDigest = cabinet => api.get('/digest/preview', { params: { cabinet }, timeout: 60000 });
 export const sendDigestNow = cabinet => api.post('/digest/send', { cabinet }, { timeout: 60000 });
+export const getPlan = (cabinet, month) => api.get('/plan', { params: { cabinet, month } });
+export const savePlan = (cabinet, month, plan) => api.post('/plan', { cabinet, month, plan });
+export const getQueries = (cabinet, p) => api.get('/queries/data', { params: { cabinet, ...p }, timeout: 90000 });
+export const getQuerySeries = (cabinet, offerId, q, days) => api.get('/queries/series', { params: { cabinet, offerId, query: q, days } });
+export const getSeason = cabinet => api.get('/queries/season', { params: { cabinet }, timeout: 90000 });

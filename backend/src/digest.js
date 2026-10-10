@@ -87,6 +87,18 @@ async function buildMorningDigest(cabinet) {
   L.push(`📣 Реклама: ${fmt(spendY)} ₽ · ДРР ${y.r ? (spendY / y.r * 100).toFixed(1).replace('.', ',') : '—'}%`);
   L.push(`💰 Прибыль от заказов (оценка): <b>${fmt(profit)} ₽</b> · маржа ${expRev > 0 ? (profit / expRev * 100).toFixed(0) : '—'}%`);
   L.push(`   <i>выкуп ${(b * 100).toFixed(0)}%, удержания Ozon ${(ozRate * 100).toFixed(0)}%, себестоимость ${(costRate * 100).toFixed(0)}%${costRate === 0 ? ' (не заполнена)' : ''}, налог ${(tax * 100).toFixed(0)}%</i>`);
+  // План месяца (вкладка «План / факт»): выполнение и прогноз по заказам ₽.
+  try {
+    const mKey = dayjs(Y).format('YYYY-MM');
+    const pr = await query(`SELECT value FROM app_settings WHERE key = $1`, [`plan:${cabinet}:${mKey}`]);
+    const planRev = pr[0] ? JSON.parse(pr[0].value)?.['Все']?.revenue : null;
+    if (planRev) {
+      const mtd = await query(`SELECT SUM(revenue) r FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, mKey + '-01', Y]);
+      const fact = num(mtd[0]?.r), days = dayjs(Y).date(), D = dayjs(Y).daysInMonth();
+      const fc = fact + (avgR || 0) * (D - days);
+      L.push(`🎯 План месяца: ${fmt(fact)} из ${fmt(planRev)} ₽ (${(fact / planRev * 100).toFixed(0)}%), темп ${(fact / (planRev * days / D) * 100).toFixed(0)}% · прогноз ${(fc / planRev * 100).toFixed(0)}%`);
+    }
+  } catch (e) { /* без плана — пропускаем */ }
   if (saleY) L.push(`🧾 Выкупы по финансам: ${fmt(saleY)} ₽ · ${fmt(qtyY)} шт · к перечислению ≈ ${fmt(payY)} ₽`);
 
   const movers = arts.map(r => ({ o: r.offer_id, y: num(r.y), a: num(r.a), d: num(r.y) - num(r.a) })).filter(r => r.a >= 3000 || r.y >= 3000);

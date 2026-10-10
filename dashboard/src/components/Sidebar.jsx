@@ -2,7 +2,14 @@ import React, { useState, useRef, useEffect } from 'react';
 
 const NAV_BY_CABINET = {
   licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
-  defly: [['sales','📈','Аналитика продаж'],['ads','📣','Реклама'],['inventory','🏬','Остатки'],['geo','🗺️','География продаж'],['check','🧾','Средний чек'],['abc','🔤','ABC-анализ'],['unit','🧩','Юнит-экономика'],['margin','🏷️','Цены и маржа'],['pnl','💰','P&L'],['recon','🔎','Сверка с Ozon'],['buyout','📦','% выкупа'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Себестоимость']],
+  // Разделы меню Defly: заголовок раздела — ['__h', 'Название'].
+  defly: [
+    ['__h','Продажи'],['sales','📈','Аналитика продаж'],['plan','🎯','План / факт'],['check','🧾','Средний чек'],['abc','🔤','ABC-анализ'],['season','🍂','Сезонность'],['geo','🗺️','География продаж'],
+    ['__h','Реклама и поиск'],['ads','📣','Реклама'],['search','🔍','Позиции в поиске'],['discounts','💸','Соинвест'],
+    ['__h','Склад'],['inventory','🏬','Остатки'],['buyout','📦','% выкупа'],
+    ['__h','Деньги'],['unit','🧩','Юнит-экономика'],['margin','🏷️','Цены и маржа'],['pnl','💰','P&L'],['recon','🔎','Сверка с Ozon'],
+    ['__h','Инструменты'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Себестоимость'],
+  ],
 };
 const CABINETS = [['licio','Licio'],['defly','Defly']];
 
@@ -68,10 +75,12 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
           </div>
         )}
       </div>
-      <nav style={{ flex:1, padding:'4px 8px' }}>
-        {nav.map(([id,icon,label]) => (
+      <nav style={{ flex:1, padding:'4px 8px', overflowY:'auto' }}>
+        {nav.map(([id,icon,label]) => id === '__h' ? (
+          <div key={'h' + icon} style={{ fontSize:10.5, fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)', padding:'10px 12px 4px' }}>{icon}</div>
+        ) : (
           <button key={id} onClick={() => setPage(id)} style={{
-            display:'flex', alignItems:'center', gap:9, width:'100%', padding:'9px 12px', borderRadius:8,
+            display:'flex', alignItems:'center', gap:9, width:'100%', padding:'7px 12px', borderRadius:8,
             border:'none', marginBottom:2, background:page===id?'var(--surface2)':'transparent',
             color:page===id?'var(--text)':'var(--text2)', fontWeight:page===id?600:400, fontSize:13, textAlign:'left', transition:'all .12s',
           }}>
