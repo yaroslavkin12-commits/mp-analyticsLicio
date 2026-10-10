@@ -10,8 +10,8 @@ import './sales.css';
 // «Юнит-экономика» — прогноз прибыли от заказов каждого дня по средним за
 // последние 30 дней:
 //   ожидаемая выручка = заказы ₽ × средний % выкупа артикула;
-//   комиссия — точный % из карточки товара для FBO и FBS, доля FBS — по
-//   заказам дня; эквайринг — фактическая доля от выкупов (из финансов
+//   комиссия — FBO из карточки товара, FBS — фактическая средняя (у FBS она
+//   зависит от скорости отгрузки: 44 / 45 / 47%); доля FBS — по заказам дня; эквайринг — фактическая доля от выкупов (из финансов
 //   Ozon; если продаж мало — среднее категории);
 //   логистика — фактическая логистика на 1 заказанную штуку;
 //   хранение и прочие услуги — доля от выкупов (+ общие начисления без
@@ -23,7 +23,7 @@ import './sales.css';
 // ─────────────────────────────────────────────────────────────────────────
 
 // Индексы в строке coefs (после ai).
-const C = { sale: 1, saleQty: 2, comm: 3, logi: 4, acq: 5, storage: 6, promo: 7, other: 8, ord: 9, del: 10, canc: 11, pctFbo: 12, acqItem: 13, price: 14, cost: 15, pctFbs: 16, ordFbs: 17, ads: 18 };
+const C = { sale: 1, saleQty: 2, comm: 3, logi: 4, acq: 5, storage: 6, promo: 7, other: 8, ord: 9, del: 10, canc: 11, pctFbo: 12, acqItem: 13, price: 14, cost: 15, pctFbs: 16, ordFbs: 17, ads: 18, commFbs: 19, saleFbs: 20, commFbo: 21, saleFbo: 22 };
 const ROWS = [
   { block: 'Заказы', tone: 'rev' },
   { key: 'ordRub', label: 'Заказано, ₽', fmt: 'int', good: 'up' },
@@ -86,7 +86,7 @@ export default function UnitEconomics({ cabinet }) {
   const K = useMemo(() => {
     if (!sales || !coefs) return null;
     const byOffer = new Map(coefs.coefs.map(c => [coefs.articles[c[0]].o, c]));
-    const W = 19;
+    const W = 23;
     const groups = new Map(); // path → суммы
     const add = (key, c) => { let g = groups.get(key); if (!g) { g = new Float64Array(W); groups.set(key, g); } for (let i = 1; i < W; i++) if (i !== C.pctFbo && i !== C.pctFbs && i !== C.acqItem && i !== C.price && i !== C.cost) g[i] += c[i] || 0; };
     for (const a of cats.arts) {
@@ -105,7 +105,10 @@ export default function UnitEconomics({ cabinet }) {
       // FBS берётся по заказам дня (ниже), без них — по 30 дням.
       const factComm = pick(L, g => g[C.sale] > 0 && g[C.saleQty] >= 3 && g[C.comm] < 0, g => -g[C.comm] / g[C.sale]);
       const pFbo = own && own[C.pctFbo] ? own[C.pctFbo] / 100 : null, pFbs = own && own[C.pctFbs] ? own[C.pctFbs] / 100 : null;
-      const commFbo = pFbo ?? pFbs ?? factComm ?? 0.2, commFbs = pFbs ?? pFbo ?? factComm ?? 0.2;
+      // FBS: ставка зависит от скорости отгрузки (44 / 45 / 47%) — берём
+      // фактическую среднюю FBS из финансов (товар → категория → кабинет).
+      const factFbs = pick(L, g => g[C.saleFbs] > 0 && g[C.commFbs] < 0, g => -g[C.commFbs] / g[C.saleFbs]);
+      const commFbo = pFbo ?? pFbs ?? factComm ?? 0.2, commFbs = factFbs ?? pFbs ?? pFbo ?? factComm ?? 0.2;
       const fbs30 = pick(L, g => g[C.ord] >= 5, g => g[C.ordFbs] / g[C.ord]) ?? 0;
       const commCard = pFbo !== null || pFbs !== null;
       const logi = pick(L, g => g[C.ord] >= 5 && g[C.logi] < 0, g => -g[C.logi] / g[C.ord]) ?? 0;

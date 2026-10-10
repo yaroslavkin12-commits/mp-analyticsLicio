@@ -25,6 +25,8 @@ const rub = v => (v === null || v === undefined || !Number.isFinite(v)) ? '—' 
 const median = arr => { const a = arr.filter(v => v !== null && Number.isFinite(v)).sort((x, y) => x - y); if (!a.length) return null; const m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
 const r1 = v => (v === null || !Number.isFinite(v)) ? null : Math.round(v * 10) / 10;
 const HIST_KEY = 'mp-calc-history';
+// Время от заказа до отгрузки FBS → поправка к комиссии из карточки, п.п.
+const SHIP = [['fact', 'как сейчас (факт за 30 дней)', 0], ['12', 'до 12 часов', -3], ['24', '12–24 часа', -2], ['36', '24–36 часов', 0], ['48', '36–48 часов', 1], ['72', 'больше 48 часов', 2]];
 
 // Суммы по набору артикулов → коэффициенты «базы».
 function baseOf(rows, scheme) {
@@ -36,17 +38,32 @@ function baseOf(rows, scheme) {
     if (x[11] !== null) { const w = x[24] || 1; sppW += w; sppV += x[11] * w; }
   }
   const fbs = scheme === 'fbs';
-  const tariff = (i) => median(rows.map(x => x[i]));
-  const direct = fbs ? (tariff(8) || 0) + (tariff(9) || 0) : (tariff(5) || 0) + (tariff(6) || 0);
+  // Логистика — по фактическим списаниям: прямая (с последней милей и
+  // обработкой) на одну отправку и обратная на один возврат. Тарифы из
+  // карточки Ozon — это максимум по всем кластерам, они сильно завышены.
+  let dSum = 0, dTrips = 0, rSum = 0, rTrips = 0, cFbs = 0, sFbs = 0, cFbo = 0, sFbo = 0;
+  for (const x of rows) { dSum += x[30] || 0; dTrips += x[31] || 0; rSum += x[32] || 0; rTrips += x[33] || 0; cFbo += x[26] || 0; sFbo += x[27] || 0; cFbs += x[28] || 0; sFbs += x[29] || 0; }
+  const bo = del + can >= 10 ? del / (del + can) : null;
+  let direct = dTrips >= 3 && dSum < 0 ? -dSum / dTrips : null;
+  let ret = rTrips >= 2 && rSum < 0 ? -rSum / rTrips : null;
+  if (direct === null && saleQty >= 3 && logi < 0) {
+    // Старые данные без числа отправок: логистика на продажу F = d·t + r·(t−1), r ≈ d, t = 1/выкуп.
+    const t = 1 / (bo || 0.8);
+    direct = -logi / saleQty / (2 * t - 1);
+  }
+  if (ret === null && direct !== null) ret = direct;
+  const factFbs = sFbs > 0 && cFbs < 0 ? -cFbs / sFbs * 100 : null;
+  const factFbo = sFbo > 0 && cFbo < 0 ? -cFbo / sFbo * 100 : null;
   return {
     n: rows.length,
     price: median(rows.map(x => x[1])),
     avgCheck: q30 > 0 ? rev / q30 : null,
     commission: median(rows.map(x => (fbs ? x[3] : x[2]))),
+    commCard: median(rows.map(x => (fbs ? x[3] : x[2]))),
+    commFact: fbs ? factFbs : factFbo,
     buyout: del + can >= 10 ? del / (del + can) * 100 : null,
     spp: sppW ? sppV / sppW : null,
-    direct: direct || null,
-    ret: tariff(fbs ? 10 : 7),
+    direct, ret, trips: dTrips,
     logiFact: ord >= 5 && logi < 0 ? -logi / ord : null, // ₽ на заказанную штуку (факт)
     acquiring: sale > 0 && saleQty >= 3 ? Math.max(0, -acq / sale * 100) : null,
     other: sale > 0 && saleQty >= 3 ? Math.max(0, -so / sale * 100) : null,
@@ -67,7 +84,7 @@ const FIELDS = [
   ['defect', 'Процент брака', '%'],
   ['commission', 'Комиссия Ozon', '%'],
   ['acquiring', 'Эквайринг', '%'],
-  ['direct', 'Логистика за поездку (прямой поток + доставка)', '₽'],
+  ['direct', 'Логистика за отправку (с доставкой до ПВЗ и обработкой)', '₽'],
   ['ret', 'Обратная логистика за невыкуп', '₽'],
   ['other', 'Хранение и прочие услуги', '%'],
   ['drr', 'Реклама (ДРР)', '%'],
@@ -133,6 +150,7 @@ export default function Calculator({ cabinet }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [scheme, setScheme] = useState('fbo');
+  const [ship, setShip] = useState('fact');
   const [cat, setCat] = useState('');
   const [art, setArt] = useState(null);
   const [q, setQ] = useState('');
@@ -181,15 +199,27 @@ export default function Calculator({ cabinet }) {
     const catLabel = cat ? `категория, ${bCat?.n || 0} арт.` : `кабинет, ${bAll?.n || 0} арт.`;
     const S = [[bOwn, 'из карточки товара'], [bCat, catLabel], [bAll, 'весь кабинет']];
     const SF = [[bOwn, 'факт товара за 30 дн'], [bCat, `факт ${catLabel}`], [bAll, 'факт кабинета']];
-    const SL = [[bOwn, 'тариф Ozon из карточки'], [bVol, `тариф похожих по объёму (${volN} арт.)`], [bCat, `тариф, ${catLabel}`], [bAll, 'тариф, кабинет']];
+    const SL = [[bOwn, 'факт товара: списания / отправки'], [bVol, `факт похожих по объёму (${volN} арт.)`], [bCat, `факт, ${catLabel}`], [bAll, 'факт кабинета']];
+    // Комиссия: FBO — из карточки (одна ставка). FBS — зависит от скорости
+    // отгрузки: по отчёту Ozon у одного товара бывает 44, 45 или 47%. По
+    // умолчанию берём фактическую среднюю FBS за 30 дней, можно выбрать время.
+    const commOf = () => {
+      if (scheme === 'fbs' && ship === 'fact') {
+        const f = pick('commFact', [[bOwn, 'факт FBS товара за 30 дн'], [bCat, `факт FBS, ${catLabel}`], [bAll, 'факт FBS кабинета']]);
+        if (f[0] !== null && f[0] !== undefined) return f;
+      }
+      const c = pick('commCard', S);
+      const adj = scheme === 'fbs' ? (SHIP.find(x => x[0] === ship)?.[2] || 0) : 0;
+      return [c[0] + adj, c[1] + (adj ? ` ${adj > 0 ? '+' : '−'}${Math.abs(adj)} п.п. за время отгрузки` : '')];
+    };
     const out = {
       price: pick(own ? 'price' : 'price', S), spp: pick('spp', S), cost: pick('cost', S), buyout: pick('buyout', SF),
-      commission: pick('commission', S), acquiring: pick('acquiring', SF), direct: pick('direct', SL), ret: pick('ret', SL),
+      commission: commOf(), acquiring: pick('acquiring', SF), direct: pick('direct', SL), ret: pick('ret', SL),
       other: pick('other', SF), drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
     };
     if (own && (own[12] === null)) out.cost = [null, 'нет себестоимости — заполните во вкладке «Себестоимость»'];
     return { out, bCat, bOwn, bAll };
-  }, [data, cat, art, scheme, volume, arts, rowsByArt]);
+  }, [data, cat, art, scheme, volume, arts, rowsByArt, ship]);
 
   const auto = k => base?.out[k]?.[0];
   const val = k => (vals[k] !== undefined ? vals[k] : (auto(k) !== null && auto(k) !== undefined ? String(r1(auto(k)) ?? '') : ''));
@@ -306,7 +336,7 @@ export default function Calculator({ cabinet }) {
               <div className="k-head"><b>Габариты</b>
                 <span className="a-seg">{[['dims', 'Д × Ш × В'], ['liters', 'Объём, л']].map(([k, l]) => <button key={k} type="button" className={dimMode === k ? 'on' : ''} onClick={() => setDimMode(k)}>{l}</button>)}</span>
               </div>
-              <div className="a-hint" style={{ marginBottom: 8 }}>Для нового товара логистика берётся по тарифам Ozon у ваших товаров похожего объёма (±35%). У товара из кабинета — его собственный тариф.</div>
+              <div className="a-hint" style={{ marginBottom: 8 }}>Логистика — по фактическим списаниям Ozon за 30 дней: у товара из кабинета — его собственная, у нового — по вашим товарам похожего объёма (±35%), иначе по категории.</div>
               {dimMode === 'dims' ? (
                 <div className="k-three">
                   {[['l', 'Длина'], ['w', 'Ширина'], ['h', 'Высота']].map(([k, l]) => (
@@ -321,7 +351,20 @@ export default function Calculator({ cabinet }) {
 
             <div className="a-card k-card">
               <div className="k-head"><b>Расходы Ozon</b></div>
-              <div className="k-two">{field('commission')}{field('acquiring')}{field('direct')}{field('ret')}{field('other')}{field('drr')}</div>
+              <div className="k-two">
+                {field('commission')}
+                {scheme === 'fbs' ? (
+                  <label className="k-field">
+                    <span className="k-lbl">Время отгрузки FBS (влияет на комиссию)</span>
+                    <span className="k-inp"><select value={ship} onChange={e => { setShip(e.target.value); reset('commission'); }}>
+                      {SHIP.map(([k, l, a]) => <option key={k} value={k}>{l}{k !== 'fact' ? ` (${a > 0 ? '+' : a < 0 ? '−' : '±'}${Math.abs(a)} п.п.)` : ''}</option>)}
+                    </select></span>
+                    <span className="k-src">от карточки {pct1(base?.bOwn?.commCard ?? base?.bCat?.commCard)}; по отчёту Ozon у FBS бывает 44 / 45 / 47%</span>
+                  </label>
+                ) : field('acquiring')}
+                {scheme === 'fbs' && field('acquiring')}
+                {field('direct')}{field('ret')}{field('other')}{field('drr')}
+              </div>
             </div>
 
             <div className="a-card k-card">
@@ -421,7 +464,7 @@ function BaseTable({ data, arts, leafCats, tops, scheme, setScheme, onPick }) {
         <table className="a-t s-slice">
           <thead><tr>
             <th>Категория</th><th className="r">Арт.</th><th className="r">Цена (медиана)</th><th className="r">Комиссия</th><th className="r">Выкуп</th><th className="r">СПП</th>
-            <th className="r">Логистика / поездка</th><th className="r">Обратная</th><th className="r">Логистика факт / заказ</th><th className="r">Эквайринг</th><th className="r">Хранение и пр.</th><th className="r">ДРР</th><th className="r">Объём, л</th><th className="r">Заказов 30 дн</th>
+            <th className="r">Комиссия факт</th><th className="r">Логистика / отправка</th><th className="r">Обратная / возврат</th><th className="r">Логистика / заказ</th><th className="r">Эквайринг</th><th className="r">Хранение и пр.</th><th className="r">ДРР</th><th className="r">Объём, л</th><th className="r">Заказов 30 дн</th>
           </tr></thead>
           <tbody>
             {rows.map(({ c, b }) => {
@@ -430,7 +473,7 @@ function BaseTable({ data, arts, leafCats, tops, scheme, setScheme, onPick }) {
                 <tr key={c} className="row" style={{ cursor: 'pointer' }} onClick={() => onPick(c)}>
                   <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><i className="s-dot" style={{ background: CAT_COLORS[tops.indexOf(top)] || 'var(--a-ink3)' }} />{c.split(SEP).join(' › ')}</span></td>
                   <td className="n r">{b.n}</td><td className="n r">{rub(b.price)}</td><td className="n r">{pct1(b.commission)}</td><td className="n r">{pct1(b.buyout)}</td><td className="n r">{pct1(b.spp)}</td>
-                  <td className="n r">{rub(b.direct)}</td><td className="n r">{rub(b.ret)}</td><td className="n r">{rub(b.logiFact)}</td><td className="n r">{pct1(b.acquiring)}</td><td className="n r">{pct1(b.other)}</td><td className="n r">{pct1(b.drr)}</td>
+                  <td className="n r">{pct1(b.commFact)}</td><td className="n r">{rub(b.direct)}</td><td className="n r">{rub(b.ret)}</td><td className="n r">{rub(b.logiFact)}</td><td className="n r">{pct1(b.acquiring)}</td><td className="n r">{pct1(b.other)}</td><td className="n r">{pct1(b.drr)}</td>
                   <td className="n r">{b.volume ? b.volume.toFixed(1).replace('.', ',') : '—'}</td><td className="n r">{fmtInt(b.orders)}</td>
                 </tr>
               );

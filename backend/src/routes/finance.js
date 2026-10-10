@@ -18,8 +18,8 @@ const { ensureFinTables } = require('../collectors/ads/sheetSync');
 // ─────────────────────────────────────────────────────────────────────────
 
 const BUCKETS = [
-  ['sale', /^Продажа$/],
-  ['return', /^Возврат выручки$/],
+  ['sale', /^Продажа( \w+)?$/],
+  ['return', /^Возврат выручки( \w+)?$/],
   ['commission', /комисси/i],
   ['acquiring', /acquiring|эквайр/i],
   // Реклама Ozon (оплата за клик / за заказ) — списывается из начислений.
@@ -84,15 +84,18 @@ router.get('/coefs', async (req, res) => {
       query(`SELECT article, cost_price, cabinet FROM product_costs`),
       query(`SELECT name, SUM(amount) a FROM finance_daily WHERE cabinet = $1 AND date >= $2 GROUP BY name ORDER BY SUM(amount)`, [cabinet, since]),
     ]);
-    // [saleAmt, saleQty, commission, logistics, acquiring, storage, promo, other, ordered30, delivered, cancelled, pctFbo, acqPerItem, price, cost, pctFbs, ordered30Fbs, ads]
+    // [saleAmt, saleQty, commission, logistics, acquiring, storage, promo, other, ordered30, delivered, cancelled, pctFbo, acqPerItem, price, cost, pctFbs, ordered30Fbs, ads, commFbs, saleFbs, commFbo, saleFbo]
     const C = new Map();
-    const get = ai => { if (!C.has(ai)) C.set(ai, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, 0, 0]); return C.get(ai); };
+    const get = ai => { if (!C.has(ai)) C.set(ai, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0, 0, 0]); return C.get(ai); };
     const noSku = {};
     for (const r of fin) {
       const b = bucketOf(r.name), a = num(r.a), q = num(r.q);
       const o = r.sku ? m.offerBySku.get(String(r.sku)) : null;
       if (!o) { noSku[b] = (noSku[b] || 0) + a; continue; }
       const x = get(m.art(o));
+      const fbs = / FBS$/.test(r.name) ? 1 : / FBO$/.test(r.name) ? 0 : -1;
+      if (b === 'sale' || b === 'return') { if (fbs === 1) x[19] += a; else if (fbs === 0) x[21] += a; }
+      if (b === 'commission') { if (fbs === 1) x[18] += a; else if (fbs === 0) x[20] += a; }
       if (b === 'sale') { x[0] += a; x[1] += q; }
       else if (b === 'return') { x[0] += a; x[1] -= Math.abs(q); }
       else if (b === 'commission') x[2] += a;
@@ -207,7 +210,8 @@ router.get('/buyout', async (req, res) => {
 // тарифы логистики Ozon, объём, СПП, себестоимость, выкуп, фактические
 // начисления, реклама и заказы. Средние по категориям считает страница.
 // a: [ai, price, pctFbo, pctFbs, volL, fboDirect, fboDeliv, fboReturn, fbsDirect, fbsDeliv, fbsReturn,
-//     spp, cost, ordered30, ordFbs30, delivered, cancelled, saleAmt, saleQty, comm, logi, acq, storOther, ads30, rev30, qty30]
+//     spp, cost, ordered30, ordFbs30, delivered, cancelled, saleAmt, saleQty, comm, logi, acq, storOther, ads30, rev30, qty30,
+//     commFbo, saleFbo, commFbs, saleFbs, directSum, directTrips, returnSum, returnTrips]
 router.get('/calc-base', async (req, res) => {
   try {
     await ensureFinTables();
@@ -227,7 +231,7 @@ router.get('/calc-base', async (req, res) => {
       query(`SELECT offer_id, SUM(revenue) r, SUM(orders_item) q FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
     ]);
     const A = new Map();
-    const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); return A.get(ai); };
+    const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); return A.get(ai); };
     const known = new Set(m.articles.map(a => a.o));
     for (const r of prices) {
       if (!known.has(r.offer_id)) continue;
@@ -244,6 +248,14 @@ router.get('/calc-base', async (req, res) => {
     for (const r of fin) {
       const o = m.offerBySku.get(String(r.sku)); if (!o) continue;
       const x = get(o), b = bucketOf(r.name), a = num(r.a), q = num(r.q);
+      const fbs = / FBS$/.test(r.name) ? 1 : / FBO$/.test(r.name) ? 0 : -1;
+      if (b === 'commission' && fbs >= 0) x[fbs ? 28 : 26] += a;
+      if ((b === 'sale' || b === 'return') && fbs >= 0) x[fbs ? 29 : 27] += a;
+      if (b === 'logistics') {
+        // Поездки: прямая логистика (Logistic) — её количество = число отправок.
+        if (/return/i.test(r.name)) { x[32] += a; x[33] += /^ReturnFlowLogistic$/i.test(r.name) ? q : 0; }
+        else { x[30] += a; x[31] += /^Logistic$/i.test(r.name) ? q : 0; }
+      }
       if (b === 'sale') { x[17] += a; x[18] += q; } else if (b === 'return') { x[17] += a; x[18] -= Math.abs(q); }
       else if (b === 'commission') x[19] += a; else if (b === 'logistics') x[20] += a; else if (b === 'acquiring') x[21] += a;
       else if (b === 'ads') x[23] -= a; else x[22] += a;

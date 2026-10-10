@@ -849,29 +849,33 @@ function collectFinance_(cab, dates, agg, started, done) {
           if (o.type_id !== undefined && finAmount_(o) !== null) return true;
           return Object.keys(o).some(function (k) { return typeof o[k] === 'object' && hasTyped(o[k]); });
         };
-        const walk = function (o, sku, key) {
-          if (Array.isArray(o)) { o.forEach(function (x) { walk(x, sku, key); }); return; }
+        // Схема (FBO/FBS) — к названиям продажи и комиссии: комиссия у FBS
+        // зависит от скорости отгрузки и отличается от FBO.
+        const sch = rec.posting && rec.posting.delivery_schema ? ' ' + String(rec.posting.delivery_schema).toUpperCase() : '';
+        const walk = function (o, sku, key, pq) {
+          if (Array.isArray(o)) { o.forEach(function (x) { walk(x, sku, key, pq); }); return; }
           if (!o || typeof o !== 'object') return;
-          if (o.sku) { sku = String(o.sku); if (key === 'products' || key === 'items') qty += Number(o.quantity) || 0; }
+          if (o.sku) { sku = String(o.sku); pq = Number(o.quantity) || 1; if (key === 'products' || key === 'items') qty += pq; }
           const inner = Object.keys(o).some(function (k) { return typeof o[k] === 'object' && k !== 'total_amount' && hasTyped(o[k]); });
           const v = finAmount_(o);
           if (!inner && v !== null && (o.type_id !== undefined || key === 'commission')) {
-            const nm = o.type_id !== undefined ? nameOf(o.type_id, o.name) : 'Комиссия';
-            names[nm] = true; found += v; add(d, sku || recSku, nm, v, 0);
+            const nm = o.type_id !== undefined ? nameOf(o.type_id, o.name) : 'Комиссия' + sch;
+            // Количество у услуг по товару — чтобы считать стоимость одной поездки.
+            names[nm] = true; found += v; add(d, sku || recSku, nm, v, pq || 0);
             return;
           }
-          Object.keys(o).forEach(function (k) { if (k !== 'total_amount' && typeof o[k] === 'object') walk(o[k], sku, k); });
+          Object.keys(o).forEach(function (k) { if (k !== 'total_amount' && typeof o[k] === 'object') walk(o[k], sku, k, pq); });
         };
-        walk(rec, '', '');
+        walk(rec, '', '', 0);
         const rest = total - found;
         if (Math.abs(rest) > 0.01) {
           const cat = String(rec.accrued_category || '');
           let nm;
-          if (cat === 'POSTING' || /posting/i.test(cat)) nm = rest > 0 ? 'Продажа' : 'Возврат выручки';
+          if (cat === 'POSTING' || /posting/i.test(cat)) nm = (rest > 0 ? 'Продажа' : 'Возврат выручки') + sch;
           else nm = rec.type_id !== undefined ? nameOf(rec.type_id, rec.name) : (rec.name || cat || 'Прочее');
           names[nm] = true;
           const sk = uniq.length ? uniq : [''];
-          sk.forEach(function (x) { add(d, x, nm, rest / sk.length, nm === 'Продажа' ? (qty || 1) / sk.length : nm === 'Возврат выручки' ? -(qty || 1) / sk.length : 0); });
+          sk.forEach(function (x) { add(d, x, nm, rest / sk.length, /^Продажа/.test(nm) ? (qty || 1) / sk.length : /^Возврат выручки/.test(nm) ? -(qty || 1) / sk.length : 0); });
         }
       });
       lastId = res.last_id || '';
