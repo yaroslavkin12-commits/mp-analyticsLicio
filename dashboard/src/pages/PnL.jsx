@@ -89,7 +89,9 @@ export default function PnL({ cabinet }) {
   const finAds = useMemo(() => {
     if (!data) return false;
     const ai = data.buckets.indexOf('ads');
-    return data.rows.some(r => r[2] === ai) || data.noSku.some(r => r[1] === ai);
+    // Только если списания привязаны к товарам; без SKU (как сейчас у Ozon) —
+    // берём расход по товарам из рекламного кабинета, суммы совпадают.
+    return data.rows.some(r => r[2] === ai);
   }, [data, cats.arts, n]);
 
   const totalSale = useMemo(() => per.reduce((s, x) => { if (x) for (let i = 0; i < n; i++) s += x.b[0][i]; return s; }, 0), [per, n]);
@@ -126,7 +128,7 @@ export default function PnL({ cabinet }) {
       const oz = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
       const t = rev > 0 ? -rev * tax / 100 : 0;
       const p = rev + oz - v.adsRaw[i] - v.costRaw[i] + t;
-      out.revenue.push(rev); out.ozon.push(oz); out.payout.push(rev + oz + (finAds ? v.ads[i] : 0)); out.ads.push(-v.adsRaw[i]); out.cost.push(-v.costRaw[i]);
+      out.revenue.push(rev); out.ozon.push(oz); out.payout.push(rev + oz + (v.ads[i] || 0)); out.ads.push(-v.adsRaw[i]); out.cost.push(-v.costRaw[i]);
       out.tax.push(t); out.profit.push(p); out.margin.push(rev > 0 ? p / rev * 100 : null); out.drr.push(rev > 0 ? v.adsRaw[i] / rev * 100 : null);
       out.ozonAbs.push(-oz); out.adsAbs.push(v.adsRaw[i]);
     }
