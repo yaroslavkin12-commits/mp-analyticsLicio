@@ -788,26 +788,37 @@ function collectStocksWh_(cab, out) {
   }
   const list = Object.keys(skus);
   let n = 0, sampled = false;
+  const start = out.length;
   try {
     for (let i = 0; i < list.length; i += 100) {
-      const data = fetchJson_('https://api-seller.ozon.ru/v1/analytics/stocks', {
-        method: 'post', contentType: 'application/json', headers: headers,
-        payload: JSON.stringify({ skus: list.slice(i, i + 100) }),
-      }, 'Остатки по кластерам');
+      // Метод с кластерами ограничен по частоте (HTTP 429) — ждём и повторяем.
+      let data = null;
+      for (let attempt = 0; attempt < 6 && !data; attempt++) {
+        const resp = UrlFetchApp.fetch('https://api-seller.ozon.ru/v1/analytics/stocks', {
+          method: 'post', contentType: 'application/json', headers: headers, muteHttpExceptions: true,
+          payload: JSON.stringify({ skus: list.slice(i, i + 100) }),
+        });
+        const code = resp.getResponseCode();
+        if (code === 429 || code >= 500) { Utilities.sleep(4000 * (attempt + 1)); continue; }
+        if (code >= 400) throw new Error('Остатки по кластерам: HTTP ' + code + ' ' + resp.getContentText().slice(0, 200));
+        data = JSON.parse(resp.getContentText() || '{}');
+      }
+      if (!data) throw new Error('Остатки по кластерам: HTTP 429 — Ozon просит реже, попробую в следующий запуск');
       const items = data.items || (data.result && data.result.items) || [];
-      if (!sampled && items.length) { sampled = true; Logger.log('Остатки по кластерам ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 800)); }
+      if (!sampled && items.length) { sampled = true; Logger.log('Остатки по кластерам ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 400)); }
       items.forEach(function (it) {
         const sku = String(it.sku || '');
         out.push([cab.id, sku, it.offer_id || offerBySku[sku] || '', it.cluster_name || '', it.warehouse_name || '',
           Number(it.available_stock_count) || 0,
           (Number(it.transit_stock_count) || 0) + (Number(it.requested_stock_count) || 0) + (Number(it.waiting_docs_stock_count) || 0),
-          Number(it.reserved_stock_count || it.reserved_amount) || 0, Number(it.ads) || 0, Number(it.idc) || 0, now]);
+          Number(it.reserved_stock_count || it.reserved_amount) || 0, Number(it.ads_cluster != null ? it.ads_cluster : it.ads) || 0,
+          Number(it.idc_cluster != null ? it.idc_cluster : it.idc) || 0, now]);
         n++;
       });
-      Utilities.sleep(250);
+      Utilities.sleep(1200);
     }
     if (n) return n;
-  } catch (e) { Logger.log('Остатки по кластерам ' + cab.id + ' (v1): ' + e.message + ' — беру остатки по складам'); }
+  } catch (e) { out.length = start; n = 0; Logger.log('Остатки по кластерам ' + cab.id + ' (v1): ' + e.message + ' — беру остатки по складам'); }
   for (let offset = 0, guard = 0; guard < 50; guard++) {
     const data = fetchJson_('https://api-seller.ozon.ru/v2/analytics/stock_on_warehouses', {
       method: 'post', contentType: 'application/json', headers: headers,
