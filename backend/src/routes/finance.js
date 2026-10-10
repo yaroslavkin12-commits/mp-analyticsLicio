@@ -22,9 +22,11 @@ const BUCKETS = [
   ['return', /^Возврат выручки$/],
   ['commission', /комисси/i],
   ['acquiring', /acquiring|эквайр/i],
-  ['logistics', /logistic|delivtocustomer|directflowtrans|dropoff|pickup|fulfillment|returnflow|returnnotdeliv|returnafterdeliv|returnpartgoods|redistribution|crossdock|логистик|доставк|обратн|last ?mile|магистрал|кросс-?док|сборк|обработк/i],
-  ['storage', /storage|хранени|размещени/i],
-  ['promo', /promotion|marketing|продвиж|реклам|costperorder|cashback|кешбэк|баллы|брендир|отзыв/i],
+  // Реклама Ozon (оплата за клик / за заказ) — списывается из начислений.
+  ['ads', /payperclick|costperorder|^promotion$|оплата за клик|оплата за заказ|трафарет|продвижение в поиске/i],
+  ['logistics', /logistic|deliv|directflowtrans|drop-?off|pick-?up|fulfillment|returnflow|returnnotdeliv|returnafterdeliv|returnpartgoods|redistribution|cross-?dock|lastmile|last ?mile|packing|package|handover|supplyinbound|rfbs|логистик|доставк|обратн|магистрал|кросс-?док|сборк|обработк|упаков/i],
+  ['storage', /storage|placement|хранени|размещени/i],
+  ['promo', /marketing|продвиж|cashback|кешбэк|баллы|брендир|отзыв|review|label|star|bonus|premium|analytics/i],
   ['other', /.*/],
 ];
 const bucketOf = name => (BUCKETS.find(([, re]) => re.test(String(name || ''))) || ['other'])[0];
@@ -77,14 +79,14 @@ router.get('/coefs', async (req, res) => {
       query(`SELECT sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date >= $2 GROUP BY sku, name`, [cabinet, since]),
       query(`SELECT offer_id, SUM(delivered)::int d, SUM(cancelled)::int c, SUM(in_progress)::int p FROM buyout_daily
               WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id`, [cabinet, bFrom, bTo]),
-      query(`SELECT offer_id, SUM(ordered)::int o FROM buyout_daily WHERE cabinet = $1 AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
+      query(`SELECT offer_id, SUM(ordered)::int o, SUM(COALESCE(ordered_fbs, 0))::int f FROM buyout_daily WHERE cabinet = $1 AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
       query(`SELECT offer_id, price, seller_price, acquiring, pct_fbo, pct_fbs FROM product_prices WHERE cabinet = $1`, [cabinet]),
       query(`SELECT article, cost_price, cabinet FROM product_costs`),
       query(`SELECT name, SUM(amount) a FROM finance_daily WHERE cabinet = $1 AND date >= $2 GROUP BY name ORDER BY SUM(amount)`, [cabinet, since]),
     ]);
-    // [saleAmt, saleQty, commission, logistics, acquiring, storage, promo, other, ordered30, delivered, cancelled, pctFbo, acqPerItem, price, cost]
+    // [saleAmt, saleQty, commission, logistics, acquiring, storage, promo, other, ordered30, delivered, cancelled, pctFbo, acqPerItem, price, cost, pctFbs, ordered30Fbs, ads]
     const C = new Map();
-    const get = ai => { if (!C.has(ai)) C.set(ai, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null]); return C.get(ai); };
+    const get = ai => { if (!C.has(ai)) C.set(ai, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, 0, 0]); return C.get(ai); };
     const noSku = {};
     for (const r of fin) {
       const b = bucketOf(r.name), a = num(r.a), q = num(r.q);
@@ -98,18 +100,22 @@ router.get('/coefs', async (req, res) => {
       else if (b === 'acquiring') x[4] += a;
       else if (b === 'storage') x[5] += a;
       else if (b === 'promo') x[6] += a;
+      else if (b === 'ads') x[17] += a;
       else x[7] += a;
     }
-    for (const r of ord) get(m.art(r.offer_id))[8] = num(r.o);
+    for (const r of ord) { const x = get(m.art(r.offer_id)); x[8] = num(r.o); x[16] = num(r.f); }
     for (const r of buy) { const x = get(m.art(r.offer_id)); x[9] = num(r.d); x[10] = num(r.c); }
-    for (const r of prices) { const x = get(m.art(r.offer_id)); x[11] = num(r.pct_fbo); x[12] = num(r.acquiring); x[13] = num(r.seller_price) || num(r.price); }
+    for (const r of prices) { const x = get(m.art(r.offer_id)); x[11] = num(r.pct_fbo); x[12] = num(r.acquiring); x[13] = num(r.seller_price) || num(r.price); x[15] = num(r.pct_fbs) || null; }
+    const fbsRows = await query(`SELECT date::text d, offer_id, ordered, COALESCE(ordered_fbs, 0) f FROM buyout_daily WHERE cabinet = $1 AND date >= $2 AND ordered > 0`,
+      [cabinet, dayjs().subtract(92, 'day').format('YYYY-MM-DD')]);
+    const fbsDays = fbsRows.map(r => [m.art(r.offer_id), r.d, num(r.ordered), num(r.f)]);
     const known = new Set(m.articles.map(a => a.o));
     for (const r of costs) if ((!r.cabinet || r.cabinet === cabinet) && known.has(r.article)) get(m.art(r.article))[14] = num(r.cost_price);
     const coefs = [...C.entries()].map(([ai, v]) => [ai, ...v.map(x => (x === null ? null : r2(x)))]);
     const totalSale = coefs.reduce((s, c) => s + (c[1] > 0 ? c[1] : 0), 0);
     res.json({ success: true, data: {
       articles: m.articles, coefs, noSku: Object.fromEntries(Object.entries(noSku).map(([k, v]) => [k, r2(v)])), totalSale: r2(totalSale),
-      names: names.map(r => [r.name, bucketOf(r.name), r2(num(r.a))]), since, order: ORDER[cabinet] || [],
+      names: names.map(r => [r.name, bucketOf(r.name), r2(num(r.a))]), since, order: ORDER[cabinet] || [], fbsDays,
     } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });

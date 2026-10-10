@@ -354,6 +354,7 @@ async function ensureFinTables() {
     checked_at TIMESTAMP, PRIMARY KEY (cabinet, offer_id))`);
   await query(`CREATE TABLE IF NOT EXISTS finance_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, sku VARCHAR(32) NOT NULL DEFAULT '',
     name VARCHAR(160) NOT NULL, amount DECIMAL(14,2) DEFAULT 0, qty DECIMAL(10,2) DEFAULT 0, PRIMARY KEY (cabinet, date, sku, name))`);
+  await query(`ALTER TABLE buyout_daily ADD COLUMN IF NOT EXISTS ordered_fbs INT DEFAULT 0`);
   finTablesReady = true;
 }
 // Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
@@ -373,8 +374,8 @@ async function syncFinanceFromSheet(cabinet) {
   const buy = await fetchSheetRows('Buyout');
   if (buy) {
     const out = buy.filter(r => r.cabinet === cabinet && r.offer_id && r.date).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,
-      r.sku ? num(r.sku) || null : null, Math.round(num(r.ordered)), Math.round(num(r.delivered)), Math.round(num(r.cancelled)), Math.round(num(r.in_progress))]);
-    total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress'], ['cabinet', 'date', 'offer_id']);
+      r.sku ? num(r.sku) || null : null, Math.round(num(r.ordered)), Math.round(num(r.delivered)), Math.round(num(r.cancelled)), Math.round(num(r.in_progress)), Math.round(num(r.ordered_fbs))]);
+    total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
   }
   const pr = await fetchSheetRows('Prices');
   if (pr) {

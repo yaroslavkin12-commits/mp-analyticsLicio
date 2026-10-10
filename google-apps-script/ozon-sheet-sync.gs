@@ -119,7 +119,7 @@ const PRICES_HEADERS = ['cabinet', 'offer_id', 'product_id', 'price', 'seller_pr
 // Финансы: день операции × SKU × статья (продажа, комиссия, каждая услуга
 // Ozon отдельно), сумма и штуки. Операции без товара (хранение и т.п.) — sku пустой.
 const FINANCE_HEADERS = ['cabinet', 'date', 'sku', 'name', 'amount', 'qty'];
-const BUYOUT_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress'];
+const BUYOUT_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'];
 
 function getCabinets_() {
   const p = PropertiesService.getScriptProperties().getProperties();
@@ -678,8 +678,9 @@ function collectGeo_(cab, days, agg, buy) {
           if (cancelled) r[7] += q;
           else { r[5] += q; r[6] += q * (parseRuNumber_(prod.price) || 0); }
           const bk = [cab.id, d, prod.offer_id || ''].join('|');
-          const b = buy[bk] || (buy[bk] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), 0, 0, 0, 0]);
+          const b = buy[bk] || (buy[bk] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), 0, 0, 0, 0, 0]);
           b[4] += q;
+          if (src[1] === 'FBS') b[8] += q;
           if (delivered) b[5] += q; else if (cancelled) b[6] += q; else b[7] += q;
           n++;
         });

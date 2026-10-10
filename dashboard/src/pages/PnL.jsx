@@ -14,11 +14,11 @@ import './sales.css';
 // пропорционально доле его выкупов.
 // ─────────────────────────────────────────────────────────────────────────
 
-const B = ['sale', 'return', 'commission', 'acquiring', 'logistics', 'storage', 'promo', 'other'];
+const B = ['sale', 'return', 'commission', 'acquiring', 'logistics', 'storage', 'promo', 'other', 'ads'];
 const COST_KEYS = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other'];
 const LABEL = {
   sale: 'Выкупы', return: 'Возвраты', commission: 'Комиссия Ozon', logistics: 'Логистика', acquiring: 'Эквайринг',
-  storage: 'Хранение и размещение', promo: 'Баллы, акции, продвижение Ozon', other: 'Прочие услуги и удержания',
+  storage: 'Хранение и размещение', promo: 'Подписки, отзывы, баллы', other: 'Прочие услуги и удержания',
 };
 const ROWS = [
   { block: 'Выручка', tone: 'rev' },
@@ -31,7 +31,7 @@ const ROWS = [
   { key: 'ozon', label: 'Итого расходы Ozon', fmt: 'money0', good: 'neutral', signed: true, strong: true },
   { key: 'payout', label: 'К перечислению от Ozon', fmt: 'int', good: 'up', hint: 'Выручка минус все удержания Ozon' },
   { block: 'Свои расходы', tone: 'traffic' },
-  { key: 'ads', label: 'Реклама (по дню списания)', fmt: 'money0', good: 'neutral', signed: true },
+  { key: 'ads', label: 'Реклама (по дню списания)', fmt: 'money0', good: 'neutral', signed: true, hint: 'Из начислений Ozon (оплата за клик / за заказ), если они там есть; иначе — расход из рекламного кабинета' },
   { key: 'cost', label: 'Себестоимость выкупленного', fmt: 'money0', good: 'neutral', signed: true },
   { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', signed: true },
   { block: 'Результат', tone: 'conv' },
@@ -84,6 +84,13 @@ export default function PnL({ cabinet }) {
     for (const [ai, d, v] of data.ads) get(ai).ads[d] += v;
     return P;
   }, [data, cats.arts, n]);
+  // Реклама: если Ozon списывает её в начислениях (PayPerClick и т. п.) —
+  // берём оттуда, это и есть день списания; иначе — из рекламного кабинета.
+  const finAds = useMemo(() => {
+    if (!data) return false;
+    const ai = data.buckets.indexOf('ads');
+    return data.rows.some(r => r[2] === ai) || data.noSku.some(r => r[1] === ai);
+  }, [data, cats.arts, n]);
 
   const totalSale = useMemo(() => per.reduce((s, x) => { if (x) for (let i = 0; i < n; i++) s += x.b[0][i]; return s; }, 0), [per, n]);
   const q = search.trim().toLowerCase();
@@ -110,15 +117,16 @@ export default function PnL({ cabinet }) {
     }
     if (share > 0) {
       for (const [d, bi, a] of data.noSku) { const k = data.buckets[bi]; v[B.includes(k) ? k : 'other'][d] += a * share; }
-      data.adNoSku.forEach((a, d) => { v.adsRaw[d] += a * share; });
+      if (!finAds) data.adNoSku.forEach((a, d) => { v.adsRaw[d] += a * share; });
     }
+    if (finAds) for (let i = 0; i < n; i++) v.adsRaw[i] = -v.ads[i];
     const out = { ...v, revenue: [], ozon: [], payout: [], ads: [], cost: [], tax: [], profit: [], margin: [], drr: [], ozonAbs: [], adsAbs: [] };
     for (let i = 0; i < n; i++) {
       const rev = v.sale[i] + v.return[i];
       const oz = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
       const t = rev > 0 ? -rev * tax / 100 : 0;
       const p = rev + oz - v.adsRaw[i] - v.costRaw[i] + t;
-      out.revenue.push(rev); out.ozon.push(oz); out.payout.push(rev + oz); out.ads.push(-v.adsRaw[i]); out.cost.push(-v.costRaw[i]);
+      out.revenue.push(rev); out.ozon.push(oz); out.payout.push(rev + oz + (finAds ? v.ads[i] : 0)); out.ads.push(-v.adsRaw[i]); out.cost.push(-v.costRaw[i]);
       out.tax.push(t); out.profit.push(p); out.margin.push(rev > 0 ? p / rev * 100 : null); out.drr.push(rev > 0 ? v.adsRaw[i] / rev * 100 : null);
       out.ozonAbs.push(-oz); out.adsAbs.push(v.adsRaw[i]);
     }
@@ -129,7 +137,7 @@ export default function PnL({ cabinet }) {
     T.drr = T.revenue > 0 ? -T.ads / T.revenue * 100 : null;
     T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;
     return { vals: out, totals: T, noCost };
-  }, [per, n, data, tax]);
+  }, [per, n, data, tax, finAds]);
 
   const shareOf = useCallback(items => {
     if (!filtered && items === list.arts) return 1;
