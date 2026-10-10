@@ -19,7 +19,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISO
 // обновляются раз в несколько минут.
 const reportCache = new Map();
 const CACHE_TTL = 3 * 60 * 1000;
-const CACHED = ['/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout'];
+const CACHED = ['/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout', '/api/finance/calc-base'];
 app.use((req, res, next) => {
   if (req.method !== 'GET') {
     if (req.path.startsWith('/api/ads') || req.path.startsWith('/api/promo') || req.path.startsWith('/api/sales') || req.path.startsWith('/api/settings')) reportCache.clear();

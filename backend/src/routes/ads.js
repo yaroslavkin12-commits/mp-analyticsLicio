@@ -265,6 +265,20 @@ router.post('/groups', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// POST /api/ads/groups/rename — { cabinet, id, name }
+router.post('/groups/rename', async (req, res) => {
+  try {
+    const { cabinet, id, name } = req.body || {};
+    if (!cabinet || !id || !name || !String(name).trim()) return res.status(400).json({ success: false, error: 'Нужны cabinet, id и name' });
+    const { groups, members } = await loadAdsGroups(cabinet);
+    const g = groups.find(x => x.id === String(id));
+    if (!g) return res.status(404).json({ success: false, error: 'Группа не найдена' });
+    g.name = String(name).trim().slice(0, 80);
+    await saveAdsGroupsSetting(`ads_groups:${cabinet}`, groups);
+    res.json({ success: true, data: { groups, members } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 router.delete('/groups/:id', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';

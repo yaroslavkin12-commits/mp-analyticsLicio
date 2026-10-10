@@ -24,7 +24,7 @@ const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl:
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
   licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['sales', 'geo', 'unit', 'pnl', 'buyout', 'ads', 'discounts', 'notifications', 'calculator', 'costs'],
+  defly: ['sales', 'ads', 'geo', 'unit', 'pnl', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 
 const THEME_KEY = 'mp-theme';

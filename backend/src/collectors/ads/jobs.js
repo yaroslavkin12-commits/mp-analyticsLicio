@@ -15,6 +15,7 @@ const {
   syncStatsFromSheet,
   syncCampaignSkusFromSheet,
   syncAdDetailsFromSheet,
+  syncFinanceFromSheet,
   cleanupSheetJunk,
 } = require('./sheetSync');
 const { collectDiscounts } = require('./ozonDiscounts');
@@ -128,6 +129,8 @@ const JOBS = [
   { id: 'clicks_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'clicks_full',
       () => collectClicks(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncStatsFromSheet(c)) },
+  // Выкуп, цены/комиссии и финансы (юнит-экономика, P&L, % выкупа) — только из таблицы.
+  { id: 'finance', every: 1 * HOUR, hard: 170 * 1000, run: c => withTimeout(syncFinanceFromSheet(c), 160000, 'finance(таблица)') },
   { id: 'analytics_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'analytics_full',
       () => collectProductAnalytics(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncAnalyticsFromSheet(c)) },
@@ -261,9 +264,9 @@ function isDue(job, st, now) {
 const HARD_JOB_TIMEOUT = 45 * 1000;
 async function runJobGuarded(cabinet, job, runFn) {
   try {
-    await withTimeout(runJob(cabinet, job, runFn), HARD_JOB_TIMEOUT, `${job.id}(watchdog)`);
+    await withTimeout(runJob(cabinet, job, runFn), job.hard || HARD_JOB_TIMEOUT, `${job.id}(watchdog)`);
   } catch (e) {
-    console.error(`[Jobs:${cabinet}] ${job.id}: не снялся за ${HARD_JOB_TIMEOUT / 1000}с, принудительно считаю ошибкой —`, e.message);
+    console.error(`[Jobs:${cabinet}] ${job.id}: не снялся за ${(job.hard || HARD_JOB_TIMEOUT) / 1000}с, принудительно считаю ошибкой —`, e.message);
     mark(cabinet, job.id, { last_error_at: new Date(), last_error: e.message }).catch(() => {});
   }
 }

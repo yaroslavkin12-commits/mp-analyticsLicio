@@ -30,6 +30,7 @@ export const saveAdsOrder = (cabinet, order) => api.post('/promo/order', { cabin
 export const getAdsGroups    = cabinet => api.get('/promo/groups', { params: { cabinet } });
 export const addAdsGroup     = (cabinet, name) => api.post('/promo/groups', { cabinet, name });
 export const removeAdsGroup  = (cabinet, id) => api.delete(`/ads/groups/${id}`, { params: { cabinet } });
+export const renameAdsGroup  = (cabinet, id, name) => api.post('/promo/groups/rename', { cabinet, id, name });
 export const assignAdsGroup  = (cabinet, offerId, groupId) => api.post('/promo/groups/assign', { cabinet, offerId, groupId });
 export const getSiblingClusters = cabinet => api.get('/promo/sibling-clusters', { params: { cabinet } });
 export const addAdsGroupFromCluster = (cabinet, name, offerIds) => api.post('/promo/groups/from-cluster', { cabinet, name, offerIds });
@@ -77,3 +78,4 @@ export const getDiscountHistory = (cabinet, days) => api.get('/discounts/history
 export const getFinanceCoefs = cabinet => api.get('/finance/coefs', { params: { cabinet }, timeout: 90000 });
 export const getFinancePnl = (cabinet, p) => api.get('/finance/pnl', { params: { cabinet, ...p }, timeout: 90000 });
 export const getBuyoutData = (cabinet, p) => api.get('/finance/buyout', { params: { cabinet, ...p }, timeout: 90000 });
+export const getCalcBase = cabinet => api.get('/finance/calc-base', { params: { cabinet }, timeout: 90000 });

@@ -115,7 +115,7 @@ const GEO_HEADERS = ['cabinet', 'date', 'offer_id', 'sku', 'cluster', 'qty', 're
 // Выкуп: день заказа × артикул — заказано, доставлено (выкуплено), отменено, ещё в пути.
 // Цены, комиссии и тарифы логистики по товару (для юнит-экономики).
 const PRICES_HEADERS = ['cabinet', 'offer_id', 'product_id', 'price', 'seller_price', 'acquiring', 'pct_fbo', 'pct_fbs',
-  'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at'];
+  'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at', 'volume_weight'];
 // Финансы: день операции × SKU × статья (продажа, комиссия, каждая услуга
 // Ozon отдельно), сумма и штуки. Операции без товара (хранение и т.п.) — sku пустой.
 const FINANCE_HEADERS = ['cabinet', 'date', 'sku', 'name', 'amount', 'qty'];
@@ -747,7 +747,8 @@ function collectPrices_(cab, out) {
       out.push([cab.id, it.offer_id || '', String(it.product_id || ''), parseRuNumber_(p.price), parseRuNumber_(p.marketing_seller_price || p.price),
         parseRuNumber_(it.acquiring), parseRuNumber_(c.sales_percent_fbo), parseRuNumber_(c.sales_percent_fbs),
         parseRuNumber_(c.fbo_deliv_to_customer_amount), parseRuNumber_(c.fbo_direct_flow_trans_max_amount), parseRuNumber_(c.fbo_return_flow_amount),
-        parseRuNumber_(c.fbs_deliv_to_customer_amount), parseRuNumber_(c.fbs_direct_flow_trans_max_amount), parseRuNumber_(c.fbs_return_flow_amount), now]);
+        parseRuNumber_(c.fbs_deliv_to_customer_amount), parseRuNumber_(c.fbs_direct_flow_trans_max_amount), parseRuNumber_(c.fbs_return_flow_amount), now,
+        parseRuNumber_(it.volume_weight)]);
     });
     cursor = data.cursor || '';
     if (!cursor || items.length < 1000) break;

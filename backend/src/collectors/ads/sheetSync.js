@@ -66,10 +66,11 @@ const REQUIRED_COLUMNS = {
   Finance: ['name', 'amount', 'qty'],
 };
 
+const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices'];
 async function fetchSheetRows(sheetName) {
   const id = sheetId();
   if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
-  const resp = await axios.get(csvUrl(sheetName), { timeout: 20000, responseType: 'text' });
+  const resp = await axios.get(csvUrl(sheetName), { timeout: HEAVY_TABS.includes(sheetName) ? 90000 : 20000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });
   const rows = parseCsv(String(resp.data));
   if (!rows.length) return [];
   const headers = rows[0];
@@ -355,6 +356,7 @@ async function ensureFinTables() {
   await query(`CREATE TABLE IF NOT EXISTS finance_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, sku VARCHAR(32) NOT NULL DEFAULT '',
     name VARCHAR(160) NOT NULL, amount DECIMAL(14,2) DEFAULT 0, qty DECIMAL(10,2) DEFAULT 0, PRIMARY KEY (cabinet, date, sku, name))`);
   await query(`ALTER TABLE buyout_daily ADD COLUMN IF NOT EXISTS ordered_fbs INT DEFAULT 0`);
+  await query(`ALTER TABLE product_prices ADD COLUMN IF NOT EXISTS volume_weight DECIMAL(10,3)`);
   finTablesReady = true;
 }
 // Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
@@ -364,13 +366,12 @@ async function replaceRange(table, cabinet, rows, columns, conflict) {
   await query(`DELETE FROM ${table} WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, dates[0], dates[dates.length - 1]]);
   return bulkUpsert(table, columns, rows, conflict);
 }
-const lastHeavy = new Map();
 async function syncFinanceFromSheet(cabinet) {
-  // Тяжёлые вкладки — не чаще раза в час.
-  const k = 'fin:' + cabinet;
-  if (Date.now() - (lastHeavy.get(k) || 0) < 55 * 60000) return { rows: 0 };
+  // Отдельная задача 'finance' раз в час (см. jobs.js) — со своим, более
+  // длинным таймаутом: вкладки большие (Finance ~30 тыс. строк).
   await ensureFinTables();
   let total = 0;
+  total += (await syncGeoFromSheet(cabinet)).rows || 0;
   const buy = await fetchSheetRows('Buyout');
   if (buy) {
     const out = buy.filter(r => r.cabinet === cabinet && r.offer_id && r.date).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,
@@ -381,9 +382,9 @@ async function syncFinanceFromSheet(cabinet) {
   if (pr) {
     const out = pr.filter(r => r.cabinet === cabinet && r.offer_id).map(r => [cabinet, r.offer_id, r.product_id ? num(r.product_id) || null : null,
       num(r.price), num(r.seller_price), num(r.acquiring), num(r.pct_fbo), num(r.pct_fbs), num(r.fbo_deliv), num(r.fbo_direct_max), num(r.fbo_return),
-      num(r.fbs_deliv), num(r.fbs_direct_max), num(r.fbs_return), r.checked_at ? new Date(r.checked_at) : new Date()]);
+      num(r.fbs_deliv), num(r.fbs_direct_max), num(r.fbs_return), r.checked_at ? new Date(r.checked_at) : new Date(), r.volume_weight === undefined || r.volume_weight === '' ? null : num(r.volume_weight)]);
     total += await bulkUpsert('product_prices', ['cabinet', 'offer_id', 'product_id', 'price', 'seller_price', 'acquiring', 'pct_fbo', 'pct_fbs',
-      'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at'], out, ['cabinet', 'offer_id']);
+      'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at', 'volume_weight'], out, ['cabinet', 'offer_id']);
   }
   const fin = await fetchSheetRows('Finance');
   if (fin) {
@@ -397,20 +398,19 @@ async function syncFinanceFromSheet(cabinet) {
     }
     total += await replaceRange('finance_daily', cabinet, [...map.values()], ['cabinet', 'date', 'sku', 'name', 'amount', 'qty'], ['cabinet', 'date', 'sku', 'name']);
   }
-  lastHeavy.set(k, Date.now());
   return { rows: total };
 }
 
 async function syncAdDetailsFromSheet(cabinet) {
   const parts = await Promise.allSettled([
     syncSkuStatsFromSheet(cabinet), syncCpoOrdersFromSheet(cabinet),
-    syncCpoProductsFromSheet(cabinet), syncCpcBidsFromSheet(cabinet), syncGeoFromSheet(cabinet), syncFinanceFromSheet(cabinet),
+    syncCpoProductsFromSheet(cabinet), syncCpcBidsFromSheet(cabinet),
   ]);
   let rows = 0;
   const errors = [];
   parts.forEach((p, i) => {
     if (p.status === 'fulfilled') rows += p.value?.rows || 0;
-    else errors.push(`${['SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids', 'GeoOrders', 'Buyout/Prices/Finance'][i]}: ${p.reason?.message || p.reason}`);
+    else errors.push(`${['SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids'][i]}: ${p.reason?.message || p.reason}`);
   });
   if (errors.length) console.warn(`[SheetAdDetails:${cabinet}]`, errors.join('; '));
   return { rows, warning: errors.length ? errors.join('; ').slice(0, 300) : null };

@@ -39,6 +39,44 @@ function hubOf(name) {
   if (!best && /спб|сзо|петербург/i.test(n)) best = 'Санкт-Петербург';
   return best ? RU_MAP.hubs[best] : null;
 }
+const SHORT_D = { 'Центральный': 'ЦФО', 'Северо-Западный': 'СЗФО', 'Южный': 'ЮФО', 'Северо-Кавказский': 'СКФО', 'Приволжский': 'ПФО', 'Уральский': 'УФО', 'Сибирский': 'СФО', 'Дальневосточный': 'ДФО' };
+// Карта по федеральным округам: регионы закрашены долей своего округа.
+function DistrictMap({ districts, metric, tip, onPick }) {
+  const by = new Map(districts.map(d => [d.name, d]));
+  const max = Math.max(1, ...districts.map(d => d.share || 0));
+  const rest = districts.filter(d => !RU_MAP.districts[d.name] && d.v > 0);
+  return (
+    <div className="a-card" style={{ padding: 14 }}>
+      <div className="a-bar" style={{ marginBottom: 6 }}>
+        <b style={{ fontSize: 14 }}>Карта по федеральным округам</b>
+        <span className="a-hint">цвет и подпись — доля округа в {metric === 'revenue' ? 'сумме заказов' : 'заказах'}; клик — кластеры округа</span>
+      </div>
+      <svg viewBox={`0 0 ${RU_MAP.w} ${RU_MAP.h}`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseLeave={tip.hide}>
+        {RU_MAP.regions.map(rg => {
+          const d = by.get(rg.f);
+          const op = d && d.share ? 0.12 + 0.78 * (d.share / max) : 0;
+          return (
+            <path key={rg.n} d={rg.d} className="g-dregion" style={{ fill: op ? 'var(--s-c1)' : undefined, fillOpacity: op || undefined, cursor: d ? 'pointer' : 'default' }}
+              onClick={() => d && onPick(d)}
+              onMouseMove={e => tip.show(e, <div><b>{rg.f} округ</b><div className="muted">{rg.n}</div>{d && <div>{pct1(d.share)} · {fmtInt(d.v)} {metric === 'revenue' ? '₽' : 'шт'}</div>}{d && d.delta !== null && <div style={{ color: 'var(--a-ink3)' }}>к прошлому периоду: {d.delta > 0 ? '+' : ''}{d.delta.toFixed(1).replace('.', ',')} п.п.</div>}</div>)} />
+          );
+        })}
+        {Object.entries(RU_MAP.districts).map(([name, p]) => {
+          const d = by.get(name);
+          if (!d || !d.v) return null;
+          return (
+            <g key={name} style={{ pointerEvents: 'none' }}>
+              <text x={p[0]} y={p[1] - 4} textAnchor="middle" className="g-blabel" style={{ fontSize: 11 }}>{SHORT_D[name] || name}</text>
+              <text x={p[0]} y={p[1] + 11} textAnchor="middle" className="g-blabel" style={{ fontSize: 13 }}>{pct1(d.share)}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {rest.length > 0 && <div className="a-hint" style={{ marginTop: 6 }}>Вне карты: {rest.map(d => `${d.name} (${pct1(d.share)})`).join(', ')}</div>}
+    </div>
+  );
+}
+
 function ClusterMap({ regions, tot, metric, tip, selected, onPick }) {
   const placed = regions.filter(g => g.v > 0).map(g => ({ g, p: hubOf(g.name) })).filter(x => x.p);
   const unplaced = regions.filter(g => g.v > 0 && !hubOf(g.name));
@@ -83,6 +121,9 @@ export default function Geography({ cabinet }) {
   const [open, setOpen] = useState(() => new Set());
   const [region, setRegion] = useState(null);
   const [mDim, setMDim] = useState('cat');
+  // По умолчанию — федеральные округа; тумблер — области (кластеры) внутри округов.
+  const [byRegion, setByRegionState] = useState(false);
+  const setByRegion = v => { setByRegionState(v); setOpen(v && view ? new Set(view.districts.map(d => d.name)) : new Set()); };
   const tip = useTip();
 
   const load = useCallback(() => {
@@ -273,6 +314,9 @@ export default function Geography({ cabinet }) {
           )}
           <input className="a-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Артикул или название" style={{ minWidth: 200 }} />
           <span className="a-seg">{[['revenue', 'по сумме'], ['orders', 'по штукам']].map(([k, l]) => <button key={k} type="button" className={metric === k ? 'on' : ''} onClick={() => setMetric(k)}>{l}</button>)}</span>
+          <label className="sw" title="Выключено — федеральные округа, включено — области (кластеры доставки) внутри округов">
+            <input type="checkbox" checked={byRegion} onChange={e => setByRegion(e.target.checked)} /><i />по областям
+          </label>
           {loading && <span className="a-hint">обновляем…</span>}
         </div>
         <div className="a-bar">
@@ -320,12 +364,17 @@ export default function Geography({ cabinet }) {
               <span className="sub">{view.regions.slice(0, 3).map(g => g.name).join(', ')}</span></div>
           </div>
 
-          <ClusterMap regions={view.regions} tot={view.tot} metric={metric} tip={tip} selected={region}
-            onPick={g => { setOpen(p => new Set(p).add(g.district)); setRegion(region === g.i ? null : g.i); }} />
+          {byRegion ? (
+            <ClusterMap regions={view.regions} tot={view.tot} metric={metric} tip={tip} selected={region}
+              onPick={g => { setOpen(p => new Set(p).add(g.district)); setRegion(region === g.i ? null : g.i); }} />
+          ) : (
+            <DistrictMap districts={view.districts} metric={metric} tip={tip}
+              onPick={d => { setOpen(p => new Set(p).add(d.name)); document.getElementById('g-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
+          )}
 
-          <div className={`a-card ${loading ? 'a-loading' : ''}`}>
+          <div className={`a-card ${loading ? 'a-loading' : ''}`} id="g-table">
             <div className="a-bar" style={{ padding: '12px 14px 0' }}>
-              <b style={{ fontSize: 14 }}>Округа и кластеры доставки</b>
+              <b style={{ fontSize: 14 }}>{byRegion ? 'Округа и области (кластеры доставки)' : 'Федеральные округа'}</b>
               <span className="a-hint">клик по округу — кластеры, по кластеру — что там покупают{view.filtered ? ' · индекс > 1 — выбранное здесь продаётся лучше, чем в среднем по стране' : ''}</span>
               <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                 <button type="button" className="a-btn ghost" onClick={() => setOpen(new Set(view.districts.map(d => d.name)))}>Раскрыть всё</button>

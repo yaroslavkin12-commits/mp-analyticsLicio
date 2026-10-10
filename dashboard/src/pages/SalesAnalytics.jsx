@@ -166,7 +166,7 @@ const STACK_METRICS = [
   { key: 'revenue', label: 'Заказано, ₽' }, { key: 'orders', label: 'Заказы, шт' },
   { key: 'views', label: 'Показы' }, { key: 'spend', label: 'Расход на рекламу, ₽' },
 ];
-export function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
+export function StackChart({ buckets, groups, metric, tip, gran, normalize, labels }) {
   const boxRef = useRef(null);
   const [w, setW] = useState(680);
   useEffect(() => {
@@ -176,7 +176,7 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
     return () => ro.disconnect();
   }, []);
   const [hover, setHover] = useState(null);
-  const h = 250, pl = 52, pr = 12, pt = 14, pb = 22;
+  const h = 250, pl = 52, pr = 12, pt = labels ? 22 : 14, pb = 22;
   const iw = w - pl - pr, ih = h - pt - pb, n = buckets.length || 1, bw = iw / n;
   const val = (g, b) => {
     let v = 0;
@@ -188,9 +188,22 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
   const cols = normalize ? raw.map(c => { const t = c.reduce((s, v) => s + v, 0); return c.map(v => t ? v / t * 100 : 0); }) : raw;
   const max = normalize ? 100 : Math.max(1, ...cols.map(c => c.reduce((s, v) => s + v, 0)));
   const step = normalize ? 25 : (() => { const r = max / 4, p = Math.pow(10, Math.floor(Math.log10(r))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(x => x >= r); })();
-  const ticks = []; for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(v);
+  const ticks = []; for (let v = 0; ; v += step) { ticks.push(v); if (v >= max - step * 0.001 || ticks.length > 12) break; }
   const top = ticks[ticks.length - 1] || 1;
   const y = v => pt + ih - v / top * ih;
+  // Подписи над столбцами: все, если хватает места; иначе через один-два
+  // плюс максимум и последний.
+  const totals = cols.map(c => c.reduce((s, v) => s + v, 0));
+  const labelSet = (() => {
+    if (!labels) return new Set();
+    const every = Math.max(1, Math.ceil(34 / bw));
+    const set = new Set();
+    totals.forEach((v, i) => { if (v && (n - 1 - i) % every === 0) set.add(i); });
+    let mx = 0; totals.forEach((v, i) => { if (v > totals[mx]) mx = i; });
+    if (totals[mx]) set.add(mx);
+    return set;
+  })();
+  const short = v => { const a = Math.abs(v); if (normalize) return `${Math.round(v)}%`; if (a >= 1e6) return `${(v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace('.', ',')}м`; if (a >= 1e4) return `${Math.round(v / 1e3)}к`; if (a >= 1e3) return `${(v / 1e3).toFixed(1).replace('.', ',')}к`; return String(Math.round(v)); };
   const xStep = Math.ceil(n / Math.max(2, Math.floor(iw / 64)));
   const label = k => gran === 'month' ? dayjs(k).format('MM.YYYY') : `${k.slice(8)}.${k.slice(5, 7)}`;
   return (
@@ -218,6 +231,10 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize }) {
             </g>
           );
         })}
+        {labels && buckets.map((b, i) => labelSet.has(i) ? (
+          <text key={'v' + b.key} x={pl + i * bw + bw / 2} y={y(totals[i]) - 5} textAnchor="middle" fontSize="10" fontWeight="600" fill="var(--a-ink2)"
+            fontFamily="JetBrains Mono, monospace" paintOrder="stroke" stroke="var(--a-panel)" strokeWidth="3">{short(totals[i])}</text>
+        ) : null)}
         {buckets.map((b, i) => ((i % xStep === 0 && n - 1 - i >= xStep / 2) || i === n - 1) ? (
           <text key={'x' + b.key} x={pl + i * bw + bw / 2} y={h - 6} textAnchor="middle" fontSize="10" fill="var(--a-ink3)" fontFamily="JetBrains Mono, monospace">{label(b.key)}</text>
         ) : null)}
@@ -430,6 +447,9 @@ export default function SalesAnalytics({ cabinet }) {
   const [search, setSearch] = useState('');
   const [gran, setGran] = useState('day');
   const [chartMode, setChartMode] = useState('cats');
+  // Тумблер: столбцы целиком (итог) или с разбивкой по категориям.
+  const [split, setSplitState] = useState(() => { try { return localStorage.getItem('mp-sales-split') === '1'; } catch (e) { return false; } });
+  const setSplit = v => { setSplitState(v); try { localStorage.setItem('mp-sales-split', v ? '1' : '0'); } catch (e) { /* ignore */ } };
   const [stackMetric, setStackMetric] = useState('revenue');
   const [sort, setSort] = useState({ key: 'revenue', dir: -1 });
   const [open, setOpen] = useState(() => new Set());
@@ -826,10 +846,15 @@ export default function SalesAnalytics({ cabinet }) {
         <div className="a-bar" style={{ marginBottom: 10 }}>
           <b style={{ fontSize: 14 }}>Динамика{sel ? ` · ${node.name}` : ''}</b>
           <span className="a-seg">
-            {[['cats', kids.length ? 'По категориям' : 'Столбцы'], ['dual', 'Две метрики']].map(([v, l]) => (
+            {[['cats', 'Столбцы'], ['dual', 'Две метрики']].map(([v, l]) => (
               <button key={v} type="button" className={chartMode === v ? 'on' : ''} onClick={() => setChartMode(v)}>{l}</button>
             ))}
           </span>
+          {chartMode === 'cats' && kids.length > 0 && (
+            <label className="sw" title="Показать, из каких категорий складывается каждый столбец">
+              <input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} /><i />разбивка по категориям
+            </label>
+          )}
           {chartMode === 'cats' && (
             <select className="a-sel" value={stackMetric} onChange={e => setStackMetric(e.target.value)} style={{ padding: '4px 8px', fontSize: 12.5 }}>
               {STACK_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
@@ -842,7 +867,7 @@ export default function SalesAnalytics({ cabinet }) {
           </span>
         </div>
         {chartMode === 'cats'
-          ? <StackChart buckets={buckets} groups={stackGroups} metric={stackMetric} tip={tip} gran={gran} />
+          ? <StackChart buckets={buckets} groups={split && kids.length ? stackGroups : [{ key: 'total', name: sel ? node.name : 'Все товары', ag, color: 'var(--a-rev)' }]} metric={stackMetric} tip={tip} gran={gran} labels />
           : <DualChart dates={buckets.map(b => b.key)} byDate={model.byDate} events={[]} tip={tip} mode="all"
               metricsList={SALES_CHART_METRICS} storeKey="mp-sales-chart" defaults={{ left: 'revenue', right: 'orders' }} />}
       </div>

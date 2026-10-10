@@ -202,5 +202,63 @@ router.get('/buyout', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
+// GET /api/finance/calc-base?cabinet= — база для калькулятора: по каждому
+// артикулу всё, что знаем сами (за 30 дней): цена и комиссии из карточки,
+// тарифы логистики Ozon, объём, СПП, себестоимость, выкуп, фактические
+// начисления, реклама и заказы. Средние по категориям считает страница.
+// a: [ai, price, pctFbo, pctFbs, volL, fboDirect, fboDeliv, fboReturn, fbsDirect, fbsDeliv, fbsReturn,
+//     spp, cost, ordered30, ordFbs30, delivered, cancelled, saleAmt, saleQty, comm, logi, acq, storOther, ads30, rev30, qty30]
+router.get('/calc-base', async (req, res) => {
+  try {
+    await ensureFinTables();
+    const cabinet = req.query.cabinet || 'defly';
+    const since = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+    const bFrom = dayjs().subtract(45, 'day').format('YYYY-MM-DD'), bTo = dayjs().subtract(5, 'day').format('YYYY-MM-DD');
+    const m = await meta(cabinet);
+    const [prices, disc, costs, ord, buy, fin, adSku, adCpo, an] = await Promise.all([
+      query(`SELECT * FROM product_prices WHERE cabinet = $1`, [cabinet]),
+      query(`SELECT offer_id, pct FROM product_discount_latest WHERE cabinet = $1`, [cabinet]).catch(() => []),
+      query(`SELECT article, cost_price, cabinet FROM product_costs`),
+      query(`SELECT offer_id, SUM(ordered)::int o, SUM(COALESCE(ordered_fbs, 0))::int f FROM buyout_daily WHERE cabinet = $1 AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
+      query(`SELECT offer_id, SUM(delivered)::int d, SUM(cancelled)::int c FROM buyout_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id`, [cabinet, bFrom, bTo]),
+      query(`SELECT sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date >= $2 AND sku <> '' GROUP BY sku, name`, [cabinet, since]),
+      query(`SELECT sku, SUM(expense) e FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY sku`, [cabinet, since]).catch(() => []),
+      query(`SELECT COALESCE(NULLIF(promoted_sku, 0), sku) sku, SUM(expense) e FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY 1`, [cabinet, since]).catch(() => []),
+      query(`SELECT offer_id, SUM(revenue) r, SUM(orders_item) q FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
+    ]);
+    const A = new Map();
+    const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); return A.get(ai); };
+    const known = new Set(m.articles.map(a => a.o));
+    for (const r of prices) {
+      if (!known.has(r.offer_id)) continue;
+      const x = get(r.offer_id);
+      x[1] = num(r.seller_price) || num(r.price) || null; x[2] = num(r.pct_fbo) || null; x[3] = num(r.pct_fbs) || null;
+      x[4] = r.volume_weight != null && num(r.volume_weight) > 0 ? r2(num(r.volume_weight) * 5) : null;
+      x[5] = num(r.fbo_direct_max) || null; x[6] = num(r.fbo_deliv) || null; x[7] = num(r.fbo_return) || null;
+      x[8] = num(r.fbs_direct_max) || null; x[9] = num(r.fbs_deliv) || null; x[10] = num(r.fbs_return) || null;
+    }
+    for (const r of disc) if (known.has(r.offer_id) && r.pct != null) get(r.offer_id)[11] = num(r.pct);
+    for (const r of costs) if ((!r.cabinet || r.cabinet === cabinet) && known.has(r.article) && num(r.cost_price) > 0) get(r.article)[12] = num(r.cost_price);
+    for (const r of ord) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[13] = num(r.o); x[14] = num(r.f); }
+    for (const r of buy) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[15] = num(r.d); x[16] = num(r.c); }
+    for (const r of fin) {
+      const o = m.offerBySku.get(String(r.sku)); if (!o) continue;
+      const x = get(o), b = bucketOf(r.name), a = num(r.a), q = num(r.q);
+      if (b === 'sale') { x[17] += a; x[18] += q; } else if (b === 'return') { x[17] += a; x[18] -= Math.abs(q); }
+      else if (b === 'commission') x[19] += a; else if (b === 'logistics') x[20] += a; else if (b === 'acquiring') x[21] += a;
+      else if (b === 'ads') x[23] -= a; else x[22] += a;
+    }
+    const adBy = new Map();
+    for (const r of [...adSku, ...adCpo]) { const o = m.offerBySku.get(String(r.sku)); if (o) adBy.set(o, (adBy.get(o) || 0) + num(r.e)); }
+    // Реклама: из кабинета (если в начислениях её нет).
+    for (const [o, v] of adBy) { const x = get(o); if (!x[23]) x[23] = v; }
+    for (const r of an) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[24] = num(r.r); x[25] = num(r.q); }
+    res.json({ success: true, data: {
+      articles: m.articles, order: ORDER[cabinet] || [], since,
+      a: [...A.values()].map(x => x.map((v, i) => (i && typeof v === 'number' ? r2(v) : v))),
+    } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
 module.exports = router;
 module.exports.bucketOf = bucketOf;

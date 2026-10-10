@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 
 const NAV_BY_CABINET = {
   licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
-  defly: [['sales','📈','Аналитика продаж'],['geo','🗺️','География продаж'],['unit','🧩','Юнит-экономика'],['pnl','💰','P&L'],['buyout','📦','% выкупа'],['ads','📣','Реклама'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Себестоимость']],
+  defly: [['sales','📈','Аналитика продаж'],['ads','📣','Реклама'],['geo','🗺️','География продаж'],['unit','🧩','Юнит-экономика'],['pnl','💰','P&L'],['buyout','📦','% выкупа'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Себестоимость']],
 };
 const CABINETS = [['licio','Licio'],['defly','Defly']];
 

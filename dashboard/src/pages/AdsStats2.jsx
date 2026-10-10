@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import dayjs from 'dayjs';
 import {
   getAdsStats, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder,
-  getAdsGroups, addAdsGroup, removeAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
+  getAdsGroups, addAdsGroup, removeAdsGroup, renameAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
   reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent,
 } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
@@ -293,11 +293,12 @@ export function niceScale(min, max, free) {
   return { lo: ticks[0], hi: ticks[ticks.length - 1], ticks };
 }
 // Индексы точек, которые подписываем: max, min, последний; все — если точек мало.
-function labelIdx(vals) {
+function labelIdx(vals, cap = 10) {
   // Нули не подписываем — это шум (дни без заказов/расхода).
   const idx = vals.map((v, i) => [v, i]).filter(([v]) => v !== null && v !== undefined && Number.isFinite(v) && v !== 0);
   if (!idx.length) return new Set();
-  if (vals.length <= 10) return new Set(idx.map(([, i]) => i));
+  // Подписываем все точки, если на ширину графика они помещаются.
+  if (vals.length <= cap) return new Set(idx.map(([, i]) => i));
   let mx = idx[0], mn = idx[0];
   for (const p of idx) { if (p[0] > mx[0]) mx = p; if (p[0] < mn[0]) mn = p; }
   return new Set([mx[1], mn[1], idx[idx.length - 1][1]]);
@@ -363,7 +364,7 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
       })}
       {/* Подписи значений: max / min / последний */}
       {series.map((s, si) => {
-        const keep = labelIdx(s.values);
+        const keep = labelIdx(s.values, Math.max(10, Math.floor(iw / 38)));
         return s.values.map((v, i) => {
           if (!keep.has(i)) return null;
           const y = yOf(s, v);
@@ -921,6 +922,7 @@ export default function AdsStats2({ cabinet }) {
   const [dragTab, setDragTab] = useState(null);
   const [overTab, setOverTab] = useState(null);
   const [newGroup, setNewGroup] = useState(null);
+  const [editGroup, setEditGroup] = useState(null);
   // Склейка (ассоциированные заказы по остальным артикулам склейки) —
   // нужна редко, поэтому включается переключателем и не грузит страницу.
   const [showAssoc, setShowAssoc] = useState(false);
@@ -1055,6 +1057,14 @@ export default function AdsStats2({ cabinet }) {
     const byId = new Map(groups.map(g => [g.id, g]));
     setGroupsData(prev => ({ ...prev, groups: ids.map(id => byId.get(id)) }));
     reorderAdsGroups(cabinet, ids).catch(console.error);
+  }
+  function saveGroupName() {
+    const eg = editGroup; setEditGroup(null);
+    const name = (eg?.name || '').trim();
+    const g = groups.find(x => x.id === eg?.id);
+    if (!g || !name || name === g.name) return;
+    setGroupsData(prev => ({ ...prev, groups: prev.groups.map(x => (x.id === g.id ? { ...x, name } : x)) }));
+    renameAdsGroup(cabinet, g.id, name).then(r => setGroupsData(r.data.data)).catch(err => window.alert(err.response?.data?.error || 'Не удалось переименовать группу'));
   }
   function removeGroup(id) {
     if (!window.confirm('Удалить группу? Артикулы останутся, просто станут «без группы».')) return;
@@ -1284,7 +1294,15 @@ export default function AdsStats2({ cabinet }) {
                 onDragEnd={() => { setDragTab(null); setOverTab(null); }}
                 title={g.name}>
                 <i className="s-dot" style={{ background: groupColors[g.id] }} />
-                {g.name.length > 28 ? g.name.slice(0, 27) + '…' : g.name}<span className="c">{cnt}</span>
+                {editGroup && editGroup.id === g.id ? (
+                  <input autoFocus className="a-input" value={editGroup.name} style={{ padding: '1px 6px', fontSize: 12.5, width: Math.max(90, editGroup.name.length * 8) }}
+                    onClick={e => e.stopPropagation()} onChange={e => setEditGroup({ id: g.id, name: e.target.value })}
+                    onBlur={() => saveGroupName()} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') saveGroupName(); if (e.key === 'Escape') setEditGroup(null); }} />
+                ) : (
+                  <span onDoubleClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>{g.name.length > 28 ? g.name.slice(0, 27) + '…' : g.name}</span>
+                )}
+                <span className="c">{cnt}</span>
+                <button type="button" className="x" title="Переименовать группу" onClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>✎</button>
                 <button type="button" className="x" title="Удалить группу" onClick={e => { e.stopPropagation(); removeGroup(g.id); }}>×</button>
               </span>
             );
