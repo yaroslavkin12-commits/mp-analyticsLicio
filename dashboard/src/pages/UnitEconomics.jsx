@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getSalesData, getFinanceCoefs } from '../api';
 import { fmtInt, fmtMoney2, useTip, DualChart } from './AdsStats2';
-import { useCats, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, SEP } from './finShared';
+import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, SEP } from './finShared';
+import { unitCoefs } from './unitModel';
 import './ads2.css';
 import './sales.css';
 
@@ -69,6 +70,7 @@ export default function UnitEconomics({ cabinet }) {
   const [tax, setTax] = useTax(cabinet);
   const [showNames, setShowNames] = useState(false);
   const tip = useTip();
+  const grp = useGroups(cabinet);
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
@@ -83,41 +85,7 @@ export default function UnitEconomics({ cabinet }) {
   const n = sales?.dates.length || 0;
 
   // Коэффициенты по артикулу с подстраховкой «категория → родитель → кабинет».
-  const K = useMemo(() => {
-    if (!sales || !coefs) return null;
-    const byOffer = new Map(coefs.coefs.map(c => [coefs.articles[c[0]].o, c]));
-    const W = 23;
-    const groups = new Map(); // path → суммы
-    const add = (key, c) => { let g = groups.get(key); if (!g) { g = new Float64Array(W); groups.set(key, g); } for (let i = 1; i < W; i++) if (i !== C.pctFbo && i !== C.pctFbs && i !== C.acqItem && i !== C.price && i !== C.cost) g[i] += c[i] || 0; };
-    for (const a of cats.arts) {
-      const c = byOffer.get(a.o); if (!c) continue;
-      add('', c);
-      for (let d = 1; d <= a.parts.length; d++) add(a.parts.slice(0, d).join(SEP), c);
-    }
-    const noSkuOther = Object.entries(coefs.noSku || {}).filter(([b]) => !['sale', 'return', 'ads'].includes(b)).reduce((s, [, v]) => s + v, 0);
-    const generalRate = coefs.totalSale > 0 ? Math.max(0, -noSkuOther / coefs.totalSale) : 0;
-    const chain = a => [byOffer.get(a.o), ...a.parts.map((_, d) => groups.get(a.parts.slice(0, a.parts.length - d).join(SEP))), groups.get('')].filter(Boolean);
-    const pick = (list, ok, val) => { for (const g of list) if (ok(g)) return val(g); return null; };
-    return cats.arts.map(a => {
-      const L = chain(a), own = byOffer.get(a.o);
-      const buyout = pick(L, g => g[C.del] + g[C.canc] >= 10, g => g[C.del] / (g[C.del] + g[C.canc])) ?? 0.8;
-      // Комиссия — точная из карточки товара, отдельно для FBO и FBS; доля
-      // FBS берётся по заказам дня (ниже), без них — по 30 дням.
-      const factComm = pick(L, g => g[C.sale] > 0 && g[C.saleQty] >= 3 && g[C.comm] < 0, g => -g[C.comm] / g[C.sale]);
-      const pFbo = own && own[C.pctFbo] ? own[C.pctFbo] / 100 : null, pFbs = own && own[C.pctFbs] ? own[C.pctFbs] / 100 : null;
-      // FBS: ставка зависит от скорости отгрузки (44 / 45 / 47%) — берём
-      // фактическую среднюю FBS из финансов (товар → категория → кабинет).
-      const factFbs = pick(L, g => g[C.saleFbs] > 0 && g[C.commFbs] < 0, g => -g[C.commFbs] / g[C.saleFbs]);
-      const commFbo = pFbo ?? pFbs ?? factComm ?? 0.2, commFbs = factFbs ?? pFbs ?? pFbo ?? factComm ?? 0.2;
-      const fbs30 = pick(L, g => g[C.ord] >= 5, g => g[C.ordFbs] / g[C.ord]) ?? 0;
-      const commCard = pFbo !== null || pFbs !== null;
-      const logi = pick(L, g => g[C.ord] >= 5 && g[C.logi] < 0, g => -g[C.logi] / g[C.ord]) ?? 0;
-      const acq = pick(L, g => g[C.sale] > 0 && g[C.saleQty] >= 3, g => Math.max(0, -g[C.acq] / g[C.sale])) ?? 0.015;
-      const other = (pick(L, g => g[C.sale] > 0 && g[C.saleQty] >= 3, g => Math.max(0, -(g[C.storage] + g[C.promo] + g[C.other]) / g[C.sale])) ?? 0) + generalRate;
-      const ownLevel = own && own[C.del] + own[C.canc] >= 10;
-      return { buyout, commFbo, commFbs, fbs30, commCard, comm: commFbo * (1 - fbs30) + commFbs * fbs30, logi, acq, other, cost: own && own[C.cost] ? own[C.cost] : null, ownLevel };
-    });
-  }, [sales, coefs, cats.arts]);
+  const K = useMemo(() => (sales && coefs ? unitCoefs(coefs, cats.arts) : null), [sales, coefs, cats.arts]);
 
   // Доля FBS в заказах артикула по дням (из статусов заказов).
   const fbsDay = useMemo(() => {
@@ -150,7 +118,7 @@ export default function UnitEconomics({ cabinet }) {
   }, [sales, K, cats.arts, n, fbsDay]);
 
   const q = search.trim().toLowerCase();
-  const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q)) }), [cats.arts, per, sel, q]);
+  const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q) && grp.test(a)) }), [cats.arts, per, sel, q, grp.test]);
 
   const calc = useCallback(items => {
     const v = {};
@@ -232,7 +200,7 @@ export default function UnitEconomics({ cabinet }) {
 
   return (
     <div className="mpui sa-page">
-      <FinHeader title="Юнит-экономика" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
+      <FinHeader grp={grp} title="Юнит-экономика" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
         dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} loading={loading}>
         <TaxInput tax={tax} setTax={setTax} />
       </FinHeader>

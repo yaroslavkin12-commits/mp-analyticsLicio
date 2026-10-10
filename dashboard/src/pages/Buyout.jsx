@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getBuyoutData } from '../api';
 import { fmtInt, useTip, DualChart, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
-import { useCats, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, SEP, OTHER } from './finShared';
+import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, SEP, OTHER } from './finShared';
 import './ads2.css';
 import './sales.css';
 
@@ -43,6 +43,7 @@ export default function Buyout({ cabinet }) {
   const [sel, setSel] = useState('');
   const [search, setSearch] = useState('');
   const tip = useTip();
+  const grp = useGroups(cabinet);
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
@@ -66,7 +67,7 @@ export default function Buyout({ cabinet }) {
   }, [data, cats.arts, n]);
 
   const q = search.trim().toLowerCase();
-  const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q)) }), [cats.arts, per, sel, q]);
+  const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q) && grp.test(a)) }), [cats.arts, per, sel, q, grp.test]);
 
   const aggOf = useCallback(items => {
     let o = 0, d = 0, c = 0, p = 0, po = 0, pd = 0, pc = 0, hasPrev = false;
@@ -123,7 +124,7 @@ export default function Buyout({ cabinet }) {
 
   return (
     <div className="mpui sa-page">
-      <FinHeader title="% выкупа" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
+      <FinHeader grp={grp} title="% выкупа" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
         dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} periods={[14, 30, 45]} loading={loading} />
 
       {!data.rows.length ? (

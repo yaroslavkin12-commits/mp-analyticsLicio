@@ -29,7 +29,7 @@ const HIST_KEY = 'mp-calc-history';
 const SHIP = [['fact', 'как сейчас (факт за 30 дней)', 0], ['12', 'до 12 часов', -3], ['24', '12–24 часа', -2], ['36', '24–36 часов', 0], ['48', '36–48 часов', 1], ['72', 'больше 48 часов', 2]];
 
 // Суммы по набору артикулов → коэффициенты «базы».
-function baseOf(rows, scheme) {
+export function baseOf(rows, scheme) {
   if (!rows.length) return null;
   let sale = 0, saleQty = 0, comm = 0, logi = 0, acq = 0, so = 0, ord = 0, del = 0, can = 0, ads = 0, rev = 0, q30 = 0, sppW = 0, sppV = 0;
   for (const x of rows) {
@@ -91,9 +91,9 @@ const FIELDS = [
   ['oper', 'Операционные расходы на 1 шт', '₽'],
   ['tax', 'Ставка налога', '%'],
 ];
-const DEFAULTS = { spp: 20, buyout: 80, defect: 0, commission: 20, acquiring: 1.5, direct: 80, ret: 60, other: 1, drr: 5, oper: 0, tax: 6, cost: 0 };
+export const DEFAULTS = { spp: 20, buyout: 80, defect: 0, commission: 20, acquiring: 1.5, direct: 80, ret: 60, other: 1, drr: 5, oper: 0, tax: 6, cost: 0 };
 
-function compute(v, price, taxMode) {
+export function compute(v, price, taxMode) {
   const P = price;
   const b = Math.max(1, Math.min(100, v.buyout));
   const trips = 100 / b;
@@ -113,7 +113,7 @@ function compute(v, price, taxMode) {
     cost, defect, tax, oper, outside, profit, margin: P > 0 ? profit / P * 100 : null, roi: cost > 0 ? profit / cost * 100 : null, payout: P - mp };
 }
 // Цена, при которой маржа = target (0 — безубыточность). Прибыль растёт с ценой — ищем делением пополам.
-function priceFor(v, taxMode, target) {
+export function priceFor(v, taxMode, target) {
   let lo = 1, hi = 1e6;
   const f = p => { const r = compute(v, p, taxMode); return r.profit - p * target / 100; };
   if (f(hi) < 0) return null;

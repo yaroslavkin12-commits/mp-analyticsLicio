@@ -1,7 +1,8 @@
-import React, { useMemo, useCallback, useRef, useEffect } from 'react';
+import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react';
+import { getAdsGroups } from '../api';
 import dayjs from 'dayjs';
 import DateRangePicker from '../components/DateRangePicker';
-import { fmtInt, fmtBy, heatColor, naturalCompare, shortModel, CAT_COLORS, Delta } from './AdsStats2';
+import { fmtInt, fmtBy, heatColor, naturalCompare, shortModel, CAT_COLORS, Delta, groupColorMap } from './AdsStats2';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Общие куски для «Юнит-экономики», «P&L» и «% выкупа»: фильтр по
@@ -32,7 +33,17 @@ export const inPath = (a, sel) => !sel || a.cat === sel || a.cat.startsWith(sel 
 export const matchQ = (a, q) => !q || a.o.toLowerCase().includes(q) || (a.n || '').toLowerCase().includes(q);
 
 // Шапка страницы: заголовок, период, поиск, вкладки категорий и «хлебные крошки».
-export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFrom, dateTo, setRange, periods = [7, 14, 30], loading, children }) {
+// Группы артикулов — те же, что в «Рекламе» и «Соинвесте».
+export function useGroups(cabinet) {
+  const [data, setData] = useState({ groups: [], members: {} });
+  const [sel, setSel] = useState('');
+  useEffect(() => { getAdsGroups(cabinet).then(r => setData(r.data.data || { groups: [], members: {} })).catch(() => {}); }, [cabinet]);
+  const colors = useMemo(() => groupColorMap(data.groups), [data]);
+  const test = useCallback(a => !sel || data.members[a.o] === sel, [sel, data]);
+  return { list: data.groups, members: data.members, colors, sel, setSel, test };
+}
+
+export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFrom, dateTo, setRange, periods = [7, 14, 30], loading, children, grp }) {
   const today = dayjs().format('YYYY-MM-DD');
   const crumbs = sel ? sel.split(SEP) : [];
   const kids = cats.childrenOf(sel);
@@ -59,6 +70,12 @@ export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFro
           {cats.topCats.map(c => (
             <button key={c} type="button" className={`a-tab ${sel === c || sel.startsWith(c + SEP) ? 'on' : ''}`} onClick={() => setSel(c)}>
               <i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(c)] || OTHER }} />{c}
+            </button>
+          ))}
+          {grp && grp.list.length > 0 && <span className="a-hint" style={{ margin: '0 4px 0 10px' }}>группы:</span>}
+          {grp && grp.list.map(g => (
+            <button key={g.id} type="button" className={`a-tab ${grp.sel === g.id ? 'on' : ''}`} onClick={() => grp.setSel(grp.sel === g.id ? '' : g.id)} title="Группа из «Рекламы» — повторный клик снимает">
+              <i className="s-dot" style={{ background: grp.colors[g.id], borderRadius: 999 }} />{g.name}
             </button>
           ))}
         </div>

@@ -274,3 +274,4 @@ router.get('/calc-base', async (req, res) => {
 
 module.exports = router;
 module.exports.bucketOf = bucketOf;
+module.exports.meta = meta;

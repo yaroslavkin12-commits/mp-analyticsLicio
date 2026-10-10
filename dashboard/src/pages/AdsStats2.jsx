@@ -3,8 +3,9 @@ import dayjs from 'dayjs';
 import {
   getAdsStats, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder,
   getAdsGroups, addAdsGroup, removeAdsGroup, renameAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
-  reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent,
+  reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs,
 } from '../api';
+import { unitCoefs, unitProfit } from './unitModel';
 import DateRangePicker from '../components/DateRangePicker';
 import './ads2.css';
 
@@ -902,6 +903,23 @@ export default function AdsStats2({ cabinet }) {
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [data, setData] = useState(null);
+  // Юнит-экономика для прогнозной прибыли по артикулу (те же коэффициенты, что во вкладке «Юнит-экономика»).
+  const [coefsData, setCoefsData] = useState(null);
+  useEffect(() => { getFinanceCoefs(cabinet).then(r => setCoefsData(r.data.data)).catch(() => {}); }, [cabinet]);
+  const unitK = useMemo(() => {
+    if (!coefsData) return null;
+    const arts = coefsData.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(' / ') }));
+    const ks = unitCoefs(coefsData, arts);
+    return new Map(arts.map((a, i) => [a.o, ks[i]]));
+  }, [coefsData]);
+  // Прогноз чистой прибыли по заказам артикула за период (после рекламы, комиссии, логистики, себестоимости, налога).
+  function profitOf(a) {
+    const k = unitK && unitK.get(a.offerId);
+    if (!k) return null;
+    const t = a.totals || {};
+    return unitProfit(k, { ordRub: (mode === 'ads' ? t.adRevenue : t.revenue) || 0, ordQty: (mode === 'ads' ? t.adOrders : t.orders) || 0, ads: t.spend || 0 }, taxPct);
+  }
+  const taxPct = (() => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cabinet}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } })();
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
   const [status, setStatus] = useState(null);
@@ -984,6 +1002,8 @@ export default function AdsStats2({ cabinet }) {
         case 'stock': return a.stock ? a.stock.fboPresent + a.stock.fbsPresent : -1;
         case 'spend': return t.spend;
         case 'drr': { const r = mode === 'ads' ? t.adRevenue : t.revenue; return r > 0 ? t.spend / r * 100 : (t.spend > 0 ? 1e9 : -1); }
+        case 'profit': { const p = profitOf(a); return p ? p.profit : -1e12; }
+        case 'margin': { const p = profitOf(a); return p && p.margin !== null ? p.margin : -1e12; }
         default: return 0;
       }
     };
@@ -1127,7 +1147,8 @@ export default function AdsStats2({ cabinet }) {
   });
   const COLS = [
     { k: 'id', t: 'Артикул' }, { k: null, t: 'Заказы по дням' }, { k: 'revenue', t: 'Заказано, ₽' }, { k: 'orders', t: 'Заказы, шт' },
-    { k: 'stock', t: 'Остаток, шт' }, { k: 'spend', t: 'Расход, ₽' }, { k: 'drr', t: 'ДРР' }, { k: null, t: 'ОЗЗ' }, { k: null, t: 'РК' },
+    { k: 'stock', t: 'Остаток, шт' }, { k: 'spend', t: 'Расход, ₽' }, { k: 'drr', t: 'ДРР' },
+    { k: 'profit', t: 'Прибыль (прогноз)' }, { k: 'margin', t: 'Маржа' }, { k: null, t: 'ОЗЗ' }, { k: null, t: 'РК' },
   ];
   const clickSort = k => {
     if (!k) return;
@@ -1196,6 +1217,15 @@ export default function AdsStats2({ cabinet }) {
             </span>
           </td>
           <td><span className={`pill ${drrClass(m.totals.drr)}`}>{m.totals.drr === null ? (m.totals.spend > 0 ? '×' : '—') : fmtPct(m.totals.drr)}</span></td>
+          {(() => { const pr = profitOf(a); return (
+            <>
+              <td className="n" title={pr ? `Ожидаемая выручка ${fmtInt(pr.expRev)} ₽ (выкуп), комиссия ${fmtInt(pr.comm)}, логистика ${fmtInt(pr.logi)}, эквайринг ${fmtInt(pr.acq)}, прочее ${fmtInt(pr.other)}, себестоимость ${fmtInt(pr.cost)}, налог ${fmtInt(pr.tax)}, реклама ${fmtInt(pr.ads)}` : 'Нет данных юнит-экономики'}>
+                {pr ? <span style={{ color: pr.profit < 0 ? 'var(--a-bad)' : undefined, fontWeight: 600 }}>{fmtInt(pr.profit)}</span> : '—'}
+                {pr && pr.noCost && <span className="a-spendsub" style={{ color: 'var(--a-warn)' }}>нет себестоимости</span>}
+              </td>
+              <td>{pr && pr.margin !== null ? <span className={`pill ${pr.margin < 0 ? 'b' : pr.margin < 10 ? 'w' : 'g'}`}>{fmtPct(pr.margin)}</span> : '—'}</td>
+            </>
+          ); })()}
           <td>{a.cpo
             ? (a.cpo.enabled
               ? <span className="tag on" title={cpoText(a.cpo)}>вкл{a.cpo.bidPct !== null ? ` · ${String(a.cpo.bidPct).replace('.', ',')}%` : ''}</span>
@@ -1375,6 +1405,10 @@ export default function AdsStats2({ cabinet }) {
                   <td className="n">{fmtInt(total.stockNow)}</td>
                   <td className="n">{fmtInt(T.spend)}<span className="a-spendsub">клик {fmtInt(T.spendCpc)} · заказ {T.spendCpo ? fmtInt(T.spendCpo) : '—'}</span></td>
                   <td><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span></td>
+                  {(() => { let p = 0, e = 0, any = false; for (const r of rows) { const x = profitOf(r); if (x) { p += x.profit; e += x.expRev; any = true; } } return (
+                    <><td className="n"><b style={{ color: p < 0 ? 'var(--a-bad)' : undefined }}>{any ? fmtInt(p) : '—'}</b></td>
+                    <td>{any && e > 0 ? <span className={`pill ${p < 0 ? 'b' : p / e * 100 < 10 ? 'w' : 'g'}`}>{fmtPct(p / e * 100)}</span> : '—'}</td></>
+                  ); })()}
                   <td /><td />
                 </tr>
                 {open.has(aggKey) && (

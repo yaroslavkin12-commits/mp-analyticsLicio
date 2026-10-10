@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { getDigestSettings, saveDigestSettings, previewDigest, sendDigestNow } from '../api';
 import {
   getTrackedArticles, getTrackedArticlesFeed, addTrackedArticle, removeTrackedArticle,
   moveTrackedArticle, getTrackedGroups, addTrackedGroup, removeTrackedGroup,
@@ -38,6 +39,41 @@ function HealthBar({ cabinet }) {
         Проверить Telegram
       </button>
       {testMsg && <span>{testMsg}</span>}
+    </div>
+  );
+}
+
+// Утренний дайджест: итоги вчерашнего дня в Telegram в заданное время.
+function DigestBar({ cabinet }) {
+  const [s, setS] = useState(null);
+  const [msg, setMsg] = useState('');
+  const [preview, setPreview] = useState(null);
+  useEffect(() => { getDigestSettings(cabinet).then(r => setS(r.data.data)).catch(() => setS(null)); }, [cabinet]);
+  if (!s) return null;
+  const save = patch => { const n = { ...s, ...patch }; setS(n); saveDigestSettings(cabinet, patch).then(r => setS(r.data.data)).catch(e => setMsg(`Ошибка: ${e.message}`)); };
+  const box = { display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 12.5, color: 'var(--text2)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 14px', marginBottom: 16 };
+  const btn = { padding: '5px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 12.5, cursor: 'pointer' };
+  const inp = { padding: '4px 8px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)', fontSize: 12.5 };
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ ...box, marginBottom: preview ? 8 : 0 }}>
+        <b style={{ color: 'var(--text)' }}>☀️ Утренний дайджест</b>
+        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!s.enabled} onChange={e => save({ enabled: e.target.checked })} />присылать каждый день</label>
+        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>в <input type="time" value={s.time} onChange={e => save({ time: e.target.value })} style={inp} /> по Москве</label>
+        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>налог <input type="number" min="0" max="30" value={s.tax ?? 6} onChange={e => save({ tax: Number(e.target.value) })} style={{ ...inp, width: 56 }} />%</label>
+        <span style={{ color: 'var(--text3)' }}>заказы и ДРР за вчера, оценка прибыли, рост/падение, остатки</span>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <button type="button" style={btn} onClick={() => { setMsg('Собираю…'); previewDigest(cabinet).then(r => { setPreview(r.data.data.text || 'Нет данных за вчера'); setMsg(''); }).catch(e => setMsg(`Ошибка: ${e.message}`)); }}>Предпросмотр</button>
+          <button type="button" style={btn} onClick={() => { setMsg('Отправляю…'); sendDigestNow(cabinet).then(r => setMsg(r.data.data.sent ? 'Отправлено в Telegram' : 'Не отправлено (нет данных или Telegram не настроен)')).catch(e => setMsg(`Ошибка: ${e.message}`)); }}>Отправить сейчас</button>
+        </span>
+        {msg && <span>{msg}</span>}
+      </div>
+      {preview && (
+        <div style={{ ...box, display: 'block', whiteSpace: 'pre-wrap', lineHeight: 1.5, color: 'var(--text)', position: 'relative' }}>
+          <button type="button" style={{ ...btn, position: 'absolute', right: 10, top: 8 }} onClick={() => setPreview(null)}>×</button>
+          <span dangerouslySetInnerHTML={{ __html: preview }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -207,6 +243,7 @@ export default function TrackedArticles({ cabinet }) {
     <div>
       <div className="page-sticky"><h2 style={{ margin: 0, fontSize: 20 }}>Уведомления о заказах</h2></div>
       <HealthBar cabinet={cabinet} />
+      <DigestBar cabinet={cabinet} />
 
       <div style={{ display: 'flex', gap: 3, background: 'var(--surface2)', borderRadius: 8, padding: 3, width: 'fit-content', marginBottom: 18 }}>
         {TABS.map(([v, l]) => (

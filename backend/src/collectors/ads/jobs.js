@@ -21,6 +21,7 @@ const {
 const { collectDiscounts } = require('./ozonDiscounts');
 const { getSettings } = require('./discountSettings');
 const { sendDiscountDigest } = require('../../telegram');
+const { sendMorningDigest, getDigestSettings } = require('../../digest');
 const { pollOrdersFromSheet } = require('../trackedOrdersPoll');
 const dayjs = require('dayjs');
 const dayjsUtc = require('dayjs/plugin/utc');
@@ -218,6 +219,29 @@ async function tickDigest(cabinet) {
   }
 }
 
+// Утренний дайджест — раз в сутки в заданное время (по Москве).
+const morningBusy = new Set();
+async function tickMorning(cabinet) {
+  if (morningBusy.has(cabinet)) return;
+  morningBusy.add(cabinet);
+  try {
+    const s = await getDigestSettings(cabinet);
+    if (!s.enabled) return;
+    const now = dayjs().tz('Europe/Moscow');
+    const [h, m] = String(s.time || '09:00').split(':').map(Number);
+    const target = now.hour(h).minute(m).second(0);
+    const diff = now.diff(target, 'minute');
+    if (diff < 0 || diff > 30) return;
+    const st = await getStatus(cabinet);
+    const last = st.get('morning_digest')?.last_success_at;
+    if (last && dayjs(last).tz('Europe/Moscow').format('YYYY-MM-DD') === now.format('YYYY-MM-DD')) return;
+    const sent = await sendMorningDigest(cabinet).catch(e => { console.warn('[Morning] telegram:', e.message); return false; });
+    if (sent) await mark(cabinet, 'morning_digest', { last_success_at: new Date() });
+  } finally {
+    morningBusy.delete(cabinet);
+  }
+}
+
 async function getStatus(cabinet) {
   try {
     const rows = await query(`SELECT * FROM ad_job_status WHERE cabinet = $1`, [cabinet]);
@@ -344,6 +368,7 @@ async function tick() {
     ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
     // Дайджест Соинвеста работает по данным из расширения — для всех кабинетов.
     ...Object.keys(CABINETS).map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
+    ...adsCabinets().map(c => tickMorning(c).catch(e => console.error(`[Morning:${c}]`, e.message))),
     ...ordersCabinets().map(c => tickOrders(c).catch(e => console.error(`[Orders:${c}]`, e.message))),
   ]);
 }

@@ -13,8 +13,13 @@ import Geography from './pages/Geography';
 import UnitEconomics from './pages/UnitEconomics';
 import PnL from './pages/PnL';
 import Buyout from './pages/Buyout';
+import Inventory from './pages/Inventory';
+import AvgCheck from './pages/AvgCheck';
+import Abc from './pages/Abc';
+import Recon from './pages/Recon';
+import Margin from './pages/Margin';
 
-const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
@@ -24,7 +29,7 @@ const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl:
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
   licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['sales', 'ads', 'geo', 'unit', 'pnl', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
+  defly: ['sales', 'ads', 'inventory', 'geo', 'check', 'abc', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 
 const THEME_KEY = 'mp-theme';
@@ -76,7 +81,7 @@ export default function App() {
   }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Переключатель WB/Ozon нужен только старым разделам Licio.
-  const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'calculator', 'notifications'].includes(page);
+  const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'inventory', 'check', 'abc', 'recon', 'margin', 'calculator', 'notifications'].includes(page);
 
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>

@@ -57,6 +57,7 @@ const SHEET_NAMES = {
   cpcBids: 'CpcBids',
   cpoOrders: 'CpoOrders',
   geo: 'GeoOrders',
+  stocksWh: 'StocksWh',
   buyout: 'Buyout',
   prices: 'Prices',
   finance: 'Finance',
@@ -82,6 +83,8 @@ const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku'
 const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name'];
 const ANALYTICS_HEADERS = ['cabinet', 'date', 'sku', 'hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
 const STOCKS_HEADERS = ['cabinet', 'product_id', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'];
+// Остатки FBO по складам и кластерам (для вкладки «Остатки» и поставок).
+const STOCKS_WH_HEADERS = ['cabinet', 'sku', 'offer_id', 'cluster', 'warehouse', 'available', 'transit', 'reserved', 'ads', 'idc', 'checked_at'];
 const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy'];
 // Товары МУЛЬТИТОВАРНЫХ кампаний ("Оплата за заказ: выбранные товары" и
 // подобные, где одна РК продвигает сразу пачку SKU, а не один артикул) —
@@ -762,6 +765,73 @@ function syncPrices() {
   Logger.log('syncPrices: товаров ' + rows.length);
 }
 
+
+// ---------- Остатки по складам и кластерам (FBO) ----------
+// Основной способ — /v1/analytics/stocks (сразу с кластером, средними
+// продажами и оборачиваемостью); если метод недоступен — старый
+// /v2/analytics/stock_on_warehouses (по складам, кластер определит сервис).
+function collectStocksWh_(cab, out) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return 0;
+  const now = new Date().toISOString();
+  // SKU товаров — из /v4/product/info/stocks.
+  const skus = {}, offerBySku = {};
+  let cursor = '';
+  for (let guard = 0; guard < 40; guard++) {
+    const data = fetchJson_('https://api-seller.ozon.ru/v4/product/info/stocks', {
+      method: 'post', contentType: 'application/json', headers: headers,
+      payload: JSON.stringify({ cursor: cursor, filter: { visibility: 'ALL' }, limit: 1000 }),
+    }, 'Остатки (SKU)');
+    (data.items || []).forEach(function (it) { (it.stocks || []).forEach(function (s) { if (s.sku) { skus[s.sku] = true; offerBySku[s.sku] = it.offer_id; } }); });
+    cursor = data.cursor || '';
+    if (!cursor || !(data.items || []).length) break;
+  }
+  const list = Object.keys(skus);
+  let n = 0, sampled = false;
+  try {
+    for (let i = 0; i < list.length; i += 100) {
+      const data = fetchJson_('https://api-seller.ozon.ru/v1/analytics/stocks', {
+        method: 'post', contentType: 'application/json', headers: headers,
+        payload: JSON.stringify({ skus: list.slice(i, i + 100) }),
+      }, 'Остатки по кластерам');
+      const items = data.items || (data.result && data.result.items) || [];
+      if (!sampled && items.length) { sampled = true; Logger.log('Остатки по кластерам ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 800)); }
+      items.forEach(function (it) {
+        const sku = String(it.sku || '');
+        out.push([cab.id, sku, it.offer_id || offerBySku[sku] || '', it.cluster_name || '', it.warehouse_name || '',
+          Number(it.available_stock_count) || 0,
+          (Number(it.transit_stock_count) || 0) + (Number(it.requested_stock_count) || 0) + (Number(it.waiting_docs_stock_count) || 0),
+          Number(it.reserved_stock_count || it.reserved_amount) || 0, Number(it.ads) || 0, Number(it.idc) || 0, now]);
+        n++;
+      });
+      Utilities.sleep(250);
+    }
+    if (n) return n;
+  } catch (e) { Logger.log('Остатки по кластерам ' + cab.id + ' (v1): ' + e.message + ' — беру остатки по складам'); }
+  for (let offset = 0, guard = 0; guard < 50; guard++) {
+    const data = fetchJson_('https://api-seller.ozon.ru/v2/analytics/stock_on_warehouses', {
+      method: 'post', contentType: 'application/json', headers: headers,
+      payload: JSON.stringify({ limit: 1000, offset: offset, warehouse_type: 'ALL' }),
+    }, 'Остатки по складам');
+    const rows = (data.result && data.result.rows) || [];
+    rows.forEach(function (r) {
+      out.push([cab.id, String(r.sku || ''), r.item_code || offerBySku[r.sku] || '', '', r.warehouse_name || '',
+        Number(r.free_to_sell_amount) || 0, Number(r.promised_amount) || 0, Number(r.reserved_amount) || 0, '', '', now]);
+      n++;
+    });
+    if (rows.length < 1000) break;
+    offset += 1000;
+    Utilities.sleep(250);
+  }
+  return n;
+}
+function syncStocksWh() {
+  const rows = [];
+  getCabinets_().forEach(function (cab) { try { Logger.log('Остатки по складам ' + cab.id + ': ' + collectStocksWh_(cab, rows)); } catch (e) { Logger.log('Остатки по складам ' + cab.id + ': ' + e.message); } });
+  if (rows.length) writeRows_(SHEET_NAMES.stocksWh, STOCKS_WH_HEADERS, rows);
+  Logger.log('syncStocksWh: строк ' + rows.length);
+}
+
 // ---------- Финансы (начисления и списания Ozon) ----------
 // Ozon отключил /v3/finance/transaction/list (сентябрь 2026). Теперь —
 // /v1/finance/accrual/by-day: один день за запрос, листание по last_id;
@@ -1067,7 +1137,7 @@ function syncDaily() {
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
@@ -1078,6 +1148,7 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
   ScriptApp.newTrigger('syncGeo').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('syncFinance').timeBased().everyHours(6).create();
+  ScriptApp.newTrigger('syncStocksWh').timeBased().everyHours(2).create();
   Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, syncFinance каждые 6 часов.');
 }
 

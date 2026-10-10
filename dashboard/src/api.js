@@ -79,3 +79,8 @@ export const getFinanceCoefs = cabinet => api.get('/finance/coefs', { params: { 
 export const getFinancePnl = (cabinet, p) => api.get('/finance/pnl', { params: { cabinet, ...p }, timeout: 90000 });
 export const getBuyoutData = (cabinet, p) => api.get('/finance/buyout', { params: { cabinet, ...p }, timeout: 90000 });
 export const getCalcBase = cabinet => api.get('/finance/calc-base', { params: { cabinet }, timeout: 90000 });
+export const getStocksData = (cabinet, p) => api.get('/stocks/data', { params: { cabinet, ...p }, timeout: 90000 });
+export const getDigestSettings = cabinet => api.get('/digest/settings', { params: { cabinet } });
+export const saveDigestSettings = (cabinet, s) => api.post('/digest/settings', { cabinet, ...s });
+export const previewDigest = cabinet => api.get('/digest/preview', { params: { cabinet }, timeout: 60000 });
+export const sendDigestNow = cabinet => api.post('/digest/send', { cabinet }, { timeout: 60000 });

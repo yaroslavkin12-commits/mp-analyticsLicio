@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { clusterOfWarehouse } = require('../../lib/warehouses');
 const { query } = require('../../db');
 const { bulkUpsert, bulkInsert } = require('./ozonHttp');
 
@@ -64,9 +65,10 @@ const REQUIRED_COLUMNS = {
   Buyout: ['ordered', 'delivered', 'in_progress'],
   Prices: ['pct_fbo', 'fbo_deliv', 'acquiring'],
   Finance: ['name', 'amount', 'qty'],
+  StocksWh: ['warehouse', 'available', 'transit'],
 };
 
-const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices'];
+const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices', 'StocksWh'];
 async function fetchSheetRows(sheetName) {
   const id = sheetId();
   if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
@@ -357,6 +359,9 @@ async function ensureFinTables() {
     name VARCHAR(160) NOT NULL, amount DECIMAL(14,2) DEFAULT 0, qty DECIMAL(10,2) DEFAULT 0, PRIMARY KEY (cabinet, date, sku, name))`);
   await query(`ALTER TABLE buyout_daily ADD COLUMN IF NOT EXISTS ordered_fbs INT DEFAULT 0`);
   await query(`ALTER TABLE product_prices ADD COLUMN IF NOT EXISTS volume_weight DECIMAL(10,3)`);
+  await query(`CREATE TABLE IF NOT EXISTS stock_cluster_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, offer_id VARCHAR(128) NOT NULL,
+    warehouse VARCHAR(160) NOT NULL, cluster VARCHAR(160), sku BIGINT, available INT DEFAULT 0, transit INT DEFAULT 0, reserved INT DEFAULT 0,
+    ads DECIMAL(10,3), idc DECIMAL(10,1), PRIMARY KEY (cabinet, date, offer_id, warehouse))`);
   finTablesReady = true;
 }
 // Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
@@ -372,6 +377,27 @@ async function syncFinanceFromSheet(cabinet) {
   await ensureFinTables();
   let total = 0;
   total += (await syncGeoFromSheet(cabinet)).rows || 0;
+  // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
+  const wh = await fetchSheetRows('StocksWh');
+  if (wh) {
+    const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+    const map = new Map();
+    for (const r of wh) {
+      if (r.cabinet !== cabinet || !r.offer_id) continue;
+      const w = String(r.warehouse || r.cluster || '—').slice(0, 160);
+      const key = r.offer_id + '|' + w;
+      const cur = map.get(key);
+      const row = [cabinet, today, r.offer_id, w, String(r.cluster || clusterOfWarehouse(r.warehouse)).slice(0, 160), r.sku ? num(r.sku) || null : null,
+        Math.round(num(r.available)), Math.round(num(r.transit)), Math.round(num(r.reserved)), r.ads === '' ? null : num(r.ads), r.idc === '' ? null : num(r.idc)];
+      if (cur) { cur[6] += row[6]; cur[7] += row[7]; cur[8] += row[8]; } else map.set(key, row);
+    }
+    if (map.size) {
+      await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date = $2`, [cabinet, today]);
+      await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date < $2`, [cabinet, new Date(Date.now() - 120 * 86400e3).toISOString().slice(0, 10)]);
+      total += await bulkUpsert('stock_cluster_daily', ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
+        [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse']);
+    }
+  }
   const buy = await fetchSheetRows('Buyout');
   if (buy) {
     const out = buy.filter(r => r.cabinet === cabinet && r.offer_id && r.date).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,

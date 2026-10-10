@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getFinancePnl } from '../api';
 import { fmtInt, useTip, DualChart, CAT_COLORS } from './AdsStats2';
-import { useCats, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput } from './finShared';
+import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput } from './finShared';
 import './ads2.css';
 import './sales.css';
 
@@ -60,6 +60,7 @@ export default function PnL({ cabinet }) {
   const [search, setSearch] = useState('');
   const [tax, setTax] = useTax(cabinet);
   const tip = useTip();
+  const grp = useGroups(cabinet);
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
@@ -96,8 +97,8 @@ export default function PnL({ cabinet }) {
 
   const totalSale = useMemo(() => per.reduce((s, x) => { if (x) for (let i = 0; i < n; i++) s += x.b[0][i]; return s; }, 0), [per, n]);
   const q = search.trim().toLowerCase();
-  const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q)) }), [cats.arts, per, sel, q]);
-  const filtered = !!(sel || q);
+  const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q) && grp.test(a)) }), [cats.arts, per, sel, q, grp.test]);
+  const filtered = !!(sel || q || grp.sel);
 
   // Строки P&L по дням для набора артикулов. share — доля начислений без
   // артикула, которую относим на этот набор.
@@ -179,7 +180,7 @@ export default function PnL({ cabinet }) {
 
   return (
     <div className="mpui sa-page">
-      <FinHeader title="P&L" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
+      <FinHeader grp={grp} title="P&L" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
         dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} loading={loading}>
         <TaxInput tax={tax} setTax={setTax} />
       </FinHeader>
