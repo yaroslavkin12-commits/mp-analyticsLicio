@@ -906,7 +906,10 @@ function skusOf_(cab) {
 }
 function postRetry_(url, headers, body, label) {
   for (let attempt = 0; attempt < 6; attempt++) {
-    const resp = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', headers: headers, muteHttpExceptions: true, payload: JSON.stringify(body) });
+    let resp;
+    // Сетевые сбои Google («Address unavailable» и т.п.) — тоже повторяем.
+    try { resp = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', headers: headers, muteHttpExceptions: true, payload: JSON.stringify(body) }); }
+    catch (e) { if (attempt >= 3) throw e; Utilities.sleep(3000 * (attempt + 1)); continue; }
     const code = resp.getResponseCode();
     if (code === 429 || code >= 500) { Utilities.sleep(3000 * (attempt + 1)); continue; }
     if (code >= 400) throw new Error(label + ': HTTP ' + code + ' ' + resp.getContentText().slice(0, 300));
@@ -940,18 +943,21 @@ function collectQueriesDay_(cab, ctx, d, deadline) {
   }
   return out;
 }
-// Дни идут от свежих к старым; день записывается, только когда собран по всем
-// кабинетам. Уже загруженные дни пропускаются (кроме двух последних — их
-// Ozon ещё досчитывает), поэтому syncQueriesFull можно запускать повторно,
-// пока в логе не будет «осталось дней: 0».
+// Дни идут от свежих к старым. Строки дописываются в конец вкладки (без
+// чтения и перезаписи всей вкладки — так быстро даже при 150+ тыс. строк);
+// повторы и старые дни раз в сутки убирает compactQueries (5:30), сервис
+// при повторе берёт последнюю строку. День кабинета пишется только целиком.
+// Уже загруженные дни кабинета пропускаются (кроме двух последних — их Ozon
+// ещё досчитывает).
 function syncQueries(days) {
   const window = typeof days === 'number' ? days : 2;
+  const started = Date.now();
+  const deadline = started + 250000;
   const have = {};
   const sh = getSheet_(SHEET_NAMES.queries);
-  if (sh.getLastRow() > 1) sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().forEach(function (r) { have[String(r[0]).slice(0, 10)] = true; });
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) { have[r[0] + '|' + String(r[1]).slice(0, 10)] = true; });
   const dates = [];
-  for (let i = 1; i <= window; i++) { const d = mskDate_(i); if (i <= 2 || !have[d]) dates.push(d); }
-  const deadline = Date.now() + 230000;
+  for (let i = 1; i <= window; i++) dates.push(mskDate_(i));
   const ctx = {};
   getCabinets_().forEach(function (cab) {
     const headers = sellerHeaders_(cab);
@@ -959,75 +965,85 @@ function syncQueries(days) {
     try { ctx[cab.id] = { headers: headers, skus: Object.keys(skusOf_(cab)), sampled: false }; Logger.log('Запросы ' + cab.id + ': SKU ' + ctx[cab.id].skus.length); }
     catch (e) { Logger.log('Запросы ' + cab.id + ': ' + e.message); }
   });
-  const rows = [], done = {};
-  let left = 0;
+  const rows = [];
+  let left = 0, doneN = 0, timeUp = false;
   for (let di = 0; di < dates.length; di++) {
-    const d = dates[di], dayRows = [];
-    let ok = true;
-    getCabinets_().forEach(function (cab) {
-      if (!ok || !ctx[cab.id]) return;
-      try { const r = collectQueriesDay_(cab, ctx[cab.id], d, deadline); if (r === null) ok = false; else Array.prototype.push.apply(dayRows, r); }
-      catch (e) { Logger.log('Запросы ' + cab.id + ' ' + d + ': ' + e.message); }
+    const d = dates[di];
+    Object.keys(ctx).forEach(function (id) {
+      if (di >= 2 && have[id + '|' + d]) return;
+      if (timeUp) { left++; return; }
+      const cab = getCabinets_().filter(function (c) { return c.id === id; })[0];
+      try {
+        const r = collectQueriesDay_(cab, ctx[id], d, deadline);
+        if (r === null) { timeUp = true; left++; return; }
+        Array.prototype.push.apply(rows, r);
+        doneN++;
+        Logger.log('Запросы ' + id + ' ' + d + ': строк ' + r.length);
+      } catch (e) { left++; Logger.log('Запросы ' + id + ' ' + d + ': ' + e.message + ' — повторю в следующий запуск'); }
     });
-    if (!ok) { left = dates.length - di; break; }
-    done[d] = true;
-    Array.prototype.push.apply(rows, dayRows);
-    Logger.log('Запросы ' + d + ': строк ' + dayRows.length);
   }
-  const total = writeQueriesDays_(rows, done);
-  Logger.log('syncQueries: загружено дней ' + Object.keys(done).length + ', строк ' + rows.length + ' (всего во вкладке ' + total + '), осталось дней: ' + left);
+  const total = appendQueries_(rows);
+  Logger.log('syncQueries: загружено дней (кабинет×день) ' + doneN + ', строк ' + rows.length + ' (всего во вкладке ' + total + '), осталось: ' + left);
   return left;
 }
 // Первичная загрузка за 14 дней. За один запуск успевает 1–2 дня, поэтому
-// сама ставит себе продолжение через минуту, пока не загрузит всё.
+// сама ставит себе продолжение через минуту (не больше 25 раз подряд).
 function syncQueriesFull() {
   ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncQueriesFull') ScriptApp.deleteTrigger(t); });
+  const props = PropertiesService.getScriptProperties();
+  const runs = Number(props.getProperty('QUERIES_FULL_RUNS') || 0) + 1;
+  props.setProperty('QUERIES_FULL_RUNS', String(runs));
   const left = syncQueries(14);
-  if (left > 0) {
+  if (left > 0 && runs < 25) {
     ScriptApp.newTrigger('syncQueriesFull').timeBased().after(60 * 1000).create();
-    Logger.log('syncQueriesFull: продолжу автоматически через минуту');
-  } else Logger.log('syncQueriesFull: всё загружено');
+    Logger.log('syncQueriesFull: запуск ' + runs + ', продолжу автоматически через минуту');
+  } else {
+    props.deleteProperty('QUERIES_FULL_RUNS');
+    Logger.log(left > 0 ? 'syncQueriesFull: остановился после 25 запусков, осталось ' + left : 'syncQueriesFull: всё загружено');
+    ScriptApp.newTrigger('compactQueriesOnce').timeBased().after(60 * 1000).create();
+  }
 }
-// Запись вкладки Queries без полной перезаписи (она большая): вкладка
-// отсортирована по дате, поэтому устаревшие дни (старше 30) лежат сверху,
-// а пересобираемые последние дни — снизу; их удаляем блоками, новые строки
-// дописываем в конец и сортируем по дате.
+function compactQueriesOnce() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'compactQueriesOnce') ScriptApp.deleteTrigger(t); });
+  compactQueries();
+}
 const QUERIES_RETENTION_DAYS = 30;
-function writeQueriesDays_(rows, done) {
+function appendQueries_(rows) {
   const sh = getSheet_(SHEET_NAMES.queries);
   const W = QUERIES_HEADERS.length;
-  const cutoff = mskDate_(QUERIES_RETENTION_DAYS);
-  const fresh = rows.filter(function (r) { return done[r[1]] && r[1] >= cutoff; })
-    .map(function (r) { return r.map(function (v) { return (v === null || v === undefined) ? '' : String(v); }); });
+  if (sh.getLastRow() < 1) sh.getRange(1, 1, 1, W).setValues([QUERIES_HEADERS]);
+  if (!rows.length) return sh.getLastRow() - 1;
+  const fresh = rows.map(function (r) { return r.map(function (v) { return (v === null || v === undefined) ? '' : String(v); }); });
+  const start = sh.getLastRow() + 1;
+  const need = start + fresh.length - 1 - sh.getMaxRows();
+  if (need > 0) sh.insertRowsAfter(sh.getMaxRows(), need);
+  const rg = sh.getRange(start, 1, fresh.length, W);
+  rg.setNumberFormat('@');
+  rg.setValues(fresh);
+  return sh.getLastRow() - 1;
+}
+// Раз в сутки: убрать повторы (оставить последнюю строку кабинет+день+SKU+запрос),
+// дни старше 30 и строки без позиции и заказов; отсортировать по дате.
+function compactQueries() {
+  const sh = getSheet_(SHEET_NAMES.queries);
+  const W = QUERIES_HEADERS.length;
   const last = sh.getLastRow();
-  if (last <= 1) { writeRows_(SHEET_NAMES.queries, QUERIES_HEADERS, fresh); return fresh.length; }
-  const dates = sh.getRange(2, 2, last - 1, 1).getValues().map(function (r) { return String(r[0]).slice(0, 10); });
-  const drop = dates.map(function (d) { return !d || d < cutoff || !!done[d]; });
-  let top = 0; while (top < drop.length && drop[top]) top++;
-  let bottom = drop.length; while (bottom > top && drop[bottom - 1]) bottom--;
-  let contiguous = true;
-  for (let i = top; i < bottom; i++) if (drop[i]) { contiguous = false; break; }
-  if (!contiguous) {
-    const keep = sh.getRange(2, 1, last - 1, W).getValues().filter(function (r, i) { return !drop[i]; });
-    writeRows_(SHEET_NAMES.queries, QUERIES_HEADERS, keep.concat(fresh));
-  } else {
-    // Очищаем, а не удаляем строки: удаление падало с «rows are out of bounds».
-    // Пустые строки после сортировки уходят в конец и заполняются новыми.
-    if (bottom < drop.length) sh.getRange(2 + bottom, 1, drop.length - bottom, W).clearContent();
-    if (top > 0) sh.getRange(2, 1, top, W).clearContent();
-    if (top > 0 && bottom > top) sh.getRange(2, 1, last - 1, W).sort({ column: 2, ascending: true });
-    if (fresh.length) {
-      const start = sh.getLastRow() + 1;
-      const need = start + fresh.length - 1 - sh.getMaxRows();
-      if (need > 0) sh.insertRowsAfter(sh.getMaxRows(), need);
-      const rg = sh.getRange(start, 1, fresh.length, W);
-      rg.setNumberFormat('@');
-      rg.setValues(fresh);
-    }
-  }
-  const n = sh.getLastRow() - 1;
-  if (n > 1) sh.getRange(2, 1, n, W).sort({ column: 2, ascending: true });
-  return n;
+  if (last <= 1) return;
+  const cutoff = mskDate_(QUERIES_RETENTION_DAYS);
+  const vals = sh.getRange(2, 1, last - 1, W).getValues();
+  const map = {};
+  vals.forEach(function (r) {
+    const d = String(r[1]).slice(0, 10);
+    if (!d || d < cutoff) return;
+    if (!(Number(r[4]) > 0) && !(Number(r[8]) > 0)) return;
+    map[r[0] + '|' + d + '|' + r[2] + '|' + r[3]] = r;
+  });
+  const out = Object.keys(map).map(function (k) { return map[k]; });
+  out.sort(function (x, y) { return String(x[1]) < String(y[1]) ? -1 : String(x[1]) > String(y[1]) ? 1 : 0; });
+  writeRows_(SHEET_NAMES.queries, QUERIES_HEADERS, out);
+  const extra = sh.getMaxRows() - (out.length + 1);
+  if (extra > 1000) sh.deleteRows(out.length + 2, extra - 500);
+  Logger.log('compactQueries: было ' + vals.length + ', стало ' + out.length);
 }
 
 // ---------- Продажи по месяцам (сезонность) ----------
@@ -1394,7 +1410,7 @@ function syncDaily() {
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh', 'syncQueries', 'syncMonthly'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh', 'syncQueries', 'syncMonthly', 'compactQueries', 'syncQueriesFull'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
@@ -1406,6 +1422,7 @@ function setupTriggers() {
   ScriptApp.newTrigger('syncGeo').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('syncFinance').timeBased().everyHours(6).create();
   ScriptApp.newTrigger('syncStocksWh').timeBased().everyHours(2).create();
+  ScriptApp.newTrigger('compactQueries').timeBased().atHour(5).nearMinute(30).everyDays(1).create();
   ScriptApp.newTrigger('syncQueries').timeBased().atHour(6).everyDays(1).create();
   ScriptApp.newTrigger('syncMonthly').timeBased().atHour(7).everyDays(1).create();
   Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, syncFinance каждые 6 часов.');
