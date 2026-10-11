@@ -879,44 +879,66 @@ function postRetry_(url, headers, body, label) {
   }
   throw new Error(label + ': Ozon просит реже (429)');
 }
-function collectQueries_(cab, dates, out, started) {
-  const headers = sellerHeaders_(cab);
-  if (!headers) return 0;
-  const skuMap = skusOf_(cab), skus = Object.keys(skuMap);
-  let n = 0, sampled = false;
-  for (let di = 0; di < dates.length; di++) {
-    const d = dates[di];
-    for (let i = 0; i < skus.length; i += 100) {
-      if (Date.now() - started > 300000) { Logger.log('Запросы ' + cab.id + ': время вышло на ' + d); return n; }
-      for (let page = 0; page < 20; page++) {
-        const data = postRetry_('https://api-seller.ozon.ru/v1/analytics/product-queries/details', headers,
-          { date_from: d + 'T00:00:00Z', date_to: d + 'T23:59:59Z', skus: skus.slice(i, i + 100), limit_by_sku: 15, page: page, page_size: 1000 }, 'Запросы ' + d);
-        const items = data.queries || data.items || (data.result && (data.result.queries || data.result.items)) || [];
-        if (!sampled && items.length) { sampled = true; Logger.log('Запросы ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 600)); }
-        items.forEach(function (q) {
-          out.push([cab.id, d, String(q.sku || ''), String(q.query || q.search_query || q.text || '').slice(0, 200),
-            Number(q.position != null ? q.position : q.avg_position) || '', Number(q.unique_search_users != null ? q.unique_search_users : q.searches) || 0,
-            Number(q.unique_view_users != null ? q.unique_view_users : q.views) || 0, Number(q.clicks != null ? q.clicks : q.to_pdp) || 0,
-            Number(q.order_count != null ? q.order_count : q.orders) || 0, Number(q.gmv != null ? q.gmv : q.revenue) || 0, Number(q.view_conversion != null ? q.view_conversion : q.conversion) || 0]);
-          n++;
-        });
-        const pages = data.page_count || (data.result && data.result.page_count) || 0;
-        if (!items.length || (pages && page + 1 >= pages) || items.length < 1000) break;
-      }
-      Utilities.sleep(700);
+// Один день по одному кабинету. Возвращает строки или null, если не успели —
+// тогда день не записываем (иначе он сохранится неполным).
+function collectQueriesDay_(cab, ctx, d, deadline) {
+  const out = [];
+  for (let i = 0; i < ctx.skus.length; i += 100) {
+    for (let page = 0; page < 50; page++) {
+      if (Date.now() > deadline) return null;
+      const data = postRetry_('https://api-seller.ozon.ru/v1/analytics/product-queries/details', ctx.headers,
+        { date_from: d + 'T00:00:00Z', date_to: d + 'T23:59:59Z', skus: ctx.skus.slice(i, i + 100), limit_by_sku: 15, page: page, page_size: 100 }, 'Запросы ' + d);
+      const items = data.queries || data.items || (data.result && (data.result.queries || data.result.items)) || [];
+      if (!ctx.sampled && items.length) { ctx.sampled = true; Logger.log('Запросы ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 600)); }
+      items.forEach(function (q) {
+        out.push([cab.id, d, String(q.sku || ''), String(q.query || q.search_query || q.text || '').slice(0, 200),
+          Number(q.position != null ? q.position : q.avg_position) || '', Number(q.unique_search_users != null ? q.unique_search_users : q.searches) || 0,
+          Number(q.unique_view_users != null ? q.unique_view_users : q.views) || 0, Number(q.clicks != null ? q.clicks : q.to_pdp) || 0,
+          Number(q.order_count != null ? q.order_count : q.orders) || 0, Number(q.gmv != null ? q.gmv : q.revenue) || 0, Number(q.view_conversion != null ? q.view_conversion : q.conversion) || 0]);
+      });
+      const pages = data.page_count || (data.result && data.result.page_count) || 0;
+      if (items.length < 100 || (pages && page + 1 >= pages)) break;
+      Utilities.sleep(300);
     }
   }
-  return n;
+  return out;
 }
+// Дни идут от свежих к старым; день записывается, только когда собран по всем
+// кабинетам. Уже загруженные дни пропускаются (кроме двух последних — их
+// Ozon ещё досчитывает), поэтому syncQueriesFull можно запускать повторно,
+// пока в логе не будет «осталось дней: 0».
 function syncQueries(days) {
   const window = typeof days === 'number' ? days : 2;
-  const dates = []; for (let i = window; i >= 1; i--) dates.push(mskDate_(i)); // полные дни, без сегодня
-  const started = Date.now();
-  const rows = [];
-  getCabinets_().forEach(function (cab) { try { Logger.log('Запросы ' + cab.id + ': строк ' + collectQueries_(cab, dates, rows, started)); } catch (e) { Logger.log('Запросы ' + cab.id + ': ' + e.message); } });
-  const done = {}; rows.forEach(function (r) { done[r[1]] = true; });
+  const have = {};
+  const sh = getSheet_(SHEET_NAMES.queries);
+  if (sh.getLastRow() > 1) sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().forEach(function (r) { have[String(r[0]).slice(0, 10)] = true; });
+  const dates = [];
+  for (let i = 1; i <= window; i++) { const d = mskDate_(i); if (i <= 2 || !have[d]) dates.push(d); }
+  const deadline = Date.now() + 270000;
+  const ctx = {};
+  getCabinets_().forEach(function (cab) {
+    const headers = sellerHeaders_(cab);
+    if (!headers) return;
+    try { ctx[cab.id] = { headers: headers, skus: Object.keys(skusOf_(cab)), sampled: false }; Logger.log('Запросы ' + cab.id + ': SKU ' + ctx[cab.id].skus.length); }
+    catch (e) { Logger.log('Запросы ' + cab.id + ': ' + e.message); }
+  });
+  const rows = [], done = {};
+  let left = 0;
+  for (let di = 0; di < dates.length; di++) {
+    const d = dates[di], dayRows = [];
+    let ok = true;
+    getCabinets_().forEach(function (cab) {
+      if (!ok || !ctx[cab.id]) return;
+      try { const r = collectQueriesDay_(cab, ctx[cab.id], d, deadline); if (r === null) ok = false; else Array.prototype.push.apply(dayRows, r); }
+      catch (e) { Logger.log('Запросы ' + cab.id + ' ' + d + ': ' + e.message); }
+    });
+    if (!ok) { left = dates.length - di; break; }
+    done[d] = true;
+    Array.prototype.push.apply(rows, dayRows);
+    Logger.log('Запросы ' + d + ': строк ' + dayRows.length);
+  }
   const total = replaceDates_(SHEET_NAMES.queries, QUERIES_HEADERS, rows, done, 1);
-  Logger.log('syncQueries: строк ' + rows.length + ' (всего во вкладке ' + total + ')');
+  Logger.log('syncQueries: загружено дней ' + Object.keys(done).length + ', строк ' + rows.length + ' (всего во вкладке ' + total + '), осталось дней: ' + left + (left ? ' — запустите ещё раз' : ''));
 }
 function syncQueriesFull() { syncQueries(14); }
 
@@ -944,28 +966,38 @@ function collectMonthly_(cab, from, to, out) {
   return n;
 }
 // Раз в сутки — текущий и прошлый месяц; первый раз syncMonthlyFull — 2 года.
+// Периоды запросов выровнены по календарным месяцам (не больше 12 за раз),
+// чтобы месяц не делился между двумя запросами.
 function syncMonthly(months) {
   const back = typeof months === 'number' ? months : 2;
-  const now = new Date();
-  const fromD = new Date(now.getFullYear(), now.getMonth() - back + 1, 1);
-  const from = Utilities.formatDate(fromD, 'GMT+3', 'yyyy-MM-dd'), to = mskDate_(0);
-  const rows = [];
+  const today = mskDate_(0);
+  const cy = Number(today.slice(0, 4)), cm = Number(today.slice(5, 7)) - 1;
+  const ym = function (k) { const y = Math.floor(k / 12), m = k % 12; return y + '-' + (m < 9 ? '0' : '') + (m + 1); };
+  const lastDay = function (k) { const y = Math.floor(k / 12), m = k % 12; return new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); };
+  const endK = cy * 12 + cm, startK = endK - back + 1;
+  const agg = {};
   getCabinets_().forEach(function (cab) {
-    try {
-      // По году за запрос — у Ozon ограничение на длину периода.
-      for (let y = new Date(fromD); y <= now; y = new Date(y.getFullYear() + 1, y.getMonth(), 1)) {
-        const f = Utilities.formatDate(y, 'GMT+3', 'yyyy-MM-dd');
-        const tEnd = new Date(y.getFullYear() + 1, y.getMonth(), 0);
-        const t = tEnd > now ? to : Utilities.formatDate(tEnd, 'GMT+3', 'yyyy-MM-dd');
+    for (let k = startK; k <= endK; k += 12) {
+      const k2 = Math.min(k + 11, endK);
+      const f = ym(k) + '-01', t = k2 === endK ? today : ym(k2) + '-' + lastDay(k2);
+      try {
+        const rows = [];
         Logger.log('Месяцы ' + cab.id + ' ' + f + '..' + t + ': ' + collectMonthly_(cab, f, t, rows));
-      }
-    } catch (e) { Logger.log('Месяцы ' + cab.id + ': ' + e.message); }
+        rows.forEach(function (r) {
+          const key = [r[0], r[1], r[2]].join('|');
+          const a = agg[key] || (agg[key] = [r[0], r[1], r[2], 0, 0]);
+          a[3] += r[3]; a[4] += r[4];
+        });
+      } catch (e) { Logger.log('Месяцы ' + cab.id + ' ' + f + '..' + t + ': ' + e.message); }
+    }
   });
-  if (!rows.length) return;
-  const map = readSheetAsMap_(SHEET_NAMES.monthly, [0, 1, 2]);
-  rows.forEach(function (r) { map[[r[0], r[1], r[2]].join('|')] = r; });
+  const keys = Object.keys(agg);
+  if (!keys.length) return;
+  // Полная загрузка пересобирает вкладку с нуля (убирает старые неполные месяцы).
+  const map = back > 12 ? {} : readSheetAsMap_(SHEET_NAMES.monthly, [0, 1, 2]);
+  keys.forEach(function (k) { const r = agg[k]; r[3] = Math.round(r[3] * 100) / 100; map[k] = r; });
   writeRows_(SHEET_NAMES.monthly, MONTHLY_HEADERS, Object.keys(map).map(function (k) { return map[k]; }));
-  Logger.log('syncMonthly: строк ' + rows.length + ' (всего во вкладке ' + Object.keys(map).length + ')');
+  Logger.log('syncMonthly: строк ' + keys.length + ' (всего во вкладке ' + Object.keys(map).length + ')');
 }
 function syncMonthlyFull() { syncMonthly(25); }
 
