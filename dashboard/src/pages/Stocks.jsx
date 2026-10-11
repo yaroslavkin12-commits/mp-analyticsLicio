@@ -220,7 +220,7 @@ export default function Stocks({ platform: platformProp }) {
     const filtered = raw.products
       .filter(p => category === 'all' || p.category === category)
       .filter(p => gender === 'all' || p.gender === gender)
-      .filter(p => !s || p.baseArticle.toLowerCase().includes(s) || (p.subject || '').toLowerCase().includes(s))
+      .filter(p => !s || String(p.baseArticle || '').toLowerCase().includes(s) || (p.subject || '').toLowerCase().includes(s))
       .map(p => {
         const sizes = [...p.sizes].sort((a, b) => sizeRank(a.size) - sizeRank(b.size));
         const total = sizes.reduce((sum, sz) => sum + qtyOf(sz, platform, fulfillment), 0);
@@ -228,7 +228,7 @@ export default function Stocks({ platform: platformProp }) {
       });
     if (sort === 'qty_desc') filtered.sort((a, b) => b.total - a.total);
     else if (sort === 'qty_asc') filtered.sort((a, b) => a.total - b.total);
-    else filtered.sort((a, b) => a.baseArticle.localeCompare(b.baseArticle));
+    else filtered.sort((a, b) => String(a.baseArticle || '').localeCompare(String(b.baseArticle || '')));
     return filtered;
   }, [raw, search, category, gender, platform, fulfillment, sort]);
 

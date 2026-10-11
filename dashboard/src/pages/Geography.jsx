@@ -157,7 +157,7 @@ export default function Geography({ cabinet }) {
     if (!data) return null;
     const q = search.trim().toLowerCase();
     const inSel = arts.map(a => (!sel || a.cat === sel || a.cat.startsWith(sel + SEP)) && (!brand || (a.brand || NO_BRAND) === brand)
-      && (!q || a.o.toLowerCase().includes(q) || a.n.toLowerCase().includes(q)));
+      && (!q || String(a.o || '').toLowerCase().includes(q) || String(a.n || '').toLowerCase().includes(q)));
     const filtered = !!(sel || brand || q);
     const R = data.regions.length;
     const cur = new Float64Array(R), all = new Float64Array(R), prev = new Float64Array(R), qty = new Float64Array(R), rev = new Float64Array(R), canc = new Float64Array(R);

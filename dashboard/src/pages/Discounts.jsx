@@ -286,7 +286,7 @@ function ArticlesTab({ cabinet, days, setDays }) {
   const max = maxPct !== '' ? Number(maxPct) : null;
 
   const articles = (data?.articles || [])
-    .filter(a => !search || a.offerId.toLowerCase().includes(search.toLowerCase()) ||
+    .filter(a => !search || String(a.offerId || '').toLowerCase().includes(search.toLowerCase()) ||
       (a.productName || '').toLowerCase().includes(search.toLowerCase()))
     .filter(a => min === null || (a.current && a.current.pct >= min))
     .filter(a => max === null || (a.current && a.current.pct <= max))

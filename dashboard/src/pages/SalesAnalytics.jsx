@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, setSalesCategory } from '../api';
+import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs } from '../api';
+import { unitCoefs, unitProfit } from './unitModel';
+import { useTax } from './finShared';
 import DateRangePicker from '../components/DateRangePicker';
 import {
   fmtInt, fmtPct, fmtBy, heatColor, naturalCompare, shortModel, derive, changePct, Delta,
@@ -479,6 +481,37 @@ export default function SalesAnalytics({ cabinet }) {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setSel(''); setBrand(''); setOpenArt(null); }, [cabinet]);
 
+  // Выкупы, поступления на счёт и прибыль — из финансовых данных Ozon (как во
+  // вкладках «Средний чек» и «P&L») и коэффициентов «Юнит-экономики».
+  const [fin, setFin] = useState(null);
+  const [tax] = useTax(cabinet);
+  useEffect(() => {
+    let off = false; setFin(null);
+    Promise.all([getFinancePnl(cabinet, { dateFrom, dateTo }).catch(() => null), getFinanceCoefs(cabinet).catch(() => null)])
+      .then(([p, c]) => { if (!off) setFin({ pnl: p?.data?.data || null, coefs: c?.data?.data || null }); });
+    return () => { off = true; };
+  }, [cabinet, dateFrom, dateTo]);
+  const finPer = useMemo(() => {
+    const pnl = fin?.pnl; if (!pnl) return null;
+    const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other', 'ads'];
+    const m = new Map(); let saleAll = 0, noSkuOz = 0;
+    for (const [pai, , b, a, q] of pnl.rows) {
+      const o = pnl.articles[pai]?.o; if (!o) continue;
+      const k = pnl.buckets[b];
+      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0 }; m.set(o, x); }
+      if (k === 'sale') { x.sRub += a; x.sQty += Math.abs(q); } else if (k === 'return') { x.sRub += a; x.sQty -= Math.abs(q); } else if (OZ.includes(k)) x.oz += a;
+    }
+    for (const [, b, a] of pnl.noSku || []) if (OZ.includes(pnl.buckets[b])) noSkuOz += a;
+    for (const x of m.values()) saleAll += x.sRub;
+    return { m, noSkuOz, saleAll };
+  }, [fin]);
+  const unitK = useMemo(() => {
+    const c = fin?.coefs; if (!c) return null;
+    const arts = c.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) }));
+    const ks = unitCoefs(c, arts);
+    return new Map(arts.map((a, i) => [a.o, ks[i]]));
+  }, [fin]);
+
   const dates = data?.dates || [];
   const N = dates.length;
   const all = useMemo(() => (data ? prepare(data) : []), [data]);
@@ -492,7 +525,7 @@ export default function SalesAnalytics({ cabinet }) {
   // Фильтры (марка, поиск) действуют на всё — дерево строится уже по ним.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return all.filter(a => (!brand || a.brand === brand) && (!q || a.o.toLowerCase().includes(q) || a.n.toLowerCase().includes(q)));
+    return all.filter(a => (!brand || a.brand === brand) && (!q || String(a.o || '').toLowerCase().includes(q) || String(a.n || '').toLowerCase().includes(q)));
   }, [all, brand, search]);
   const tree = useMemo(() => buildTree(filtered, data?.order || []), [filtered, data]);
   // Цвета — по полному дереву (без фильтров), чтобы не перекрашивались.
@@ -514,6 +547,25 @@ export default function SalesAnalytics({ cabinet }) {
   // каждое движение мыши — пересчитывать 1800 артикулов каждый раз нельзя.
   const cache = useMemo(() => new Map(), [filtered, buckets]); // eslint-disable-line react-hooks/exhaustive-deps
   const cached = (k, fn) => { if (!cache.has(k)) cache.set(k, fn()); return cache.get(k); };
+
+  const finK = useMemo(() => {
+    if (!finPer && !unitK) return null;
+    let sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false;
+    for (const a of node.arts) {
+      const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
+      if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
+      if (k && a.tOrders > 0) {
+        const r = unitProfit(k, { ordRub: a.tRevenue, ordQty: a.tOrders, ads: a.tSpend }, tax);
+        fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += a.tOrders; fAny = true;
+      }
+    }
+    if (finPer && finPer.saleAll > 0) oz += finPer.noSkuOz * (sRub / finPer.saleAll);
+    const pay = sRub + oz;
+    return {
+      has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: sQty > 0 ? pay / sQty : null,
+      payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - sRub * tax / 100 : null, noCost,
+    };
+  }, [node, finPer, unitK, tax]);
 
   async function moveCategory(a, path) {
     try {
@@ -793,8 +845,9 @@ export default function SalesAnalytics({ cabinet }) {
       </div>
 
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
+        {/* 1. Заказы и выкупы */}
         <div className="a-kpi">
-          <span className="lbl">Заказано, ₽</span>
+          <span className="lbl">Заказы, ₽</span>
           <span className="val n">{fmtInt(T.revenue)}</span>
           <span className="sub"><Delta value={P && changePct(T.revenue, P.revenue)} /> к прошлому периоду</span>
           <AreaSpark values={series('revenue')} color="var(--a-rev)" />
@@ -805,22 +858,40 @@ export default function SalesAnalytics({ cabinet }) {
           <span className="sub"><Delta value={P && changePct(T.orders, P.orders)} /> · ≈ {N ? perDayTxt(dayT.orders / N) : '—'} в день</span>
           <AreaSpark values={series('orders')} color="var(--a-good)" />
         </div>
+        <div className="a-kpi" title="Сумма выкупленных товаров за вычетом возвратов — по дню выкупа (из финансового отчёта Ozon)">
+          <span className="lbl">Выкупы, ₽</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.sRub) : '…'}</span>
+          <span className="sub">{finK?.has && T.revenue ? `${fmtPct(finK.sRub / T.revenue * 100)} от суммы заказов` : 'по дню выкупа'}</span>
+        </div>
+        <div className="a-kpi" title="Выкуплено штук за вычетом возвратов — по дню выкупа">
+          <span className="lbl">Выкупы, шт</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.sQty) : '…'}</span>
+          <span className="sub">{finK?.has && N ? `≈ ${perDayTxt(finK.sQty / N)} в день` : ''}</span>
+        </div>
+
+        {/* 2. Средние чеки и поступления */}
         <div className="a-kpi">
-          <span className="lbl">Средний чек, ₽</span>
+          <span className="lbl">Ср. чек заказа, ₽</span>
           <span className="val n">{fmtInt(avgCheck)}</span>
           <span className="sub"><Delta value={avgCheck !== null && pAvgCheck !== null ? changePct(avgCheck, pAvgCheck) : null} goodWhen="neutral" /> к прошлому периоду</span>
         </div>
-        <div className="a-kpi">
-          <span className="lbl">Остаток сейчас, шт</span>
-          <span className="val n">{fmtInt(ag.stockNow)}</span>
-          <span className="sub">{sDays === null ? 'нет продаж за 7 дней' : `хватит ≈ на ${Math.round(sDays)} дн`}</span>
-          <AreaSpark values={series('stock')} color="var(--a-ink3)" />
+        <div className="a-kpi" title="Выкупы, ₽ / выкупы, шт">
+          <span className="lbl">Ср. чек выкупа, ₽</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.checkSale) : '…'}</span>
+          <span className="sub">по выкупленным товарам</span>
         </div>
-        <div className="a-kpi">
-          <span className="lbl">Артикулы с заказами</span>
-          <span className="val n">{fmtInt(ag.active)} <small className="s-of">из {fmtInt(ag.count)}</small></span>
-          <span className="sub">{ag.count ? fmtPct(ag.active / ag.count * 100) : '—'} ассортимента продавалось</span>
+        <div className="a-kpi" title="Сколько в среднем придёт на счёт с одного заказанного товара: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение и реклама (коэффициенты из «Юнит-экономики»)">
+          <span className="lbl">Ср. поступление с заказа, ₽</span>
+          <span className="val n">{finK ? fmtInt(finK.payOrder) : '…'}</span>
+          <span className="sub">прогноз · на 1 заказанный товар</span>
         </div>
+        <div className="a-kpi" title="Фактически к перечислению по выкупам периода (выкупы минус все удержания Ozon) / выкупы, шт">
+          <span className="lbl">Ср. поступление с выкупа, ₽</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.paySale) : '…'}</span>
+          <span className="sub">{finK?.has && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
+        </div>
+
+        {/* 3. Реклама */}
         <div className="a-kpi">
           <span className="lbl">Расход на рекламу, ₽</span>
           <span className="val n">{fmtInt(T.spend)}</span>
@@ -830,15 +901,43 @@ export default function SalesAnalytics({ cabinet }) {
           </div>
           {unalloc > 0 && <span className="sub" title="Расход кампаний, которые не удалось привязать ни к одному артикулу. В сумме выше не учтён.">+{fmtInt(unalloc)} ₽ без привязки к артикулам</span>}
         </div>
-        <div className="a-kpi">
+        <div className="a-kpi" title="Доля рекламных расходов: расход на рекламу / сумма заказов">
           <span className="lbl">ДРР</span>
           <span className="val n">{fmtPct(T.drr)}</span>
           <span className="sub"><Delta value={P && T.drr !== null && P.drr !== null ? T.drr - P.drr : null} unit="pp" goodWhen="down" /> к прошлому периоду</span>
         </div>
-        <div className="a-kpi">
+        <div className="a-kpi" title="Заказы, которые Ozon отнёс к рекламе, — доля от всех заказов">
           <span className="lbl">Заказы с рекламы</span>
           <span className="val n">{fmtPct(adShare)}</span>
           <span className="sub"><Delta value={adShare !== null && pAdShare !== null ? adShare - pAdShare : null} unit="pp" goodWhen="neutral" /> · {fmtInt(T.adOrders)} шт</span>
+        </div>
+        <div className="a-kpi" title="Расход на рекламу / число заказов с рекламы — сколько стоит привести один заказ">
+          <span className="lbl">Цена заказа с рекламы, ₽</span>
+          <span className="val n">{T.adOrders > 0 ? fmtInt(T.spend / T.adOrders) : '—'}</span>
+          <span className="sub">{T.adOrders > 0 && avgCheck ? `${fmtPct(T.spend / T.adOrders / avgCheck * 100)} от ср. чека` : ''}</span>
+        </div>
+
+        {/* 4. Прибыль и ассортимент */}
+        <div className="a-kpi" title="С заказов периода: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог (как в «Юнит-экономике»)">
+          <span className="lbl">Прогнозируемая прибыль (с заказов), ₽</span>
+          <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : '…'}</span>
+          <span className="sub">налог {tax}%</span>
+        </div>
+        <div className="a-kpi" title="По выкупам периода: поступления на счёт минус себестоимость выкупленных товаров и налог">
+          <span className="lbl">Фактическая прибыль (с выкупов), ₽</span>
+          <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : '…'}</span>
+          <span className="sub">{finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
+        </div>
+        <div className="a-kpi">
+          <span className="lbl">Артикулы с заказами</span>
+          <span className="val n">{fmtInt(ag.active)} <small className="s-of">из {fmtInt(ag.count)}</small></span>
+          <span className="sub">{ag.count ? fmtPct(ag.active / ag.count * 100) : '—'} ассортимента продавалось</span>
+        </div>
+        <div className="a-kpi">
+          <span className="lbl">Остаток сейчас, шт</span>
+          <span className="val n">{fmtInt(ag.stockNow)}</span>
+          <span className="sub">{sDays === null ? 'нет продаж за 7 дней' : `хватит ≈ на ${Math.round(sDays)} дн`}</span>
+          <AreaSpark values={series('stock')} color="var(--a-ink3)" />
         </div>
       </div>
 

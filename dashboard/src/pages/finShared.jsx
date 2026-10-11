@@ -30,7 +30,7 @@ export function useCats(articles, order) {
 }
 
 export const inPath = (a, sel) => !sel || a.cat === sel || a.cat.startsWith(sel + SEP);
-export const matchQ = (a, q) => !q || a.o.toLowerCase().includes(q) || (a.n || '').toLowerCase().includes(q);
+export const matchQ = (a, q) => !q || String(a.o || '').toLowerCase().includes(q) || (a.n || '').toLowerCase().includes(q);
 
 // Шапка страницы: заголовок, период, поиск, вкладки категорий и «хлебные крошки».
 // Группы артикулов — те же, что в «Рекламе» и «Соинвесте».
@@ -122,7 +122,7 @@ export function RowsTable({ dates, rows, vals, totals, firstCol = 'Статья'
             const min = nums.length ? Math.min(...nums) : 0, max = nums.length ? Math.max(...nums) : 0;
             return (
               <tr key={row.key} className={`${row.sub ? 'sub' : ''} ${row.strong ? 'f-strong' : ''}`}>
-                <td className="lbl" title={row.hint || row.label}>{row.sub ? '— ' : ''}{row.label}</td>
+                <td className="lbl" title={row.hint || row.label} data-hint={row.hint ? 1 : undefined}>{row.sub ? '— ' : ''}{row.label}</td>
                 <td className="tot">{fmtBy(totals[row.key], row.fmt)}</td>
                 {dates.map((d, i) => {
                   const x = v[i];

@@ -237,7 +237,7 @@ export default function Calculator({ cabinet }) {
     if (x?.[4]) { setDimMode('liters'); setDims(d => ({ ...d, liters: String(x[4]) })); }
     if (x && x[13] > 0 && x[14] / x[13] > 0.5) setScheme('fbs');
   };
-  const found = q.trim().length >= 2 ? arts.filter(a => rowsByArt.has(a.i) && (a.o.toLowerCase().includes(q.trim().toLowerCase()) || (a.n || '').toLowerCase().includes(q.trim().toLowerCase()))).slice(0, 12) : [];
+  const found = q.trim().length >= 2 ? arts.filter(a => rowsByArt.has(a.i) && (String(a.o || '').toLowerCase().includes(q.trim().toLowerCase()) || (a.n || '').toLowerCase().includes(q.trim().toLowerCase()))).slice(0, 12) : [];
 
   const saveHist = () => {
     if (!res) return;
@@ -434,7 +434,7 @@ export default function Calculator({ cabinet }) {
                     <Row label="Прогнозная выручка" value={rub(qty * res.P)} />
                     <Row label="Расходы Ozon" value={rub(-qty * res.mp)} neg />
                     <Row label="Расходы вне Ozon" value={rub(-qty * res.outside)} neg />
-                    <Row label="Прогнозная прибыль" value={rub(qty * res.profit)} strong />
+                    <Row label="Прогнозируемая прибыль" value={rub(qty * res.profit)} strong />
                   </>
                 ) : <div className="a-hint">Нужна себестоимость и бюджет.</div>}
               </div>

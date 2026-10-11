@@ -70,8 +70,15 @@ app.get('/api/env-check', (req, res) => {
 app.use('/api/netcheck', require('./routes/netcheck')); // ВРЕМЕННО: диагностика таймаутов Ozon 28.09, убрать после
 
 const distPath = path.join(__dirname, '../../dashboard/dist');
-app.use(express.static(distPath));
-app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+// Файлы сборки с хешем в имени (assets/*) не меняются — браузер хранит их год
+// и при повторном открытии не качает заново; index.html — всегда свежий.
+app.use(express.static(distPath, {
+  setHeaders: (res, file) => {
+    if (/[\\/]assets[\\/]/.test(file)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    else if (file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
+app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(distPath, 'index.html')); });
 
 async function start() {
   let retries = 15;

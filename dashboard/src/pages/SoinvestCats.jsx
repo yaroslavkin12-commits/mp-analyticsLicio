@@ -100,7 +100,7 @@ export default function SoinvestCats({ cabinet }) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter(a => (!sel || a.cat === sel || a.cat.startsWith(sel + SEP)) && (!group || groupsData.members[a.o] === group)
-      && (!q || a.o.toLowerCase().includes(q) || a.n.toLowerCase().includes(q)));
+      && (!q || String(a.o || '').toLowerCase().includes(q) || String(a.n || '').toLowerCase().includes(q)));
   }, [items, sel, search, group, groupsData]);
   const groupColors = useMemo(() => groupColorMap(groupsData.groups), [groupsData]);
   const tops = useMemo(() => {

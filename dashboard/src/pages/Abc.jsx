@@ -4,6 +4,7 @@ import { getSalesData, getFinancePnl, getFinanceCoefs } from '../api';
 import { fmtInt, Delta, CAT_COLORS, SparkBars } from './AdsStats2';
 import { unitCoefs, unitProfit } from './unitModel';
 import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, OTHER } from './finShared';
+import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import './ads2.css';
 import './sales.css';
 
@@ -17,7 +18,7 @@ import './sales.css';
 //   класс в прошлом периоде той же длины (видно, кто вырос/выпал).
 // ─────────────────────────────────────────────────────────────────────────
 
-const METRICS = [['revenue', 'Заказы, ₽'], ['orders', 'Заказы, шт'], ['sales', 'Выкупы, ₽'], ['profit', 'Прибыль (прогноз)']];
+const METRICS = [['revenue', 'Заказы, ₽'], ['orders', 'Заказы, шт'], ['sales', 'Выкупы, ₽'], ['profit', 'Прогнозируемая прибыль']];
 const LEVELS = [['art', 'Артикулы'], ['model', 'Модели'], ['brand', 'Марки авто'], ['cat', 'Подкатегории']];
 const CLS = { A: 'g', B: 'w', C: 'b' };
 const NO_BRAND = 'Без марки';
@@ -52,6 +53,7 @@ export default function Abc({ cabinet }) {
   const [error, setError] = useState(null);
   const [sel, setSel] = useState('');
   const [search, setSearch] = useState('');
+  const ctl = useTableCtl('abc');
   const [metric, setMetric] = useState('revenue');
   const [level, setLevel] = useState('art');
   const [thA, setThA] = useState(80);
@@ -137,7 +139,8 @@ export default function Abc({ cabinet }) {
   const stats = ['A', 'B', 'C'].map(c => { const l = items.filter(x => x.cls === c); return { c, n: l.length, v: l.reduce((s, x) => s + Math.max(0, x.v), 0) }; });
   const matrix = {};
   for (const x of items) { const k = x.cls + x.xyz.cls; matrix[k] = matrix[k] || { n: 0, v: 0 }; matrix[k].n++; matrix[k].v += Math.max(0, x.v); }
-  const shown = cell ? items.filter(x => (cell.length === 1 ? x.cls === cell : x.cls + x.xyz.cls === cell)) : items;
+  const GETA = { rank: x => items.indexOf(x) + 1, name: x => x.key, v: x => x.v, delta: x => x.delta, share: x => x.share, cum: x => x.cum, orders: x => x.orders };
+  const shown = ctl.apply(cell ? items.filter(x => (cell.length === 1 ? x.cls === cell : x.cls + x.xyz.cls === cell)) : items, (x, k) => GETA[k](x));
   const moved = items.filter(x => x.prevCls && x.prevCls !== '—' && x.prevCls !== x.cls);
   const fmtV = v => (metric === 'orders' ? fmtInt(v) : `${fmtInt(v)} ₽`);
   const mLabel = METRICS.find(m => m[0] === metric)[1];
@@ -201,11 +204,16 @@ export default function Abc({ cabinet }) {
           <b style={{ fontSize: 14 }}>{LEVELS.find(l => l[0] === level)[1]}</b>
           {cell && <span className="pill w">{cell} · {shown.length} <button type="button" className="a-btn ghost" style={{ padding: '0 4px' }} onClick={() => setCell(null)}>×</button></span>}
           <span className="a-hint">{mLabel}; рядом — изменение к прошлому периоду той же длины</span>
+          <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
         </div>
         <div className="a-scroll">
           <table className="a-t s-slice">
-            <thead><tr><th className="r">#</th><th>{LEVELS.find(l => l[0] === level)[1].replace(/ы$/, '').replace(/и$/, 'я')}</th><th>ABC</th><th>XYZ</th><th title="Класс в прошлом периоде">Был</th>
-              <th className="r">{mLabel}</th><th className="r">Доля</th><th className="r">Накопл.</th><th className="r">Заказы, шт</th><th className="r">По неделям</th></tr></thead>
+            <thead><tr><ThCtl ctl={ctl} k="rank" filter={false}>#</ThCtl><ThCtl ctl={ctl} k="name" className="" filter={false}>{LEVELS.find(l => l[0] === level)[1].replace(/ы$/, '').replace(/и$/, 'я')}</ThCtl>
+              <th title="A — дают первые 80% суммы, B — следующие 15%, C — последние 5% (границы настраиваются выше)">ABC</th>
+              <th title="Стабильность спроса по неделям: X — ровный (вариация < 25%), Y — колеблется (25–50%), Z — нестабильный (> 50%)">XYZ</th><th title="Класс ABC в прошлом периоде той же длины">Был</th>
+              <ThCtl ctl={ctl} k="v">{mLabel}</ThCtl><ThCtl ctl={ctl} k="share" unit="%" hint="Доля в общей сумме выборки">Доля</ThCtl>
+              <ThCtl ctl={ctl} k="cum" unit="%" hint="Накопленная доля — сумма долей этой и всех позиций выше по рейтингу">Накопл.</ThCtl>
+              <ThCtl ctl={ctl} k="orders">Заказы, шт</ThCtl><th className="r">По неделям</th></tr></thead>
             <tbody>
               {shown.slice(0, 500).map(x => {
                 const rank = items.indexOf(x) + 1;

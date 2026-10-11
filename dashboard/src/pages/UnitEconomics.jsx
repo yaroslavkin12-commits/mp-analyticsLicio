@@ -41,14 +41,14 @@ const ROWS = [
   { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', sub: true, signed: true },
   { key: 'exp', label: 'Итого расходы', fmt: 'money0', good: 'neutral', signed: true, strong: true },
   { block: 'Прогноз результата', tone: 'conv' },
-  { key: 'profit', label: 'Прогнозная прибыль, ₽', fmt: 'int', good: 'up', strong: true, signed: true },
-  { key: 'margin', label: 'Маржа, %', fmt: 'pct', good: 'up', hint: 'Прибыль / ожидаемая выручка' },
-  { key: 'perUnit', label: 'Прибыль на 1 выкуп, ₽', fmt: 'int', good: 'up' },
+  { key: 'drr', label: 'ДРР от заказов, %', fmt: 'pct', good: 'down', hint: 'Расход на рекламу / сумма заказов' },
+  { key: 'perUnit', label: 'Прибыль на 1 выкуп, ₽', fmt: 'int', good: 'up', hint: 'Прогнозируемая прибыль / ожидаемое число выкупов' },
   { key: 'roi', label: 'ROI, %', fmt: 'pct', good: 'up', hint: 'Прибыль / себестоимость' },
-  { key: 'drr', label: 'ДРР от заказов, %', fmt: 'pct', good: 'down' },
+  { key: 'margin', label: 'Маржа, %', fmt: 'pct', good: 'up', hint: 'Прибыль / ожидаемая выручка' },
+  { key: 'profit', label: 'Прогнозируемая прибыль, ₽', fmt: 'int', good: 'up', strong: true, signed: true, hint: 'С заказов дня: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог' },
 ];
 const METRICS = [
-  { key: 'profit', label: 'Прогнозная прибыль, ₽', fmt: 'int', free: true },
+  { key: 'profit', label: 'Прогнозируемая прибыль, ₽', fmt: 'int', free: true },
   { key: 'margin', label: 'Маржа, %', fmt: 'pct', free: true },
   { key: 'ordRub', label: 'Заказано, ₽', fmt: 'int' },
   { key: 'expRev', label: 'Ожидаемая выручка, ₽', fmt: 'int' },
@@ -216,7 +216,7 @@ export default function UnitEconomics({ cabinet }) {
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         <Kpi label={todayIdx >= 0 ? 'Прибыль от заказов сегодня' : 'Прибыль за последний день'} value={<span className={(vals.profit[todayIdx >= 0 ? todayIdx : n - 1] || 0) < 0 ? 's-down' : ''}>{money(vals.profit[todayIdx >= 0 ? todayIdx : n - 1])}</span>}
           sub={`заказано ${money(vals.ordRub[todayIdx >= 0 ? todayIdx : n - 1])}, маржа ${pct1(vals.margin[todayIdx >= 0 ? todayIdx : n - 1])}`} />
-        <Kpi label="Прогнозная прибыль за период" value={<span className={T.profit < 0 ? 's-down' : ''}>{money(T.profit)}</span>} sub={`маржа ${pct1(T.margin)} · ROI ${pct1(T.roi)}`} />
+        <Kpi label="Прогнозируемая прибыль за период" value={<span className={T.profit < 0 ? 's-down' : ''}>{money(T.profit)}</span>} sub={`маржа ${pct1(T.margin)} · ROI ${pct1(T.roi)}`} />
         <Kpi label="Ожидаемая выручка" value={money(T.expRev)} sub={`выкуп ${pct1(T.buyout)} от ${money(T.ordRub)}`} />
         <Kpi label="Прибыль на 1 выкуп" value={money(T.perUnit)} sub={w?.check ? `средний чек ${fmtInt(w.check)} ₽` : ''} />
       </div>

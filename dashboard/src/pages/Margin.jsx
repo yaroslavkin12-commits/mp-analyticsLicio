@@ -3,6 +3,7 @@ import { getCalcBase } from '../api';
 import { fmtInt, CAT_COLORS } from './AdsStats2';
 import { baseOf, compute, priceFor, DEFAULTS } from './Calculator';
 import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, OTHER, SEP } from './finShared';
+import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import './ads2.css';
 import './sales.css';
 
@@ -25,9 +26,9 @@ export default function Margin({ cabinet }) {
   const [target, setTarget] = useState(20);
   const [withAds, setWithAds] = useState(true);
   const [flt, setFlt] = useState(null);
-  const [sortKey, setSortKey] = useState('margin');
   const [tax] = useTax(cabinet);
   const grp = useGroups(cabinet);
+  const ctl = useTableCtl('margin', { k: 'margin', dir: 1 });
 
   useEffect(() => { setData(null); getCalcBase(cabinet).then(r => setData(r.data.data)).catch(e => setError(e.response?.data?.error || e.message)); }, [cabinet]);
   const cats = useCats(data?.articles, data?.order);
@@ -65,14 +66,15 @@ export default function Margin({ cabinet }) {
   const q = search.trim().toLowerCase();
   const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a));
   const counts = Object.fromEntries(FILTERS.map(([k]) => [k, base.filter(r => r.status === k).length]));
-  const sortFn = {
-    margin: r => (r.status === 'nocost' ? 1e9 : r.r.margin ?? 1e9), profit: r => r.r.profit, rev: r => -r.rev, gap: r => (r.tp ? r.r.P - r.tp : 1e9),
-  }[sortKey];
-  const shown = (flt ? base.filter(r => r.status === flt) : base).sort((a, b) => sortFn(a) - sortFn(b)).slice(0, 500);
+  const GET = {
+    o: r => r.a.o, price: r => r.r.P, buyer: r => (r.v.spp ? r.r.buyerPrice : null), cost: r => r.v.cost || null, profit: r => r.r.profit,
+    margin: r => (r.status === 'nocost' ? null : r.r.margin), roi: r => r.r.roi, be: r => r.be || null, tp: r => r.tp || null,
+    gap: r => (r.tp ? r.tp - r.r.P : null), rev: r => r.rev,
+  };
+  const shown = ctl.apply(flt ? base.filter(r => r.status === flt) : base, (r, k) => GET[k](r)).slice(0, 500);
   const withCost = base.filter(r => r.status !== 'nocost');
   const avgMargin = (() => { let p = 0, rv = 0; for (const r of withCost) { p += r.r.profit * r.orders; rv += r.r.P * r.orders; } return rv ? p / rv * 100 : null; })();
   const lossRev = base.filter(r => r.status === 'loss').reduce((s, r) => s + r.rev, 0);
-  const th = (k, l, t) => <th className={`r ${sortKey === k ? 'on' : ''}`} style={{ cursor: 'pointer' }} title={t} onClick={() => setSortKey(k)}>{l}{sortKey === k ? ' ↑' : ''}</th>;
 
   if (error) return <div className="mpui"><div className="a-empty" style={{ padding: 40 }}>Не удалось загрузить: {error}</div></div>;
   if (!data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
@@ -105,13 +107,21 @@ export default function Margin({ cabinet }) {
       </div>
 
       <div className="a-card">
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctl} /></div>
         <div className="a-scroll">
           <table className="a-t s-slice">
             <thead><tr>
-              <th>Товар</th><th>Схема</th><th className="r">Цена</th><th className="r" title="Цена для покупателя со скидкой Ozon (СПП)">Покупатель</th><th className="r">Себест.</th>
-              {th('profit', 'Прибыль / шт')}{th('margin', 'Маржа')}<th className="r">ROI</th>
-              <th className="r" title="Цена, при которой прибыль = 0">Безубыточность</th><th className="r">Цена для {target}%</th>{th('gap', 'Изменить цену', 'Насколько поднять/можно снизить цену до целевой маржи')}
-              {th('rev', 'Заказы 30 дн, ₽')}
+              <ThCtl ctl={ctl} k="o" className="" filter={false}>Товар</ThCtl><th title="Схема, по которой идёт большинство заказов товара, и комиссия Ozon по ней">Схема</th>
+              <ThCtl ctl={ctl} k="price" hint="Ваша цена до скидки Ozon">Цена</ThCtl>
+              <ThCtl ctl={ctl} k="buyer" hint="Цена для покупателя со скидкой Ozon (СПП)">Покупатель</ThCtl>
+              <ThCtl ctl={ctl} k="cost">Себест.</ThCtl>
+              <ThCtl ctl={ctl} k="profit" hint="Прибыль с одной проданной (выкупленной) штуки после всех расходов, рекламы и налога">Прибыль / шт</ThCtl>
+              <ThCtl ctl={ctl} k="margin" hint="Прибыль / выручка с продажи">Маржа</ThCtl>
+              <ThCtl ctl={ctl} k="roi" hint="Прибыль / себестоимость">ROI</ThCtl>
+              <ThCtl ctl={ctl} k="be" hint="Цена, при которой прибыль = 0">Безубыточность</ThCtl>
+              <ThCtl ctl={ctl} k="tp" hint={`Цена, при которой маржа = ${target}%`}>Цена для {target}%</ThCtl>
+              <ThCtl ctl={ctl} k="gap" hint="Насколько поднять (+) или можно снизить (−) цену до целевой маржи">Изменить цену</ThCtl>
+              <ThCtl ctl={ctl} k="rev">Заказы 30 дн, ₽</ThCtl>
             </tr></thead>
             <tbody>
               {shown.map(({ a, scheme, v, r, be, tp, status, rev }) => {

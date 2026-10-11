@@ -49,7 +49,7 @@ export default function SearchPositions({ cabinet }) {
   const rows = useMemo(() => {
     if (!data) return [];
     return data.rows.map(r => ({ a: cats.arts[r[0]], q: data.queries[r[1]], p: r[2], s: r[3], c: r[4], o: r[5], rv: r[6], p1: r[7], p2: r[8] }))
-      .filter(r => r.a && inPath(r.a, sel) && grp.test(r.a) && (!q || matchQ(r.a, q) || r.q.toLowerCase().includes(q)));
+      .filter(r => r.a && inPath(r.a, sel) && grp.test(r.a) && (!q || matchQ(r.a, q) || String(r.q || '').toLowerCase().includes(q)));
   }, [data, cats.arts, sel, grp.test, q]);
 
   const byQuery = useMemo(() => {

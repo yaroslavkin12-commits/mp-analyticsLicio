@@ -52,7 +52,7 @@ export default function Costs({ cabinet }) {
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = items.filter(it => (!cat || it.category === cat || it.category.startsWith(cat + ' / '))
-      && (!q || it.offerId.toLowerCase().includes(q) || it.name.toLowerCase().includes(q))
+      && (!q || String(it.offerId || '').toLowerCase().includes(q) || String(it.name || '').toLowerCase().includes(q))
       && (!onlyEmpty || it.cost === null) && (!onlySold || it.orders30 > 0));
     const val = it => {
       switch (sort.key) {

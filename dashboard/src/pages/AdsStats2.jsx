@@ -7,6 +7,7 @@ import {
 } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
 import DateRangePicker from '../components/DateRangePicker';
+import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 // Лениво: AdSpendCats берёт график из SalesAnalytics, а тот — из этого файла
 // (статический импорт дал бы цикл модулей).
 const AdSpendCats = React.lazy(() => import('./AdSpendCats'));
@@ -882,7 +883,7 @@ export function AddToGroup({ catalog, exclude, onPick }) {
   const [open, setOpen] = useState(false);
   const ex = new Set(exclude);
   const s = q.trim().toLowerCase();
-  const res = s ? catalog.filter(a => !ex.has(a.offerId) && (a.offerId.toLowerCase().includes(s) || (a.productName || '').toLowerCase().includes(s))).slice(0, 30) : [];
+  const res = s ? catalog.filter(a => !ex.has(a.offerId) && (String(a.offerId || '').toLowerCase().includes(s) || (a.productName || '').toLowerCase().includes(s))).slice(0, 30) : [];
   return (
     <div className="a-ac" style={{ marginLeft: 'auto' }}>
       <input className="a-input" value={q} placeholder="+ Добавить артикул в группу…" style={{ minWidth: 260 }}
@@ -934,6 +935,7 @@ export default function AdsStats2({ cabinet }) {
   const [events, setEvents] = useState([]);
   const [tab, setTab] = useState('all');
   const [sort, setSort] = useState({ key: 'spend', dir: -1 });
+  const fctl = useTableCtl('ads-list'); // фильтры «от … до …» по колонкам
   const [search, setSearch] = useState('');
   const [onlyActive, setOnlyActive] = useState(false);
   const [payFilter, setPayFilter] = useState('');
@@ -988,7 +990,7 @@ export default function AdsStats2({ cabinet }) {
     let list = articlesRaw.filter(a => tab === 'all' ? a.campaigns.length > 0 : members[a.offerId] === tab);
     const before = list.length;
     list = list.filter(a => {
-      if (q && !(a.offerId.toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)
+      if (q && !(String(a.offerId || '').toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)
         || a.campaigns.some(c => (c.title || '').toLowerCase().includes(q)))) return false;
       if (!onlyActive && !payFilter) return true;
       if (a.campaigns.length === 0) return tab !== 'all';
@@ -996,9 +998,9 @@ export default function AdsStats2({ cabinet }) {
         && (!payFilter || (payFilter === 'cpo') === isCpoCampaign(c)));
     });
     const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
-    const val = (a) => {
+    const valK = (a, k) => {
       const t = a.totals;
-      switch (sort.key) {
+      switch (k) {
         case 'id': return a.offerId;
         case 'revenue': return mode === 'ads' ? t.adRevenue : t.revenue;
         case 'orders': return mode === 'ads' ? t.adOrders : t.orders;
@@ -1010,6 +1012,19 @@ export default function AdsStats2({ cabinet }) {
         default: return 0;
       }
     };
+    const val = a => valK(a, sort.key);
+    // Фильтры «от … до …» (ДРР — в %, без заглушек для пустых значений).
+    const fk = Object.keys(fctl.filters);
+    if (fk.length) list = list.filter(a => fk.every(k => {
+      const t = a.totals, rev = mode === 'ads' ? t.adRevenue : t.revenue;
+      const v = k === 'drr' ? (rev > 0 ? t.spend / rev * 100 : null) : k === 'stock' ? (a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null)
+        : k === 'profit' ? (profitOf(a)?.profit ?? null) : k === 'margin' ? (profitOf(a)?.margin ?? null) : valK(a, k);
+      const { min, max } = fctl.filters[k];
+      if (v === null || v === undefined) return false;
+      if (min !== '' && min != null && v < Number(min)) return false;
+      if (max !== '' && max != null && v > Number(max)) return false;
+      return true;
+    }));
     if (sort.key === 'manual') {
       list.sort((x, y) => {
         const ix = orderIndex.has(x.offerId) ? orderIndex.get(x.offerId) : Infinity;
@@ -1023,7 +1038,7 @@ export default function AdsStats2({ cabinet }) {
       });
     }
     return { rows: list, hiddenByFilter: before - list.length };
-  }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode]);
+  }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK]);
 
   const total = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode]);
 
@@ -1150,9 +1165,18 @@ export default function AdsStats2({ cabinet }) {
   });
   const COLS = [
     { k: 'id', t: 'Артикул' }, { k: null, t: 'Заказы по дням' }, { k: 'revenue', t: 'Заказано, ₽' }, { k: 'orders', t: 'Заказы, шт' },
-    { k: 'stock', t: 'Остаток, шт' }, { k: 'spend', t: 'Расход, ₽' }, { k: 'drr', t: 'ДРР' },
-    { k: 'profit', t: 'Прибыль (прогноз)' }, { k: 'margin', t: 'Маржа' }, { k: null, t: 'ОЗЗ' }, { k: null, t: 'РК' },
+    { k: 'stock', t: 'Остаток, шт', h: 'Текущий остаток FBO + FBS' }, { k: 'spend', t: 'Расход, ₽', h: 'Оплата за клик + оплата за заказ (по дню заказа)' },
+    { k: 'drr', t: 'ДРР', h: 'Доля рекламных расходов: расход / сумма заказов', u: '%' },
+    { k: 'profit', t: 'Прогнозируемая прибыль', h: 'Ожидаемая прибыль с заказов периода после выкупа, комиссии, логистики, рекламы, себестоимости и налога (коэффициенты — из «Юнит-экономики»)' },
+    { k: 'margin', t: 'Маржа', h: 'Прогнозируемая прибыль / ожидаемая выручка', u: '%' },
+    { k: null, t: 'ОЗЗ', h: 'Оплата за заказ: статус на товаре и ставка' }, { k: null, t: 'РК', h: 'Рекламные кампании товара' },
   ];
+  const ctlAds = {
+    sort: sort.key && sort.key !== 'manual' ? { k: sort.key, dir: sort.dir } : null,
+    cycleSort: k => clickSort(k), filters: fctl.filters, setFilter: fctl.setFilter,
+    changed: fctl.changed || !(sort.key === 'spend' && sort.dir === -1) && !(sort.key === 'manual'),
+    reset: () => { fctl.reset(); setSort(tab === 'all' ? { key: 'spend', dir: -1 } : { key: 'manual', dir: 1 }); },
+  };
   const clickSort = k => {
     if (!k) return;
     setSort(prev => prev.key === k ? { key: k, dir: -prev.dir } : { key: k, dir: k === 'id' ? 1 : -1 });
@@ -1379,15 +1403,14 @@ export default function AdsStats2({ cabinet }) {
       <Matrix rows={rows} dates={dates} mode={mode} />
 
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctlAds} /></div>
         <div className="a-scroll">
           <table className="a-t">
             <thead>
               <tr>
-                {COLS.map((c, i) => (
-                  <th key={i} className={`${c.k ? 'sortable' : ''} ${sort.key === c.k ? 'sorted' : ''}`} onClick={() => clickSort(c.k)}>
-                    {c.t}{sort.key === c.k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}
-                  </th>
-                ))}
+                {COLS.map((c, i) => c.k ? (
+                  <ThCtl key={i} ctl={ctlAds} k={c.k} className={sort.key === c.k ? 'sorted' : ''} filter={c.k !== 'id'} hint={c.h} unit={c.u}>{c.t}</ThCtl>
+                ) : <th key={i} title={c.h}>{c.t}</th>)}
               </tr>
             </thead>
             <tbody>

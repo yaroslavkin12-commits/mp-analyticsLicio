@@ -19,7 +19,7 @@ router.post('/', async (req, res) => {
     const clean = {};
     for (const [k, v] of Object.entries(plan || {})) {
       const o = {};
-      for (const f of ['revenue', 'orders', 'profit', 'sales']) if (v && v[f] !== undefined && v[f] !== '' && Number.isFinite(Number(v[f]))) o[f] = Number(v[f]);
+      for (const f of ['revenue', 'orders', 'profit', 'sales', 'salesQty', 'payout']) if (v && v[f] !== undefined && v[f] !== '' && Number.isFinite(Number(v[f]))) o[f] = Number(v[f]);
       if (Object.keys(o).length) clean[String(k).slice(0, 200)] = o;
     }
     await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())

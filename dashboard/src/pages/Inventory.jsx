@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getStocksData } from '../api';
+import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, useTip, DualChart, AreaSpark, Delta, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, Kpi, Empty, inPath, matchQ, pct1, SEP, OTHER } from './finShared';
 import './ads2.css';
@@ -53,7 +54,7 @@ export default function Inventory({ cabinet }) {
   const [target, setTarget] = useState(30);
   const [sig, setSig] = useState(null);
   const [open, setOpen] = useState(null);
-  const [sortKey, setSortKey] = useState('prio');
+  const ctl = useTableCtl('inventory');
   const tip = useTip();
   const grp = useGroups(cabinet);
 
@@ -119,7 +120,8 @@ export default function Inventory({ cabinet }) {
     return { stock: x.fbo + x.fbs, v: x.v };
   }, [scheme]);
 
-  const q = search.trim().toLowerCase();
+  // Поиск применяем с задержкой (useDeferredValue) — ввод не тормозит.
+  const q = React.useDeferredValue(search.trim().toLowerCase());
   const base = useMemo(() => per.filter(x => x.any && inPath(x.a, sel) && matchQ(x.a, q) && grp.test(x.a)), [per, sel, q, grp.test]);
   const rows = useMemo(() => base.map(x => {
     const { stock, v } = pick(x);
@@ -135,12 +137,11 @@ export default function Inventory({ cabinet }) {
   }), [base, pick]);
   const shown = useMemo(() => {
     const list = sig ? rows.filter(r => r.sigs.has(sig)) : rows.filter(r => r.stock > 0 || r.v > 0);
-    const key = {
-      prio: r => -r.prio - r.v * 0.001, cover: r => (r.cover === null ? 1e9 : r.cover), stock: r => -r.stock, v: r => -r.v,
-      need: r => -r.x.need, trend: r => -(r.x.trend ?? -1e9),
-    }[sortKey];
-    return [...list].sort((a, b) => key(a) - key(b)).slice(0, 400);
-  }, [rows, sig, sortKey]);
+    // По умолчанию — по важности (сколько денег под риском); дальше — сортировка и фильтры таблицы.
+    const byPrio = [...list].sort((a, b) => (-a.prio - a.v * 0.001) - (-b.prio - b.v * 0.001));
+    const GET = { o: r => r.x.a.o, stock: r => r.stock, v: r => r.v, trend: r => r.x.trend, cover: r => (r.cover === Infinity ? 1e9 : r.cover), fbs: r => (r.x.v ? r.x.fbsShare * 100 : null), need: r => r.x.need };
+    return ctl.apply(byPrio, (r, k) => GET[k](r)).slice(0, 400);
+  }, [rows, sig, ctl.apply]);
 
   const sigCount = useMemo(() => {
     const c = {}; for (const [k] of SIGNALS) c[k] = 0;
@@ -211,7 +212,6 @@ export default function Inventory({ cabinet }) {
     const cls = st ? STATUS[st][1] : (v === null ? 'm' : v < 7 ? 'b' : v < 14 ? 'w' : v > 90 ? 'm' : 'g');
     return <span className={`pill ${cls}`}>{daysTxt(v)}</span>;
   };
-  const sortTh = (k, l, title) => <th className={`r ${sortKey === k ? 'on' : ''}`} style={{ cursor: 'pointer' }} title={title} onClick={() => setSortKey(k)}>{l}{sortKey === k ? ' ↓' : ''}</th>;
   const clusterTable = list => (
     <table className="a-t s-slice">
       <thead><tr><th>Кластер</th><th className="r">Спрос / день</th><th className="r">Доступно FBO</th><th className="r">В пути</th><th className="r">Хватит, дн</th><th className="r">Везти</th></tr></thead>
@@ -277,21 +277,23 @@ export default function Inventory({ cabinet }) {
             <div className="a-bar" style={{ padding: '12px 14px 4px' }}>
               <span className="a-seg">{VIEWS.map(([k, l]) => <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => { setView(k); setOpen(null); }}>{l}</button>)}</span>
               {sig && <span className="pill w">{SIGNALS.find(s => s[0] === sig)[1]} · {shown.length}</span>}
-              <button type="button" className="a-btn" style={{ marginLeft: 'auto' }} onClick={exportPlan} title="Все товары выборки, которым нужна поставка, по кластерам">⬇ План поставки (CSV)</button>
+              {view === 'goods' && <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />}
+              <button type="button" className="a-btn" style={{ marginLeft: view === 'goods' && ctl.changed ? 0 : 'auto' }} onClick={exportPlan} title="Все товары выборки, которым нужна поставка, по кластерам">⬇ План поставки (CSV)</button>
             </div>
 
             {view === 'goods' && (
               <div className="a-scroll">
                 <table className="a-t s-tree">
                   <thead><tr>
-                    <th>Товар</th><th>Статус</th>
-                    {sortTh('stock', scheme === 'all' ? 'Остаток' : `Остаток ${scheme.toUpperCase()}`)}
-                    <th className="r">FBO / FBS</th>
-                    {sortTh('v', 'Продаж в день')}{sortTh('trend', 'Темп', 'К прошлому окну той же длины')}
-                    {sortTh('cover', 'Хватит, дн')}
-                    <th className="r" title="Доля заказов со своего склада">FBS</th>
+                    <ThCtl ctl={ctl} k="o" className="" filter={false}>Товар</ThCtl><th>Статус</th>
+                    <ThCtl ctl={ctl} k="stock">{scheme === 'all' ? 'Остаток' : `Остаток ${scheme.toUpperCase()}`}</ThCtl>
+                    <th className="r" title="Остаток на складах Ozon / на своём складе; +N — в пути на склады Ozon">FBO / FBS</th>
+                    <ThCtl ctl={ctl} k="v" hint="Средние продажи в день за выбранное окно (темп 7/14/30 дней)">Продаж в день</ThCtl>
+                    <ThCtl ctl={ctl} k="trend" unit="%" hint="Изменение продаж к прошлому окну той же длины">Темп</ThCtl>
+                    <ThCtl ctl={ctl} k="cover" hint="На сколько дней хватит остатка при текущем темпе продаж">Хватит, дн</ThCtl>
+                    <ThCtl ctl={ctl} k="fbs" unit="%" hint="Доля заказов со своего склада (FBS)">FBS</ThCtl>
                     <th className="r">Остаток 45 дн</th>
-                    {sortTh('need', 'Везти', `Сумма по кластерам, чтобы хватило на ${target} дн`)}
+                    <ThCtl ctl={ctl} k="need" hint={`Сколько штук отвезти по кластерам, чтобы хватило на ${target} дн`}>Везти</ThCtl>
                   </tr></thead>
                   <tbody>
                     {shown.map(r => {

@@ -1,26 +1,48 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
-import Dashboard from './pages/Dashboard';
-import Stocks from './pages/Stocks';
-import AdsStats from './pages/AdsStats2';
-import Discounts from './pages/Discounts';
-import Calculator from './pages/Calculator';
-import Settings from './pages/Settings';
-import TrackedArticles from './pages/TrackedArticles';
-import SalesAnalytics from './pages/SalesAnalytics';
-import Costs from './pages/Costs';
-import Geography from './pages/Geography';
-import UnitEconomics from './pages/UnitEconomics';
-import PnL from './pages/PnL';
-import Buyout from './pages/Buyout';
-import Inventory from './pages/Inventory';
-import AvgCheck from './pages/AvgCheck';
-import Abc from './pages/Abc';
-import Recon from './pages/Recon';
-import Margin from './pages/Margin';
-import PlanFact from './pages/PlanFact';
-import SearchPositions from './pages/SearchPositions';
-import Season from './pages/Season';
+// Страницы грузятся по требованию (отдельными файлами): при открытии
+// сервиса браузер качает только код текущей страницы, а не всех сразу.
+const lazyPage = f => { const C = React.lazy(f); C.preload = f; return C; };
+const Dashboard = lazyPage(() => import('./pages/Dashboard'));
+const Stocks = lazyPage(() => import('./pages/Stocks'));
+const AdsStats = lazyPage(() => import('./pages/AdsStats2'));
+const Discounts = lazyPage(() => import('./pages/Discounts'));
+const Calculator = lazyPage(() => import('./pages/Calculator'));
+const Settings = lazyPage(() => import('./pages/Settings'));
+const TrackedArticles = lazyPage(() => import('./pages/TrackedArticles'));
+const SalesAnalytics = lazyPage(() => import('./pages/SalesAnalytics'));
+const Costs = lazyPage(() => import('./pages/Costs'));
+const Geography = lazyPage(() => import('./pages/Geography'));
+const UnitEconomics = lazyPage(() => import('./pages/UnitEconomics'));
+const PnL = lazyPage(() => import('./pages/PnL'));
+const Buyout = lazyPage(() => import('./pages/Buyout'));
+const Inventory = lazyPage(() => import('./pages/Inventory'));
+const AvgCheck = lazyPage(() => import('./pages/AvgCheck'));
+const Abc = lazyPage(() => import('./pages/Abc'));
+const Recon = lazyPage(() => import('./pages/Recon'));
+const Margin = lazyPage(() => import('./pages/Margin'));
+const PlanFact = lazyPage(() => import('./pages/PlanFact'));
+const SearchPositions = lazyPage(() => import('./pages/SearchPositions'));
+const Season = lazyPage(() => import('./pages/Season'));
+
+// Если страница упала с ошибкой — показываем её текст и кнопку «Обновить
+// раздел» вместо белого экрана (остальные разделы продолжают работать).
+class PageBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: null, key: 0 }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.error('[Страница упала]', err, info?.componentStack); }
+  render() {
+    if (this.state.err) return (
+      <div style={{ padding: 40, maxWidth: 720 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>В этом разделе произошла ошибка</div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, opacity: 0.7, marginBottom: 14, whiteSpace: 'pre-wrap' }}>{String(this.state.err?.message || this.state.err)}</div>
+        <button className="a-btn" onClick={() => this.setState(s => ({ err: null, key: s.key + 1 }))}>Обновить раздел</button>
+        <span style={{ marginLeft: 10, fontSize: 12, opacity: 0.6 }}>Если повторяется — пришлите текст ошибки Claude.</span>
+      </div>
+    );
+    return <React.Fragment key={this.state.key}>{this.props.children}</React.Fragment>;
+  }
+}
 
 const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
@@ -69,19 +91,17 @@ export default function App() {
   const allowed = PAGES_BY_CABINET[cabinet] || PAGES_BY_CABINET.licio;
   const [visited, setVisited] = useState(() => new Set([page]));
   useEffect(() => { setVisited(prev => prev.has(page) ? prev : new Set(prev).add(page)); }, [page]);
+  // Раньше в фоне по очереди открывались ВСЕ разделы кабинета — каждый со
+  // своими тяжёлыми запросами, и при первом открытии сервер и браузер были
+  // заняты десятком загрузок сразу. Теперь в фоне подгружается только код
+  // страниц (без данных), данные — когда раздел открыт.
   useEffect(() => {
     setVisited(new Set([page]));
-    let cancelled = false;
-    const timers = [];
-    const order = allowed.filter(id => id !== page);
-    order.forEach((id, i) => {
-      timers.push(setTimeout(() => {
-        if (cancelled) return;
-        setVisited(prev => prev.has(id) ? prev : new Set(prev).add(id));
-      }, 2500 + i * 1500));
-    });
-    return () => { cancelled = true; timers.forEach(clearTimeout); };
+    const t = setTimeout(() => { allowed.forEach(id => { try { PAGES[id]?.preload?.(); } catch (e) { /* ignore */ } }); }, 4000);
+    return () => clearTimeout(t);
   }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { document.title = cabinet === 'defly' ? 'Defly — аналитика Ozon' : 'Licio — WB + Ozon'; }, [cabinet]);
 
   // Переключатель WB/Ozon нужен только старым разделам Licio.
   const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'inventory', 'check', 'abc', 'recon', 'margin', 'plan', 'search', 'season', 'calculator', 'notifications'].includes(page);
@@ -114,7 +134,11 @@ export default function App() {
                 position:'absolute', inset:0, overflow:'auto', padding:18,
                 visibility: on ? 'visible' : 'hidden', zIndex: on ? 1 : 0, pointerEvents: on ? 'auto' : 'none',
               }}>
-                <P platform={platform} cabinet={cabinet} active={on}/>
+                <PageBoundary>
+                  <React.Suspense fallback={<div style={{ padding: 40, color: 'var(--a-ink3, #888)' }}>Загрузка…</div>}>
+                    <P platform={platform} cabinet={cabinet} active={on}/>
+                  </React.Suspense>
+                </PageBoundary>
               </div>
             );
           })}
