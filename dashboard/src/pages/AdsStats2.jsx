@@ -10,7 +10,11 @@ import DateRangePicker from '../components/DateRangePicker';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 // Лениво: AdSpendCats берёт график из SalesAnalytics, а тот — из этого файла
 // (статический импорт дал бы цикл модулей).
-const AdSpendCats = React.lazy(() => import('./AdSpendCats'));
+// Если после обновления сервиса старый файл уже удалён — один раз перезагружаем страницу.
+const AdSpendCats = React.lazy(() => import('./AdSpendCats').catch(e => {
+  try { if (!sessionStorage.getItem('mp-chunk-reload')) { sessionStorage.setItem('mp-chunk-reload', '1'); window.location.reload(); } } catch (x) { /* ignore */ }
+  throw e;
+}));
 import './ads2.css';
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -1,29 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
-// Страницы грузятся по требованию (отдельными файлами): при открытии
-// сервиса браузер качает только код текущей страницы, а не всех сразу.
-const lazyPage = f => { const C = React.lazy(f); C.preload = f; return C; };
-const Dashboard = lazyPage(() => import('./pages/Dashboard'));
-const Stocks = lazyPage(() => import('./pages/Stocks'));
-const AdsStats = lazyPage(() => import('./pages/AdsStats2'));
-const Discounts = lazyPage(() => import('./pages/Discounts'));
-const Calculator = lazyPage(() => import('./pages/Calculator'));
-const Settings = lazyPage(() => import('./pages/Settings'));
-const TrackedArticles = lazyPage(() => import('./pages/TrackedArticles'));
-const SalesAnalytics = lazyPage(() => import('./pages/SalesAnalytics'));
-const Costs = lazyPage(() => import('./pages/Costs'));
-const Geography = lazyPage(() => import('./pages/Geography'));
-const UnitEconomics = lazyPage(() => import('./pages/UnitEconomics'));
-const PnL = lazyPage(() => import('./pages/PnL'));
-const Buyout = lazyPage(() => import('./pages/Buyout'));
-const Inventory = lazyPage(() => import('./pages/Inventory'));
-const AvgCheck = lazyPage(() => import('./pages/AvgCheck'));
-const Abc = lazyPage(() => import('./pages/Abc'));
-const Recon = lazyPage(() => import('./pages/Recon'));
-const Margin = lazyPage(() => import('./pages/Margin'));
-const PlanFact = lazyPage(() => import('./pages/PlanFact'));
-const SearchPositions = lazyPage(() => import('./pages/SearchPositions'));
-const Season = lazyPage(() => import('./pages/Season'));
+import Dashboard from './pages/Dashboard';
+import Stocks from './pages/Stocks';
+import AdsStats from './pages/AdsStats2';
+import Discounts from './pages/Discounts';
+import Calculator from './pages/Calculator';
+import Settings from './pages/Settings';
+import TrackedArticles from './pages/TrackedArticles';
+import SalesAnalytics from './pages/SalesAnalytics';
+import Costs from './pages/Costs';
+import Geography from './pages/Geography';
+import UnitEconomics from './pages/UnitEconomics';
+import PnL from './pages/PnL';
+import Buyout from './pages/Buyout';
+import Inventory from './pages/Inventory';
+import AvgCheck from './pages/AvgCheck';
+import Abc from './pages/Abc';
+import Recon from './pages/Recon';
+import Margin from './pages/Margin';
+import PlanFact from './pages/PlanFact';
+import SearchPositions from './pages/SearchPositions';
+import Season from './pages/Season';
 
 // Если страница упала с ошибкой — показываем её текст и кнопку «Обновить
 // раздел» вместо белого экрана (остальные разделы продолжают работать).
@@ -91,14 +88,20 @@ export default function App() {
   const allowed = PAGES_BY_CABINET[cabinet] || PAGES_BY_CABINET.licio;
   const [visited, setVisited] = useState(() => new Set([page]));
   useEffect(() => { setVisited(prev => prev.has(page) ? prev : new Set(prev).add(page)); }, [page]);
-  // Раньше в фоне по очереди открывались ВСЕ разделы кабинета — каждый со
-  // своими тяжёлыми запросами, и при первом открытии сервер и браузер были
-  // заняты десятком загрузок сразу. Теперь в фоне подгружается только код
-  // страниц (без данных), данные — когда раздел открыт.
+  // Все разделы кабинета открываются в фоне по очереди — переключение между
+  // вкладками мгновенное, данные уже загружены.
   useEffect(() => {
     setVisited(new Set([page]));
-    const t = setTimeout(() => { allowed.forEach(id => { try { PAGES[id]?.preload?.(); } catch (e) { /* ignore */ } }); }, 4000);
-    return () => clearTimeout(t);
+    let cancelled = false;
+    const timers = [];
+    const order = allowed.filter(id => id !== page);
+    order.forEach((id, i) => {
+      timers.push(setTimeout(() => {
+        if (cancelled) return;
+        setVisited(prev => prev.has(id) ? prev : new Set(prev).add(id));
+      }, 2500 + i * 1500));
+    });
+    return () => { cancelled = true; timers.forEach(clearTimeout); };
   }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { document.title = cabinet === 'defly' ? 'Defly — аналитика Ozon' : 'Licio — WB + Ozon'; }, [cabinet]);
@@ -135,9 +138,7 @@ export default function App() {
                 visibility: on ? 'visible' : 'hidden', zIndex: on ? 1 : 0, pointerEvents: on ? 'auto' : 'none',
               }}>
                 <PageBoundary>
-                  <React.Suspense fallback={<div style={{ padding: 40, color: 'var(--a-ink3, #888)' }}>Загрузка…</div>}>
-                    <P platform={platform} cabinet={cabinet} active={on}/>
-                  </React.Suspense>
+                  <P platform={platform} cabinet={cabinet} active={on}/>
                 </PageBoundary>
               </div>
             );
