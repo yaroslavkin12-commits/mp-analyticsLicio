@@ -160,7 +160,8 @@ function adsCabinets() {
   return Object.entries(CABINETS)
     // Данные идут через Google-таблицу (скрипт собирает оба кабинета), поэтому
     // ключи Ozon на Render не обязательны. Licio подключён к рекламе с 11.10.2026.
-    .filter(([id]) => !!id)
+    // Licio временно отключён: с ним сервер (512 МБ) падал по памяти (11.10.2026).
+    .filter(([id, cfg]) => id !== 'licio' && (cfg.ozonClientId || cfg.ozonPerfClientId))
     .map(([id]) => id);
 }
 
