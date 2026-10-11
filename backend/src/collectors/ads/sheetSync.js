@@ -415,27 +415,35 @@ async function syncQueriesIncremental(cabinet) {
   const sheetCnt = {};
   for (const r of counts.slice(1)) if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[0]).trim())) sheetCnt[String(r[0]).trim()] = Number(r[1]) || 0;
   const key = `queries_imported:${cabinet}`;
-  const prevRow = await query(`SELECT value FROM app_settings WHERE key = $1`, [key]).catch(() => ({ rows: [] }));
+  const prevRows = await query(`SELECT value FROM app_settings WHERE key = $1`, [key]).catch(() => []);
   let prev = {};
-  try { prev = JSON.parse(prevRow.rows[0]?.value || '{}') || {}; } catch (e) { prev = {}; }
-  const changed = Object.keys(sheetCnt).filter(d => prev[d] !== sheetCnt[d]).sort().reverse().slice(0, 16);
+  try { prev = JSON.parse((Array.isArray(prevRows) ? prevRows[0] : prevRows?.rows?.[0])?.value || '{}') || {}; } catch (e) { prev = {}; }
+  // По одному дню и не больше 3 дней за запуск: вкладка большая (до ~15 тыс.
+  // строк в день), а разбор сразу всех дней не помещался в память сервера.
+  const changed = Object.keys(sheetCnt).filter(d => prev[d] !== sheetCnt[d]).sort().reverse().slice(0, 3);
   if (!changed.length) return 0;
-  const rows = await gvizRows('Queries', `select * where A = '${cabinet}' and (${changed.map(d => `B = '${d}'`).join(' or ')})`);
-  if (!rows.length) return 0;
-  const h = rows[0];
-  if (!['query', 'position', 'searches'].every(c => h.includes(c))) return 0;
-  const ix = Object.fromEntries(h.map((c, i) => [c, i]));
-  const map = new Map();
-  for (const r of rows.slice(1)) {
-    const g = c => (r[ix[c]] !== undefined ? r[ix[c]] : '');
-    if (!g('sku') || !g('query') || !g('date')) continue;
-    const row = [cabinet, String(g('date')).slice(0, 10), num(g('sku')), String(g('query')).slice(0, 200), g('position') === '' ? null : num(g('position')),
-      Math.round(num(g('searches'))), Math.round(num(g('views'))), Math.round(num(g('clicks'))), Math.round(num(g('orders'))), num(g('revenue')), g('conversion') === '' ? null : num(g('conversion'))];
-    map.set(row.slice(1, 4).join('|'), row);
+  let n = 0;
+  for (const d of changed) {
+    let rows = await gvizRows('Queries', `select * where A = '${cabinet}' and B = '${d}'`);
+    if (!rows.length) continue;
+    const h = rows[0];
+    if (!['query', 'position', 'searches'].every(c => h.includes(c))) return n;
+    const ix = Object.fromEntries(h.map((c, i) => [c, i]));
+    const map = new Map();
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const g = c => (r[ix[c]] !== undefined ? r[ix[c]] : '');
+      if (!g('sku') || !g('query') || !g('date')) continue;
+      const row = [cabinet, String(g('date')).slice(0, 10), num(g('sku')), String(g('query')).slice(0, 200), g('position') === '' ? null : num(g('position')),
+        Math.round(num(g('searches'))), Math.round(num(g('views'))), Math.round(num(g('clicks'))), Math.round(num(g('orders'))), num(g('revenue')), g('conversion') === '' ? null : num(g('conversion'))];
+      map.set(row.slice(1, 4).join('|'), row);
+    }
+    rows = null;
+    await query(`DELETE FROM search_query_daily WHERE cabinet = $1 AND date = $2`, [cabinet, d]);
+    if (map.size) n += await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], [...map.values()], ['cabinet', 'date', 'sku', 'query']);
+    prev[d] = sheetCnt[d];
+    await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(prev)]);
   }
-  await query(`DELETE FROM search_query_daily WHERE cabinet = $1 AND date = ANY($2::date[])`, [cabinet, changed]);
-  const n = map.size ? await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], [...map.values()], ['cabinet', 'date', 'sku', 'query']) : 0;
-  for (const d of changed) prev[d] = sheetCnt[d];
   for (const d of Object.keys(prev)) if (!(d in sheetCnt)) delete prev[d];
   await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(prev)]);
   return n;
