@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 const NAV_BY_CABINET = {
-  licio: [['dashboard','📊','Дашборд'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
+  licio: [['dashboard','📊','Дашборд'],['ads','📣','Реклама'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
   // Разделы меню Defly: заголовок раздела — ['__h', 'Название'].
   defly: [
     ['__h','Продажи'],['sales','📈','Аналитика продаж'],['plan','🎯','План / факт'],['check','🧾','Средний чек'],['abc','🔤','ABC-анализ'],['season','🍂','Сезонность'],['geo','🗺️','География продаж'],

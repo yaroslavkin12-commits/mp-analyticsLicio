@@ -158,7 +158,9 @@ async function tickOrders(cabinet) {
 
 function adsCabinets() {
   return Object.entries(CABINETS)
-    .filter(([id, cfg]) => id !== 'licio' && (cfg.ozonClientId || cfg.ozonPerfClientId))
+    // Данные идут через Google-таблицу (скрипт собирает оба кабинета), поэтому
+    // ключи Ozon на Render не обязательны. Licio подключён к рекламе с 11.10.2026.
+    .filter(([id]) => !!id)
     .map(([id]) => id);
 }
 

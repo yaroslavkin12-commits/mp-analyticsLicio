@@ -31,7 +31,7 @@ const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl:
 // "Уведомления" — отслеживание артикулов + Telegram-алерты о новых заказах,
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
-  licio: ['dashboard', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
+  licio: ['dashboard', 'ads', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
   defly: ['sales', 'plan', 'ads', 'search', 'inventory', 'geo', 'check', 'abc', 'season', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 

@@ -976,8 +976,11 @@ function writeQueriesDays_(rows, done) {
     const keep = sh.getRange(2, 1, last - 1, W).getValues().filter(function (r, i) { return !drop[i]; });
     writeRows_(SHEET_NAMES.queries, QUERIES_HEADERS, keep.concat(fresh));
   } else {
-    if (bottom < drop.length) sh.deleteRows(2 + bottom, drop.length - bottom);
-    if (top > 0) sh.deleteRows(2, top);
+    // Очищаем, а не удаляем строки: удаление падало с «rows are out of bounds».
+    // Пустые строки после сортировки уходят в конец и заполняются новыми.
+    if (bottom < drop.length) sh.getRange(2 + bottom, 1, drop.length - bottom, W).clearContent();
+    if (top > 0) sh.getRange(2, 1, top, W).clearContent();
+    if (top > 0 && bottom > top) sh.getRange(2, 1, last - 1, W).sort({ column: 2, ascending: true });
     if (fresh.length) {
       const start = sh.getLastRow() + 1;
       const need = start + fresh.length - 1 - sh.getMaxRows();
