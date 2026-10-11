@@ -7,6 +7,9 @@ import {
 } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
 import DateRangePicker from '../components/DateRangePicker';
+// Лениво: AdSpendCats берёт график из SalesAnalytics, а тот — из этого файла
+// (статический импорт дал бы цикл модулей).
+const AdSpendCats = React.lazy(() => import('./AdSpendCats'));
 import './ads2.css';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1422,6 +1425,8 @@ export default function AdsStats2({ cabinet }) {
           </table>
         </div>
       </div>
+
+      <React.Suspense fallback={null}><AdSpendCats data={data} cabinet={cabinet} tip={tip} /></React.Suspense>
 
       {tip.node}
     </div>

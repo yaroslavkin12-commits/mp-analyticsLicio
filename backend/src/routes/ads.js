@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { campLabel } = require('../lib/adZone');
+const { autoPath } = require('../lib/categories');
 const dayjs = require('dayjs');
 const { query } = require('../db');
 const { listCabinets } = require('../config/cabinets');
@@ -1045,7 +1046,28 @@ router.get('/stats', async (req, res) => {
     timings.push(`compute;dur=${Date.now() - tQueries}`);
     timings.push(`total;dur=${Date.now() - tStart}`);
     res.set('Server-Timing', timings.join(', '));
-    res.json({ success: true, data: { dates, articles: articlesOut } });
+    // Для блока «Расход по категориям»: категория артикула (как во вкладке
+    // «Аналитика продаж», с ручными переносами) и «оплата за заказ» по ДНЮ
+    // СПИСАНИЯ — в таблице выше она отнесена ко дню заказа.
+    const overrides = await query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]).catch(() => []);
+    const ovMap = new Map(overrides.map(r => [r.offer_id, r.path]));
+    for (const a of articlesOut) {
+      if (a.offerId) a.cat = ovMap.get(a.offerId) || autoPath(cabinet, a.productName || nameByOfferId.get(a.offerId), a.offerId).join(' / ');
+    }
+    const cpoChargeMap = new Map();
+    for (const r of cpoOrderRows) {
+      if (!(r.date >= from && r.date <= to)) continue;
+      const offerId = offerBySkuCat.get(String(r.promoted_sku || r.sku)) || offerBySkuCat.get(String(r.sku)) || '';
+      const k = `${offerId}|${r.date}`;
+      cpoChargeMap.set(k, (cpoChargeMap.get(k) || 0) + (Number(r.expense) || 0));
+    }
+    const cpoCharge = [...cpoChargeMap].filter(([, v]) => v).map(([k, v]) => { const [o, d] = k.split('|'); return [o || null, d, Math.round(v * 100) / 100]; });
+    const catOfOffer = {};
+    for (const [o] of cpoCharge) if (o && !articlesOut.some(a => a.offerId === o)) {
+      catOfOffer[o] = { cat: ovMap.get(o) || autoPath(cabinet, nameByOfferId.get(o), o).join(' / '), name: nameByOfferId.get(o) || null };
+    }
+
+    res.json({ success: true, data: { dates, articles: articlesOut, cpoCharge, catOfOffer } });
   } catch (e) {
     console.error(e);
     res.status(500).json({ success: false, error: e.message });
