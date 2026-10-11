@@ -556,7 +556,7 @@ export default function SalesAnalytics({ cabinet }) {
       if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
       if (k && a.tOrders > 0) {
         const r = unitProfit(k, { ordRub: a.tRevenue, ordQty: a.tOrders, ads: a.tSpend }, tax);
-        fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += a.tOrders; fAny = true;
+        fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
       }
     }
     if (finPer && finPer.saleAll > 0) oz += finPer.noSkuOz * (sRub / finPer.saleAll);
@@ -880,13 +880,13 @@ export default function SalesAnalytics({ cabinet }) {
           <span className="val n">{finK?.has ? fmtInt(finK.checkSale) : '…'}</span>
           <span className="sub">по выкупленным товарам</span>
         </div>
-        <div className="a-kpi" title="Сколько в среднем придёт на счёт с одного заказанного товара: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение и реклама (коэффициенты из «Юнит-экономики»)">
-          <span className="lbl">Ср. поступление с заказа, ₽</span>
+        <div className="a-kpi" title="Прогноз по заказам периода: ожидаемая выручка (заказы × % выкупа) минус комиссия, логистика, эквайринг, хранение и реклама, делённая на ожидаемое число выкупов. Сравнима с фактическим поступлением с выкупа справа.">
+          <span className="lbl">Ср. поступление с выкупа (прогноз), ₽</span>
           <span className="val n">{finK ? fmtInt(finK.payOrder) : '…'}</span>
-          <span className="sub">прогноз · на 1 заказанный товар</span>
+          <span className="sub">по заказам периода · на 1 ожидаемый выкуп</span>
         </div>
         <div className="a-kpi" title="Фактически к перечислению по выкупам периода (выкупы минус все удержания Ozon) / выкупы, шт">
-          <span className="lbl">Ср. поступление с выкупа, ₽</span>
+          <span className="lbl">Ср. поступление с выкупа (факт), ₽</span>
           <span className="val n">{finK?.has ? fmtInt(finK.paySale) : '…'}</span>
           <span className="sub">{finK?.has && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
         </div>

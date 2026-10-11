@@ -72,7 +72,20 @@ const REQUIRED_COLUMNS = {
 };
 
 const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices', 'StocksWh', 'Queries', 'AnalyticsMonthly'];
+// Короткий кэш вкладок (60 с): вкладка содержит оба кабинета, и при сборе
+// Licio сразу после Defly её не нужно скачивать и разбирать второй раз.
+const SHEET_CACHE = new Map();
 async function fetchSheetRows(sheetName) {
+  const hit = SHEET_CACHE.get(sheetName);
+  if (hit && Date.now() - hit.at < 60000) return hit.p;
+  const p = fetchSheetRowsRaw(sheetName);
+  SHEET_CACHE.set(sheetName, { at: Date.now(), p });
+  p.catch(() => SHEET_CACHE.delete(sheetName));
+  // Через минуту отпускаем память.
+  setTimeout(() => { const h = SHEET_CACHE.get(sheetName); if (h && h.p === p) SHEET_CACHE.delete(sheetName); }, 61000).unref?.();
+  return p;
+}
+async function fetchSheetRowsRaw(sheetName) {
   const id = sheetId();
   if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
   const resp = await axios.get(csvUrl(sheetName), { timeout: HEAVY_TABS.includes(sheetName) ? 90000 : 20000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });

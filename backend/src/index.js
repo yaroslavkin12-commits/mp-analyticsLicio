@@ -29,16 +29,38 @@ app.use((req, res, next) => {
   const key = req.originalUrl;
   const hit = reportCache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) { res.set('X-Cache', 'hit'); return res.type('json').send(hit.body); }
-  const json = res.json.bind(res);
-  res.json = body => {
-    if (res.statusCode === 200 && body && body.success) {
-      if (reportCache.size > 60) reportCache.clear();
-      reportCache.set(key, { at: Date.now(), body: JSON.stringify(body) });
-    }
-    return json(body);
-  };
-  next();
+  // Тяжёлые отчёты считаются не больше двух одновременно (остальные ждут
+  // очереди): при открытии сервиса все разделы просят данные разом, и
+  // параллельный расчёт не помещался в память сервера (512 МБ).
+  heavyAcquire().then(release => {
+    let done = false;
+    const free = () => { if (!done) { done = true; release(); } };
+    res.on('finish', free); res.on('close', free);
+    const again = reportCache.get(key);
+    if (again && Date.now() - again.at < CACHE_TTL) { res.set('X-Cache', 'hit'); return res.type('json').send(again.body); }
+    const json = res.json.bind(res);
+    res.json = body => {
+      if (res.statusCode === 200 && body && body.success) {
+        const str = JSON.stringify(body);
+        reportCache.set(key, { at: Date.now(), body: str, size: str.length });
+        // Кэш не больше ~60 МБ: выкидываем самые старые записи.
+        let total = 0; for (const v of reportCache.values()) total += v.size || 0;
+        for (const [k, v] of reportCache) { if (total <= 60e6) break; total -= v.size || 0; reportCache.delete(k); }
+        return res.type('json').send(str);
+      }
+      return json(body);
+    };
+    next();
+  });
 });
+let heavyActive = 0;
+const heavyQueue = [];
+function heavyAcquire() {
+  return new Promise(resolve => {
+    const go = () => { heavyActive++; resolve(() => { heavyActive--; const n = heavyQueue.shift(); if (n) n(); }); };
+    if (heavyActive < 2) go(); else heavyQueue.push(go);
+  });
+}
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/settings',  require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));

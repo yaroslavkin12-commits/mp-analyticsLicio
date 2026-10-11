@@ -366,11 +366,13 @@ async function tickCabinet(cabinet) {
 
 async function tick() {
   await Promise.all([
-    ...adsCabinets().map(c => tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message))),
+    // Кабинеты — по очереди, не параллельно: каждый сбор читает большие вкладки
+    // таблицы целиком, и два одновременно не помещаются в память сервера.
+    (async () => { for (const c of adsCabinets()) await tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message)); })(),
     ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
     // Дайджест Соинвеста работает по данным из расширения — для всех кабинетов.
     ...Object.keys(CABINETS).map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
-    ...adsCabinets().map(c => tickMorning(c).catch(e => console.error(`[Morning:${c}]`, e.message))),
+    ...adsCabinets().filter(c => c !== 'licio').map(c => tickMorning(c).catch(e => console.error(`[Morning:${c}]`, e.message))),
     ...ordersCabinets().map(c => tickOrders(c).catch(e => console.error(`[Orders:${c}]`, e.message))),
   ]);
 }
