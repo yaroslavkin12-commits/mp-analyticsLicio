@@ -381,6 +381,47 @@ async function replaceRange(table, cabinet, rows, columns, conflict) {
   await query(`DELETE FROM ${table} WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, dates[0], dates[dates.length - 1]]);
   return bulkUpsert(table, columns, rows, conflict);
 }
+// Поисковые запросы: вкладка большая (десятки тысяч строк в день), поэтому
+// тянем не всю, а только дни, где число строк в таблице изменилось с
+// прошлого импорта. Сначала — сводка «дата → строк» (запрос gviz group by),
+// потом строки только этих дней.
+async function gvizRows(sheetName, tq) {
+  const url = `https://docs.google.com/spreadsheets/d/${sheetId()}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(sheetName)}&tq=${encodeURIComponent(tq)}`;
+  const resp = await axios.get(url, { timeout: 90000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });
+  return parseCsv(String(resp.data));
+}
+async function syncQueriesIncremental(cabinet) {
+  if (!sheetId()) return 0;
+  let counts;
+  try { counts = await gvizRows('Queries', `select B, count(C) where A = '${cabinet}' group by B`); } catch (e) { return 0; }
+  const sheetCnt = {};
+  for (const r of counts.slice(1)) if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[0]).trim())) sheetCnt[String(r[0]).trim()] = Number(r[1]) || 0;
+  const key = `queries_imported:${cabinet}`;
+  const prevRow = await query(`SELECT value FROM app_settings WHERE key = $1`, [key]).catch(() => ({ rows: [] }));
+  let prev = {};
+  try { prev = JSON.parse(prevRow.rows[0]?.value || '{}') || {}; } catch (e) { prev = {}; }
+  const changed = Object.keys(sheetCnt).filter(d => prev[d] !== sheetCnt[d]).sort().reverse().slice(0, 16);
+  if (!changed.length) return 0;
+  const rows = await gvizRows('Queries', `select * where A = '${cabinet}' and (${changed.map(d => `B = '${d}'`).join(' or ')})`);
+  if (!rows.length) return 0;
+  const h = rows[0];
+  if (!['query', 'position', 'searches'].every(c => h.includes(c))) return 0;
+  const ix = Object.fromEntries(h.map((c, i) => [c, i]));
+  const map = new Map();
+  for (const r of rows.slice(1)) {
+    const g = c => (r[ix[c]] !== undefined ? r[ix[c]] : '');
+    if (!g('sku') || !g('query') || !g('date')) continue;
+    const row = [cabinet, String(g('date')).slice(0, 10), num(g('sku')), String(g('query')).slice(0, 200), g('position') === '' ? null : num(g('position')),
+      Math.round(num(g('searches'))), Math.round(num(g('views'))), Math.round(num(g('clicks'))), Math.round(num(g('orders'))), num(g('revenue')), g('conversion') === '' ? null : num(g('conversion'))];
+    map.set(row.slice(1, 4).join('|'), row);
+  }
+  await query(`DELETE FROM search_query_daily WHERE cabinet = $1 AND date = ANY($2::date[])`, [cabinet, changed]);
+  const n = map.size ? await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], [...map.values()], ['cabinet', 'date', 'sku', 'query']) : 0;
+  for (const d of changed) prev[d] = sheetCnt[d];
+  for (const d of Object.keys(prev)) if (!(d in sheetCnt)) delete prev[d];
+  await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(prev)]);
+  return n;
+}
 async function syncFinanceFromSheet(cabinet) {
   // Отдельная задача 'finance' раз в час (см. jobs.js) — со своим, более
   // длинным таймаутом: вкладки большие (Finance ~30 тыс. строк).
@@ -388,18 +429,7 @@ async function syncFinanceFromSheet(cabinet) {
   let total = 0;
   total += (await syncGeoFromSheet(cabinet)).rows || 0;
   // Поисковые запросы по дням.
-  const qs = await fetchSheetRows('Queries');
-  if (qs) {
-    const map = new Map();
-    for (const r of qs) {
-      if (r.cabinet !== cabinet || !r.sku || !r.query || !r.date) continue;
-      const row = [cabinet, String(r.date).slice(0, 10), num(r.sku), String(r.query).slice(0, 200), r.position === '' ? null : num(r.position),
-        Math.round(num(r.searches)), Math.round(num(r.views)), Math.round(num(r.clicks)), Math.round(num(r.orders)), num(r.revenue), r.conversion === '' ? null : num(r.conversion)];
-      map.set(row.slice(1, 4).join('|'), row);
-    }
-    total += await replaceRange('search_query_daily', cabinet, [...map.values()],
-      ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], ['cabinet', 'date', 'sku', 'query']);
-  }
+  total += await syncQueriesIncremental(cabinet);
   // Продажи по месяцам (сезонность).
   const mon = await fetchSheetRows('AnalyticsMonthly');
   if (mon) {
