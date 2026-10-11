@@ -28,6 +28,8 @@ const ACC = [
   { id: '7', name: 'Крепления' },
   { id: '0', name: 'Без категории / без привязки к товару' },
 ];
+// Licio — шесть категорий одежды, цвет закреплён за каждой.
+const LICIO = ['Футболки', 'Лонгсливы', 'Худи', 'Свитшоты', 'Брюки', 'Шорты'];
 // Цвет закреплён за категорией (не за местом в рейтинге).
 const COLOR = { 1: 'var(--s-c4)', 2: 'var(--s-c2)', 3: 'var(--s-c1)', 4: 'var(--s-c6)', 5: 'var(--s-c5)', 6: 'var(--s-c3)', 7: 'var(--a-ink3)', 0: 'var(--a-ink3)' };
 
@@ -93,6 +95,7 @@ export default function AdSpendCats({ data, cabinet, tip }) {
       return rows.get(id);
     };
     if (isDefly) ACC.forEach(c => rowOf(c.id, c.name, c.parent));
+    else if (cabinet === 'licio') LICIO.forEach(c => rowOf(c, c));
     for (const it of items.values()) {
       it.tCpc = it.cpc.reduce((s, v) => s + v, 0); it.tCpo = it.cpo.reduce((s, v) => s + v, 0); it.total = it.tCpc + it.tCpo;
       if (!(it.total > 0)) continue;
@@ -110,7 +113,8 @@ export default function AdSpendCats({ data, cabinet, tip }) {
       r.items.sort((x, y) => y.total - x.total);
     }
     let list = [...rows.values()];
-    if (!isDefly) list.sort((x, y) => (x.id === '0') - (y.id === '0') || y.total - x.total);
+    const rank = id => { const i = LICIO.indexOf(id); return i >= 0 ? i : id === '0' ? 1e6 : 1e5; };
+    if (!isDefly) list.sort((x, y) => rank(x.id) - rank(y.id) || y.total - x.total);
     const top = list.filter(r => !r.parent);
     const grand = top.reduce((s, r) => s + r.total, 0);
     const gCpc = top.reduce((s, r) => s + r.tCpc, 0), gCpo = top.reduce((s, r) => s + r.tCpo, 0);
@@ -122,9 +126,9 @@ export default function AdSpendCats({ data, cabinet, tip }) {
   // График — по верхним категориям; «Крепления» и «без категории» — одной серой полосой.
   const chartGroups = (() => {
     if (!model.isDefly) {
-      const shown = model.top.filter(r => r.total > 0 && r.id !== '0').slice(0, 5);
+      const shown = model.top.filter(r => r.total > 0 && LICIO.includes(r.id));
       const rest = model.top.filter(r => !shown.includes(r));
-      const g = shown.map((r, i) => ({ key: r.id, name: r.name, color: `var(--s-c${i + 1})`, ag: { s: { spendCpc: r.cpc, spendCpo: r.cpo } } }));
+      const g = shown.map(r => ({ key: r.id, name: r.name, color: `var(--s-c${LICIO.indexOf(r.id) + 1})`, ag: { s: { spendCpc: r.cpc, spendCpo: r.cpo } } }));
       if (rest.some(r => r.total > 0)) {
         const N = dates.length, cpc = new Array(N).fill(0), cpo = new Array(N).fill(0);
         rest.forEach(r => { for (let i = 0; i < N; i++) { cpc[i] += r.cpc[i]; cpo[i] += r.cpo[i]; } });
@@ -157,7 +161,7 @@ export default function AdSpendCats({ data, cabinet, tip }) {
           <td>
             <div className="a-art" style={{ paddingLeft: child ? 22 : 0 }}>
               <span className="a-chev" style={{ visibility: r.items.length ? 'visible' : 'hidden' }}>▶</span>
-              {!child && <i className="s-dot" style={{ background: model.isDefly ? COLOR[r.id] : 'var(--a-ink3)', marginRight: 6 }} />}
+              {!child && <i className="s-dot" style={{ background: model.isDefly ? COLOR[r.id] : LICIO.includes(r.id) ? `var(--s-c${LICIO.indexOf(r.id) + 1})` : 'var(--a-ink3)', marginRight: 6 }} />}
               {child ? <span className="muted">в т.ч. </span> : null}
               {child ? label : <b>{label}</b>}
             </div>
@@ -211,12 +215,16 @@ export default function AdSpendCats({ data, cabinet, tip }) {
             <th className="r" title="По дню списания">Оплата за заказ, ₽ <span className="muted">(по дню списания)</span></th>
             <th className="r">Всего, ₽</th><th className="r">Доля</th>
           </tr></thead>
-          <tbody>{model.list.filter(r => r.total > 0 || (model.isDefly && r.id !== '0')).map(catRow)}</tbody>
+          <tbody>{model.list.filter(r => r.total > 0 || (model.isDefly && r.id !== '0') || LICIO.includes(r.id)).map(catRow)}</tbody>
           <tfoot><tr>
             <td><b>Итого</b></td><td className="n r"><b>{fmtInt(model.gCpc)}</b></td><td className="n r"><b>{fmtInt(model.gCpo)}</b></td>
             <td className="n r"><b>{fmtInt(model.grand)}</b></td><td className="n r muted">100%</td>
           </tr></tfoot>
         </table>
+      </div>
+      <div className="a-hint" style={{ marginTop: 8 }}>
+        «Без категории / без привязки к товару» — расход кампаний, которые Ozon не разносит по товарам (например, «Оплата за заказ — все товары»,
+        пока за эти дни нет отчёта по её заказам). Как только отчёт подгрузится, расход разойдётся по товарам и категориям.
       </div>
       {model.isDefly && (
         <div className="a-hint" style={{ marginTop: 8 }}>

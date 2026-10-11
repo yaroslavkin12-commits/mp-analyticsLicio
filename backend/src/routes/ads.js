@@ -498,10 +498,10 @@ router.get('/stats', async (req, res) => {
       // date — день списания (выкупа), order_date — день заказа. Расход
       // относим ко дню ЗАКАЗА (так видно, как реклама отработала в тот день);
       // если день заказа неизвестен — ко дню списания.
-      timed('cpoOrders', query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense
-             FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon'
+      timed('cpoOrders', query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense, COALESCE(to_jsonb(t)->>'kind', '') AS kind
+             FROM ad_cpo_orders t WHERE cabinet = $1 AND platform = 'ozon'
               AND (date BETWEEN $2 AND $3 OR COALESCE(order_date, date) BETWEEN $2 AND $3)`, [cabinet, from, to])
-        .catch(() => query(`SELECT date::text AS date, NULL AS order_date, sku, promoted_sku, quantity, cost, expense
+        .catch(() => query(`SELECT date::text AS date, NULL AS order_date, sku, promoted_sku, quantity, cost, expense, '' AS kind
              FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]))
         .catch(() => [])),
       timed('cpoProducts', query(`SELECT sku, offer_id, enabled, available, bid_pct, bid_rub, checked_at
@@ -665,14 +665,17 @@ router.get('/stats', async (req, res) => {
     // дню. Пока эти данные есть, сами CPO-кампании в расход не считаем
     // (иначе задвоили бы) — только в пределах дат, покрытых отчётом.
     const cpoByOfferDate = new Map(); // offer|date -> {expense, orders, revenue}
-    let cpoFrom = null, cpoTo = null;
+    // Покрытие — отдельно для «выбранных товаров» ('') и «всех товаров» ('all'):
+    // у каждого вида свой отчёт, и пропуск одного не должен обнулять другой.
+    const cpoSpan = {};
     for (const r of cpoOrderRows) {
       const offerId = offerBySkuCat.get(String(r.promoted_sku || r.sku)) || offerBySkuCat.get(String(r.sku));
       // Покрытие отчётом считаем по дню списания — чтобы не задвоить с
       // расходом самой CPO-кампании, который Ozon тоже отдаёт по дню списания.
       if (r.date >= from && r.date <= to) {
-        if (!cpoFrom || r.date < cpoFrom) cpoFrom = r.date;
-        if (!cpoTo || r.date > cpoTo) cpoTo = r.date;
+        const sp = cpoSpan[r.kind || ''] || (cpoSpan[r.kind || ''] = [r.date, r.date]);
+        if (r.date < sp[0]) sp[0] = r.date;
+        if (r.date > sp[1]) sp[1] = r.date;
       }
       const day = r.order_date || r.date;
       if (!offerId || day < from || day > to) continue;
@@ -683,7 +686,7 @@ router.get('/stats', async (req, res) => {
       if (!r.order_date) cur.undated += Number(r.expense) || 0;
       cpoByOfferDate.set(k, cur);
     }
-    const cpoCovers = date => cpoFrom && date >= cpoFrom && date <= cpoTo;
+    const cpoCovers = (date, kind) => { const sp = cpoSpan[kind || '']; return !!sp && date >= sp[0] && date <= sp[1]; };
 
     for (const camp of campaigns) {
       const multiOfferIds = [...(campaignOfferIds.get(camp.campaign_id) || [])];
@@ -715,7 +718,7 @@ router.get('/stats', async (req, res) => {
         for (const date of dates) {
           const k = `${camp.campaign_id}|${date}`;
           let spend, clicks, adViews, adOrders, adRevenue, adToCart = null;
-          if (isCpo && cpoCovers(date)) {
+          if (isCpo && cpoCovers(date, String(camp.adv_object_type || '').toUpperCase() === 'ALL_SKU_PROMO' ? 'all' : '')) {
             // Расход этой РК за день уже разнесён по товарам из отчёта по заказам.
             spend = 0; clicks = 0; adViews = 0; adOrders = 0; adRevenue = 0;
           } else if (skuCovered.has(k)) {

@@ -88,10 +88,12 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
   }
 
   // «Оплата за заказ» — по дню заказа; дни списания, покрытые отчётом.
-  let cpoFrom = null, cpoTo = null;
+  // Покрытие отчётом — отдельно для «выбранных товаров» ('') и «всех товаров» ('all').
+  const cpoSpan = {};
   for (const r of cpoRows) {
-    if (!cpoFrom || r.date < cpoFrom) cpoFrom = r.date;
-    if (!cpoTo || r.date > cpoTo) cpoTo = r.date;
+    const sp = cpoSpan[r.kind || ''] || (cpoSpan[r.kind || ''] = [r.date, r.date]);
+    if (r.date < sp[0]) sp[0] = r.date;
+    if (r.date > sp[1]) sp[1] = r.date;
     const day = r.order_date || r.date;
     if (day < from || day > to) continue;
     const o = offerBySku.get(String(r.promoted_sku || r.sku)) || offerBySku.get(String(r.sku));
@@ -100,7 +102,7 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
     add(o, day, 'adOrders', num(r.quantity) || 1);
     add(o, day, 'adRevenue', num(r.cost));
   }
-  const cpoCovers = d => cpoFrom && d >= cpoFrom && d <= cpoTo;
+  const cpoCovers = (d, kind) => { const sp = cpoSpan[kind || '']; return !!sp && d >= sp[0] && d <= sp[1]; };
 
   for (const r of adRows) {
     const spend = num(r.spend);
@@ -108,7 +110,7 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
     const id = String(r.campaign_id);
     const c = campById.get(id);
     const isCpo = String(c?.payment_type || '').toUpperCase() === 'CPO';
-    if (isCpo && cpoCovers(r.date)) continue;
+    if (isCpo && cpoCovers(r.date, String(c?.adv_object_type || '').toUpperCase() === 'ALL_SKU_PROMO' ? 'all' : '')) continue;
     if (covered.has(`${id}|${r.date}`)) continue;
     const targets = campOffers.has(id) ? [...campOffers.get(id)] : (c?.matched_offer_id ? [c.matched_offer_id] : []);
     if (!targets.length) { lost(r.date, spend); continue; }
@@ -154,14 +156,14 @@ router.get('/data', async (req, res) => {
               WHERE cabinet = $1 AND platform = 'ozon'
                 AND snapshot_date = (SELECT MAX(snapshot_date) FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon')
               GROUP BY offer_id`, P),
-      query(`SELECT campaign_id, matched_offer_id, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, P),
+      query(`SELECT campaign_id, matched_offer_id, payment_type, adv_object_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, P),
       query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, P).catch(() => []),
       query(`SELECT date::text AS date, campaign_id, spend, clicks, orders, orders_money
                FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, adFrom, to]),
       query(`SELECT date::text AS date, campaign_id, sku, clicks, orders, sales, expense
                FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, adFrom, to]).catch(() => []),
-      query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense
-               FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon'
+      query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense, COALESCE(to_jsonb(t)->>'kind', '') AS kind
+               FROM ad_cpo_orders t WHERE cabinet = $1 AND platform = 'ozon'
                 AND (date BETWEEN $2 AND $3 OR order_date BETWEEN $2 AND $3)`, [cabinet, adFrom, to]).catch(() => []),
       compare
         ? query(`SELECT sku, offer_id, SUM(hits_view) v, SUM(hits_view_pdp) pv, SUM(hits_tocart) c, SUM(orders_item) o, SUM(revenue) r

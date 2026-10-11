@@ -233,14 +233,19 @@ async function syncCpoOrdersFromSheet(cabinet) {
   // Колонки дня заказа могло ещё не быть (таблица создана раньше).
   await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_date DATE`).catch(() => {});
   await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(64)`).catch(() => {});
+  // kind: '' — «выбранные товары» (продвижение в поиске), 'all' — «все товары».
+  await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS kind VARCHAR(8) NOT NULL DEFAULT ''`).catch(() => {});
   const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
   const out = rows.filter(r => r.cabinet === cabinet && isDate(r.date) && (r.sku || r.promoted_sku))
     .map(r => [cabinet, 'ozon', r.date, String(r.order_id || ''), String(r.sku || ''), String(r.promoted_sku || ''),
       r.offer_id || null, num(r.quantity) || 1, num(r.cost), num(r.expense),
-      isDate(r.order_date) ? r.order_date : null, r.order_number || null, new Date()]);
+      isDate(r.order_date) ? r.order_date : null, r.order_number || null, new Date(), r.kind === 'all' ? 'all' : '']);
+  // Одна строка на ключ таблицы (иначе Postgres отказывает всему пакету).
+  const uniq = new Map();
+  for (const r of out) uniq.set([r[3], r[4], r[5], r[2]].join('|'), r);
   const saved = await bulkUpsert('ad_cpo_orders',
-    ['cabinet', 'platform', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number', 'updated_at'],
-    out, ['cabinet', 'platform', 'order_id', 'sku', 'promoted_sku', 'date']);
+    ['cabinet', 'platform', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number', 'updated_at', 'kind'],
+    [...uniq.values()], ['cabinet', 'platform', 'order_id', 'sku', 'promoted_sku', 'date']);
   return { rows: saved };
 }
 

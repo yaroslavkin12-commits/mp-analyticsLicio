@@ -8,6 +8,7 @@
 
 // Порядок категорий в интерфейсе (то, чего нет в списке, идёт следом по алфавиту).
 const ORDER = {
+  licio: ['Футболки', 'Лонгсливы', 'Худи', 'Свитшоты', 'Брюки', 'Шорты', 'Прочее', 'Без категории'],
   defly: [
     'Чехлы', 'Чехлы на сиденья', 'Жаккард', 'Экокожа', 'Обычная (K)', 'Ромб (KR)', 'Накидки и другое', 'Чехлы на подлокотник',
     'Дефлекторы', 'Окна', '3D', '2D', 'PSA', 'Капот', 'Люк',
@@ -69,8 +70,18 @@ function genericPath(name) {
   return [w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()];
 }
 
+// Licio (одежда): шесть категорий (список владельца, 11.10.2026).
+const LICIO_CATS = [['Футболки', /футболк/], ['Лонгсливы', /лонгслив/], ['Худи', /худи/], ['Свитшоты', /свитшот/], ['Брюки', /брюк|штан|джоггер/], ['Шорты', /шорт/]];
+function licioPath(name) {
+  const n = String(name || '').toLowerCase();
+  for (const [cat, re] of LICIO_CATS) if (re.test(n)) return [cat];
+  return n ? ['Прочее'] : ['Без категории'];
+}
+
 function autoPath(cabinet, name, offerId) {
-  return cabinet === 'defly' ? deflyPath(name, offerId) : genericPath(name);
+  if (cabinet === 'defly') return deflyPath(name, offerId);
+  if (cabinet === 'licio') return licioPath(name);
+  return genericPath(name);
 }
 
 // Марка автомобиля из названия — второй срез для автотоваров.

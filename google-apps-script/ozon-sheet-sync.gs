@@ -80,7 +80,8 @@ const CPC_BIDS_HEADERS = ['cabinet', 'campaign_id', 'sku', 'bid', 'checked_at'];
 // Отчёт по заказам «оплаты за заказ»: строка = заказ, с датой, SKU и списанной суммой.
 // date — день СПИСАНИЯ (Ozon списывает «оплату за заказ» в момент выкупа),
 // order_date — день самого ЗАКАЗА (по номеру отправления из списка заказов).
-const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number'];
+// kind: '' — «Оплата за заказ: выбранные товары» (продвижение в поиске), 'all' — «Оплата за заказ — все товары».
+const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number', 'kind'];
 
 const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name'];
 const ANALYTICS_HEADERS = ['cabinet', 'date', 'sku', 'hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
@@ -513,6 +514,31 @@ function runPerfReport_(cab, url, payload, label) {
   throw new Error(label + ': отчёт не успел сформироваться');
 }
 
+// То же для отчётов, которые заказываются GET-запросом с параметрами в адресе
+// (отчёты «Оплата за заказ — все товары»). Ответ — CSV или ZIP с CSV.
+function runPerfReportGet_(cab, url, label) {
+  const gen = fetchJson_(url, { method: 'get', headers: perfHeaders_(cab) }, label + ': заказ отчёта');
+  const uuid = gen.UUID || gen.uuid;
+  if (!uuid) throw new Error(label + ': нет UUID в ответе ' + JSON.stringify(gen).slice(0, 200));
+  for (let i = 0; i < 18; i++) {
+    Utilities.sleep(10000);
+    const st = fetchJson_('https://api-performance.ozon.ru/api/client/statistics/' + uuid, { method: 'get', headers: perfHeaders_(cab) }, label + ': статус');
+    if (st.state === 'OK') {
+      const resp = UrlFetchApp.fetch('https://api-performance.ozon.ru/api/client/statistics/report?UUID=' + uuid,
+        { method: 'get', headers: perfHeaders_(cab), muteHttpExceptions: true });
+      const blob = resp.getBlob();
+      const bytes = blob.getBytes();
+      if (bytes.length > 1 && bytes[0] === 0x50 && bytes[1] === 0x4B) { // ZIP
+        blob.setContentType('application/zip');
+        return Utilities.unzip(blob).map(function (b) { return b.getDataAsString('UTF-8'); }).join('\n');
+      }
+      return blob.getDataAsString('UTF-8');
+    }
+    if (st.state === 'ERROR') throw new Error(label + ': Ozon вернул ошибку формирования отчёта');
+  }
+  throw new Error(label + ': отчёт не успел сформироваться');
+}
+
 // Ищет в разобранном JSON первый массив объектов-строк (структура ответа
 // отчёта Ozon документирована не полностью).
 function findRows_(obj, depth) {
@@ -543,7 +569,7 @@ function normDate_(v) {
   if (m) return m[3] + '-' + m[2] + '-' + m[1];
   return '';
 }
-function parseCpoOrders_(cab, text, out) {
+function parseCpoOrders_(cab, text, out, kind) {
   let rows = null;
   try { rows = findRows_(JSON.parse(text), 0); } catch (e) { rows = null; }
   if (!rows) {
@@ -551,9 +577,10 @@ function parseCpoOrders_(cab, text, out) {
     const lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
     const hi = lines.findIndex(function (l) { return /sku/i.test(l); });
     if (hi === -1) { Logger.log('CPO-отчёт: не нашёл строк. Начало ответа: ' + text.slice(0, 500)); return 0; }
-    const head = lines[hi].split(';').map(function (h) { return h.replace(/^"|"$/g, '').trim(); });
-    rows = lines.slice(hi + 1).map(function (l) {
-      const cells = l.split(';').map(function (c) { return c.replace(/^"|"$/g, '').trim(); });
+    const sep = (lines[hi].split(';').length >= lines[hi].split(',').length) ? ';' : ',';
+    const head = lines[hi].split(sep).map(function (h) { return h.replace(/^"|"$/g, '').trim(); });
+    rows = lines.slice(hi + 1).filter(function (l) { return !/^(итого|всего|total)/i.test(l.replace(/^"/, '')); }).map(function (l) {
+      const cells = l.split(sep).map(function (c) { return c.replace(/^"|"$/g, '').trim(); });
       const o = {}; head.forEach(function (h, i) { o[h] = cells[i]; }); return o;
     });
   }
@@ -576,7 +603,7 @@ function parseCpoOrders_(cab, text, out) {
     if (!date) return;
     out.push([cab.id, date, kOrder ? String(r[kOrder]) : '', kSku ? String(r[kSku] || '') : '', kPromo ? String(r[kPromo] || '') : '',
       kOffer ? String(r[kOffer] || '') : '', kQty ? parseRuNumber_(r[kQty]) : 1, kCost ? parseRuNumber_(r[kCost]) : 0, parseRuNumber_(r[kExp]),
-      '', kOrderNum ? String(r[kOrderNum] || '') : '']);
+      '', kOrderNum ? String(r[kOrderNum] || '') : '', kind || '']);
     n++;
   });
   return n;
@@ -631,7 +658,15 @@ function syncCpoOrders(days) {
       const text = runPerfReport_(cab, 'https://api-performance.ozon.ru/api/client/statistic/orders/generate/json',
         { from: mskDate_(window - 1) + 'T00:00:00Z', to: mskDate_(0) + 'T23:59:59Z' }, 'CPO-отчёт ' + cab.id);
       const start = rows.length;
-      Logger.log('CPO-отчёт ' + cab.id + ': строк ' + parseCpoOrders_(cab, text, rows));
+      Logger.log('CPO-отчёт ' + cab.id + ': строк ' + parseCpoOrders_(cab, text, rows, ''));
+      // «Оплата за заказ — все товары» — отдельный отчёт Ozon.
+      try {
+        const url = 'https://api-performance.ozon.ru/api/client/statistics/all_sku_promo/orders/generate?timeBounds.from=' +
+          encodeURIComponent(mskDate_(window - 1) + 'T00:00:00Z') + '&timeBounds.to=' + encodeURIComponent(mskDate_(0) + 'T23:59:59Z');
+        const t2 = runPerfReportGet_(cab, url, 'CPO все товары ' + cab.id);
+        Logger.log('CPO все товары ' + cab.id + ': начало отчёта ' + t2.slice(0, 400));
+        Logger.log('CPO все товары ' + cab.id + ': строк ' + parseCpoOrders_(cab, t2, rows, 'all'));
+      } catch (e) { Logger.log('CPO все товары ' + cab.id + ': ' + e.message); }
       if (rows.length > start) {
         const dates = orderDatesMap_(cab);
         let found = 0;
@@ -646,7 +681,7 @@ function syncCpoOrders(days) {
     } catch (e) { Logger.log('CPO-отчёт ' + cab.id + ': ' + e.message); }
   });
   // Заказ может прийти с одинаковым id для разных SKU — ключ: кабинет+заказ+sku+продвигаемый sku.
-  mergeIntoSheet_(SHEET_NAMES.cpoOrders, CPO_ORDERS_HEADERS, rows, [0, 2, 3, 4, 1], 1);
+  mergeIntoSheet_(SHEET_NAMES.cpoOrders, CPO_ORDERS_HEADERS, rows, [0, 2, 3, 4, 1, 11], 1);
 }
 function syncCpoOrdersFull() { syncCpoOrders(30); }
 
@@ -1265,7 +1300,7 @@ function readSheetAsMap_(sheetName, keyCols) {
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     if (!row.length || row.every(function (v) { return v === ''; })) continue;
-    const key = keyCols.map(function (c) { return String(row[c]); }).join('|');
+    const key = keyCols.map(function (c) { return String(row[c] === undefined ? '' : row[c]); }).join('|');
     map[key] = row;
   }
   return map;
