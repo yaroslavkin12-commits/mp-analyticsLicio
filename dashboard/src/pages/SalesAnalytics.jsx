@@ -3,6 +3,7 @@ import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
+import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { useTax, useBuyerShare } from './finShared';
 import DateRangePicker from '../components/DateRangePicker';
 import {
@@ -417,14 +418,29 @@ function ArticleDetail({ a, dates, buckets, gran, tip, leafPaths, onMoveCategory
 }
 
 // ── Срезы ────────────────────────────────────────────────────────────────
-function SliceTable({ rows, cols, onOpen, empty }) {
+// Значение колонки для сортировки и фильтра: c.s(r), иначе — из текста ячейки
+// ("1 234" → 1234, "12,5%" → 12.5), иначе сам текст.
+const sliceVal = (c, r) => {
+  if (c.s) return c.s(r);
+  const v = c.v(r);
+  if (typeof v === 'number') return v;
+  if (typeof v !== 'string') return null;
+  const t = v.replace(/[\s\u00a0₽%]/g, '').replace(',', '.').replace('−', '-');
+  return t !== '' && Number.isFinite(Number(t)) ? Number(t) : v;
+};
+function SliceTable({ rows, cols, onOpen, empty, id }) {
+  // Сортировка (клик по названию колонки) и фильтр «от … до» (воронка) — как в других таблицах.
+  const ctl = useTableCtl(id ? `slice-${id}` : null);
   if (!rows.length) return <div className="a-empty" style={{ padding: 18 }}>{empty}</div>;
+  const shown = ctl.apply(rows, (r, k) => { const c = cols.find(x => x.t === k); return c ? sliceVal(c, r) : null; });
   return (
     <div className="a-scroll">
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctl} /></div>
       <table className="a-t s-slice">
-        <thead><tr>{cols.map(c => <th key={c.t} className={c.num ? 'r' : ''}>{c.t}</th>)}</tr></thead>
+        <thead><tr>{cols.map(c => <ThCtl key={c.t} ctl={ctl} k={c.t} className={c.num ? 'r' : ''} filter={!!c.num}>{c.t}</ThCtl>)}</tr></thead>
         <tbody>
-          {rows.map(r => (
+          {!shown.length && <tr><td colSpan={cols.length} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
+          {shown.map(r => (
             <tr key={r.key} className="row" onClick={onOpen ? () => onOpen(r) : undefined}>
               {cols.map(c => <td key={c.t} className={c.num ? 'n r' : ''}>{c.v(r)}</td>)}
             </tr>
@@ -1061,8 +1077,8 @@ export default function SalesAnalytics({ cabinet }) {
               <div key={k}>
                 <div className="a-hint" style={{ marginBottom: 6 }}>{title} — изменение выручки к прошлому периоду той же длины</div>
                 <SliceTable rows={movers[k]} onOpen={r => openArticle(r.a)} empty="Нет таких артикулов"
-                  cols={[{ t: 'Артикул', v: r => artCell(r.a) }, { t: 'Было, ₽', num: 1, v: r => fmtInt(r.prevRev) }, { t: 'Стало, ₽', num: 1, v: r => fmtInt(r.rev) },
-                    { t: 'Разница', num: 1, v: r => <span className={r.diff > 0 ? 's-up' : 's-down'}>{r.diff > 0 ? '+' : ''}{fmtInt(r.diff)}</span> }]} />
+                  id={'movers-' + k} cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Было, ₽', num: 1, v: r => fmtInt(r.prevRev), s: r => r.prevRev }, { t: 'Стало, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev },
+                    { t: 'Разница', num: 1, s: r => r.diff, v: r => <span className={r.diff > 0 ? 's-up' : 's-down'}>{r.diff > 0 ? '+' : ''}{fmtInt(r.diff)}</span> }]} />
               </div>
             ))}
           </div>
@@ -1070,19 +1086,19 @@ export default function SalesAnalytics({ cabinet }) {
         {slice === 'sleep' && (
           <>
             <div className="a-hint" style={{ marginBottom: 6 }}>Есть остаток, но за весь период ни одного заказа — деньги лежат на складе. Сначала самые большие остатки.</div>
-            <SliceTable rows={sleeping.slice(0, 100)} onOpen={r => openArticle(r.a)} empty="Спящих артикулов нет"
-              cols={[{ t: 'Артикул', v: r => artCell(r.a) }, { t: 'Категория', v: r => r.a.cat }, { t: 'Остаток', num: 1, v: r => fmtInt(r.a.st) },
-                { t: 'Показы', num: 1, v: r => fmtInt(r.a.views.reduce((s, v) => s + v, 0)) }, { t: 'Заказы в прошлом периоде', num: 1, v: r => fmtInt(r.a.prev?.orders || 0) }]} />
+            <SliceTable id="sleep" rows={sleeping.slice(0, 100)} onOpen={r => openArticle(r.a)} empty="Спящих артикулов нет"
+              cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Категория', v: r => r.a.cat }, { t: 'Остаток', num: 1, v: r => fmtInt(r.a.st), s: r => r.a.st },
+                { t: 'Показы', num: 1, v: r => fmtInt(r.a.views.reduce((s, v) => s + v, 0)), s: r => r.a.views.reduce((s, v) => s + v, 0) }, { t: 'Заказы в прошлом периоде', num: 1, v: r => fmtInt(r.a.prev?.orders || 0), s: r => r.a.prev?.orders || 0 }]} />
             {sleeping.length > 100 && <div className="a-hint" style={{ marginTop: 6 }}>Показаны первые 100 из {sleeping.length}.</div>}
           </>
         )}
         {slice === 'deficit' && (
           <>
             <div className="a-hint" style={{ marginBottom: 6 }}>Продаются, но остатка меньше чем на 7 дней при темпе последней недели (или уже нет в наличии).</div>
-            <SliceTable rows={deficit} onOpen={r => openArticle(r.a)} empty="Дефицита нет"
-              cols={[{ t: 'Артикул', v: r => artCell(r.a) }, { t: 'Категория', v: r => r.a.cat }, { t: 'Остаток', num: 1, v: r => fmtInt(r.a.st) },
-                { t: 'Хватит на', num: 1, v: r => <span className="s-days b">{r.a.st === 0 ? 'нет в наличии' : r.sd === null ? '—' : `${Math.round(r.sd)} дн`}</span> },
-                { t: 'Заказы за период', num: 1, v: r => fmtInt(r.orders) }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev) }]} />
+            <SliceTable id="deficit" rows={deficit} onOpen={r => openArticle(r.a)} empty="Дефицита нет"
+              cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Категория', v: r => r.a.cat }, { t: 'Остаток', num: 1, v: r => fmtInt(r.a.st), s: r => r.a.st },
+                { t: 'Хватит на', num: 1, s: r => (r.a.st === 0 ? 0 : r.sd), v: r => <span className="s-days b">{r.a.st === 0 ? 'нет в наличии' : r.sd === null ? '—' : `${Math.round(r.sd)} дн`}</span> },
+                { t: 'Заказы за период', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev }]} />
           </>
         )}
         {slice === 'abc' && (
@@ -1093,17 +1109,17 @@ export default function SalesAnalytics({ cabinet }) {
               ))}
               <div className="s-abc-i"><b className="s-cls Z">—</b><span><b className="n">{abc.zero}</b> арт. без заказов</span></div>
             </div>
-            <SliceTable rows={abc.list.slice(0, 150)} onOpen={r => openArticle(r.a)} empty="Нет заказов за период"
-              cols={[{ t: 'Класс', v: r => <b className={`s-cls ${r.cls}`}>{r.cls}</b> }, { t: 'Артикул', v: r => artCell(r.a) }, { t: 'Категория', v: r => r.a.cat },
-                { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev) }, { t: 'Доля', num: 1, v: r => fmtPct(r.rev / abc.tot * 100) }, { t: 'Накопленно', num: 1, v: r => fmtPct(r.cum) }]} />
+            <SliceTable id="abc" rows={abc.list.slice(0, 150)} onOpen={r => openArticle(r.a)} empty="Нет заказов за период"
+              cols={[{ t: 'Класс', v: r => <b className={`s-cls ${r.cls}`}>{r.cls}</b>, s: r => r.cls }, { t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Категория', v: r => r.a.cat },
+                { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev }, { t: 'Доля', num: 1, v: r => fmtPct(r.rev / abc.tot * 100), s: r => r.rev / abc.tot * 100 }, { t: 'Накопленно', num: 1, v: r => fmtPct(r.cum), s: r => r.cum }]} />
           </>
         )}
         {slice === 'brands' && brandTable && (
           <>
             <div className="a-hint" style={{ marginBottom: 6 }}>Выручка по маркам авто в каждой категории. Пустые клетки — по марке продаётся одно, а другого нет. Клик по строке — фильтр по марке.</div>
-            <SliceTable rows={brandTable.rows.slice(0, 60)} onOpen={r => setBrand(r.key === 'Не определена' ? '' : r.key)} empty="Нет продаж"
-              cols={[{ t: 'Марка', v: r => <b>{r.key}</b> }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.total) }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders) },
-                ...brandTable.tops.map(tp => ({ t: tp, num: 1, v: r => r.by[tp] ? fmtInt(r.by[tp]) : <span className="muted">—</span> }))]} />
+            <SliceTable id="brands" rows={brandTable.rows.slice(0, 60)} onOpen={r => setBrand(r.key === 'Не определена' ? '' : r.key)} empty="Нет продаж"
+              cols={[{ t: 'Марка', v: r => <b>{r.key}</b>, s: r => r.key }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.total), s: r => r.total }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders },
+                ...brandTable.tops.map(tp => ({ t: tp, num: 1, s: r => r.by[tp] || 0, v: r => r.by[tp] ? fmtInt(r.by[tp]) : <span className="muted">—</span> }))]} />
           </>
         )}
         {slice === 'funnel' && (
@@ -1114,9 +1130,9 @@ export default function SalesAnalytics({ cabinet }) {
               <SliceTable
                 rows={(kids.length ? kids.map(k => ({ key: k.path, name: k.name, t: toModel(agOf(k.arts), [{ key: 'a', idx: dates.map((_, i) => i) }]).totals }))
                   : [...node.arts].sort((x, y) => y.tRevenue - x.tRevenue).slice(0, 20).map(a => ({ key: a.o, name: a.o, t: toModel(agOf([a]), [{ key: 'a', idx: dates.map((_, i) => i) }]).totals })))}
-                onOpen={kids.length ? r => setSel(r.key) : null} empty="Нет данных"
-                cols={[{ t: kids.length ? 'Категория' : 'Артикул', v: r => r.name }, { t: 'Показы', num: 1, v: r => fmtInt(r.t.views) }, { t: 'CTR', num: 1, v: r => fmtPct(r.t.ctr) },
-                  { t: 'CR в корзину', num: 1, v: r => fmtPct(r.t.crToCart) }, { t: 'CR в заказ', num: 1, v: r => fmtPct(r.t.crToOrder) }, { t: 'Заказы', num: 1, v: r => fmtInt(r.t.orders) }]} />
+                onOpen={kids.length ? r => setSel(r.key) : null} empty="Нет данных" id="funnel"
+                cols={[{ t: kids.length ? 'Категория' : 'Артикул', v: r => r.name }, { t: 'Показы', num: 1, v: r => fmtInt(r.t.views), s: r => r.t.views }, { t: 'CTR', num: 1, v: r => fmtPct(r.t.ctr), s: r => r.t.ctr },
+                  { t: 'CR в корзину', num: 1, v: r => fmtPct(r.t.crToCart), s: r => r.t.crToCart }, { t: 'CR в заказ', num: 1, v: r => fmtPct(r.t.crToOrder), s: r => r.t.crToOrder }, { t: 'Заказы', num: 1, v: r => fmtInt(r.t.orders), s: r => r.t.orders }]} />
             </div>
           </div>
         )}

@@ -74,6 +74,9 @@ export default function UnitEconomics({ cabinet }) {
   const [tax, setTax] = useTax(cabinet);
   const [showNames, setShowNames] = useState(false);
   const tip = useTip();
+  // «На 1 выкуп»: суммы таблицы делятся на ожидаемое число выкупов (за день / за период).
+  const [perUnit, setPerUnitRaw] = useState(() => { try { return localStorage.getItem('mp-unit-perunit') === '1'; } catch (e) { return false; } });
+  const setPerUnit = v => { setPerUnitRaw(v); try { localStorage.setItem('mp-unit-perunit', v ? '1' : '0'); } catch (e) { /* ignore */ } };
   const grp = useGroups(cabinet);
 
   const load = useCallback(() => {
@@ -219,6 +222,11 @@ export default function UnitEconomics({ cabinet }) {
     { key: 'perUnit', label: 'На 1 выкуп', fmt: 'int' },
   ];
   const todayIdx = dates.indexOf(today);
+  // На 1 выкуп: проценты, штуки и уже «на выкуп» строки — как есть.
+  const KEEP = new Set(['ordQty', 'buyout', 'drr', 'perUnit', 'roi', 'margin', 'payUnit']);
+  const perQ = (v, q) => (v === null || v === undefined || !(q > 0) ? null : v / q);
+  const shownVals = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? vals[r.key] : Array.from(vals[r.key] || [], (x, i) => perQ(x, vals.expQty[i]))])) : vals;
+  const shownT = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perQ(T[r.key], T.expQty)])) : T;
   const payT = T.pay;
   const payUnit = T.payUnit;
   const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
@@ -256,10 +264,13 @@ export default function UnitEconomics({ cabinet }) {
 
       <div className="a-card">
         <div className="a-bar" style={{ padding: '12px 14px 8px' }}>
-          <b style={{ fontSize: 14 }}>Прогноз по дням заказа</b>
+          <b style={{ fontSize: 14 }}>Прогноз по дням заказа{perUnit ? ' · на 1 выкуп, ₽' : ''}</b>
+          <label className="sw" title="Каждая статья в среднем на один ожидаемый выкуп: сумма за день (период) / ожидаемые выкупы за день (период)">
+            <input type="checkbox" checked={perUnit} onChange={e => setPerUnit(e.target.checked)} /><i />на 1 выкуп
+          </label>
           <span className="a-hint">средние коэффициенты за 30 дней{coefs.since ? ` (с ${dayjs(coefs.since).format('DD.MM')})` : ''}, реклама — факт дня</span>
         </div>
-        <RowsTable dates={dates} rows={ROWS} vals={vals} totals={T} />
+        <RowsTable dates={dates} rows={ROWS} vals={shownVals} totals={shownT} />
       </div>
 
       {w && (
