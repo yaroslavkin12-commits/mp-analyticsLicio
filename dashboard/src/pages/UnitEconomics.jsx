@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getSalesData, getFinanceCoefs } from '../api';
-import { fmtInt, fmtMoney2, useTip, DualChart } from './AdsStats2';
+import { fmtInt, fmtMoney2, useTip, DualChart, Delta } from './AdsStats2';
 import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, useBuyerShare, SEP } from './finShared';
-import { unitCoefs } from './unitModel';
+import { unitCoefs, unitProfit } from './unitModel';
 import './ads2.css';
 import './sales.css';
 
@@ -75,7 +75,7 @@ export default function UnitEconomics({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
-    Promise.all([getSalesData(cabinet, { dateFrom, dateTo }), getFinanceCoefs(cabinet)])
+    Promise.all([getSalesData(cabinet, { dateFrom, dateTo, compare: 1 }), getFinanceCoefs(cabinet)])
       .then(([s, c]) => { setSales(s.data.data); setCoefs(c.data.data); })
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoading(false));
@@ -154,6 +154,18 @@ export default function UnitEconomics({ cabinet }) {
   }, [per, n, K, tax]);
 
   const main = useMemo(() => (K ? calc(list.arts) : null), [K, calc, list]);
+  // Прошлый период той же длины: те же коэффициенты, заказы и реклама за прошлый период.
+  const prevByAi = useMemo(() => new Map((sales?.prev || []).map(p => [p[0], p])), [sales]);
+  const prevT = useMemo(() => {
+    if (!K || !prevByAi.size) return null;
+    let profit = 0, pay = 0, expQty = 0, any = false;
+    for (const a of list.arts) {
+      const p = prevByAi.get(a.i), k = K[a.i]; if (!p || !k || !(p[4] > 0)) continue;
+      const r = unitProfit(k, { ordRub: p[5] || 0, ordQty: p[4] || 0, ads: p[6] || 0 }, tax);
+      profit += r.profit; pay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; expQty += r.expQty; any = true;
+    }
+    return any ? { profit, pay, perUnit: expQty > 0 ? profit / expQty : null, payUnit: expQty > 0 ? pay / expQty : null } : null;
+  }, [K, prevByAi, list, tax]);
   const aggOf = useCallback(items => {
     const { totals: t } = calc(items);
     return {
@@ -199,6 +211,9 @@ export default function UnitEconomics({ cabinet }) {
     { key: 'perUnit', label: 'На 1 выкуп', fmt: 'int' },
   ];
   const todayIdx = dates.indexOf(today);
+  const payT = T.expRev + T.comm + T.logi + T.acq + T.other + T.ads;
+  const payUnit = T.expQty > 0 ? payT / T.expQty : null;
+  const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
 
   return (
     <div className="mpui sa-page">
@@ -216,11 +231,14 @@ export default function UnitEconomics({ cabinet }) {
       )}
 
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
-        <Kpi label={todayIdx >= 0 ? 'Прибыль от заказов сегодня' : 'Прибыль за последний день'} value={<span className={(vals.profit[todayIdx >= 0 ? todayIdx : n - 1] || 0) < 0 ? 's-down' : ''}>{money(vals.profit[todayIdx >= 0 ? todayIdx : n - 1])}</span>}
-          sub={`заказано ${money(vals.ordRub[todayIdx >= 0 ? todayIdx : n - 1])}, маржа ${pct1(vals.margin[todayIdx >= 0 ? todayIdx : n - 1])}`} />
-        <Kpi label="Прогнозируемая прибыль за период" value={<span className={T.profit < 0 ? 's-down' : ''}>{money(T.profit)}</span>} sub={`маржа ${pct1(T.margin)} · ROI ${pct1(T.roi)}`} />
-        <Kpi label="Ожидаемая выручка" value={money(T.expRev)} sub={`выкуп ${pct1(T.buyout)} от ${money(T.ordRub)}`} />
-        <Kpi label="Прибыль на 1 выкуп" value={money(T.perUnit)} sub={w?.check ? `средний чек ${fmtInt(w.check)} ₽` : ''} />
+        <Kpi label="Прогнозируемая прибыль за период" value={<span className={T.profit < 0 ? 's-down' : ''}>{money(T.profit)}</span>}
+          sub={<><Delta value={dP(T.profit, prevT?.profit)} /> маржа {pct1(T.margin)} · ROI {pct1(T.roi)}</>} />
+        <Kpi label="Прогнозируемая прибыль на 1 выкуп" value={<span className={T.perUnit < 0 ? 's-down' : ''}>{money(T.perUnit)}</span>}
+          sub={<><Delta value={dP(T.perUnit, prevT?.perUnit)} /> {w?.check ? `средний чек ${fmtInt(w.check)} ₽` : ''}</>} />
+        <Kpi label="Прогнозируемое поступление на счёт" value={money(payT)}
+          sub={<><Delta value={dP(payT, prevT?.pay)} /> {T.expRev > 0 ? `${pct1(payT / T.expRev * 100)} от ожидаемой выручки` : ''}</>} hint="Ожидаемая выручка (заказы × % выкупа) минус комиссия, логистика, эквайринг, хранение и реклама — до себестоимости и налога" />
+        <Kpi label="Поступление на счёт с 1 выкупа" value={money(payUnit)}
+          sub={<><Delta value={dP(payUnit, prevT?.payUnit)} /> к прошлому периоду</>} />
       </div>
       {noCost > 0 && <div className="c-msg bad">У {noCost} арт. ({pct1(T.ordRub ? noCostRub / T.ordRub * 100 : null)} заказов) нет себестоимости — прибыль по ним завышена. Заполните во вкладке «Себестоимость».</div>}
 

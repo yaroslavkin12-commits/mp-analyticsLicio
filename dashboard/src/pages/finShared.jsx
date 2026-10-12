@@ -198,8 +198,8 @@ export function CatTable({ cats, sel, setSel, list, cols, aggOf, sortKey, title,
   );
 }
 
-export function Kpi({ label, value, sub }) {
-  return <div className="a-kpi"><span className="lbl">{label}</span><span className="val n">{value}</span>{sub !== undefined && <span className="sub">{sub}</span>}</div>;
+export function Kpi({ label, value, sub, hint }) {
+  return <div className="a-kpi" title={hint}><span className="lbl">{label}</span><span className="val n">{value}</span>{sub !== undefined && <span className="sub">{sub}</span>}</div>;
 }
 
 export function Empty({ children }) {
