@@ -810,27 +810,6 @@ function collectPrices_(cab, out) {
     Utilities.sleep(300);
   }
 }
-// ---------- Веб-приложение: ручное обновление по кнопке в сервисе ----------
-// Развернуть: «Начать развёртывание» → «Новое развёртывание» → тип «Веб-приложение»,
-// «Выполнять от имени: меня», «Доступ: все». Адрес развёртывания вставить в
-// Render → Environment → SHEET_SCRIPT_URL. По желанию — секрет: свойство
-// скрипта REFRESH_TOKEN и такое же значение в Render → SHEET_SCRIPT_TOKEN.
-function doGet(e) {
-  const p = (e && e.parameter) || {};
-  const out = function (o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); };
-  const tok = PropertiesService.getScriptProperties().getProperty('REFRESH_TOKEN');
-  if (tok && p.token !== tok) return out({ ok: false, error: 'неверный токен (REFRESH_TOKEN)' });
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(60000)) return out({ ok: false, error: 'скрипт занят другой выгрузкой — попробуйте через минуту' });
-  try {
-    if ((p.what || 'prices') === 'prices') syncPrices();
-    else return out({ ok: false, error: 'неизвестная команда' });
-    return out({ ok: true, at: new Date().toISOString() });
-  } catch (err) {
-    return out({ ok: false, error: String(err && err.message || err) });
-  } finally { lock.releaseLock(); }
-}
-
 function syncPrices() {
   const rows = [];
   getCabinets_().forEach(function (cab) { try { collectPrices_(cab, rows); } catch (e) { Logger.log('Цены ' + cab.id + ': ' + e.message); } });
@@ -1385,6 +1364,9 @@ function dueEvery_(key, hours) {
 function syncRecent() {
   const cabinets = getCabinets_();
   if (!cabinets.length) { Logger.log('Нет настроенных кабинетов — проверьте Свойства скрипта.'); return; }
+  // Цены и комиссии — каждые 30 минут (несколько быстрых запросов): кнопка
+  // «Обновить цены» в сервисе забирает их из таблицы, как «Обновить» в рекламе.
+  try { syncPrices(); } catch (e) { Logger.log('Цены и комиссии: ' + e.message); }
   const analytics = [], stocks = [], campaigns = [], stats = [], campaignSkus = [];
   const skuStats = [], cpoProducts = [], cpcBids = [];
   const from = mskDate_(ANALYTICS_WINDOW_DAYS_RECENT - 1), to = mskDate_(0);

@@ -291,30 +291,17 @@ router.get('/calc-base', async (req, res) => {
 // «Баллы за скидки» Ozon доходом не являются). Считается по загруженному
 // в «Сверку» отчёту «Начисления»: (Выручка + Программы партнёров) /
 // (Выручка + Баллы за скидки + Программы партнёров). Хранится в app_settings.
-// POST /api/finance/refresh-prices?cabinet= — кнопка «Обновить цены»: просим
-// Google-скрипт (веб-приложение, адрес в SHEET_SCRIPT_URL) выгрузить свежие
-// цены и комиссии в таблицу, затем забираем вкладку Prices. Сам сервис в Ozon
-// не ходит — только в Google.
-let refreshBusy = null;
+// POST /api/finance/refresh-prices?cabinet= — кнопка «Обновить цены»: забрать
+// свежую вкладку Prices из Google-таблицы (скрипт обновляет её каждые 30 минут),
+// так же как кнопка «Обновить» в рекламе.
 router.post('/refresh-prices', async (req, res) => {
   const cabinet = req.query.cabinet || req.body?.cabinet || 'defly';
-  const url = process.env.SHEET_SCRIPT_URL;
-  if (!url) return res.status(400).json({ success: false, error: 'not_configured' });
   try {
-    if (!refreshBusy) {
-      refreshBusy = (async () => {
-        const axios = require('axios');
-        const r = await axios.get(url, { params: { what: 'prices', token: process.env.SHEET_SCRIPT_TOKEN || '' }, timeout: 170000, maxRedirects: 5 });
-        const body = typeof r.data === 'string' ? (() => { try { return JSON.parse(r.data); } catch (e) { return { ok: false, error: 'Скрипт ответил не JSON — проверьте, что он развёрнут как веб-приложение' }; } })() : r.data;
-        if (!body || !body.ok) throw new Error(body?.error || 'скрипт не обновил цены');
-        return body;
-      })().finally(() => { setTimeout(() => { refreshBusy = null; }, 1000); });
-    }
-    const body = await refreshBusy;
     const { importPrices, dropSheetCache } = require('../collectors/ads/sheetSync');
     dropSheetCache('Prices');
     const rows = await importPrices(cabinet);
-    res.json({ success: true, data: { rows, at: body.at || new Date().toISOString() } });
+    const at = await query(`SELECT MAX(checked_at) t FROM product_prices WHERE cabinet = $1`, [cabinet]).catch(() => []);
+    res.json({ success: true, data: { rows, checkedAt: at[0]?.t || null } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
