@@ -218,14 +218,20 @@ export default function Calculator({ cabinet }) {
       return [c[0] + adj, c[1] + (adj ? ` ${adj > 0 ? '+' : '−'}${Math.abs(adj)} п.п. за время отгрузки` : '')];
     };
     const out = {
-      price: pick(own ? 'price' : 'price', S), spp: pick('spp', S), cost: pick('cost', S), buyout: pick('buyout', SF),
+      price: own && own[36] && own[1] ? [own[1], `цена в кабинете (проверена ${own[36].slice(8, 10)}.${own[36].slice(5, 7)})`] : pick('price', S), spp: pick('spp', S), cost: pick('cost', S), buyout: pick('buyout', SF),
       commission: commOf(), acquiring: pick('acquiring', SF), direct: pick('direct', SL), ret: pick('ret', SL),
       other: pick('other', SF), drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
     };
-    if (bs.shareOf) {
-      // Скидка для покупателя — по факту из отчёта Ozon «Начисления» (Баллы за скидки): от неё же считается налог.
+    // Скидка для покупателя (СПП): прежде всего — текущая, с сайта (расширение
+    // «Соинвест»: цена с Ozon-картой к цене в кабинете). Отчёт «Начисления»
+    // (баллы за скидки) — только запасной вариант: он за прошлый месяц и при
+    // другой цене, а СПП Ozon меняет постоянно.
+    if (own && own[11] !== null && own[11] !== undefined) {
+      const d = own[36] ? own[36].slice(8, 10) + '.' + own[36].slice(5, 7) : '';
+      out.spp = [own[11], `с сайта${d ? ` (${d})` : ''}${own[34] ? `: с Ozon-картой ${Math.round(own[34]).toLocaleString('ru-RU')} ₽` : ''}${own[35] ? `, без карты ${Math.round(own[35]).toLocaleString('ru-RU')} ₽` : ''}`];
+    } else if ((out.spp[0] === null || out.spp[0] === undefined || out.spp[1] === 'весь кабинет') && bs.shareOf) {
       const sh = own ? bs.shareOf(arts[own[0]]?.o, String(arts[own[0]]?.cat || '').split(SEP)) : bs.shareOf('', cat ? cat.split(SEP) : []);
-      if (sh) out.spp = [Math.round((1 - sh) * 1000) / 10, 'по отчёту «Начисления» (баллы за скидки)'];
+      if (sh) out.spp = [Math.round((1 - sh) * 1000) / 10, 'по отчёту «Начисления» за прошлый период (баллы за скидки)'];
     }
     if (own && (own[12] === null)) out.cost = [null, 'нет себестоимости — заполните во вкладке «Себестоимость»'];
     return { out, bCat, bOwn, bAll };

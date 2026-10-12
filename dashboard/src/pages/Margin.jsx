@@ -24,7 +24,14 @@ export default function Margin({ cabinet }) {
   const [sel, setSel] = useState('');
   const [search, setSearch] = useState('');
   const [target, setTarget] = useState(20);
-  const [withAds, setWithAds] = useState(true);
+  // ДРР: по умолчанию — фактический за 30 дней (реклама / заказы товара);
+  // можно задать один для всех или свой по каждому товару — как в калькуляторе.
+  const lsKey = `mp-margin-drr:${cabinet}`;
+  const [drrAll, setDrrAll] = useState('');
+  const [drrOver, setDrrOver] = useState({});
+  useEffect(() => { try { const v = JSON.parse(localStorage.getItem(lsKey) || '{}'); setDrrAll(v.all ?? ''); setDrrOver(v.over || {}); } catch (e) { setDrrAll(''); setDrrOver({}); } }, [lsKey]);
+  useEffect(() => { try { localStorage.setItem(lsKey, JSON.stringify({ all: drrAll, over: drrOver })); } catch (e) { /* ignore */ } }, [lsKey, drrAll, drrOver]);
+  const setOver = (o, val) => setDrrOver(m => { const n = { ...m }; if (val === '' || val === null) delete n[o]; else n[o] = val; return n; });
   const [flt, setFlt] = useState(null);
   const [tax] = useTax(cabinet);
   const grp = useGroups(cabinet);
@@ -52,10 +59,14 @@ export default function Margin({ cabinet }) {
       const pick = (k, minOwn) => { for (const b of [own, cb, ab]) if (b && b[k] !== null && b[k] !== undefined && (b !== own || !minOwn || minOwn(b))) return b[k]; return DEFAULTS[k] ?? 0; };
       const commission = scheme === 'fbs' ? (own.commFact ?? cb?.commFact ?? own.commCard ?? pick('commCard')) : (own.commCard ?? pick('commCard'));
       const v = {
-        // Скидка покупателя — по отчёту «Начисления» (от неё налог), иначе СПП из Соинвеста.
-        spp: bs.shareOf ? (1 - bs.shareOf(a.o, a.parts)) * 100 : (own.spp ?? 0), cost: x[12] || 0, buyout: pick('buyout'), defect: 0, commission: commission ?? DEFAULTS.commission,
-        acquiring: pick('acquiring'), direct: pick('direct'), ret: pick('ret'), other: pick('other'), drr: withAds ? Math.min(100, pick('drr', b => b.orders >= 5)) : 0, oper: 0, tax,
+        // Скидка покупателя — текущая с сайта (Соинвест, с Ozon-картой); нет — по отчёту «Начисления».
+        spp: x[11] !== null && x[11] !== undefined ? x[11] : bs.shareOf ? (1 - bs.shareOf(a.o, a.parts)) * 100 : 0, cost: x[12] || 0, buyout: pick('buyout'), defect: 0, commission: commission ?? DEFAULTS.commission,
+        acquiring: pick('acquiring'), direct: pick('direct'), ret: pick('ret'), other: pick('other'), drr: 0, oper: 0, tax,
       };
+      const factDrr = Math.min(100, pick('drr', b => b.orders >= 5));
+      const ov = drrOver[a.o];
+      v.drr = ov !== undefined && ov !== '' && Number.isFinite(Number(ov)) ? Number(ov) : drrAll !== '' && Number.isFinite(Number(drrAll)) ? Number(drrAll) : factDrr;
+      const drrSrc = ov !== undefined && ov !== '' ? 'own' : drrAll !== '' ? 'all' : 'fact';
       const price = x[1];
       const r = compute(v, price, 'usn_income');
       // Предел маржи: при любой цене процентные расходы (комиссия, реклама как % от цены,
@@ -67,10 +78,10 @@ export default function Margin({ cabinet }) {
       const be = cap(beRaw), tp = cap(tpRaw);
       const tpNo = !tp, beNo = !be;
       const status = !x[12] ? 'nocost' : r.profit < 0 ? 'loss' : r.margin < target ? 'below' : 'ok';
-      out.push({ a, x, scheme, v, r, be, tp, beNo, tpNo, maxM, status, orders: x[25], rev: x[24] });
+      out.push({ a, x, scheme, v, r, be, tp, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drrSrc });
     }
     return out;
-  }, [data, cats.arts, target, withAds, tax, bs.shareOf]);
+  }, [data, cats.arts, target, drrAll, drrOver, tax, bs.shareOf]);
 
   const q = search.trim().toLowerCase();
   const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a));
@@ -78,7 +89,7 @@ export default function Margin({ cabinet }) {
   const GET = {
     o: r => r.a.o, price: r => r.r.P, buyer: r => (r.v.spp ? r.r.buyerPrice : null), cost: r => r.v.cost || null, profit: r => r.r.profit,
     margin: r => (r.status === 'nocost' ? null : r.r.margin), roi: r => r.r.roi, be: r => r.be || null, tp: r => r.tp || null,
-    gap: r => (r.tp ? r.tp - r.r.P : null), rev: r => r.rev,
+    gap: r => (r.tp ? r.tp - r.r.P : null), rev: r => r.rev, drr: r => r.v.drr,
   };
   const shown = ctl.apply(flt ? base.filter(r => r.status === flt) : base, (r, k) => GET[k](r)).slice(0, 500);
   const withCost = base.filter(r => r.status !== 'nocost');
@@ -94,7 +105,10 @@ export default function Margin({ cabinet }) {
         <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>целевая маржа
           <input className="a-input" type="number" min="0" max="80" value={target} onChange={e => setTarget(Math.max(0, Number(e.target.value) || 0))} style={{ width: 60, padding: '4px 8px' }} />%
         </label>
-        <label className="sw"><input type="checkbox" checked={withAds} onChange={e => setWithAds(e.target.checked)} /><i />с учётом рекламы</label>
+        <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} title="Пусто — у каждого товара его фактический ДРР за 30 дней. Число — один ДРР для всех (кроме заданных вручную в таблице)">ДРР для всех
+          <input className="a-input" type="number" min="0" max="100" step="0.5" value={drrAll} placeholder="факт" onChange={e => setDrrAll(e.target.value)} style={{ width: 64, padding: '4px 8px' }} />%
+        </label>
+        {(drrAll !== '' || Object.keys(drrOver).length > 0) && <button type="button" className="tt-reset" onClick={() => { setDrrAll(''); setDrrOver({}); }} title="Вернуть фактический ДРР всем товарам">↺ ДРР как по факту</button>}
       </FinHeader>
 
       <div className="a-kpis s-kpis">
@@ -123,15 +137,16 @@ export default function Margin({ cabinet }) {
               <ThCtl ctl={ctl} k="o" className="" filter={false}>Товар</ThCtl>
               <ThCtl ctl={ctl} k="price" hint="Ваша цена до скидки Ozon; ниже — цена для покупателя со скидкой Ozon">Цена</ThCtl>
               <ThCtl ctl={ctl} k="cost">Себест.</ThCtl>
+              <ThCtl ctl={ctl} k="drr" hint="ДРР — реклама в % от цены. По умолчанию фактический за 30 дней (расход на рекламу / сумма заказов товара). Впишите свой — пересчитаются прибыль, маржа и цены">ДРР</ThCtl>
               <ThCtl ctl={ctl} k="profit" hint="Прибыль с одной проданной (выкупленной) штуки после всех расходов, рекламы и налога">Прибыль / шт</ThCtl>
               <ThCtl ctl={ctl} k="margin" hint="Прибыль / выручка с продажи; ниже — ROI (прибыль / себестоимость)">Маржа</ThCtl>
               <ThCtl ctl={ctl} k="be" hint="Цена, при которой прибыль = 0">Без&shy;убыток</ThCtl>
-              <ThCtl ctl={ctl} k="tp" hint={`Цена, при которой маржа = ${target}%. «ценой не достичь» — комиссия, реклама и налог в % от цены не дают марже дойти до цели даже при цене ×3`}>Цена для {target}%</ThCtl>
-              <ThCtl ctl={ctl} k="gap" hint="Насколько поднять (+) или можно снизить (−) цену до целевой маржи">Изменить</ThCtl>
+              <ThCtl ctl={ctl} k="tp" hint={`Какой должна стать цена в кабинете, чтобы маржа была ${target}%; ниже — на сколько это выше (+) или ниже (−) текущей. «ценой не достичь» — комиссия, реклама и налог в % от цены не дают марже дойти до цели`}>Цена для {target}%</ThCtl>
+              <ThCtl ctl={ctl} k="gap" hint="Разница между нужной и текущей ценой: + поднять на, − можно снизить на" filter={false}>±</ThCtl>
               <ThCtl ctl={ctl} k="rev" hint="Сумма заказов за 30 дней, ₽">Заказы 30 дн</ThCtl>
             </tr></thead>
             <tbody>
-              {shown.map(({ a, scheme, v, r, be, tp, beNo, tpNo, maxM, status, rev }) => {
+              {shown.map(({ a, scheme, v, r, be, tp, beNo, tpNo, maxM, status, rev, factDrr, drrSrc }) => {
                 const gap = tp ? tp - r.P : null;
                 const why = `Даже при очень высокой цене маржа не выше ${pct1(maxM)}: комиссия ${pct1(v.commission)}, реклама ${pct1(v.drr)}, эквайринг ${pct1(v.acquiring)}, прочее ${pct1(v.other)}, налог ${pct1(v.tax)} от оплаты покупателя. Поднять маржу можно снижением ДРР или комиссии (другая схема / категория)`;
                 return (
@@ -140,17 +155,23 @@ export default function Margin({ cabinet }) {
                       <span title={`${a.n}\n${a.cat.split(SEP).join(' › ')}`}><b>{a.o}</b><small className="m-sub">{a.short} · {scheme.toUpperCase()} {pct1(v.commission)}</small></span></span></td>
                     <td className="n r">{fmtInt(r.P)}{v.spp ? <small className="m-sub" title="Цена для покупателя со скидкой Ozon">{fmtInt(r.buyerPrice)}</small> : null}</td>
                     <td className="n r">{v.cost ? fmtInt(v.cost) : <span className="pill m">нет</span>}</td>
+                    <td className="r">
+                      <input className={`a-input m-drr ${drrSrc !== 'fact' ? 'ed' : ''}`} type="number" min="0" max="100" step="0.5"
+                        value={drrOver[a.o] ?? ''} placeholder={(drrSrc === 'all' ? Number(drrAll) : factDrr).toFixed(1)}
+                        onChange={e => setOver(a.o, e.target.value)} title={`Фактический ДРР за 30 дней: ${pct1(factDrr)}`} />
+                      {drrSrc !== 'fact' && <small className="m-sub">факт {pct1(factDrr)}</small>}
+                    </td>
                     <td className="n r" title={`Комиссия ${fmtInt(r.commission)}, логистика ${fmtInt(r.logistics)} (×${r.trips.toFixed(2)}), эквайринг ${fmtInt(r.acquiring)}, прочее ${fmtInt(r.other)}, реклама ${fmtInt(r.ads)}, налог ${fmtInt(r.tax)}`}>
                       <b style={{ color: r.profit < 0 ? 'var(--a-bad)' : undefined }}>{fmtInt(r.profit)}</b></td>
                     <td className="r"><span className={`pill ${status === 'nocost' ? 'm' : r.profit < 0 ? 'b' : r.margin < target ? 'w' : 'g'}`}>{pct1(r.margin)}</span><small className="m-sub">ROI {pct1(r.roi)}</small></td>
                     <td className="n r">{be ? fmtInt(be) : beNo && v.cost ? (maxM > 0 ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь</span>) : '—'}</td>
                     <td className="n r">{tp ? fmtInt(tp) : tpNo && v.cost ? (maxM > target ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь<small className="m-sub">макс. {pct1(maxM)}</small></span>) : '—'}</td>
-                    <td className="n r">{gap === null ? '—' : <span className={gap > 0 ? 's-down' : 's-up'}>{gap > 0 ? '+' : ''}{fmtInt(gap)}<small className="m-sub">{gap > 0 ? '+' : ''}{(gap / r.P * 100).toFixed(0)}%</small></span>}</td>
+                    <td className="n r">{gap === null ? '—' : <span className={gap > 0 ? 's-down' : 's-up'} title={gap > 0 ? `Поднять цену на ${fmtInt(gap)} ₽: ${fmtInt(r.P)} → ${fmtInt(tp)}` : `Можно снизить на ${fmtInt(-gap)} ₽: ${fmtInt(r.P)} → ${fmtInt(tp)}`}>{gap > 0 ? '+' : '−'}{fmtInt(Math.abs(gap))}<small className="m-sub">{gap > 0 ? '+' : '−'}{Math.abs(gap / r.P * 100).toFixed(0)}%</small></span>}</td>
                     <td className="n r">{fmtInt(rev)}</td>
                   </tr>
                 );
               })}
-              {!shown.length && <tr><td colSpan={9} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
+              {!shown.length && <tr><td colSpan={10} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
             </tbody>
           </table>
         </div>

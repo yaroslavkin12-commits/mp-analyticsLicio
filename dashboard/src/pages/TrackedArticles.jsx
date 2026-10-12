@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import RestockTab from './RestockTab';
 import { getDigestSettings, saveDigestSettings, previewDigest, sendDigestNow } from '../api';
 import {
   getTrackedArticles, getTrackedArticlesFeed, addTrackedArticle, removeTrackedArticle,
@@ -88,7 +89,7 @@ function DigestBar({ cabinet }) {
 // "Чехлы"): сверху — сводка по группе целиком (сколько заказов по всем
 // артикулам группы), ниже — каждый артикул отдельно со своим счётчиком.
 
-const TABS = [['articles', 'Мои артикулы'], ['feed', 'Лента уведомлений']];
+const TABS = [['articles', 'Мои артикулы'], ['feed', 'Лента уведомлений'], ['restock', 'Пополнения остатков']];
 
 function fmtDateTime(iso) {
   const d = new Date(iso);
@@ -241,7 +242,7 @@ export default function TrackedArticles({ cabinet }) {
 
   return (
     <div>
-      <div className="page-sticky"><h2 style={{ margin: 0, fontSize: 20 }}>Уведомления о заказах</h2></div>
+      <div className="page-sticky"><h2 style={{ margin: 0, fontSize: 20 }}>Уведомления</h2></div>
       <HealthBar cabinet={cabinet} />
       <DigestBar cabinet={cabinet} />
 
@@ -253,6 +254,8 @@ export default function TrackedArticles({ cabinet }) {
           }}>{l}</button>
         ))}
       </div>
+
+      {tab === 'restock' && <RestockTab cabinet={cabinet} />}
 
       {tab === 'articles' && (
         <>

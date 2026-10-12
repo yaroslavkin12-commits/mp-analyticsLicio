@@ -229,17 +229,23 @@ async function tickMorning(cabinet) {
   morningBusy.add(cabinet);
   try {
     const s = await getDigestSettings(cabinet);
-    if (!s.enabled) return;
     const now = dayjs().tz('Europe/Moscow');
     const [h, m] = String(s.time || '09:00').split(':').map(Number);
     const target = now.hour(h).minute(m).second(0);
     const diff = now.diff(target, 'minute');
     if (diff < 0 || diff > 30) return;
     const st = await getStatus(cabinet);
-    const last = st.get('morning_digest')?.last_success_at;
-    if (last && dayjs(last).tz('Europe/Moscow').format('YYYY-MM-DD') === now.format('YYYY-MM-DD')) return;
-    const sent = await sendMorningDigest(cabinet).catch(e => { console.warn('[Morning] telegram:', e.message); return false; });
-    if (sent) await mark(cabinet, 'morning_digest', { last_success_at: new Date() });
+    const today = d => d && dayjs(d).tz('Europe/Moscow').format('YYYY-MM-DD') === now.format('YYYY-MM-DD');
+    if (s.enabled && !today(st.get('morning_digest')?.last_success_at)) {
+      const sent = await sendMorningDigest(cabinet).catch(e => { console.warn('[Morning] telegram:', e.message); return false; });
+      if (sent) await mark(cabinet, 'morning_digest', { last_success_at: new Date() });
+    }
+    // Следом — сводка пополнений остатков за сутки (restock.js).
+    if (!today(st.get('restock_daily')?.last_success_at)) {
+      const { sendRestockDaily } = require('../../restock');
+      await sendRestockDaily(cabinet).catch(e => console.warn('[Restock] daily:', e.message));
+      await mark(cabinet, 'restock_daily', { last_success_at: new Date() });
+    }
   } finally {
     morningBusy.delete(cabinet);
   }

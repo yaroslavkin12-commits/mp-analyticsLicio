@@ -154,6 +154,11 @@ async function syncStocksFromSheet(cabinet) {
   await bulkInsert('ad_product_stocks',
     ['cabinet', 'platform', 'snapshot_date', 'sku', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'], out);
   console.log(`[SheetStocks:${cabinet}] ${out.length} (из Google-таблицы)`);
+  // Пополнения остатков → уведомления (см. restock.js).
+  try {
+    const { detectRestocks } = require('../../restock');
+    await detectRestocks(cabinet, filtered.map(r => ({ offer_id: r.offer_id, fbo: num(r.fbo_present), fbs: num(r.fbs_present) })));
+  } catch (e) { console.warn(`[Restock:${cabinet}]`, e.message); }
   return { rows: out.length };
 }
 

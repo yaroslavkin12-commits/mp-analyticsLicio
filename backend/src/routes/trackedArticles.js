@@ -55,6 +55,29 @@ router.post('/test-telegram', async (req, res) => {
   }
 });
 
+// ── Пополнения остатков (restock.js) ─────────────────────────────────────
+// GET /api/tracked-articles/restock?cabinet=defly&days=14 — настройки и лента.
+router.get('/restock', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const { getRestockSettings, listRestocks } = require('../restock');
+    const [settings, events] = await Promise.all([getRestockSettings(cabinet), listRestocks(cabinet, Math.min(60, Number(req.query.days) || 14))]);
+    res.json({ success: true, data: { settings, events } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+// POST /api/tracked-articles/restock/settings — { cabinet, enabled, instant, daily, minInc, arts, groups }
+router.post('/restock/settings', async (req, res) => {
+  try {
+    const { cabinet = 'defly', ...rest } = req.body || {};
+    const { saveRestockSettings } = require('../restock');
+    res.json({ success: true, data: await saveRestockSettings(cabinet, rest) });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // GET /api/tracked-articles/feed?cabinet=licio — лента отправленных уведомлений.
 router.get('/feed', async (req, res) => {
   try {

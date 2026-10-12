@@ -170,3 +170,5 @@
 .mpui .m-tbl .m-prod .m-sub{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mpui .m-tbl .m-no{color:var(--a-ink3);font-size:12px}
 .mpui .m-tbl .s-dot{margin-top:5px;align-self:flex-start}
+.mpui .m-tbl input.m-drr{width:62px;padding:3px 6px;font-size:12.5px;text-align:right}
+.mpui .m-tbl input.m-drr.ed{border-color:var(--a-accent)}

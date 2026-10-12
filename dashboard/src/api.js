@@ -91,3 +91,5 @@ export const savePlan = (cabinet, month, plan) => api.post('/plan', { cabinet, m
 export const getQueries = (cabinet, p) => api.get('/queries/data', { params: { cabinet, ...p }, timeout: 90000 });
 export const getQuerySeries = (cabinet, offerId, q, days) => api.get('/queries/series', { params: { cabinet, offerId, query: q, days } });
 export const getSeason = cabinet => api.get('/queries/season', { params: { cabinet }, timeout: 90000 });
+export const getRestock = (cabinet, days = 14) => api.get('/tracked-articles/restock', { params: { cabinet, days } });
+export const saveRestockSettings = (cabinet, s) => api.post('/tracked-articles/restock/settings', { cabinet, ...s });

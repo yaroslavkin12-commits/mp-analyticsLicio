@@ -211,7 +211,7 @@ router.get('/buyout', async (req, res) => {
 // начисления, реклама и заказы. Средние по категориям считает страница.
 // a: [ai, price, pctFbo, pctFbs, volL, fboDirect, fboDeliv, fboReturn, fbsDirect, fbsDeliv, fbsReturn,
 //     spp, cost, ordered30, ordFbs30, delivered, cancelled, saleAmt, saleQty, comm, logi, acq, storOther, ads30, rev30, qty30,
-//     commFbo, saleFbo, commFbs, saleFbs, directSum, directTrips, returnSum, returnTrips]
+//     commFbo, saleFbo, commFbs, saleFbs, directSum, directTrips, returnSum, returnTrips, cardPrice, sitePrice, sppCheckedAt]
 router.get('/calc-base', async (req, res) => {
   try {
     await ensureFinTables();
@@ -221,7 +221,7 @@ router.get('/calc-base', async (req, res) => {
     const m = await meta(cabinet);
     const [prices, disc, costs, ord, buy, fin, adSku, adCpo, an] = await Promise.all([
       query(`SELECT * FROM product_prices WHERE cabinet = $1`, [cabinet]),
-      query(`SELECT offer_id, pct FROM product_discount_latest WHERE cabinet = $1`, [cabinet]).catch(() => []),
+      query(`SELECT offer_id, pct, pct_card, seller_price, card_price, site_price, checked_at FROM product_discount_latest WHERE cabinet = $1`, [cabinet]).catch(() => []),
       query(`SELECT article, cost_price, cabinet FROM product_costs`),
       query(`SELECT offer_id, SUM(ordered)::int o, SUM(COALESCE(ordered_fbs, 0))::int f FROM buyout_daily WHERE cabinet = $1 AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
       query(`SELECT offer_id, SUM(delivered)::int d, SUM(cancelled)::int c FROM buyout_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id`, [cabinet, bFrom, bTo]),
@@ -231,7 +231,7 @@ router.get('/calc-base', async (req, res) => {
       query(`SELECT offer_id, SUM(revenue) r, SUM(orders_item) q FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
     ]);
     const A = new Map();
-    const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]); return A.get(ai); };
+    const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null]); return A.get(ai); };
     const known = new Set(m.articles.map(a => a.o));
     for (const r of prices) {
       if (!known.has(r.offer_id)) continue;
@@ -241,7 +241,19 @@ router.get('/calc-base', async (req, res) => {
       x[5] = num(r.fbo_direct_max) || null; x[6] = num(r.fbo_deliv) || null; x[7] = num(r.fbo_return) || null;
       x[8] = num(r.fbs_direct_max) || null; x[9] = num(r.fbs_deliv) || null; x[10] = num(r.fbs_return) || null;
     }
-    for (const r of disc) if (known.has(r.offer_id) && r.pct != null) get(r.offer_id)[11] = num(r.pct);
+    // СПП — с сайта (расширение «Соинвест»): цена с Ozon-картой к цене в кабинете;
+    // без карты — если карточной цены нет. Цену в кабинете берём оттуда же, если
+    // проверка свежая (цены из таблицы обновляются раз в сутки).
+    const fresh = Date.now() - 3 * 86400000;
+    for (const r of disc) {
+      if (!known.has(r.offer_id)) continue;
+      const x = get(r.offer_id);
+      const byCard = num(r.card_price) > 0 && num(r.seller_price) > 0 ? Math.round((1 - num(r.card_price) / num(r.seller_price)) * 1000) / 10 : null;
+      const pc = r.pct_card != null && num(r.pct_card) > 0 ? num(r.pct_card) : byCard !== null && byCard > 0 ? byCard : r.pct != null ? num(r.pct) : null;
+      if (pc !== null) x[11] = pc;
+      x[34] = num(r.card_price) || null; x[35] = num(r.site_price) || null; x[36] = r.checked_at ? dayjs(r.checked_at).format('YYYY-MM-DD') : null;
+      if (r.checked_at && new Date(r.checked_at).getTime() > fresh && num(r.seller_price) > 0) x[1] = num(r.seller_price);
+    }
     for (const r of costs) if ((!r.cabinet || r.cabinet === cabinet) && known.has(r.article) && num(r.cost_price) > 0) get(r.article)[12] = num(r.cost_price);
     for (const r of ord) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[13] = num(r.o); x[14] = num(r.f); }
     for (const r of buy) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[15] = num(r.d); x[16] = num(r.c); }
