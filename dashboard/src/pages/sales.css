@@ -170,5 +170,11 @@
 .mpui .m-tbl .m-prod .m-sub{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mpui .m-tbl .m-no{color:var(--a-ink3);font-size:12px}
 .mpui .m-tbl .s-dot{margin-top:5px;align-self:flex-start}
-.mpui .m-tbl input.m-drr{width:62px;padding:3px 6px;font-size:12.5px;text-align:right}
-.mpui .m-tbl input.m-drr.ed{border-color:var(--a-accent)}
+.mpui .m-tbl input.m-ed{padding:3px 6px;font-size:13px;text-align:right;font-family:var(--a-num);background:transparent;border-color:transparent}
+.mpui .m-tbl input.m-ed:hover,.mpui .m-tbl input.m-ed:focus{border-color:var(--a-line2);background:var(--a-panel)}
+.mpui .m-tbl input.m-ed.ed{border-color:var(--a-accent);background:var(--a-accent-soft);font-weight:600}
+.mpui .m-tbl .m-was{display:block;margin:2px 0 0 auto;border:0;background:none;padding:0;color:var(--a-accent);font-size:11px;cursor:pointer;font-family:var(--a-num)}
+.mpui .m-tbl .m-was:hover{text-decoration:underline}
+.mpui table.a-t.m-tbl th, .mpui table.a-t.m-tbl td{padding:8px 7px}
+.mpui .m-tbl .m-sub.s-down{color:var(--a-bad)}
+.mpui .m-tbl .m-sub.s-up{color:var(--a-good, #3fb950)}

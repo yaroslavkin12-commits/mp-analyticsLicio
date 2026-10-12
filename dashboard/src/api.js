@@ -1,5 +1,30 @@
 import axios from 'axios';
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
+// Во время выкладки/перезапуска Render отдаёт 502/503 или HTML-заглушку вместо
+// JSON — тогда GET-запрос повторяем (до 3 раз через 5 с), а не показываем
+// «нет данных».
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function retry(cfg, why) {
+  cfg.__try = (cfg.__try || 0) + 1;
+  if (cfg.__try > 3 || (cfg.method || 'get') !== 'get') return null;
+  await sleep(5000);
+  return api.request(cfg);
+}
+api.interceptors.response.use(async r => {
+  if (typeof r.data === 'string' && /<html|<!doctype/i.test(r.data.slice(0, 200))) {
+    const again = await retry(r.config);
+    if (again) return again;
+    return Promise.reject(new Error('Сервер перезапускается — обновите страницу через минуту'));
+  }
+  return r;
+}, async err => {
+  const st = err.response?.status;
+  if (err.config && err.code !== 'ECONNABORTED' && (!err.response || st === 502 || st === 503 || st === 504)) {
+    const again = await retry(err.config);
+    if (again) return again;
+  }
+  return Promise.reject(err);
+});
 export const getOverview    = p => api.get('/dashboard/overview', { params: p });
 export const getChart       = p => api.get('/dashboard/chart',    { params: p });
 
