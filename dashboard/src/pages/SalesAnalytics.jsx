@@ -510,7 +510,13 @@ export default function SalesAnalytics({ cabinet }) {
     const pTo = dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(dateFrom).subtract(len, 'day').format('YYYY-MM-DD');
     Promise.all([getFinancePnl(cabinet, { dateFrom, dateTo }).catch(() => null), getFinanceCoefs(cabinet).catch(() => null)])
       .then(([p, c]) => { if (!off) setFin(f => ({ ...(f || {}), pnl: p?.data?.data || null, coefs: c?.data?.data || null })); });
-    getFinancePnl(cabinet, { dateFrom: pFrom, dateTo: pTo }).then(p => { if (!off) setFin(f => ({ ...(f || {}), pnlPrev: p?.data?.data || null })); }).catch(() => {});
+    getFinancePnl(cabinet, { dateFrom: pFrom, dateTo: pTo }).then(p => {
+      // Финансы за прошлый период есть не целиком (история короче) — не сравниваем,
+      // иначе получаются «+354%».
+      const d = p?.data?.data || null;
+      const full = d && d.available?.mn && d.available.mn <= pFrom;
+      if (!off) setFin(f => ({ ...(f || {}), pnlPrev: full ? d : null }));
+    }).catch(() => {});
     return () => { off = true; };
   }, [cabinet, dateFrom, dateTo]);
   const finPerOf = pnl => {

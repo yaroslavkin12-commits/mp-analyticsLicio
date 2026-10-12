@@ -101,12 +101,13 @@ export default function Buyout({ cabinet }) {
   dates.forEach((d, i) => { byDate[d] = {}; for (const m of METRICS) byDate[d][m.key] = series[m.key][i]; });
   const totals = { ordered: tot.ordered, delivered: tot.delivered, cancelled: tot.cancelled, inProgress: tot.inProgress, buyout: tot.buyout, done: tot.done };
 
-  // % выкупа по подкатегориям (линии), только дни с ≥ 5 завершёнными заказами.
+  // % выкупа по подкатегориям (линии): дни с ≥ 5 завершёнными заказами, где
+  // завершено больше половины (свежие дни ещё в пути — их выкуп занижен).
   const depth = sel ? sel.split(SEP).length : 0;
   const kids = q ? [] : cats.childrenOf(sel);
   const kidSeries = kids.slice(0, 6).map((k, ki) => {
     const items = list.arts.filter(a => a.parts[depth] === k);
-    const vals = dates.map((_, i) => { let d = 0, c = 0; for (const a of items) { d += per[a.i].d[i]; c += per[a.i].c[i]; } return d + c >= 5 ? d / (d + c) * 100 : null; });
+    const vals = dates.map((_, i) => { let d = 0, c = 0, o = 0; for (const a of items) { d += per[a.i].d[i]; c += per[a.i].c[i]; o += per[a.i].o[i]; } return d + c >= 5 && (d + c) >= o * 0.5 ? d / (d + c) * 100 : null; });
     return { key: k, label: k, fmt: 'pct', kind: 'line', side: 'left', values: vals, color: depth === 0 ? (CAT_COLORS[cats.topSlot(k)] || OTHER) : (CAT_COLORS[ki] || OTHER) };
   }).filter(s => s.values.some(v => v !== null));
   const allKid = kidSeries.flatMap(s => s.values).filter(v => v !== null);
@@ -149,7 +150,7 @@ export default function Buyout({ cabinet }) {
 
           {kidSeries.length > 1 && (
             <div className="a-card s-card">
-              <div className="a-bar" style={{ marginBottom: 6 }}><b style={{ fontSize: 14 }}>% выкупа по подкатегориям</b><span className="a-hint">дни, где завершено хотя бы 5 заказов</span></div>
+              <div className="a-bar" style={{ marginBottom: 6 }}><b style={{ fontSize: 14 }}>% выкупа по подкатегориям</b><span className="a-hint">дни, где завершено хотя бы 5 заказов и больше половины</span></div>
               <ChartPane dates={dates} series={kidSeries} events={[]} tip={tip} height={220} showX onHover={() => {}} hoverIdx={null} />
               <div className="s-legend">{kidSeries.map(s => <span key={s.key}><i style={{ background: s.color }} />{s.label}</span>)}</div>
             </div>

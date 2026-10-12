@@ -375,6 +375,8 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
       })}
       {/* Подписи значений: max / min / последний */}
       {series.map((s, si) => {
+        // Больше двух линий — подписи только у первой (итог), иначе цифры налезают друг на друга.
+        if (series.length > 2 && si > 0 && !s.labels) return null;
         const keep = labelIdx(s.values, Math.max(10, Math.floor(iw / 38)));
         return s.values.map((v, i) => {
           if (!keep.has(i)) return null;
