@@ -1282,7 +1282,8 @@ function syncFinanceContinue() {
   const left = JSON.parse(PropertiesService.getScriptProperties().getProperty('FIN_PENDING') || '[]');
   if (left.length) runFinance_(left);
 }
-function syncFinanceFull() { syncFinance(30); }
+// Полная загрузка — 45 дней (столько хранит вкладка); сервис хранит историю у себя.
+function syncFinanceFull() { syncFinance(45); }
 
 // ---------- Запись в таблицу ----------
 function getSheet_(name) {
