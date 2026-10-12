@@ -178,3 +178,10 @@
 .mpui table.a-t.m-tbl th, .mpui table.a-t.m-tbl td{padding:8px 7px}
 .mpui .m-tbl .m-sub.s-down{color:var(--a-bad)}
 .mpui .m-tbl .m-sub.s-up{color:var(--a-good, #3fb950)}
+/* Срезы: поиск проблем и точек роста */
+.mpui .s-finder{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.mpui .s-fg{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mpui .s-fg .a-hint{min-width:92px}
+.mpui .s-fg .s-chip.on{background:var(--a-accent);color:var(--a-accent-ink);border-color:var(--a-accent)}
+.mpui .s-fg .s-chip.zero{opacity:.55}
+.mpui .s-fg .s-chip b{font-weight:600;margin-left:2px}

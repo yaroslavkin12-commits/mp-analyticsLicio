@@ -454,6 +454,18 @@ const artCell = a => (
   <div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{a.o}</div><div className="model" title={a.n}>{a.short}</div></div></div>
 );
 
+const FINDER_HINT = {
+  loss: 'По прогнозу юнит-экономики (заказы периода × % выкупа минус комиссия, логистика, реклама, себестоимость, налог) — товары, которые сейчас продаются в минус. Только с заполненной себестоимостью.',
+  adwaste: 'Расход на рекламу от 300 ₽, а заказов с рекламы нет, или ДРР выше 25%. Кандидаты снизить ставки или выключить РК.',
+  crdrop: 'Переходов в карточку достаточно (от 30), но конверсия в заказ упала больше чем на 30% к прошлому периоду: цена, отзывы, фото, наличие размеров/конкуренты.',
+  viewsdrop: 'Показы упали больше чем на 40% к прошлому периоду (было от 300): позиции в поиске, выключенная реклама, наличие на складах.',
+  lowbuy: 'Выкуп ниже 65% (по фактическим доставкам и отменам за 30–45 дней): описание, размеры/совместимость, качество — каждый невыкуп стоит двух логистик.',
+  check: 'Средний чек заказа изменился больше чем на 10% к прошлому периоду — изменилась цена, СПП или скидка.',
+  scale: 'Маржа по прогнозу от 25% и запаса хватит минимум на 3 недели — сюда выгодно добавить рекламу/трафик.',
+  noads: 'От 3 заказов за период без рекламы — органика работает, стоит протестировать рекламу.',
+  highcr: 'Конверсия в заказ в 1,5 раза выше средней, а показов меньше средних — карточка продаёт, ей не хватает трафика.',
+};
+
 // ═════════════════════════════════════════════════════════════════════════
 export default function SalesAnalytics({ cabinet }) {
   const today = dayjs().format('YYYY-MM-DD');
@@ -475,7 +487,7 @@ export default function SalesAnalytics({ cabinet }) {
   const [open, setOpen] = useState(() => new Set());
   const [openArt, setOpenArt] = useState(null);
   const [showAll, setShowAll] = useState(() => new Set());
-  const [slice, setSlice] = useState('movers');
+  const [slice, setSlice] = useState('loss');
   const [matrixMetric, setMatrixMetric] = useState('revenue');
   const tip = useTip();
   // Ширина видимой части таблицы: карточка артикула внутри широкой таблицы
@@ -522,19 +534,30 @@ export default function SalesAnalytics({ cabinet }) {
   const finPerOf = pnl => {
     if (!pnl) return null;
     const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other', 'ads'];
+    // Удержания без артикула (хранение, подписки, реклама без SKU) делим по
+    // дням пропорционально выручке дня — так же, как в «P&L» и «Среднем чеке».
+    const nd = pnl.dates.length;
     const m = new Map(); let saleAll = 0, noSkuOz = 0;
-    for (const [pai, , b, a, q] of pnl.rows) {
+    const noSkuDay = new Float64Array(nd), saleDay = new Float64Array(nd);
+    for (const [pai, d, b, a, q] of pnl.rows) {
       const o = pnl.articles[pai]?.o; if (!o) continue;
       const k = pnl.buckets[b];
-      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0 }; m.set(o, x); }
-      if (k === 'sale') { x.sRub += a; x.sQty += Math.abs(q); } else if (k === 'return') { x.sRub += a; x.sQty -= Math.abs(q); } else if (OZ.includes(k)) x.oz += a;
+      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, sDay: new Float64Array(nd) }; m.set(o, x); }
+      if (k === 'sale' || k === 'return') { x.sRub += a; x.sDay[d] += a; saleDay[d] += a; x.sQty += k === 'sale' ? Math.abs(q) : -Math.abs(q); } else if (OZ.includes(k)) x.oz += a;
     }
-    for (const [, b, a] of pnl.noSku || []) if (OZ.includes(pnl.buckets[b])) noSkuOz += a;
+    for (const [d, b, a] of pnl.noSku || []) if (OZ.includes(pnl.buckets[b])) { noSkuOz += a; noSkuDay[d] += a; }
     for (const x of m.values()) saleAll += x.sRub;
-    return { m, noSkuOz, saleAll };
+    return { m, noSkuOz, saleAll, noSkuDay, saleDay, nd };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
   const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Доля FBS по дням (как в «Юнит-экономике»): артикул|дата → доля.
+  const fbsDay = useMemo(() => {
+    const m = new Map(), c = fin?.coefs;
+    if (!c?.fbsDays) return m;
+    for (const [cai, d, o, f] of c.fbsDays) if (o > 0) m.set(c.articles[cai].o + '|' + d, f / o);
+    return m;
+  }, [fin?.coefs]);
   const coefArts = useMemo(() => (fin?.coefs ? fin.coefs.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) })) : []), [fin]);
   const bs = useBuyerShare(cabinet, coefArts);
   const unitK = useMemo(() => {
@@ -583,23 +606,43 @@ export default function SalesAnalytics({ cabinet }) {
   const finCalc = (finPer, prevMode) => {
     if (!finPer && !unitK) return null;
     let sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
+    const selDay = finPer ? new Float64Array(finPer.nd) : null;
     for (const a of node.arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
+      if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; }
       if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; taxBase += x.sRub * (k?.share ?? 1); if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
-      const oq = prevMode ? a.prev?.orders || 0 : a.tOrders;
-      if (k && oq > 0) {
-        const r = unitProfit(k, prevMode ? { ordRub: a.prev.revenue, ordQty: a.prev.orders, ads: a.prev.spend } : { ordRub: a.tRevenue, ordQty: a.tOrders, ads: a.tSpend }, tax);
-        fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
+      // Прогноз — по дням, как в «Юнит-экономике»: комиссия по доле FBS
+      // именно этого дня, реклама — и в дни без заказов.
+      if (k && prevMode) {
+        if ((a.prev?.orders || 0) > 0 || (a.prev?.spend || 0) > 0) {
+          const r = unitProfit(k, { ordRub: a.prev.revenue, ordQty: a.prev.orders, ads: a.prev.spend }, tax);
+          fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
+        }
+      } else if (k && (a.tOrders > 0 || a.tSpend > 0)) {
+        for (let d = 0; d < N; d++) {
+          const ordRub = a.revenue[d], ordQty = a.orders[d], ads = a.spendCpc[d] + a.spendCpo[d];
+          if (!ordRub && !ordQty && !ads) continue;
+          const fs = fbsDay.get(a.o + '|' + dates[d]);
+          const r = unitProfit(k, { ordRub, ordQty, ads, fbs: fs }, tax);
+          fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
+        }
       }
     }
-    if (finPer && finPer.saleAll > 0) oz += finPer.noSkuOz * (sRub / finPer.saleAll);
+    if (finPer) {
+      // Без артикула — по дням, пропорционально выручке дня выбранного.
+      const shareAll = finPer.saleAll > 0 ? sRub / finPer.saleAll : 0;
+      for (let d = 0; d < finPer.nd; d++) {
+        const sh = finPer.saleDay[d] > 0 ? selDay[d] / finPer.saleDay[d] : shareAll;
+        oz += finPer.noSkuDay[d] * sh;
+      }
+    }
     const pay = sRub + oz;
     return {
       has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: sQty > 0 ? pay / sQty : null,
       payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - taxBase * tax / 100 : null, noCost,
     };
   };
-  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay]); // eslint-disable-line react-hooks/exhaustive-deps
   const finKP = useMemo(() => (finPerPrev ? finCalc(finPerPrev, true) : null), [node, finPerPrev, unitK, tax]); // eslint-disable-line react-hooks/exhaustive-deps
   // Δ к прошлому периоду (в %), только когда есть обе величины.
   const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
@@ -822,10 +865,43 @@ export default function SalesAnalytics({ cabinet }) {
     setOpenArt(a.o);
     setTimeout(() => document.getElementById('s-tree')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   };
-  const SLICES = [
-    ['movers', `Растут / падают`], ['sleep', `Спящие · ${sleeping.length}`], ['deficit', `Дефицит · ${deficit.length}`],
-    ['abc', 'ABC'], ...(brandTable ? [['brands', 'Марки авто']] : []), ['funnel', 'Воронка'],
+  // ── Поиск проблем и точек роста: метрики артикула за период и прошлый период ──
+  const sumA = arr => { let x = 0; for (let d = 0; d < N; d++) x += arr[d]; return x; };
+  const ext = cached(`ext|${sel}|${tax}|${unitK ? 1 : 0}`, () => node.arts.map(a => {
+    const views = sumA(a.views), pdp = sumA(a.pdpViews), orders = a.tOrders, rev = a.tRevenue, spend = a.tSpend, adOrders = sumA(a.adOrders);
+    const p = a.prev || {};
+    const k = unitK?.get(a.o);
+    let fc = null;
+    if (k && (orders > 0 || spend > 0)) {
+      const r = unitProfit(k, { ordRub: rev, ordQty: orders, ads: spend }, tax);
+      fc = { profit: r.profit, margin: r.margin, buyout: k.buyout * 100, noCost: !k.cost, ownBuyout: !!k.ownLevel };
+    }
+    return {
+      key: a.o, a, views, pdp, orders, rev, spend, adOrders, drr: rev > 0 ? spend / rev * 100 : null,
+      ctr: views > 0 ? pdp / views * 100 : null, cr: pdp > 0 ? orders / pdp * 100 : null, pcr: p.pdpViews > 0 ? p.orders / p.pdpViews * 100 : null,
+      check: orders > 0 ? rev / orders : null, pcheck: p.orders > 0 ? p.revenue / p.orders : null,
+      pviews: p.views || 0, porders: p.orders || 0, sd: stockDaysOf({ s: { orders: a.orders }, stockNow: a.st }, dates), fc,
+    };
+  }));
+  const med = arr => { const v = arr.filter(x => x !== null && Number.isFinite(x)).sort((x, y) => x - y); return v.length ? v[Math.floor(v.length / 2)] : null; };
+  const medCr = med(ext.filter(x => x.pdp >= 10).map(x => x.cr)), medViews = med(ext.filter(x => x.views > 0).map(x => x.views));
+  const finder = {
+    loss: ext.filter(x => x.fc && !x.fc.noCost && x.fc.profit < 0).sort((x, y) => x.fc.profit - y.fc.profit),
+    adwaste: ext.filter(x => x.spend >= 300 && (x.adOrders === 0 || (x.drr !== null && x.drr > 25) || x.orders === 0)).sort((x, y) => y.spend - x.spend),
+    crdrop: ext.filter(x => x.pdp >= 30 && x.pcr && x.cr !== null && x.cr < x.pcr * 0.7).map(x => ({ ...x, lost: (x.pcr - x.cr) / 100 * x.pdp })).sort((x, y) => y.lost - x.lost),
+    viewsdrop: ext.filter(x => x.pviews >= 300 && x.views < x.pviews * 0.6).sort((x, y) => (y.pviews - y.views) - (x.pviews - x.views)),
+    lowbuy: ext.filter(x => x.fc && x.fc.ownBuyout && x.fc.buyout < 65 && x.orders >= 3).sort((x, y) => y.rev - x.rev),
+    check: ext.filter(x => x.pcheck && x.check && x.orders >= 3 && Math.abs(x.check / x.pcheck - 1) > 0.1).sort((x, y) => Math.abs(y.check / y.pcheck - 1) - Math.abs(x.check / x.pcheck - 1)),
+    scale: ext.filter(x => x.fc && !x.fc.noCost && x.fc.margin >= 25 && x.orders > 0 && (x.sd === null || x.sd >= 21)).sort((x, y) => y.fc.profit - x.fc.profit),
+    noads: ext.filter(x => x.spend === 0 && x.orders >= 3).sort((x, y) => y.rev - x.rev),
+    highcr: medCr === null ? [] : ext.filter(x => x.pdp >= 10 && x.cr !== null && x.cr >= medCr * 1.5 && medViews !== null && x.views <= medViews).sort((x, y) => y.cr - x.cr),
+  };
+  const SLICE_GROUPS = [
+    ['Проблемы', [['loss', 'Убыточные'], ['adwaste', 'Реклама без отдачи'], ['crdrop', 'Упала конверсия'], ['viewsdrop', 'Упали показы'], ['lowbuy', 'Низкий выкуп'], ['check', 'Сменился чек'], ['deficit', 'Дефицит'], ['sleep', 'Спящие']]],
+    ['Точки роста', [['scale', 'Масштабировать'], ['noads', 'Продаются без рекламы'], ['highcr', 'Сильная карточка, мало показов']]],
+    ['Обзор', [['movers', 'Растут / падают'], ['abc', 'ABC'], ...(brandTable ? [['brands', 'Марки авто']] : []), ['funnel', 'Воронка']]],
   ];
+  const sliceCount = k => (k === 'deficit' ? deficit.length : k === 'sleep' ? sleeping.length : finder[k] ? finder[k].length : null);
   const periodBtn = n => {
     const f = dayjs().subtract(n - 1, 'day').format('YYYY-MM-DD');
     return <button key={n} type="button" className={dateFrom === f && dateTo === today ? 'on' : ''} onClick={() => { setDateFrom(f); setDateTo(today); }}>{n} дн</button>;
@@ -1075,8 +1151,46 @@ export default function SalesAnalytics({ cabinet }) {
       <div className="a-card" style={{ padding: 14 }}>
         <div className="a-bar" style={{ marginBottom: 10 }}>
           <b style={{ fontSize: 14 }}>Срезы{sel ? ` · ${node.name}` : ''}</b>
-          <span className="a-seg">{SLICES.map(([k, l]) => <button key={k} type="button" className={slice === k ? 'on' : ''} onClick={() => setSlice(k)}>{l}</button>)}</span>
         </div>
+        <div className="s-finder">
+          {SLICE_GROUPS.map(([g, items]) => (
+            <div key={g} className="s-fg"><span className="a-hint">{g}:</span>
+              {items.map(([k, l]) => { const c = sliceCount(k); return (
+                <button key={k} type="button" className={`s-chip ${slice === k ? 'on' : ''} ${c === 0 ? 'zero' : ''}`} onClick={() => setSlice(k)}>{l}{c !== null && <b className="n"> {c}</b>}</button>
+              ); })}
+            </div>
+          ))}
+        </div>
+        {FINDER_HINT[slice] && <div className="a-hint" style={{ margin: '4px 0 8px' }}>{FINDER_HINT[slice]}</div>}
+        {slice === 'loss' && <SliceTable id="f-loss" rows={finder.loss.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Убыточных по прогнозу нет"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders },
+            { t: 'ДРР', num: 1, v: r => fmtPct(r.drr), s: r => r.drr }, { t: 'Выкуп', num: 1, v: r => fmtPct(r.fc.buyout), s: r => r.fc.buyout },
+            { t: 'Прибыль (прогноз), ₽', num: 1, s: r => r.fc.profit, v: r => <span className="s-down">{fmtInt(r.fc.profit)}</span> }, { t: 'Маржа', num: 1, v: r => fmtPct(r.fc.margin), s: r => r.fc.margin }]} />}
+        {slice === 'adwaste' && <SliceTable id="f-adwaste" rows={finder.adwaste.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Расход, ₽', num: 1, v: r => fmtInt(r.spend), s: r => r.spend }, { t: 'Заказы с рекламы', num: 1, v: r => fmtInt(r.adOrders), s: r => r.adOrders },
+            { t: 'Заказы всего', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev },
+            { t: 'ДРР', num: 1, s: r => r.drr, v: r => <span className={`pill ${drrClass(r.drr)}`}>{r.drr === null ? '×' : fmtPct(r.drr)}</span> }]} />}
+        {slice === 'crdrop' && <SliceTable id="f-crdrop" rows={finder.crdrop.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Конверсия нигде заметно не упала"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Переходы', num: 1, v: r => fmtInt(r.pdp), s: r => r.pdp }, { t: 'CR было', num: 1, v: r => fmtPct(r.pcr), s: r => r.pcr },
+            { t: 'CR стало', num: 1, v: r => fmtPct(r.cr), s: r => r.cr }, { t: 'Недобрали заказов ≈', num: 1, v: r => fmtInt(r.lost), s: r => r.lost }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }]} />}
+        {slice === 'viewsdrop' && <SliceTable id="f-views" rows={finder.viewsdrop.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Показы нигде заметно не упали"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Показы было', num: 1, v: r => fmtInt(r.pviews), s: r => r.pviews }, { t: 'Показы стало', num: 1, v: r => fmtInt(r.views), s: r => r.views },
+            { t: 'Изменение', num: 1, s: r => (r.views / r.pviews - 1) * 100, v: r => <span className="s-down">{fmtPct((r.views / r.pviews - 1) * 100)}</span> }, { t: 'Заказы было', num: 1, v: r => fmtInt(r.porders), s: r => r.porders }, { t: 'Заказы стало', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }]} />}
+        {slice === 'lowbuy' && <SliceTable id="f-lowbuy" rows={finder.lowbuy.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Выкуп', num: 1, v: r => fmtPct(r.fc.buyout), s: r => r.fc.buyout }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders },
+            { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev }, { t: 'Прибыль (прогноз), ₽', num: 1, v: r => fmtInt(r.fc.profit), s: r => r.fc.profit }]} />}
+        {slice === 'check' && <SliceTable id="f-check" rows={finder.check.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Чек было, ₽', num: 1, v: r => fmtInt(r.pcheck), s: r => r.pcheck }, { t: 'Чек стало, ₽', num: 1, v: r => fmtInt(r.check), s: r => r.check },
+            { t: 'Изменение', num: 1, s: r => (r.check / r.pcheck - 1) * 100, v: r => <Delta value={(r.check / r.pcheck - 1) * 100} goodWhen="neutral" /> }, { t: 'Заказы было', num: 1, v: r => fmtInt(r.porders), s: r => r.porders }, { t: 'Заказы стало', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }]} />}
+        {slice === 'scale' && <SliceTable id="f-scale" rows={finder.scale.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Прибыль (прогноз), ₽', num: 1, v: r => <span className="s-up">{fmtInt(r.fc.profit)}</span>, s: r => r.fc.profit }, { t: 'Маржа', num: 1, v: r => fmtPct(r.fc.margin), s: r => r.fc.margin },
+            { t: 'ДРР', num: 1, v: r => fmtPct(r.drr), s: r => r.drr }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }, { t: 'Запас, дн', num: 1, v: r => (r.sd === null ? '∞' : fmtInt(r.sd)), s: r => (r.sd === null ? 1e9 : r.sd) }]} />}
+        {slice === 'noads' && <SliceTable id="f-noads" rows={finder.noads.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev },
+            { t: 'CR в заказ', num: 1, v: r => fmtPct(r.cr), s: r => r.cr }, { t: 'Маржа (прогноз)', num: 1, v: r => (r.fc && !r.fc.noCost ? fmtPct(r.fc.margin) : '—'), s: r => (r.fc && !r.fc.noCost ? r.fc.margin : null) }, { t: 'Запас, дн', num: 1, v: r => (r.sd === null ? '∞' : fmtInt(r.sd)), s: r => (r.sd === null ? 1e9 : r.sd) }]} />}
+        {slice === 'highcr' && <SliceTable id="f-highcr" rows={finder.highcr.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'CR в заказ', num: 1, v: r => fmtPct(r.cr), s: r => r.cr }, { t: 'Показы', num: 1, v: r => fmtInt(r.views), s: r => r.views },
+            { t: 'CTR', num: 1, v: r => fmtPct(r.ctr), s: r => r.ctr }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }, { t: 'Расход, ₽', num: 1, v: r => fmtInt(r.spend), s: r => r.spend }]} />}
         {slice === 'movers' && (
           <div className="s-two">
             {[['up', 'Растут сильнее всего', 'good'], ['down', 'Падают сильнее всего', 'bad']].map(([k, title]) => (

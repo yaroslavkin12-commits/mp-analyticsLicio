@@ -99,7 +99,10 @@ export default function AvgCheck({ cabinet }) {
   const sumOf = useCallback(items => {
     const S = { oRub: new Float64Array(n), oQty: new Float64Array(n), sRub: new Float64Array(n), sQty: new Float64Array(n), oz: new Float64Array(n) };
     for (const a of items) { const x = per[a.i]; if (!x) continue; for (const k of Object.keys(S)) { const s = x[k], t = S[k]; for (let i = 0; i < n; i++) t[i] += s[i]; } }
-    for (let i = 0; i < n; i++) if (saleDayAll[i] > 0) S.oz[i] += noSkuDay[i] * (S.sRub[i] / saleDayAll[i]);
+    // Без артикула — по дням пропорционально выручке дня; в день без выручки — по доле за период.
+    let selT = 0, allT = 0; for (let i = 0; i < n; i++) { selT += S.sRub[i]; allT += saleDayAll[i]; }
+    const shareAll = allT > 0 ? selT / allT : 0;
+    for (let i = 0; i < n; i++) S.oz[i] += noSkuDay[i] * (saleDayAll[i] > 0 ? S.sRub[i] / saleDayAll[i] : shareAll);
     return S;
   }, [per, n, saleDayAll, noSkuDay]);
   const metricsOf = (S, idx) => {
