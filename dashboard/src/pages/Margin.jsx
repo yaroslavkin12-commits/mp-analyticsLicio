@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getCalcBase } from '../api';
+import { getCalcBase, refreshPrices } from '../api';
 import { fmtInt, CAT_COLORS } from './AdsStats2';
 import { baseOf, compute, priceFor, DEFAULTS } from './Calculator';
 import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, useBuyerShare, OTHER, SEP } from './finShared';
@@ -60,6 +60,23 @@ export default function Margin({ cabinet }) {
   const ctl = useTableCtl('margin', { k: 'margin', dir: 1 });
 
   useEffect(() => { setData(null); getCalcBase(cabinet).then(r => setData(r.data.data)).catch(e => setError(e.response?.data?.error || e.message)); }, [cabinet]);
+  // Ручное обновление цен: Google-скрипт выгружает свежие цены и комиссии из Ozon
+  // в таблицу, сервис их забирает и пересчитывает страницу.
+  const [refr, setRefr] = useState({ busy: false, msg: '' });
+  const doRefresh = async () => {
+    setRefr({ busy: true, msg: 'Обновляем цены из Ozon… (до минуты)' });
+    try {
+      await refreshPrices(cabinet);
+      const r = await getCalcBase(cabinet, true);
+      setData(r.data.data);
+      setRefr({ busy: false, msg: `Цены обновлены в ${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` });
+    } catch (e) {
+      const err = e.response?.data?.error || e.message;
+      setRefr({ busy: false, msg: err === 'not_configured'
+        ? 'Кнопка ещё не подключена: разверните Google-скрипт как веб-приложение и добавьте его адрес в Render → SHEET_SCRIPT_URL'
+        : `Не удалось обновить: ${err}` });
+    }
+  };
   const cats = useCats(data?.articles, data?.order);
   const bs = useBuyerShare(cabinet, cats.arts);
 
@@ -128,6 +145,8 @@ export default function Margin({ cabinet }) {
   return (
     <div className="mpui sa-page">
       <FinHeader title="Цены и маржа" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch} grp={grp}>
+        <button type="button" className="a-btn" onClick={doRefresh} disabled={refr.busy} title="Подтянуть актуальные цены и комиссии из Ozon сейчас, не дожидаясь ночного обновления">{refr.busy ? '↻ обновляем…' : '↻ Обновить цены'}</button>
+        {refr.msg && <span className="a-hint" style={{ maxWidth: 360 }}>{refr.msg}</span>}
         <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>целевая маржа
           <input className="a-input" type="number" min="0" max="80" value={target} onChange={e => setTarget(Math.max(0, Number(e.target.value) || 0))} style={{ width: 60, padding: '4px 8px' }} />%
         </label>

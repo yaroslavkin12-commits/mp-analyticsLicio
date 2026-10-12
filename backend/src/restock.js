@@ -129,6 +129,13 @@ async function detectRestocks(cabinet, rows) {
     await query(`INSERT INTO restock_events (cabinet, offer_id, fbo_before, fbo_after, fbs_before, fbs_after, watched, sent_instant)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [cabinet, e.offer_id, e.fbo_before, e.fbo_after, e.fbs_before, e.fbs_after, e.watched, !!(sent && e.watched)]);
   }
+  // В журнал изменений «Рекламы» — чтобы рост заказов было с чем связать.
+  for (const e of ev) {
+    const b = e.fbo_before + e.fbs_before, a = e.fbo_after + e.fbs_after;
+    await query(`INSERT INTO ad_events (cabinet, platform, offer_id, date, kind, text, old_value, new_value, auto)
+      VALUES ($1, 'ozon', $2, (NOW() AT TIME ZONE 'Europe/Moscow')::date, 'restock', $3, $4, $5, true)`,
+      [cabinet, e.offer_id, `Пополнение остатка: ${fmt(b)} → ${fmt(a)} шт (+${fmt(a - b)})`, String(b), String(a)]).catch(() => {});
+  }
   console.log(`[Restock:${cabinet}] пополнений ${ev.length}, сразу отправлено ${sent ? instant.length : 0}`);
   return { events: ev.length, instant: sent ? instant.length : 0 };
 }

@@ -224,3 +224,8 @@
 /* Подсказка у названия колонки/строки — тонкое пунктирное подчёркивание */
 .mpui .a-t th[title]:not(.tt-th),.mpui .a-t .tt-th[title] .tt-lbl,.mpui td.lbl[data-hint]{text-decoration:underline dotted var(--a-line2);text-underline-offset:3px}
 .mpui .a-t th[title]:not(.tt-th){cursor:help}
+/* Журнал: зелёным — пополнение остатка / РК включена, красным — выключена */
+.mpui .a-ev.ev-good{background:var(--a-good-soft);border-radius:6px;padding-left:6px;padding-right:6px}
+.mpui .a-ev.ev-bad{background:var(--a-bad-soft);border-radius:6px;padding-left:6px;padding-right:6px}
+.mpui .a-ev.ev-good .dt{color:var(--a-good)}
+.mpui .a-ev.ev-bad .dt{color:var(--a-bad)}

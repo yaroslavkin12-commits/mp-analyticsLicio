@@ -434,11 +434,11 @@ export default function Calculator({ cabinet }) {
               <div className="a-card k-card">
                 <div className="k-head"><b>Прогнозная цена</b></div>
                 <table className="a-t s-slice">
-                  <thead><tr><th>Цель</th><th className="r">Цена</th><th className="r">Прибыль</th><th className="r">ROI</th></tr></thead>
+                  <thead><tr><th>Цель</th><th className="r" title="Цена в кабинете (до скидки Ozon)">Цена</th><th className="r" title={`Цена для покупателя со скидкой Ozon (СПП ${pct1(V.spp)})`}>Для клиента</th><th className="r">Прибыль</th><th className="r">ROI</th></tr></thead>
                   <tbody>
                     {[0, 10, 20, 30].map(t => { const p = priceFor(V, taxMode, t); const r = p ? compute(V, p, taxMode) : null; return (
                       <tr key={t} className="row" style={{ cursor: p ? 'pointer' : 'default' }} title="Подставить эту цену" onClick={() => p && set('price', String(Math.ceil(p)))}>
-                        <td>{t === 0 ? 'Безубыточность' : `Маржа ${t}%`}</td><td className="n r">{rub(p)}</td><td className="n r">{rub(r?.profit)}</td><td className="n r">{pct1(r?.roi)}</td>
+                        <td>{t === 0 ? 'Безубыточность' : `Маржа ${t}%`}</td><td className="n r">{rub(p)}</td><td className="n r muted">{rub(r?.buyerPrice)}</td><td className="n r">{rub(r?.profit)}</td><td className="n r">{pct1(r?.roi)}</td>
                       </tr>
                     ); })}
                   </tbody>

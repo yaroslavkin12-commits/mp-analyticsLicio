@@ -78,7 +78,7 @@ function aggregate(list, n) {
   const s = {};
   for (const k of K) s[k] = new Float64Array(n);
   const stock = new Array(n).fill(null);
-  let stockNow = null, prev = null, active = 0;
+  let stockNow = null, prev = null, active = 0, pActive = 0;
   for (const a of list) {
     for (const k of K) { const src = a[k], dst = s[k]; for (let d = 0; d < n; d++) dst[d] += src[d]; }
     for (let d = 0; d < n; d++) if (a.stockArr[d] !== null) stock[d] = (stock[d] || 0) + a.stockArr[d];
@@ -88,8 +88,9 @@ function aggregate(list, n) {
       for (const k of Object.keys(prev)) prev[k] += a.prev[k] || 0;
     }
     if (a.tOrders > 0) active++;
+    if (a.prev && a.prev.orders > 0) pActive++;
   }
-  return { s, stock, stockNow, prev, count: list.length, active, single: list.length === 1 ? list[0] : null };
+  return { s, stock, stockNow, prev, count: list.length, active, pActive, single: list.length === 1 ? list[0] : null };
 }
 
 // Модель в формате компонентов «Рекламы» (byDate, totals, prev), с
@@ -488,12 +489,16 @@ export default function SalesAnalytics({ cabinet }) {
   const [tax] = useTax(cabinet);
   useEffect(() => {
     let off = false; setFin(null);
+    // Прошлый период той же длины — для сравнения выкупов, поступлений и прибыли.
+    const len = dayjs(dateTo).diff(dayjs(dateFrom), 'day') + 1;
+    const pTo = dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(dateFrom).subtract(len, 'day').format('YYYY-MM-DD');
     Promise.all([getFinancePnl(cabinet, { dateFrom, dateTo }).catch(() => null), getFinanceCoefs(cabinet).catch(() => null)])
-      .then(([p, c]) => { if (!off) setFin({ pnl: p?.data?.data || null, coefs: c?.data?.data || null }); });
+      .then(([p, c]) => { if (!off) setFin(f => ({ ...(f || {}), pnl: p?.data?.data || null, coefs: c?.data?.data || null })); });
+    getFinancePnl(cabinet, { dateFrom: pFrom, dateTo: pTo }).then(p => { if (!off) setFin(f => ({ ...(f || {}), pnlPrev: p?.data?.data || null })); }).catch(() => {});
     return () => { off = true; };
   }, [cabinet, dateFrom, dateTo]);
-  const finPer = useMemo(() => {
-    const pnl = fin?.pnl; if (!pnl) return null;
+  const finPerOf = pnl => {
+    if (!pnl) return null;
     const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other', 'ads'];
     const m = new Map(); let saleAll = 0, noSkuOz = 0;
     for (const [pai, , b, a, q] of pnl.rows) {
@@ -505,7 +510,9 @@ export default function SalesAnalytics({ cabinet }) {
     for (const [, b, a] of pnl.noSku || []) if (OZ.includes(pnl.buckets[b])) noSkuOz += a;
     for (const x of m.values()) saleAll += x.sRub;
     return { m, noSkuOz, saleAll };
-  }, [fin]);
+  };
+  const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
   const coefArts = useMemo(() => (fin?.coefs ? fin.coefs.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) })) : []), [fin]);
   const bs = useBuyerShare(cabinet, coefArts);
   const unitK = useMemo(() => {
@@ -550,14 +557,16 @@ export default function SalesAnalytics({ cabinet }) {
   const cache = useMemo(() => new Map(), [filtered, buckets]); // eslint-disable-line react-hooks/exhaustive-deps
   const cached = (k, fn) => { if (!cache.has(k)) cache.set(k, fn()); return cache.get(k); };
 
-  const finK = useMemo(() => {
+  // prevMode — прошлый период: финансы прошлого периода и заказы артикула за него (a.prev).
+  const finCalc = (finPer, prevMode) => {
     if (!finPer && !unitK) return null;
     let sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
     for (const a of node.arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
       if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; taxBase += x.sRub * (k?.share ?? 1); if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
-      if (k && a.tOrders > 0) {
-        const r = unitProfit(k, { ordRub: a.tRevenue, ordQty: a.tOrders, ads: a.tSpend }, tax);
+      const oq = prevMode ? a.prev?.orders || 0 : a.tOrders;
+      if (k && oq > 0) {
+        const r = unitProfit(k, prevMode ? { ordRub: a.prev.revenue, ordQty: a.prev.orders, ads: a.prev.spend } : { ordRub: a.tRevenue, ordQty: a.tOrders, ads: a.tSpend }, tax);
         fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
       }
     }
@@ -567,7 +576,11 @@ export default function SalesAnalytics({ cabinet }) {
       has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: sQty > 0 ? pay / sQty : null,
       payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - taxBase * tax / 100 : null, noCost,
     };
-  }, [node, finPer, unitK, tax]);
+  };
+  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finKP = useMemo(() => (finPerPrev ? finCalc(finPerPrev, true) : null), [node, finPerPrev, unitK, tax]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Δ к прошлому периоду (в %), только когда есть обе величины.
+  const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
 
   async function moveCategory(a, path) {
     try {
@@ -863,40 +876,40 @@ export default function SalesAnalytics({ cabinet }) {
         <div className="a-kpi" title="Сумма выкупленных товаров за вычетом возвратов — по дню выкупа (из финансового отчёта Ozon)">
           <span className="lbl">Выкупы, ₽</span>
           <span className="val n">{finK?.has ? fmtInt(finK.sRub) : '…'}</span>
-          <span className="sub">{finK?.has && T.revenue ? `${fmtPct(finK.sRub / T.revenue * 100)} от суммы заказов` : 'по дню выкупа'}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sRub, finKP.sRub) : null} /> {finK?.has && T.revenue ? `${fmtPct(finK.sRub / T.revenue * 100)} от суммы заказов` : 'по дню выкупа'}</span>
         </div>
         <div className="a-kpi" title="Выкуплено штук за вычетом возвратов — по дню выкупа">
           <span className="lbl">Выкупы, шт</span>
           <span className="val n">{finK?.has ? fmtInt(finK.sQty) : '…'}</span>
-          <span className="sub">{finK?.has && N ? `≈ ${perDayTxt(finK.sQty / N)} в день` : ''}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sQty, finKP.sQty) : null} /> {finK?.has && N ? `≈ ${perDayTxt(finK.sQty / N)} в день` : ''}</span>
         </div>
 
         {/* 2. Средние чеки и поступления */}
         <div className="a-kpi">
           <span className="lbl">Ср. чек заказа, ₽</span>
           <span className="val n">{fmtInt(avgCheck)}</span>
-          <span className="sub"><Delta value={avgCheck !== null && pAvgCheck !== null ? changePct(avgCheck, pAvgCheck) : null} goodWhen="neutral" /> к прошлому периоду</span>
+          <span className="sub"><Delta value={avgCheck !== null && pAvgCheck !== null ? changePct(avgCheck, pAvgCheck) : null} /> к прошлому периоду</span>
         </div>
         <div className="a-kpi" title="Выкупы, ₽ / выкупы, шт">
           <span className="lbl">Ср. чек выкупа, ₽</span>
           <span className="val n">{finK?.has ? fmtInt(finK.checkSale) : '…'}</span>
-          <span className="sub">по выкупленным товарам</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.checkSale, finKP.checkSale) : null} /> по выкупленным товарам</span>
         </div>
         <div className="a-kpi" title="Прогноз по заказам периода: ожидаемая выручка (заказы × % выкупа) минус комиссия, логистика, эквайринг, хранение и реклама, делённая на ожидаемое число выкупов. Сравнима с фактическим поступлением с выкупа справа.">
           <span className="lbl">Ср. поступление с выкупа (прогноз), ₽</span>
           <span className="val n">{finK ? fmtInt(finK.payOrder) : '…'}</span>
-          <span className="sub">по заказам периода · на 1 ожидаемый выкуп</span>
+          <span className="sub"><Delta value={finKP ? dP(finK?.payOrder, finKP.payOrder) : null} /> на 1 ожидаемый выкуп</span>
         </div>
         <div className="a-kpi" title="Фактически к перечислению по выкупам периода (выкупы минус все удержания Ozon) / выкупы, шт">
           <span className="lbl">Ср. поступление с выкупа (факт), ₽</span>
           <span className="val n">{finK?.has ? fmtInt(finK.paySale) : '…'}</span>
-          <span className="sub">{finK?.has && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.paySale, finKP.paySale) : null} /> {finK?.has && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
         </div>
 
         {/* 3. Реклама */}
         <div className="a-kpi">
           <span className="lbl">Расход на рекламу, ₽</span>
-          <span className="val n">{fmtInt(T.spend)}</span>
+          <span className="val n">{fmtInt(T.spend)} <small className="s-of"><Delta value={P ? dP(T.spend, P.spend) : null} goodWhen="down" /></small></span>
           <div className="split">
             <span>За клик <b className="n">{fmtInt(T.spendCpc)}</b></span>
             <span>За заказ <b className="n">{T.spendCpo ? fmtInt(T.spendCpo) : '—'}</b></span>
@@ -916,24 +929,24 @@ export default function SalesAnalytics({ cabinet }) {
         <div className="a-kpi" title="Расход на рекламу / число заказов с рекламы — сколько стоит привести один заказ">
           <span className="lbl">Цена заказа с рекламы, ₽</span>
           <span className="val n">{T.adOrders > 0 ? fmtInt(T.spend / T.adOrders) : '—'}</span>
-          <span className="sub">{T.adOrders > 0 && avgCheck ? `${fmtPct(T.spend / T.adOrders / avgCheck * 100)} от ср. чека` : ''}</span>
+          <span className="sub"><Delta value={P && P.adOrders > 0 && T.adOrders > 0 ? dP(T.spend / T.adOrders, P.spend / P.adOrders) : null} goodWhen="down" /> {T.adOrders > 0 && avgCheck ? `${fmtPct(T.spend / T.adOrders / avgCheck * 100)} от ср. чека` : ''}</span>
         </div>
 
         {/* 4. Прибыль и ассортимент */}
         <div className="a-kpi" title="С заказов периода: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог (как в «Юнит-экономике»)">
           <span className="lbl">Прогнозируемая прибыль (с заказов), ₽</span>
           <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : '…'}</span>
-          <span className="sub">налог {tax}%</span>
+          <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> налог {tax}%</span>
         </div>
         <div className="a-kpi" title="По выкупам периода: поступления на счёт минус себестоимость выкупленных товаров и налог">
           <span className="lbl">Фактическая прибыль (с выкупов), ₽</span>
           <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : '…'}</span>
-          <span className="sub">{finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
         </div>
         <div className="a-kpi">
           <span className="lbl">Артикулы с заказами</span>
           <span className="val n">{fmtInt(ag.active)} <small className="s-of">из {fmtInt(ag.count)}</small></span>
-          <span className="sub">{ag.count ? fmtPct(ag.active / ag.count * 100) : '—'} ассортимента продавалось</span>
+          <span className="sub"><Delta value={ag.pActive ? dP(ag.active, ag.pActive) : null} /> {ag.count ? fmtPct(ag.active / ag.count * 100) : '—'} ассортимента продавалось</span>
         </div>
         <div className="a-kpi">
           <span className="lbl">Остаток сейчас, шт</span>

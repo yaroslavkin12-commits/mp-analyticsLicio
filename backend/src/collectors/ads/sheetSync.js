@@ -168,6 +168,8 @@ async function syncCampaignsFromSheet(cabinet) {
   const filtered = rows.filter(r => r.cabinet === cabinet && r.campaign_id);
   const out = filtered.map(r => [cabinet, 'ozon', r.campaign_id, r.title || null, r.state || null, r.adv_object_type || null,
     r.payment_type || null, r.autopilot_strategy || null, r.placement || null, r.expense_strategy || null, new Date()]);
+  // Прежние статусы — чтобы записать в журнал включение/выключение РК.
+  const prevCamps = await query(`SELECT campaign_id, state, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
   const saved = await bulkUpsert('ad_campaigns',
     ['cabinet', 'platform', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type',
      'autopilot_strategy', 'placement', 'expense_strategy', 'updated_at'],
@@ -194,8 +196,35 @@ async function syncCampaignsFromSheet(cabinet) {
         WHERE c.cabinet = $1 AND c.platform = 'ozon' AND c.campaign_id = m.campaign_id`,
       [cabinet, ids, matches]);
   }
+  try { await logCampaignSwitches(cabinet, filtered, prevCamps); } catch (e) { console.warn(`[SheetCampaigns:${cabinet}] журнал:`, e.message); }
   console.log(`[SheetCampaigns:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
+}
+
+// Журнал: РК включилась / выключилась — запись у каждого её товара.
+const RUNNING = st => String(st || '') === 'CAMPAIGN_STATE_RUNNING';
+async function logCampaignSwitches(cabinet, rows, prevCamps) {
+  if (!prevCamps.length) return; // первый импорт — сравнивать не с чем
+  const prev = new Map(prevCamps.map(c => [String(c.campaign_id), c]));
+  const changed = rows.filter(r => { const p = prev.get(String(r.campaign_id)); return p && RUNNING(p.state) !== RUNNING(r.state); });
+  if (!changed.length) return;
+  // Массовая смена статусов разом — скорее сбой выгрузки, чем действия продавца.
+  if (changed.length > 60) { console.warn(`[SheetCampaigns:${cabinet}] сменилось ${changed.length} статусов — в журнал не пишем`); return; }
+  const ids = changed.map(r => String(r.campaign_id));
+  const skuRows = await query(`SELECT s.campaign_id, c.offer_id FROM ad_campaign_skus s
+      JOIN ad_product_catalog c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
+     WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2)`, [cabinet, ids]).catch(() => []);
+  const offersOf = new Map();
+  for (const r of skuRows) { const k = String(r.campaign_id); if (!offersOf.has(k)) offersOf.set(k, new Set()); offersOf.get(k).add(r.offer_id); }
+  for (const r of changed) {
+    const id = String(r.campaign_id), on = RUNNING(r.state);
+    const set = offersOf.get(id) || new Set();
+    const m = prev.get(id)?.matched_offer_id; if (m) set.add(m);
+    const title = String(r.title || '').slice(0, 80);
+    for (const o of [...set].slice(0, 200)) {
+      await addAutoEvent(cabinet, o, on ? 'camp_on' : 'camp_off', `РК ${on ? 'включена' : 'выключена'}${title ? ` — «${title}»` : ''} (РК ${id})`, on ? 'off' : 'on', on ? 'on' : 'off');
+    }
+  }
 }
 
 async function syncStatsFromSheet(cabinet) {
@@ -455,6 +484,21 @@ async function syncQueriesIncremental(cabinet) {
   await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(prev)]);
   return n;
 }
+// Цены и комиссии из вкладки Prices (отдельно — для кнопки «Обновить цены»).
+async function importPrices(cabinet) {
+  await ensureFinTables();
+  let total = 0;
+  const pr = await fetchSheetRows('Prices');
+  if (pr) {
+    const out = pr.filter(r => r.cabinet === cabinet && r.offer_id).map(r => [cabinet, r.offer_id, r.product_id ? num(r.product_id) || null : null,
+      num(r.price), num(r.seller_price), num(r.acquiring), num(r.pct_fbo), num(r.pct_fbs), num(r.fbo_deliv), num(r.fbo_direct_max), num(r.fbo_return),
+      num(r.fbs_deliv), num(r.fbs_direct_max), num(r.fbs_return), r.checked_at ? new Date(r.checked_at) : new Date(), r.volume_weight === undefined || r.volume_weight === '' ? null : num(r.volume_weight)]);
+    total += await bulkUpsert('product_prices', ['cabinet', 'offer_id', 'product_id', 'price', 'seller_price', 'acquiring', 'pct_fbo', 'pct_fbs',
+      'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at', 'volume_weight'], out, ['cabinet', 'offer_id']);
+  }
+  return total;
+}
+
 async function syncFinanceFromSheet(cabinet) {
   // Отдельная задача 'finance' раз в час (см. jobs.js) — со своим, более
   // длинным таймаутом: вкладки большие (Finance ~30 тыс. строк).
@@ -499,14 +543,7 @@ async function syncFinanceFromSheet(cabinet) {
       r.sku ? num(r.sku) || null : null, Math.round(num(r.ordered)), Math.round(num(r.delivered)), Math.round(num(r.cancelled)), Math.round(num(r.in_progress)), Math.round(num(r.ordered_fbs))]);
     total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
   }
-  const pr = await fetchSheetRows('Prices');
-  if (pr) {
-    const out = pr.filter(r => r.cabinet === cabinet && r.offer_id).map(r => [cabinet, r.offer_id, r.product_id ? num(r.product_id) || null : null,
-      num(r.price), num(r.seller_price), num(r.acquiring), num(r.pct_fbo), num(r.pct_fbs), num(r.fbo_deliv), num(r.fbo_direct_max), num(r.fbo_return),
-      num(r.fbs_deliv), num(r.fbs_direct_max), num(r.fbs_return), r.checked_at ? new Date(r.checked_at) : new Date(), r.volume_weight === undefined || r.volume_weight === '' ? null : num(r.volume_weight)]);
-    total += await bulkUpsert('product_prices', ['cabinet', 'offer_id', 'product_id', 'price', 'seller_price', 'acquiring', 'pct_fbo', 'pct_fbs',
-      'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at', 'volume_weight'], out, ['cabinet', 'offer_id']);
-  }
+  total += await importPrices(cabinet);
   const fin = await fetchSheetRows('Finance');
   if (fin) {
     const map = new Map();
@@ -553,6 +590,9 @@ async function cleanupSheetJunk() {
 }
 
 module.exports = {
+  addAutoEvent,
+  importPrices,
+  dropSheetCache: name => SHEET_CACHE.delete(name),
   syncGeoFromSheet,
   syncFinanceFromSheet,
   ensureFinTables,

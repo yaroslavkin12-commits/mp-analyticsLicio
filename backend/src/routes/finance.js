@@ -233,10 +233,11 @@ router.get('/calc-base', async (req, res) => {
     const A = new Map();
     const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null]); return A.get(ai); };
     const known = new Set(m.articles.map(a => a.o));
+    const priceAt = new Map();
     for (const r of prices) {
       if (!known.has(r.offer_id)) continue;
       const x = get(r.offer_id);
-      x[1] = num(r.seller_price) || num(r.price) || null; x[2] = num(r.pct_fbo) || null; x[3] = num(r.pct_fbs) || null;
+      x[1] = num(r.seller_price) || num(r.price) || null; priceAt.set(r.offer_id, r.checked_at ? new Date(r.checked_at).getTime() : 0); x[2] = num(r.pct_fbo) || null; x[3] = num(r.pct_fbs) || null;
       x[4] = r.volume_weight != null && num(r.volume_weight) > 0 ? r2(num(r.volume_weight) * 5) : null;
       x[5] = num(r.fbo_direct_max) || null; x[6] = num(r.fbo_deliv) || null; x[7] = num(r.fbo_return) || null;
       x[8] = num(r.fbs_direct_max) || null; x[9] = num(r.fbs_deliv) || null; x[10] = num(r.fbs_return) || null;
@@ -252,7 +253,8 @@ router.get('/calc-base', async (req, res) => {
       const pc = r.pct_card != null && num(r.pct_card) > 0 ? num(r.pct_card) : byCard !== null && byCard > 0 ? byCard : r.pct != null ? num(r.pct) : null;
       if (pc !== null) x[11] = pc;
       x[34] = num(r.card_price) || null; x[35] = num(r.site_price) || null; x[36] = r.checked_at ? dayjs(r.checked_at).format('YYYY-MM-DD') : null;
-      if (r.checked_at && new Date(r.checked_at).getTime() > fresh && num(r.seller_price) > 0) x[1] = num(r.seller_price);
+      const at = r.checked_at ? new Date(r.checked_at).getTime() : 0;
+      if (at > fresh && at > (priceAt.get(r.offer_id) || 0) && num(r.seller_price) > 0) x[1] = num(r.seller_price);
     }
     for (const r of costs) if ((!r.cabinet || r.cabinet === cabinet) && known.has(r.article) && num(r.cost_price) > 0) get(r.article)[12] = num(r.cost_price);
     for (const r of ord) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[13] = num(r.o); x[14] = num(r.f); }
@@ -289,6 +291,33 @@ router.get('/calc-base', async (req, res) => {
 // «Баллы за скидки» Ozon доходом не являются). Считается по загруженному
 // в «Сверку» отчёту «Начисления»: (Выручка + Программы партнёров) /
 // (Выручка + Баллы за скидки + Программы партнёров). Хранится в app_settings.
+// POST /api/finance/refresh-prices?cabinet= — кнопка «Обновить цены»: просим
+// Google-скрипт (веб-приложение, адрес в SHEET_SCRIPT_URL) выгрузить свежие
+// цены и комиссии в таблицу, затем забираем вкладку Prices. Сам сервис в Ozon
+// не ходит — только в Google.
+let refreshBusy = null;
+router.post('/refresh-prices', async (req, res) => {
+  const cabinet = req.query.cabinet || req.body?.cabinet || 'defly';
+  const url = process.env.SHEET_SCRIPT_URL;
+  if (!url) return res.status(400).json({ success: false, error: 'not_configured' });
+  try {
+    if (!refreshBusy) {
+      refreshBusy = (async () => {
+        const axios = require('axios');
+        const r = await axios.get(url, { params: { what: 'prices', token: process.env.SHEET_SCRIPT_TOKEN || '' }, timeout: 170000, maxRedirects: 5 });
+        const body = typeof r.data === 'string' ? (() => { try { return JSON.parse(r.data); } catch (e) { return { ok: false, error: 'Скрипт ответил не JSON — проверьте, что он развёрнут как веб-приложение' }; } })() : r.data;
+        if (!body || !body.ok) throw new Error(body?.error || 'скрипт не обновил цены');
+        return body;
+      })().finally(() => { setTimeout(() => { refreshBusy = null; }, 1000); });
+    }
+    const body = await refreshBusy;
+    const { importPrices, dropSheetCache } = require('../collectors/ads/sheetSync');
+    dropSheetCache('Prices');
+    const rows = await importPrices(cabinet);
+    res.json({ success: true, data: { rows, at: body.at || new Date().toISOString() } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 router.get('/buyer-share', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';

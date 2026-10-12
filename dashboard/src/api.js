@@ -105,7 +105,8 @@ export const saveBuyerShare = (cabinet, body) => api.post('/finance/buyer-share'
 export const getFinanceCoefs = cabinet => api.get('/finance/coefs', { params: { cabinet }, timeout: 90000 });
 export const getFinancePnl = (cabinet, p) => api.get('/finance/pnl', { params: { cabinet, ...p }, timeout: 90000 });
 export const getBuyoutData = (cabinet, p) => api.get('/finance/buyout', { params: { cabinet, ...p }, timeout: 90000 });
-export const getCalcBase = cabinet => api.get('/finance/calc-base', { params: { cabinet }, timeout: 90000 });
+export const getCalcBase = (cabinet, fresh) => api.get('/finance/calc-base', { params: fresh ? { cabinet, fresh: 1 } : { cabinet }, timeout: 90000 });
+export const refreshPrices = cabinet => api.post('/finance/refresh-prices', null, { params: { cabinet }, timeout: 200000 });
 export const getStocksData = (cabinet, p) => api.get('/stocks/data', { params: { cabinet, ...p }, timeout: 90000 });
 export const getDigestSettings = cabinet => api.get('/digest/settings', { params: { cabinet } });
 export const saveDigestSettings = (cabinet, s) => api.post('/digest/settings', { cabinet, ...s });

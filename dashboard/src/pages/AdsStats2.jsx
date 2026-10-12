@@ -619,6 +619,9 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
 }
 
 // ── Журнал изменений ──────────────────────────────────────────────────────
+// Подсветка: пополнение остатка и включение РК / оплаты за заказ — зелёным,
+// выключение — красным.
+const EV_TONE = { restock: 'ev-good', camp_on: 'ev-good', cpo_on: 'ev-good', camp_off: 'ev-bad', cpo_off: 'ev-bad' };
 function Journal({ events, offerId, onAdd, onDelete }) {
   const [text, setText] = useState('');
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -634,7 +637,7 @@ function Journal({ events, offerId, onAdd, onDelete }) {
       <div className="a-journal">
         {events.length === 0 && <div className="a-hint">Пока нет записей. Добавьте заметку: «снизил ставку до 20 ₽», «сменил главное фото»…</div>}
         {events.map(e => (
-          <div key={e.id} className="a-ev">
+          <div key={e.id} className={`a-ev ${EV_TONE[e.kind] || ''}`}>
             <span className="dt">{e.date.slice(8)}.{e.date.slice(5, 7)}</span>
             <span>{e.auto && <span className="auto">авто</span>}{e.text}</span>
             {!e.auto && <button type="button" className="a-rm" title="Удалить заметку" onClick={() => onDelete(e.id)}>×</button>}
@@ -646,7 +649,7 @@ function Journal({ events, offerId, onAdd, onDelete }) {
         <input className="a-input" value={text} onChange={e => setText(e.target.value)} placeholder="Что сделали: снизил ставку, сменил фото…" />
         <button type="submit" className="a-btn" disabled={saving || !text.trim()}>Добавить</button>
       </form>
-      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ) и включение/выключение оплаты за заказ появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия.</div>
+      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ), включение/выключение РК и оплаты за заказ, пополнения остатка появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия.</div>
     </div>
   );
 }
