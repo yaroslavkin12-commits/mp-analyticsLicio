@@ -220,7 +220,10 @@ export default function Calculator({ cabinet }) {
     const out = {
       price: own && own[36] && own[1] ? [own[1], `цена в кабинете (проверена ${own[36].slice(8, 10)}.${own[36].slice(5, 7)})`] : pick('price', S), spp: pick('spp', S), cost: pick('cost', S), buyout: pick('buyout', SF),
       commission: commOf(), acquiring: pick('acquiring', SF), direct: pick('direct', SL), ret: pick('ret', SL),
-      other: pick('other', SF), drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
+      other: pick('other', SF),
+      // Реклама: у выбранного товара — только его собственный ДРР (не рекламировался — 0);
+      // средний по категории — лишь для нового товара.
+      drr: own ? (bOwn && bOwn.drr !== null && bOwn.drr !== undefined ? [bOwn.drr, bOwn.drr > 0 ? 'факт товара за 30 дн' : 'товар не рекламировался'] : [0, 'нет заказов за 30 дн — реклама 0']) : pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
     };
     // Скидка для покупателя (СПП): прежде всего — текущая, с сайта (расширение
     // «Соинвест»: цена с Ozon-картой к цене в кабинете). Отчёт «Начисления»
@@ -345,7 +348,7 @@ export default function Calculator({ cabinet }) {
                 <span className="k-inp"><input value={name} onChange={e => setName(e.target.value)} placeholder="Например: чехлы экокожа, новая модель" /></span>
               </label>
               <div className="k-two">{field('price')}{field('spp')}{field('cost')}{field('buyout')}{field('defect')}</div>
-              {res && <div className="k-note">Цена для покупателя ≈ <b>{rub(res.buyerPrice)}</b> · поездок на 1 продажу <b>{res.trips.toFixed(2).replace('.', ',')}</b> · к перечислению от Ozon <b>{rub(res.payout)}</b></div>}
+              {res && <div className="k-note">Цена для покупателя ≈ <b>{rub(res.buyerPrice)}</b> · отправок на 1 продажу <b>{res.trips.toFixed(2).replace('.', ',')}</b> (100 / выкуп) · к перечислению от Ozon <b>{rub(res.payout)}</b></div>}
             </div>
 
             <div className="a-card k-card">
@@ -407,8 +410,10 @@ export default function Calculator({ cabinet }) {
                   <Row label="Расходы Ozon" value={rub(-res.mp)} strong neg />
                   <Row sub label={`Комиссия ${pct1(V.commission)}`} value={rub(-res.commission)} neg />
                   <Row sub label={`Эквайринг ${pct1(V.acquiring)}`} value={rub(-res.acquiring)} neg />
-                  <Row sub label={`Логистика прямая × ${res.trips.toFixed(2).replace('.', ',')}`} value={rub(-res.logDirect)} neg />
-                  <Row sub label="Логистика обратная (невыкупы)" value={rub(-res.logReturn)} neg />
+                  <Row sub label={`Логистика прямая: ${rub(V.direct)} × ${res.trips.toFixed(2).replace('.', ',')} отправки`} value={rub(-res.logDirect)} neg
+                    hint={`Чтобы продать 1 шт при выкупе ${pct1(V.buyout)}, товар в среднем отправляется к покупателю 100 / ${pct1(V.buyout)} = ${res.trips.toFixed(2).replace('.', ',')} раза — каждая отправка оплачивается`} />
+                  <Row sub label={`Логистика обратная: ${rub(V.ret)} × ${(res.trips - 1).toFixed(2).replace('.', ',')} возврата`} value={rub(-res.logReturn)} neg
+                    hint={`Из ${res.trips.toFixed(2).replace('.', ',')} отправок одна выкуплена, остальные ${(res.trips - 1).toFixed(2).replace('.', ',')} — невыкупы, и за каждый платится обратная логистика. То же самое на 1 заказ: обратная × (1 − выкуп) = ${rub(V.ret)} × ${(1 - V.buyout / 100).toFixed(2).replace('.', ',')}; на 1 продажу это делится на выкуп`} />
                   <Row sub label={`Хранение и прочее ${pct1(V.other)}`} value={rub(-res.other)} neg />
                   <Row sub label={`Реклама ${pct1(V.drr)}`} value={rub(-res.ads)} neg />
                   <Row label="Средняя сумма поступления на счёт" value={rub(res.payout)} strong hint="Цена до скидки минус все расходы Ozon (комиссия, эквайринг, логистика с учётом невыкупов, хранение, реклама) — столько в среднем приходит на расчётный счёт с 1 проданной штуки" />
