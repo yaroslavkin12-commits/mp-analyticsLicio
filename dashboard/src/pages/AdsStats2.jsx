@@ -6,6 +6,7 @@ import {
   reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs,
 } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
+import { useBuyerShare } from './buyerShare';
 import DateRangePicker from '../components/DateRangePicker';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 // Лениво: AdSpendCats берёт график из SalesAnalytics, а тот — из этого файла
@@ -914,12 +915,13 @@ export default function AdsStats2({ cabinet }) {
   // Юнит-экономика для прогнозной прибыли по артикулу (те же коэффициенты, что во вкладке «Юнит-экономика»).
   const [coefsData, setCoefsData] = useState(null);
   useEffect(() => { getFinanceCoefs(cabinet).then(r => setCoefsData(r.data.data)).catch(() => {}); }, [cabinet]);
+  const coefArts = useMemo(() => (coefsData ? coefsData.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(' / ') })) : []), [coefsData]);
+  const bs = useBuyerShare(cabinet, coefArts);
   const unitK = useMemo(() => {
     if (!coefsData) return null;
-    const arts = coefsData.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(' / ') }));
-    const ks = unitCoefs(coefsData, arts);
-    return new Map(arts.map((a, i) => [a.o, ks[i]]));
-  }, [coefsData]);
+    const ks = unitCoefs(coefsData, coefArts, bs.shareOf);
+    return new Map(coefArts.map((a, i) => [a.o, ks[i]]));
+  }, [coefsData, coefArts, bs.shareOf]);
   // Прогноз чистой прибыли по заказам артикула за период (после рекламы, комиссии, логистики, себестоимости, налога).
   function profitOf(a) {
     const k = unitK && unitK.get(a.offerId);

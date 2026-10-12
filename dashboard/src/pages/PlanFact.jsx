@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import { getSalesData, getFinanceCoefs, getFinancePnl, getPlan, savePlan } from '../api';
 import { fmtInt, CAT_COLORS, useTip } from './AdsStats2';
 import { unitCoefs, unitProfit } from './unitModel';
-import { useCats, Kpi, pct1, useTax, SEP, OTHER } from './finShared';
+import { useCats, Kpi, pct1, useTax, useBuyerShare, SEP, OTHER } from './finShared';
 import './ads2.css';
 import './sales.css';
 
@@ -62,7 +62,8 @@ export default function PlanFact({ cabinet }) {
   }, [metric, cabinet, month]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cats = useCats(sales?.articles, sales?.order);
-  const K = useMemo(() => (coefs ? unitCoefs(coefs, cats.arts) : null), [coefs, cats.arts]);
+  const bs = useBuyerShare(cabinet, cats.arts);
+  const K = useMemo(() => (coefs ? unitCoefs(coefs, cats.arts, bs.shareOf) : null), [coefs, cats.arts, bs.shareOf]);
 
   // Факт по дням месяца для каждого артикула и выбранной метрики.
   const dayIdx = useMemo(() => { const m = new Map(); (sales?.dates || []).forEach(d => m.set(d, dayjs(d).date() - 1)); return m; }, [sales]);

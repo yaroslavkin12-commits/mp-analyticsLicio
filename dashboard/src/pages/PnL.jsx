@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getFinancePnl } from '../api';
 import { fmtInt, useTip, DualChart, CAT_COLORS } from './AdsStats2';
-import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput } from './finShared';
+import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, useBuyerShare } from './finShared';
 import './ads2.css';
 import './sales.css';
 
@@ -72,6 +72,7 @@ export default function PnL({ cabinet }) {
   useEffect(() => { load(); }, [load]);
 
   const cats = useCats(data?.articles, data?.order);
+  const bs = useBuyerShare(cabinet, cats.arts);
   const n = data?.dates.length || 0;
   const per = useMemo(() => {
     if (!data) return [];
@@ -105,15 +106,19 @@ export default function PnL({ cabinet }) {
   const calc = useCallback((items, share) => {
     const v = {};
     for (const k of B) v[k] = new Float64Array(n);
-    v.qty = new Float64Array(n); v.adsRaw = new Float64Array(n); v.costRaw = new Float64Array(n);
+    v.qty = new Float64Array(n); v.adsRaw = new Float64Array(n); v.costRaw = new Float64Array(n); v.taxBase = new Float64Array(n);
     let noCost = 0;
     for (const a of items) {
       const x = per[a.i]; if (!x) continue;
       const cp = data.cost[a.i];
+      // База налога — то, что заплатил покупатель (доля цены после скидки Ozon).
+      const sh = bs.shareOf ? (bs.shareOf(a.o, a.parts) ?? 1) : 1;
+      const iSale = B.indexOf('sale'), iRet = B.indexOf('return');
       let sold = 0;
       for (let i = 0; i < n; i++) {
         for (let j = 0; j < B.length; j++) v[B[j]][i] += x.b[j][i];
         v.qty[i] += x.qty[i]; v.adsRaw[i] += x.ads[i]; sold += x.qty[i];
+        v.taxBase[i] += (x.b[iSale][i] + x.b[iRet][i]) * sh;
         if (cp) v.costRaw[i] += cp * x.qty[i];
       }
       if (!cp && sold > 0) noCost++;
@@ -127,7 +132,7 @@ export default function PnL({ cabinet }) {
     for (let i = 0; i < n; i++) {
       const rev = v.sale[i] + v.return[i];
       const oz = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
-      const t = rev > 0 ? -rev * tax / 100 : 0;
+      const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
       const p = rev + oz - v.adsRaw[i] - v.costRaw[i] + t;
       out.revenue.push(rev); out.ozon.push(oz); out.payout.push(rev + oz + (v.ads[i] || 0)); out.ads.push(-v.adsRaw[i]); out.cost.push(-v.costRaw[i]);
       out.tax.push(t); out.profit.push(p); out.margin.push(rev > 0 ? p / rev * 100 : null); out.drr.push(rev > 0 ? v.adsRaw[i] / rev * 100 : null);
@@ -140,7 +145,7 @@ export default function PnL({ cabinet }) {
     T.drr = T.revenue > 0 ? -T.ads / T.revenue * 100 : null;
     T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;
     return { vals: out, totals: T, noCost };
-  }, [per, n, data, tax, finAds]);
+  }, [per, n, data, tax, finAds, bs.shareOf]);
 
   const shareOf = useCallback(items => {
     if (!filtered && items === list.arts) return 1;

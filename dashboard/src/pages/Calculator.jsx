@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { getCalcBase } from '../api';
 import { fmtInt, naturalCompare, shortModel, CAT_COLORS } from './AdsStats2';
 import { pct1 } from './finShared';
+import { useBuyerShare } from './buyerShare';
 import './ads2.css';
 import './sales.css';
 
@@ -78,7 +79,7 @@ export function baseOf(rows, scheme) {
 const FIELDS = [
   // key, label, suffix, источник в базе
   ['price', 'Цена до скидки (ваша цена)', '₽'],
-  ['spp', 'Скидка Ozon для покупателя (СПП)', '%'],
+  ['spp', 'Скидка для покупателя (СПП), налог — от цены после неё', '%'],
   ['cost', 'Себестоимость', '₽'],
   ['buyout', 'Процент выкупа', '%'],
   ['defect', 'Процент брака', '%'],
@@ -105,7 +106,9 @@ export function compute(v, price, taxMode) {
   const ads = P * v.drr / 100;
   const mp = commission + acquiring + logDirect + logReturn + other + ads;
   const cost = v.cost, defect = v.cost * v.defect / 100, oper = v.oper;
-  const base = taxMode === 'usn_profit' ? Math.max(0, P - mp - cost - defect - oper) : P;
+  // База налога — цена, которую платит покупатель (после скидки Ozon / «Баллов за скидки»), письмо ФНС от 02.09.2026 № СД-35-3/11693@.
+  const income = P * (1 - (v.spp || 0) / 100);
+  const base = taxMode === 'usn_profit' ? Math.max(0, income - mp - cost - defect - oper) : income;
   const tax = base * v.tax / 100;
   const outside = cost + defect + tax + oper;
   const profit = P - mp - outside;
@@ -170,6 +173,8 @@ export default function Calculator({ cabinet }) {
 
   const arts = useMemo(() => (data?.articles || []).map((a, i) => ({ ...a, i, short: shortModel(a.n) || a.n })), [data]);
   const rowsByArt = useMemo(() => new Map((data?.a || []).map(x => [x[0], x])), [data]);
+  const bsArts = useMemo(() => arts.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) })), [arts]);
+  const bs = useBuyerShare(cabinet, bsArts);
   const rank = useMemo(() => new Map((data?.order || []).map((x, i) => [x, i])), [data]);
   const leafCats = useMemo(() => {
     const m = new Map();
@@ -217,9 +222,14 @@ export default function Calculator({ cabinet }) {
       commission: commOf(), acquiring: pick('acquiring', SF), direct: pick('direct', SL), ret: pick('ret', SL),
       other: pick('other', SF), drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
     };
+    if (bs.shareOf) {
+      // Скидка для покупателя — по факту из отчёта Ozon «Начисления» (Баллы за скидки): от неё же считается налог.
+      const sh = own ? bs.shareOf(arts[own[0]]?.o, String(arts[own[0]]?.cat || '').split(SEP)) : bs.shareOf('', cat ? cat.split(SEP) : []);
+      if (sh) out.spp = [Math.round((1 - sh) * 1000) / 10, 'по отчёту «Начисления» (баллы за скидки)'];
+    }
     if (own && (own[12] === null)) out.cost = [null, 'нет себестоимости — заполните во вкладке «Себестоимость»'];
     return { out, bCat, bOwn, bAll };
-  }, [data, cat, art, scheme, volume, arts, rowsByArt, ship]);
+  }, [data, cat, art, scheme, volume, arts, rowsByArt, ship, bs.shareOf]);
 
   const auto = k => base?.out[k]?.[0];
   const val = k => (vals[k] !== undefined ? vals[k] : (auto(k) !== null && auto(k) !== undefined ? String(r1(auto(k)) ?? '') : ''));

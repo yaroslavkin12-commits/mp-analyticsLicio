@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { getCalcBase } from '../api';
 import { fmtInt, CAT_COLORS } from './AdsStats2';
 import { baseOf, compute, priceFor, DEFAULTS } from './Calculator';
-import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, OTHER, SEP } from './finShared';
+import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, useBuyerShare, OTHER, SEP } from './finShared';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import './ads2.css';
 import './sales.css';
@@ -32,6 +32,7 @@ export default function Margin({ cabinet }) {
 
   useEffect(() => { setData(null); getCalcBase(cabinet).then(r => setData(r.data.data)).catch(e => setError(e.response?.data?.error || e.message)); }, [cabinet]);
   const cats = useCats(data?.articles, data?.order);
+  const bs = useBuyerShare(cabinet, cats.arts);
 
   // Входные данные расчёта по каждому товару: свои → категория → кабинет.
   const rows = useMemo(() => {
@@ -51,7 +52,8 @@ export default function Margin({ cabinet }) {
       const pick = (k, minOwn) => { for (const b of [own, cb, ab]) if (b && b[k] !== null && b[k] !== undefined && (b !== own || !minOwn || minOwn(b))) return b[k]; return DEFAULTS[k] ?? 0; };
       const commission = scheme === 'fbs' ? (own.commFact ?? cb?.commFact ?? own.commCard ?? pick('commCard')) : (own.commCard ?? pick('commCard'));
       const v = {
-        spp: own.spp ?? 0, cost: x[12] || 0, buyout: pick('buyout'), defect: 0, commission: commission ?? DEFAULTS.commission,
+        // Скидка покупателя — по отчёту «Начисления» (от неё налог), иначе СПП из Соинвеста.
+        spp: bs.shareOf ? (1 - bs.shareOf(a.o, a.parts)) * 100 : (own.spp ?? 0), cost: x[12] || 0, buyout: pick('buyout'), defect: 0, commission: commission ?? DEFAULTS.commission,
         acquiring: pick('acquiring'), direct: pick('direct'), ret: pick('ret'), other: pick('other'), drr: withAds ? Math.min(100, pick('drr', b => b.orders >= 5)) : 0, oper: 0, tax,
       };
       const price = x[1];
@@ -61,7 +63,7 @@ export default function Margin({ cabinet }) {
       out.push({ a, x, scheme, v, r, be, tp, status, orders: x[25], rev: x[24] });
     }
     return out;
-  }, [data, cats.arts, target, withAds, tax]);
+  }, [data, cats.arts, target, withAds, tax, bs.shareOf]);
 
   const q = search.trim().toLowerCase();
   const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a));

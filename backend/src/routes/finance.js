@@ -272,6 +272,34 @@ router.get('/calc-base', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
+// Доля цены, которую реально платит покупатель (база налогов — письмо ФНС
+// от 02.09.2026 № СД-35-3/11693@: доход и НДС — со стоимости после скидки,
+// «Баллы за скидки» Ozon доходом не являются). Считается по загруженному
+// в «Сверку» отчёту «Начисления»: (Выручка + Программы партнёров) /
+// (Выручка + Баллы за скидки + Программы партнёров). Хранится в app_settings.
+router.get('/buyer-share', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const r = await query(`SELECT value FROM app_settings WHERE key = $1`, [`buyer_share:${cabinet}`]);
+    res.json({ success: true, data: r[0] ? JSON.parse(r[0].value) : null });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+router.post('/buyer-share', async (req, res) => {
+  try {
+    const { cabinet = 'defly', from, to, total, byOffer } = req.body || {};
+    if (!(total > 0 && total <= 1)) return res.status(400).json({ success: false, error: 'bad total' });
+    const clean = {};
+    for (const [o, v] of Object.entries(byOffer || {})) {
+      const sh = Number(v?.[0]), w = Number(v?.[1]);
+      if (sh > 0 && sh <= 1 && w > 0) clean[String(o).slice(0, 128)] = [Math.round(sh * 1e4) / 1e4, Math.round(w)];
+    }
+    const val = { from, to, total: Math.round(total * 1e4) / 1e4, byOffer: clean, at: new Date().toISOString() };
+    await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [`buyer_share:${cabinet}`, JSON.stringify(val)]);
+    res.json({ success: true, data: val });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 module.exports = router;
 module.exports.bucketOf = bucketOf;
 module.exports.meta = meta;

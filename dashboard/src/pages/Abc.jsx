@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import { getSalesData, getFinancePnl, getFinanceCoefs } from '../api';
 import { fmtInt, Delta, CAT_COLORS, SparkBars } from './AdsStats2';
 import { unitCoefs, unitProfit } from './unitModel';
-import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, OTHER } from './finShared';
+import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, useBuyerShare, OTHER } from './finShared';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import './ads2.css';
 import './sales.css';
@@ -97,7 +97,8 @@ export default function Abc({ cabinet }) {
     }
     return P;
   }, [sales, pnl, cats.arts, n]);
-  const K = useMemo(() => (coefs ? unitCoefs(coefs, cats.arts.map(a => ({ o: a.o, parts: a.parts }))) : null), [coefs, cats.arts]);
+  const bs = useBuyerShare(cabinet, cats.arts);
+  const K = useMemo(() => (coefs ? unitCoefs(coefs, cats.arts.map(a => ({ o: a.o, parts: a.parts })), bs.shareOf) : null), [coefs, cats.arts, bs.shareOf]);
   // Сопоставляем коэффициенты по артикулу (порядок articles у coefs свой).
   const kByOffer = useMemo(() => (K ? new Map(cats.arts.map((a, i) => [a.o, K[i]])) : null), [K, cats.arts]);
 

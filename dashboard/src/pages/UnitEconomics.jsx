@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getSalesData, getFinanceCoefs } from '../api';
 import { fmtInt, fmtMoney2, useTip, DualChart } from './AdsStats2';
-import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, SEP } from './finShared';
+import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, useBuyerShare, SEP } from './finShared';
 import { unitCoefs } from './unitModel';
 import './ads2.css';
 import './sales.css';
@@ -85,7 +85,8 @@ export default function UnitEconomics({ cabinet }) {
   const n = sales?.dates.length || 0;
 
   // Коэффициенты по артикулу с подстраховкой «категория → родитель → кабинет».
-  const K = useMemo(() => (sales && coefs ? unitCoefs(coefs, cats.arts) : null), [sales, coefs, cats.arts]);
+  const bs = useBuyerShare(cabinet, cats.arts);
+  const K = useMemo(() => (sales && coefs ? unitCoefs(coefs, cats.arts, bs.shareOf) : null), [sales, coefs, cats.arts, bs.shareOf]);
 
   // Доля FBS в заказах артикула по дням (из статусов заказов).
   const fbsDay = useMemo(() => {

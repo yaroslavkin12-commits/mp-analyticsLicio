@@ -218,7 +218,10 @@ export function TaxInput({ tax, setTax }) {
     <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       налог
       <input className="a-input" type="number" min="0" max="30" step="0.5" value={tax} onChange={e => setTax(Math.max(0, parseFloat(e.target.value) || 0))} style={{ width: 64, padding: '4px 8px' }} />
-      % от выручки
+      <span title="Налог считается от суммы, которую заплатил покупатель (цена после скидки Ozon): письмо ФНС от 02.09.2026 № СД-35-3/11693@. Доля берётся из отчёта «Начисления», загруженного в «Сверку с Ozon».">% от оплаты покупателя</span>
     </label>
   );
 }
+
+
+export { useBuyerShare } from './buyerShare';

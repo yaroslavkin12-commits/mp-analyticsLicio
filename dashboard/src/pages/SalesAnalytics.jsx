@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import dayjs from 'dayjs';
 import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
-import { useTax } from './finShared';
+import { useTax, useBuyerShare } from './finShared';
 import DateRangePicker from '../components/DateRangePicker';
 import {
   fmtInt, fmtPct, fmtBy, heatColor, naturalCompare, shortModel, derive, changePct, Delta,
@@ -505,12 +505,13 @@ export default function SalesAnalytics({ cabinet }) {
     for (const x of m.values()) saleAll += x.sRub;
     return { m, noSkuOz, saleAll };
   }, [fin]);
+  const coefArts = useMemo(() => (fin?.coefs ? fin.coefs.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) })) : []), [fin]);
+  const bs = useBuyerShare(cabinet, coefArts);
   const unitK = useMemo(() => {
     const c = fin?.coefs; if (!c) return null;
-    const arts = c.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) }));
-    const ks = unitCoefs(c, arts);
-    return new Map(arts.map((a, i) => [a.o, ks[i]]));
-  }, [fin]);
+    const ks = unitCoefs(c, coefArts, bs.shareOf);
+    return new Map(coefArts.map((a, i) => [a.o, ks[i]]));
+  }, [fin, coefArts, bs.shareOf]);
 
   const dates = data?.dates || [];
   const N = dates.length;
@@ -550,10 +551,10 @@ export default function SalesAnalytics({ cabinet }) {
 
   const finK = useMemo(() => {
     if (!finPer && !unitK) return null;
-    let sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false;
+    let sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
     for (const a of node.arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
-      if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
+      if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; taxBase += x.sRub * (k?.share ?? 1); if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
       if (k && a.tOrders > 0) {
         const r = unitProfit(k, { ordRub: a.tRevenue, ordQty: a.tOrders, ads: a.tSpend }, tax);
         fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
@@ -563,7 +564,7 @@ export default function SalesAnalytics({ cabinet }) {
     const pay = sRub + oz;
     return {
       has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: sQty > 0 ? pay / sQty : null,
-      payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - sRub * tax / 100 : null, noCost,
+      payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - taxBase * tax / 100 : null, noCost,
     };
   }, [node, finPer, unitK, tax]);
 

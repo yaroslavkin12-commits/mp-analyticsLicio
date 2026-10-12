@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import dayjs from 'dayjs';
-import { getFinancePnl } from '../api';
+import { getFinancePnl, saveBuyerShare } from '../api';
 import { fmtInt } from './AdsStats2';
 import { Kpi, Empty, pct1 } from './finShared';
 import './ads2.css';
@@ -72,6 +72,7 @@ const Diff = ({ a, b }) => {
 };
 
 export default function Recon({ cabinet }) {
+  const [shareMsg, setShareMsg] = useState('');
   const [rep, setRep] = useState(null);
   const [ours, setOurs] = useState(null);
   const [busy, setBusy] = useState('');
@@ -100,6 +101,28 @@ export default function Recon({ cabinet }) {
       const period = (String(aoa[0]?.[0] || '').match(/(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})/) || []);
       const from = period[1] ? day(period[1]) : dates[0], to = period[2] ? day(period[2]) : dates[dates.length - 1];
       setRep({ rows, from, to, name: file.name });
+      // Доля цены, которую реально заплатил покупатель: (Выручка + Программы
+      // партнёров) / (+ Баллы за скидки). От неё сервис считает налог
+      // (письмо ФНС от 02.09.2026 № СД-35-3/11693@).
+      try {
+        const per = {}; let paid = 0, all = 0;
+        for (const r of rows) {
+          if (r.group !== 'Продажи' && r.group !== 'Возвраты') continue;
+          const isPaid = /^(Выручка|Возврат выручки|Программы партн)/i.test(r.type), isPts = /^Баллы за скидки/i.test(r.type);
+          if (!isPaid && !isPts) continue;
+          const x = per[r.art] || (per[r.art] = [0, 0, 0]);
+          if (isPaid) { x[0] += r.amount; paid += r.amount; }
+          x[1] += r.amount; all += r.amount;
+          if (r.group === 'Продажи' && /^Выручка/i.test(r.type)) x[2] += 1;
+        }
+        if (all > 0 && paid > 0) {
+          const byOffer = {};
+          for (const [o, x] of Object.entries(per)) if (o && x[1] > 0 && x[0] > 0) byOffer[o] = [x[0] / x[1], x[2]];
+          await saveBuyerShare(cabinet, { from, to, total: paid / all, byOffer });
+          window.dispatchEvent(new Event('mp-buyer-share'));
+          setShareMsg(`Налог теперь считается от цены, которую платит покупатель: в среднем ${(paid / all * 100).toFixed(1).replace('.', ',')}% от вашей цены (по ${Object.keys(byOffer).length} арт. из этого отчёта).`);
+        }
+      } catch (e) { setShareMsg('Не удалось сохранить долю оплаты покупателем: ' + (e.response?.data?.error || e.message)); }
       setBusy('Загружаю данные сервиса за тот же период…');
       const p = await getFinancePnl(cabinet, { dateFrom: from, dateTo: to, fresh: 1 });
       setOurs(p.data.data);
@@ -136,6 +159,7 @@ export default function Recon({ cabinet }) {
           {rep ? 'Загрузить другой отчёт' : 'Загрузить отчёт «Начисления» (xlsx)'}
           <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => onFile(e.target.files[0])} />
         </label>
+        {shareMsg && <span className="a-hint" style={{ color: 'var(--a-good)' }}>{shareMsg}</span>}
         {rep && <span className="a-hint">{rep.name} · {dayjs(rep.from).format('DD.MM')}–{dayjs(rep.to).format('DD.MM.YYYY')} · {fmtInt(rep.rows.length)} строк</span>}
         {busy && <span className="a-hint">{busy}</span>}
       </div></div>

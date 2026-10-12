@@ -4,7 +4,8 @@
 const SEP = ' / ';
 export const C = { sale: 1, saleQty: 2, comm: 3, logi: 4, acq: 5, storage: 6, promo: 7, other: 8, ord: 9, del: 10, canc: 11, pctFbo: 12, acqItem: 13, price: 14, cost: 15, pctFbs: 16, ordFbs: 17, ads: 18, commFbs: 19, saleFbs: 20, commFbo: 21, saleFbo: 22 };
 
-export function unitCoefs(coefs, arts) {
+// shareOf(o, parts) — доля цены, которую платит покупатель (база налога); без неё — 1.
+export function unitCoefs(coefs, arts, shareOf) {
     const byOffer = new Map(coefs.coefs.map(c => [coefs.articles[c[0]].o, c]));
     const W = 23;
     const groups = new Map(); // path → суммы
@@ -35,7 +36,8 @@ export function unitCoefs(coefs, arts) {
       const acq = pick(L, g => g[C.sale] > 0 && g[C.saleQty] >= 3, g => Math.max(0, -g[C.acq] / g[C.sale])) ?? 0.015;
       const other = (pick(L, g => g[C.sale] > 0 && g[C.saleQty] >= 3, g => Math.max(0, -(g[C.storage] + g[C.promo] + g[C.other]) / g[C.sale])) ?? 0) + generalRate;
       const ownLevel = own && own[C.del] + own[C.canc] >= 10;
-      return { buyout, commFbo, commFbs, fbs30, commCard, comm: commFbo * (1 - fbs30) + commFbs * fbs30, logi, acq, other, cost: own && own[C.cost] ? own[C.cost] : null, ownLevel };
+      const share = shareOf ? (shareOf(a.o, a.parts) ?? 1) : 1;
+      return { buyout, commFbo, commFbs, fbs30, commCard, comm: commFbo * (1 - fbs30) + commFbs * fbs30, logi, acq, other, cost: own && own[C.cost] ? own[C.cost] : null, ownLevel, share };
     });
 }
 
@@ -45,7 +47,8 @@ export function unitProfit(k, { ordRub, ordQty, ads = 0, fbs }, taxPct = 6) {
   const expRev = ordRub * k.buyout, expQty = ordQty * k.buyout;
   const comm = expRev * (k.commFbo * (1 - sh) + k.commFbs * sh);
   const logi = ordQty * k.logi, acq = expRev * k.acq, other = expRev * k.other;
-  const cost = k.cost ? expQty * k.cost : 0, tax = expRev * taxPct / 100;
+  // Налог — от того, что заплатил покупатель (цена после скидки Ozon), а не от нашей цены.
+  const cost = k.cost ? expQty * k.cost : 0, tax = expRev * (k.share ?? 1) * taxPct / 100;
   const profit = expRev - comm - logi - acq - other - cost - tax - ads;
   return { expRev, expQty, comm, logi, acq, other, cost, tax, ads, profit, margin: expRev > 0 ? profit / expRev * 100 : null, noCost: !k.cost };
 }
