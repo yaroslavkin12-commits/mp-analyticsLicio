@@ -32,10 +32,32 @@ app.use((req, res, next) => {
   // Тяжёлые отчёты считаются не больше двух одновременно (остальные ждут
   // очереди): при открытии сервиса все разделы просят данные разом, и
   // параллельный расчёт не помещался в память сервера (512 МБ).
-  heavyAcquire().then(release => {
+  // Одинаковые запросы, пришедшие пока первый считается, ждут его результат.
+  if (inflight.has(key)) {
+    return inflight.get(key).then(() => {
+      const h = reportCache.get(key);
+      if (h) { res.set('X-Cache', 'shared'); return res.type('json').send(h.body); }
+      return runHeavy(req, res, next, key);
+    });
+  }
+  return runHeavy(req, res, next, key);
+});
+const inflight = new Map();
+function runHeavy(req, res, next, key) {
+  let settle;
+  inflight.set(key, new Promise(r => { settle = r; }));
+  const finishFlight = () => { if (inflight.has(key)) { inflight.delete(key); settle(); } };
+  let gone = false;
+  res.on('close', () => { gone = true; });
+  heavyAcquire(() => gone).then(release => {
     let done = false;
-    const free = () => { if (!done) { done = true; release(); } };
+    const free = () => { if (!done) { done = true; release(); finishFlight(); } };
+    // Клиент ушёл, пока ждали очереди, — место сразу освобождаем (раньше оно
+    // терялось навсегда, и через пару таймаутов очередь вставала целиком).
+    if (gone || res.writableEnded || res.destroyed) { free(); return; }
     res.on('finish', free); res.on('close', free);
+    // Страховка: место в очереди не держим дольше 2 минут.
+    setTimeout(free, 120000).unref?.();
     const again = reportCache.get(key);
     if (again && Date.now() - again.at < CACHE_TTL) { res.set('X-Cache', 'hit'); return res.type('json').send(again.body); }
     const json = res.json.bind(res);
@@ -52,13 +74,23 @@ app.use((req, res, next) => {
     };
     next();
   });
-});
+}
 let heavyActive = 0;
 const heavyQueue = [];
-function heavyAcquire() {
+// isGone() — клиент уже отключился: такую заявку из очереди пропускаем.
+function heavyAcquire(isGone = () => false) {
   return new Promise(resolve => {
-    const go = () => { heavyActive++; resolve(() => { heavyActive--; const n = heavyQueue.shift(); if (n) n(); }); };
-    if (heavyActive < 2) go(); else heavyQueue.push(go);
+    const release = () => {
+      heavyActive = Math.max(0, heavyActive - 1);
+      while (heavyQueue.length) {
+        const n = heavyQueue.shift();
+        if (n.isGone()) { n.resolveNoop(); continue; }
+        n.go(); break;
+      }
+    };
+    const go = () => { heavyActive++; resolve(release); };
+    if (heavyActive < 2) go();
+    else heavyQueue.push({ go, isGone, resolveNoop: () => resolve(() => {}) });
   });
 }
 app.use('/api/dashboard', require('./routes/dashboard'));

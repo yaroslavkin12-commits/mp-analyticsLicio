@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { whenIdle } from './api';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
@@ -94,13 +95,18 @@ export default function App() {
     setVisited(new Set([page]));
     let cancelled = false;
     const timers = [];
+    // По одному разделу и только когда сеть свободна: сначала свои данные
+    // получает открытая страница, потом фоном — остальные.
     const order = allowed.filter(id => id !== page);
-    order.forEach((id, i) => {
-      timers.push(setTimeout(() => {
+    (async () => {
+      await new Promise(r => timers.push(setTimeout(r, 1500)));
+      for (const id of order) {
+        await whenIdle(800);
         if (cancelled) return;
         setVisited(prev => prev.has(id) ? prev : new Set(prev).add(id));
-      }, 2500 + i * 1500));
-    });
+        await new Promise(r => timers.push(setTimeout(r, 400)));
+      }
+    })();
     return () => { cancelled = true; timers.forEach(clearTimeout); };
   }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
 

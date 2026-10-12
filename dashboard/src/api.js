@@ -1,5 +1,23 @@
 import axios from 'axios';
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
+// Счётчик запросов в полёте: фоновая подгрузка разделов ждёт, пока сеть
+// освободится, — открытая страница получает данные первой.
+let pending = 0;
+api.interceptors.request.use(cfg => { pending++; return cfg; });
+const done = () => { pending = Math.max(0, pending - 1); };
+api.interceptors.response.use(r => { done(); return r; }, e => { done(); return Promise.reject(e); });
+export function whenIdle(quietMs = 800, maxWaitMs = 60000) {
+  return new Promise(resolve => {
+    const start = Date.now(); let quietSince = null;
+    const tick = () => {
+      if (pending === 0) { quietSince = quietSince || Date.now(); if (Date.now() - quietSince >= quietMs) return resolve(); }
+      else quietSince = null;
+      if (Date.now() - start > maxWaitMs) return resolve();
+      setTimeout(tick, 200);
+    };
+    tick();
+  });
+}
 // Во время выкладки/перезапуска Render отдаёт 502/503 или HTML-заглушку вместо
 // JSON — тогда GET-запрос повторяем (до 3 раз через 5 с), а не показываем
 // «нет данных».
