@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import SoinvestCats from './SoinvestCats';
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
@@ -286,8 +287,7 @@ function ArticlesTab({ cabinet, days, setDays }) {
   const max = maxPct !== '' ? Number(maxPct) : null;
 
   const articles = (data?.articles || [])
-    .filter(a => !search || String(a.offerId || '').toLowerCase().includes(search.toLowerCase()) ||
-      (a.productName || '').toLowerCase().includes(search.toLowerCase()))
+    .filter(a => artMatch(a.offerId, a.productName, search))
     .filter(a => min === null || (a.current && a.current.pct >= min))
     .filter(a => max === null || (a.current && a.current.pct <= max))
     .filter(a => !hideEstimates || !a.isEstimate)
@@ -303,11 +303,10 @@ function ArticlesTab({ cabinet, days, setDays }) {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
         <DaysSwitch days={days} setDays={setDays} />
-        <input
-          value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск по артикулу…"
-          style={{ marginLeft: 'auto', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)',
-            background: 'var(--surface)', color: 'var(--text)', fontSize: 13, minWidth: 200 }}
-        />
+        <ArtSearch value={search} onChange={setSearch} placeholder="Поиск по артикулу…"
+          options={(data?.articles || []).map(a => ({ o: a.offerId, n: a.productName }))} className=""
+          style={{ marginLeft: 'auto', minWidth: 200 }} inputStyle={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)',
+            background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
         <button onClick={load} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)',
           background: 'var(--surface2)', color: 'var(--text2)', fontSize: 12.5 }}>Обновить</button>
       </div>

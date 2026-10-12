@@ -163,3 +163,10 @@
 .mpui .season-t th{text-align:center}
 .mpui .season-t th.cur{color:var(--a-accent)}
 .mpui .season-t td.n{font-size:12px;padding:6px 4px}
+/* «Цены и маржа» — компактная таблица: вторые строки мелким шрифтом */
+.mpui table.a-t.m-tbl th, .mpui table.a-t.m-tbl td{padding:8px 9px}
+.mpui table.a-t.m-tbl td{vertical-align:top}
+.mpui .m-tbl .m-sub{display:block;font-size:11px;color:var(--a-ink3);font-weight:400;margin-top:2px;line-height:1.25}
+.mpui .m-tbl .m-prod .m-sub{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mpui .m-tbl .m-no{color:var(--a-ink3);font-size:12px}
+.mpui .m-tbl .s-dot{margin-top:5px;align-self:flex-start}

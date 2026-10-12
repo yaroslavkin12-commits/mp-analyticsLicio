@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import { getStocksV2, getStocksHistory } from '../api';
 
 const PLATFORMS = [['all','Все'],['wb','WB'],['ozon','Ozon']];
@@ -220,7 +221,7 @@ export default function Stocks({ platform: platformProp }) {
     const filtered = raw.products
       .filter(p => category === 'all' || p.category === category)
       .filter(p => gender === 'all' || p.gender === gender)
-      .filter(p => !s || String(p.baseArticle || '').toLowerCase().includes(s) || (p.subject || '').toLowerCase().includes(s))
+      .filter(p => artMatch(p.baseArticle, p.subject, s))
       .map(p => {
         const sizes = [...p.sizes].sort((a, b) => sizeRank(a.size) - sizeRank(b.size));
         const total = sizes.reduce((sum, sz) => sum + qtyOf(sz, platform, fulfillment), 0);
@@ -301,7 +302,8 @@ export default function Stocks({ platform: platformProp }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 17, fontWeight: 700 }}>Остатки</h1>
-        <input placeholder="Поиск по артикулу или названию..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: 260 }} />
+        <ArtSearch placeholder="Поиск по артикулу или названию..." value={search} onChange={setSearch} className="" style={{ width: 260 }}
+          options={raw.products.map(p => ({ o: p.baseArticle, n: p.subject }))} />
         <select value={category} onChange={e => setCategory(e.target.value)} style={{ padding: '5px 8px', borderRadius: 6 }}>
           <option value="all">Все категории</option>
           {raw.categories.map(c => <option key={c} value={c}>{c}</option>)}

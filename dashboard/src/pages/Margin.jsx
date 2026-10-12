@@ -58,9 +58,16 @@ export default function Margin({ cabinet }) {
       };
       const price = x[1];
       const r = compute(v, price, 'usn_income');
-      const be = priceFor(v, 'usn_income', 0), tp = priceFor(v, 'usn_income', target);
+      // Предел маржи: при любой цене процентные расходы (комиссия, реклама как % от цены,
+      // эквайринг, налог) не дают марже подняться выше этого значения.
+      const maxM = compute(v, 1e7, 'usn_income').margin;
+      // Цену дальше 3× от текущей не показываем — это «ценой не достичь», а не рекомендация.
+      const cap = p => (p && p <= price * 3 ? p : null);
+      const beRaw = priceFor(v, 'usn_income', 0), tpRaw = priceFor(v, 'usn_income', target);
+      const be = cap(beRaw), tp = cap(tpRaw);
+      const tpNo = !tp, beNo = !be;
       const status = !x[12] ? 'nocost' : r.profit < 0 ? 'loss' : r.margin < target ? 'below' : 'ok';
-      out.push({ a, x, scheme, v, r, be, tp, status, orders: x[25], rev: x[24] });
+      out.push({ a, x, scheme, v, r, be, tp, beNo, tpNo, maxM, status, orders: x[25], rev: x[24] });
     }
     return out;
   }, [data, cats.arts, target, withAds, tax, bs.shareOf]);
@@ -111,43 +118,39 @@ export default function Margin({ cabinet }) {
       <div className="a-card">
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctl} /></div>
         <div className="a-scroll">
-          <table className="a-t s-slice">
+          <table className="a-t s-slice m-tbl">
             <thead><tr>
-              <ThCtl ctl={ctl} k="o" className="" filter={false}>Товар</ThCtl><th title="Схема, по которой идёт большинство заказов товара, и комиссия Ozon по ней">Схема</th>
-              <ThCtl ctl={ctl} k="price" hint="Ваша цена до скидки Ozon">Цена</ThCtl>
-              <ThCtl ctl={ctl} k="buyer" hint="Цена для покупателя со скидкой Ozon (СПП)">Покупатель</ThCtl>
+              <ThCtl ctl={ctl} k="o" className="" filter={false}>Товар</ThCtl>
+              <ThCtl ctl={ctl} k="price" hint="Ваша цена до скидки Ozon; ниже — цена для покупателя со скидкой Ozon">Цена</ThCtl>
               <ThCtl ctl={ctl} k="cost">Себест.</ThCtl>
               <ThCtl ctl={ctl} k="profit" hint="Прибыль с одной проданной (выкупленной) штуки после всех расходов, рекламы и налога">Прибыль / шт</ThCtl>
-              <ThCtl ctl={ctl} k="margin" hint="Прибыль / выручка с продажи">Маржа</ThCtl>
-              <ThCtl ctl={ctl} k="roi" hint="Прибыль / себестоимость">ROI</ThCtl>
-              <ThCtl ctl={ctl} k="be" hint="Цена, при которой прибыль = 0">Безубыточность</ThCtl>
-              <ThCtl ctl={ctl} k="tp" hint={`Цена, при которой маржа = ${target}%`}>Цена для {target}%</ThCtl>
-              <ThCtl ctl={ctl} k="gap" hint="Насколько поднять (+) или можно снизить (−) цену до целевой маржи">Изменить цену</ThCtl>
-              <ThCtl ctl={ctl} k="rev">Заказы 30 дн, ₽</ThCtl>
+              <ThCtl ctl={ctl} k="margin" hint="Прибыль / выручка с продажи; ниже — ROI (прибыль / себестоимость)">Маржа</ThCtl>
+              <ThCtl ctl={ctl} k="be" hint="Цена, при которой прибыль = 0">Без&shy;убыток</ThCtl>
+              <ThCtl ctl={ctl} k="tp" hint={`Цена, при которой маржа = ${target}%. «ценой не достичь» — комиссия, реклама и налог в % от цены не дают марже дойти до цели даже при цене ×3`}>Цена для {target}%</ThCtl>
+              <ThCtl ctl={ctl} k="gap" hint="Насколько поднять (+) или можно снизить (−) цену до целевой маржи">Изменить</ThCtl>
+              <ThCtl ctl={ctl} k="rev" hint="Сумма заказов за 30 дней, ₽">Заказы 30 дн</ThCtl>
             </tr></thead>
             <tbody>
-              {shown.map(({ a, scheme, v, r, be, tp, status, rev }) => {
+              {shown.map(({ a, scheme, v, r, be, tp, beNo, tpNo, maxM, status, rev }) => {
                 const gap = tp ? tp - r.P : null;
+                const why = `Даже при очень высокой цене маржа не выше ${pct1(maxM)}: комиссия ${pct1(v.commission)}, реклама ${pct1(v.drr)}, эквайринг ${pct1(v.acquiring)}, прочее ${pct1(v.other)}, налог ${pct1(v.tax)} от оплаты покупателя. Поднять маржу можно снижением ДРР или комиссии (другая схема / категория)`;
                 return (
                   <tr key={a.i} className={status === 'loss' ? 's-hole' : ''}>
-                    <td><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(a.parts[0])] || OTHER }} />
-                      <span title={`${a.n}\n${a.cat.split(SEP).join(' › ')}`}><b>{a.o}</b> <span className="muted">{a.short}</span></span></span></td>
-                    <td className="muted">{scheme.toUpperCase()} · {pct1(v.commission)}</td>
-                    <td className="n r">{fmtInt(r.P)}</td>
-                    <td className="n r muted">{v.spp ? fmtInt(r.buyerPrice) : '—'}</td>
+                    <td className="m-prod"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(a.parts[0])] || OTHER }} />
+                      <span title={`${a.n}\n${a.cat.split(SEP).join(' › ')}`}><b>{a.o}</b><small className="m-sub">{a.short} · {scheme.toUpperCase()} {pct1(v.commission)}</small></span></span></td>
+                    <td className="n r">{fmtInt(r.P)}{v.spp ? <small className="m-sub" title="Цена для покупателя со скидкой Ozon">{fmtInt(r.buyerPrice)}</small> : null}</td>
                     <td className="n r">{v.cost ? fmtInt(v.cost) : <span className="pill m">нет</span>}</td>
                     <td className="n r" title={`Комиссия ${fmtInt(r.commission)}, логистика ${fmtInt(r.logistics)} (×${r.trips.toFixed(2)}), эквайринг ${fmtInt(r.acquiring)}, прочее ${fmtInt(r.other)}, реклама ${fmtInt(r.ads)}, налог ${fmtInt(r.tax)}`}>
                       <b style={{ color: r.profit < 0 ? 'var(--a-bad)' : undefined }}>{fmtInt(r.profit)}</b></td>
-                    <td className="r"><span className={`pill ${status === 'nocost' ? 'm' : r.profit < 0 ? 'b' : r.margin < target ? 'w' : 'g'}`}>{pct1(r.margin)}</span></td>
-                    <td className="n r muted">{pct1(r.roi)}</td>
-                    <td className="n r">{be ? fmtInt(be) : '—'}</td>
-                    <td className="n r">{tp ? fmtInt(tp) : '—'}</td>
-                    <td className="n r">{gap === null ? '—' : <span className={gap > 0 ? 's-down' : 's-up'}>{gap > 0 ? '+' : ''}{fmtInt(gap)} ({gap > 0 ? '+' : ''}{(gap / r.P * 100).toFixed(0)}%)</span>}</td>
+                    <td className="r"><span className={`pill ${status === 'nocost' ? 'm' : r.profit < 0 ? 'b' : r.margin < target ? 'w' : 'g'}`}>{pct1(r.margin)}</span><small className="m-sub">ROI {pct1(r.roi)}</small></td>
+                    <td className="n r">{be ? fmtInt(be) : beNo && v.cost ? (maxM > 0 ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь</span>) : '—'}</td>
+                    <td className="n r">{tp ? fmtInt(tp) : tpNo && v.cost ? (maxM > target ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь<small className="m-sub">макс. {pct1(maxM)}</small></span>) : '—'}</td>
+                    <td className="n r">{gap === null ? '—' : <span className={gap > 0 ? 's-down' : 's-up'}>{gap > 0 ? '+' : ''}{fmtInt(gap)}<small className="m-sub">{gap > 0 ? '+' : ''}{(gap / r.P * 100).toFixed(0)}%</small></span>}</td>
                     <td className="n r">{fmtInt(rev)}</td>
                   </tr>
                 );
               })}
-              {!shown.length && <tr><td colSpan={12} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
+              {!shown.length && <tr><td colSpan={9} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
             </tbody>
           </table>
         </div>

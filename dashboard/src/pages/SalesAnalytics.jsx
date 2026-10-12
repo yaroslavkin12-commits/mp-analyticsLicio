@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
@@ -526,7 +527,7 @@ export default function SalesAnalytics({ cabinet }) {
   // Фильтры (марка, поиск) действуют на всё — дерево строится уже по ним.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return all.filter(a => (!brand || a.brand === brand) && (!q || String(a.o || '').toLowerCase().includes(q) || String(a.n || '').toLowerCase().includes(q)));
+    return all.filter(a => (!brand || a.brand === brand) && artMatch(a.o, a.n, q));
   }, [all, brand, search]);
   const tree = useMemo(() => buildTree(filtered, data?.order || []), [filtered, data]);
   // Цвета — по полному дереву (без фильтров), чтобы не перекрашивались.
@@ -808,7 +809,7 @@ export default function SalesAnalytics({ cabinet }) {
             {brands.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
         )}
-        <input className="a-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Артикул или название" style={{ minWidth: 200 }} />
+        <ArtSearch value={search} onChange={setSearch} options={all} style={{ minWidth: 200 }} />
         {loading && <span className="a-hint">обновляем…</span>}
       </div>
 

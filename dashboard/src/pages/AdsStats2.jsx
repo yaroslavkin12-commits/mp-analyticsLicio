@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import {
   getAdsStats, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder,
@@ -979,6 +980,7 @@ export default function AdsStats2({ cabinet }) {
 
   const dates = data?.dates || [];
   const articlesRaw = useMemo(() => (data?.articles || []).filter(a => a.offerId), [data]);
+  const artOpts = useMemo(() => articlesRaw.map(a => ({ o: a.offerId, n: a.productName })), [articlesRaw]);
   const groups = groupsData.groups;
   const members = groupsData.members;
   const activeGroup = tab !== 'all' ? groups.find(g => g.id === tab) : null;
@@ -996,8 +998,8 @@ export default function AdsStats2({ cabinet }) {
     let list = articlesRaw.filter(a => tab === 'all' ? a.campaigns.length > 0 : members[a.offerId] === tab);
     const before = list.length;
     list = list.filter(a => {
-      if (q && !(String(a.offerId || '').toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)
-        || a.campaigns.some(c => (c.title || '').toLowerCase().includes(q)))) return false;
+      if (q && (isExactArt(q) ? String(a.offerId || '').toLowerCase() !== q : !(String(a.offerId || '').toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)
+        || a.campaigns.some(c => (c.title || '').toLowerCase().includes(q))))) return false;
       if (!onlyActive && !payFilter) return true;
       if (a.campaigns.length === 0) return tab !== 'all';
       return a.campaigns.some(c => (!onlyActive || c.state === 'CAMPAIGN_STATE_RUNNING')
@@ -1389,7 +1391,7 @@ export default function AdsStats2({ cabinet }) {
       </div>
 
       <div className="a-bar">
-        <input className="a-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Артикул, модель или название РК" style={{ minWidth: 260 }} />
+        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ minWidth: 260 }} />
         <button type="button" className="a-toggle" onClick={() => setOnlyActive(v => !v)}><span className={`a-sw ${onlyActive ? 'on' : ''}`} />Только с активными РК</button>
         <select className="a-sel" value={payFilter} onChange={e => setPayFilter(e.target.value)}>
           <option value="">Все типы оплаты</option>

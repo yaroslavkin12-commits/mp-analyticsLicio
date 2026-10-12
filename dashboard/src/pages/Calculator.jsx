@@ -113,7 +113,7 @@ export function compute(v, price, taxMode) {
   const outside = cost + defect + tax + oper;
   const profit = P - mp - outside;
   return { P, buyerPrice: P * (1 - v.spp / 100), trips, commission, acquiring, logDirect, logReturn, logistics: logDirect + logReturn, other, ads, mp,
-    cost, defect, tax, oper, outside, profit, margin: P > 0 ? profit / P * 100 : null, roi: cost > 0 ? profit / cost * 100 : null, payout: P - mp };
+    cost, defect, tax, taxBase: base, oper, outside, profit, margin: P > 0 ? profit / P * 100 : null, roi: cost > 0 ? profit / cost * 100 : null, payout: P - mp };
 }
 // Цена, при которой маржа = target (0 — безубыточность). Прибыль растёт с ценой — ищем делением пополам.
 export function priceFor(v, taxMode, target) {
@@ -405,9 +405,11 @@ export default function Calculator({ cabinet }) {
                   <Row sub label="Логистика обратная (невыкупы)" value={rub(-res.logReturn)} neg />
                   <Row sub label={`Хранение и прочее ${pct1(V.other)}`} value={rub(-res.other)} neg />
                   <Row sub label={`Реклама ${pct1(V.drr)}`} value={rub(-res.ads)} neg />
+                  <Row label="Средняя сумма поступления на счёт" value={rub(res.payout)} strong hint="Цена до скидки минус все расходы Ozon (комиссия, эквайринг, логистика с учётом невыкупов, хранение, реклама) — столько в среднем приходит на расчётный счёт с 1 проданной штуки" />
                   <Row label="Расходы вне Ozon" value={rub(-res.outside)} strong neg />
                   <Row sub label="Себестоимость" value={rub(-res.cost)} neg />
                   <Row sub label="Брак" value={rub(-res.defect)} neg />
+                  <Row sub label={taxMode === 'usn_profit' ? 'Налоговая база (доходы − расходы)' : 'Оплачено покупателем (налоговая база)'} value={rub(res.taxBase)} hint="Налог считается от суммы, которую заплатил покупатель, — цены после скидки Ozon (письмо ФНС от 02.09.2026 № СД-35-3/11693@)" />
                   <Row sub label={`Налог ${pct1(V.tax)}`} value={rub(-res.tax)} neg />
                   <Row sub label="Операционные" value={rub(-res.oper)} neg />
                   <div className={`k-profit ${res.profit < 0 ? 'bad' : ''}`}><span>Чистая прибыль</span><b className="n">{rub(res.profit)}</b></div>
@@ -443,7 +445,8 @@ export default function Calculator({ cabinet }) {
                     <Row label="Количество, шт" value={fmtInt(qty)} />
                     <Row label="Прогнозная выручка" value={rub(qty * res.P)} />
                     <Row label="Расходы Ozon" value={rub(-qty * res.mp)} neg />
-                    <Row label="Расходы вне Ozon" value={rub(-qty * res.outside)} neg />
+                    <Row label="Средняя сумма поступления на счёт" value={rub(res.payout)} strong hint="Цена до скидки минус все расходы Ozon (комиссия, эквайринг, логистика с учётом невыкупов, хранение, реклама) — столько в среднем приходит на расчётный счёт с 1 проданной штуки" />
+                  <Row label="Расходы вне Ozon" value={rub(-qty * res.outside)} neg />
                     <Row label="Прогнозируемая прибыль" value={rub(qty * res.profit)} strong />
                   </>
                 ) : <div className="a-hint">Нужна себестоимость и бюджет.</div>}

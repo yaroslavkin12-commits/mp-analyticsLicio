@@ -33,7 +33,8 @@ const ROWS = [
   { block: 'Свои расходы', tone: 'traffic' },
   { key: 'ads', label: 'Реклама (по дню списания)', fmt: 'money0', good: 'neutral', signed: true, hint: 'Из начислений Ozon (оплата за клик / за заказ), если они там есть; иначе — расход из рекламного кабинета' },
   { key: 'cost', label: 'Себестоимость выкупленного', fmt: 'money0', good: 'neutral', signed: true },
-  { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', signed: true },
+  { key: 'taxBase', label: 'Оплачено покупателями (налоговая база), ₽', fmt: 'int', good: 'neutral', sub: true, hint: 'Сколько из выручки заплатили сами покупатели — цена после скидки Ozon (баллов за скидки), за вычетом возвратов. От этой суммы считается налог (письмо ФНС от 02.09.2026 № СД-35-3/11693@). Доля — по отчёту «Начисления», загруженному в «Сверку»' },
+  { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', signed: true, hint: 'Ставка × налоговая база' },
   { block: 'Результат', tone: 'conv' },
   { key: 'profit', label: 'Прибыль, ₽', fmt: 'int', good: 'up', strong: true, signed: true },
   { key: 'margin', label: 'Маржа, %', fmt: 'pct', good: 'up', hint: 'Прибыль / выручка' },
@@ -140,7 +141,7 @@ export default function PnL({ cabinet }) {
     }
     const sum = arr => { let s = 0; for (let i = 0; i < n; i++) s += arr[i] || 0; return s; };
     const T = {};
-    for (const k of [...B, 'qty', 'revenue', 'ozon', 'payout', 'ads', 'cost', 'tax', 'profit', 'ozonAbs', 'adsAbs']) T[k] = sum(out[k]);
+    for (const k of [...B, 'qty', 'taxBase', 'revenue', 'ozon', 'payout', 'ads', 'cost', 'tax', 'profit', 'ozonAbs', 'adsAbs']) T[k] = sum(out[k]);
     T.margin = T.revenue > 0 ? T.profit / T.revenue * 100 : null;
     T.drr = T.revenue > 0 ? -T.ads / T.revenue * 100 : null;
     T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;

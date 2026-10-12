@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesGeo } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
@@ -157,7 +158,7 @@ export default function Geography({ cabinet }) {
     if (!data) return null;
     const q = search.trim().toLowerCase();
     const inSel = arts.map(a => (!sel || a.cat === sel || a.cat.startsWith(sel + SEP)) && (!brand || (a.brand || NO_BRAND) === brand)
-      && (!q || String(a.o || '').toLowerCase().includes(q) || String(a.n || '').toLowerCase().includes(q)));
+      && artMatch(a.o, a.n, q));
     const filtered = !!(sel || brand || q);
     const R = data.regions.length;
     const cur = new Float64Array(R), all = new Float64Array(R), prev = new Float64Array(R), qty = new Float64Array(R), rev = new Float64Array(R), canc = new Float64Array(R);
@@ -312,7 +313,7 @@ export default function Geography({ cabinet }) {
               {brandsList.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           )}
-          <input className="a-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Артикул или название" style={{ minWidth: 200 }} />
+          <ArtSearch value={search} onChange={setSearch} options={arts} style={{ minWidth: 200 }} />
           <span className="a-seg">{[['revenue', 'по сумме'], ['orders', 'по штукам']].map(([k, l]) => <button key={k} type="button" className={metric === k ? 'on' : ''} onClick={() => setMetric(k)}>{l}</button>)}</span>
           <label className="sw" title="Выключено — федеральные округа, включено — области (кластеры доставки) внутри округов">
             <input type="checkbox" checked={byRegion} onChange={e => setByRegion(e.target.checked)} /><i />по областям

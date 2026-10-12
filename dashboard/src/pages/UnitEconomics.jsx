@@ -38,7 +38,8 @@ const ROWS = [
   { key: 'other', label: 'Хранение и прочие услуги', fmt: 'money0', good: 'neutral', sub: true, signed: true },
   { key: 'ads', label: 'Реклама (факт за день)', fmt: 'money0', good: 'neutral', sub: true, signed: true },
   { key: 'cost', label: 'Себестоимость', fmt: 'money0', good: 'neutral', sub: true, signed: true },
-  { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', sub: true, signed: true },
+  { key: 'taxBase', label: 'Оплачено покупателями (налоговая база), ₽', fmt: 'int', good: 'neutral', sub: true, hint: 'Сколько из ожидаемой выручки заплатят сами покупатели — цена после скидки Ozon (баллов за скидки). От этой суммы считается налог (письмо ФНС от 02.09.2026 № СД-35-3/11693@). Доля — по отчёту «Начисления», загруженному в «Сверку»' },
+  { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', sub: true, signed: true, hint: 'Ставка × налоговая база' },
   { key: 'exp', label: 'Итого расходы', fmt: 'money0', good: 'neutral', signed: true, strong: true },
   { block: 'Прогноз результата', tone: 'conv' },
   { key: 'drr', label: 'ДРР от заказов, %', fmt: 'pct', good: 'down', hint: 'Расход на рекламу / сумма заказов' },
@@ -55,7 +56,7 @@ const METRICS = [
   { key: 'adsAbs', label: 'Реклама, ₽', fmt: 'int' },
   { key: 'drr', label: 'ДРР, %', fmt: 'pct', free: true },
 ];
-const SUM_KEYS = ['ordRub', 'ordQty', 'expRev', 'expQty', 'comm', 'logi', 'acq', 'other', 'ads', 'cost', 'tax'];
+const SUM_KEYS = ['ordRub', 'ordQty', 'expRev', 'expQty', 'taxBase', 'comm', 'logi', 'acq', 'other', 'ads', 'cost', 'tax'];
 
 export default function UnitEconomics({ cabinet }) {
   const today = dayjs().format('YYYY-MM-DD');
@@ -109,7 +110,7 @@ export default function UnitEconomics({ cabinet }) {
       if (!x) { x = P[ai] = {}; for (const k of SUM_KEYS) x[k] = new Float64Array(n); }
       const k = K[ai];
       const expRev = ordRub * k.buyout, expQty = ordQty * k.buyout;
-      x.ordRub[d] += ordRub; x.ordQty[d] += ordQty; x.expRev[d] += expRev; x.expQty[d] += expQty;
+      x.ordRub[d] += ordRub; x.ordQty[d] += ordQty; x.expRev[d] += expRev; x.expQty[d] += expQty; x.taxBase[d] += expRev * (k.share ?? 1);
       const fs = fbsDay.get(cats.arts[ai].o + '|' + d);
       const sh = fs === undefined ? k.fbs30 : fs;
       x.comm[d] -= expRev * (k.commFbo * (1 - sh) + k.commFbs * sh); x.logi[d] -= ordQty * k.logi; x.acq[d] -= expRev * k.acq; x.other[d] -= expRev * k.other;
@@ -133,7 +134,7 @@ export default function UnitEconomics({ cabinet }) {
     const out = { ...v, buyout: [], exp: [], profit: [], margin: [], perUnit: [], roi: [], drr: [], adsAbs: [] };
     const tx = tax / 100;
     for (let i = 0; i < n; i++) {
-      v.tax[i] = -v.expRev[i] * tx;
+      v.tax[i] = -v.taxBase[i] * tx;
       const e = v.comm[i] + v.logi[i] + v.acq[i] + v.other[i] + v.ads[i] + v.cost[i] + v.tax[i];
       const p = v.expRev[i] + e;
       out.buyout.push(v.ordRub[i] > 0 ? v.expRev[i] / v.ordRub[i] * 100 : null);

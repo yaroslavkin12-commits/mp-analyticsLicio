@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getDiscountOverview, getDiscountHistory, getAdsGroups, addAdsGroup, assignAdsGroup } from '../api';
 import { fmtInt, Delta, naturalCompare, shortModel, CAT_COLORS, ChartPane, niceScale, useTip, groupColorMap, AddToGroup } from './AdsStats2';
@@ -100,7 +101,7 @@ export default function SoinvestCats({ cabinet }) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter(a => (!sel || a.cat === sel || a.cat.startsWith(sel + SEP)) && (!group || groupsData.members[a.o] === group)
-      && (!q || String(a.o || '').toLowerCase().includes(q) || String(a.n || '').toLowerCase().includes(q)));
+      && artMatch(a.o, a.n, q));
   }, [items, sel, search, group, groupsData]);
   const groupColors = useMemo(() => groupColorMap(groupsData.groups), [groupsData]);
   const tops = useMemo(() => {
@@ -201,7 +202,7 @@ export default function SoinvestCats({ cabinet }) {
           {last ? `Цены обновлены ${last.format('DD.MM HH:mm')}` : 'Цены ещё не собирались'}
           {ageH !== null && ageH > 2 && ' — проверьте, что браузер с расширением открыт и вы вошли в seller.ozon.ru'}
         </span>
-        <input className="a-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Артикул или название" style={{ marginLeft: 'auto', minWidth: 220 }} />
+        <ArtSearch value={search} onChange={setSearch} options={items} style={{ marginLeft: 'auto', minWidth: 220 }} />
       </div>
       <div className="a-bar">
         <div className="a-tabs">

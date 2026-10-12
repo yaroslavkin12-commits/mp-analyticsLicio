@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getCostList, saveCostList } from '../api';
 import { fmtInt, fmtPct, naturalCompare, shortModel } from './AdsStats2';
@@ -43,6 +44,7 @@ export default function Costs({ cabinet }) {
   }, [cabinet]);
   useEffect(() => { load(); setDraft({}); setPreview(null); setCat(''); }, [load]);
 
+  const artOpts = useMemo(() => items.map(it => ({ o: it.offerId, n: it.name })), [items]);
   const cats = useMemo(() => {
     const s = new Set();
     for (const it of items) { const p = it.category.split(' / '); for (let i = 1; i <= p.length; i++) s.add(p.slice(0, i).join(' / ')); }
@@ -52,7 +54,7 @@ export default function Costs({ cabinet }) {
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = items.filter(it => (!cat || it.category === cat || it.category.startsWith(cat + ' / '))
-      && (!q || String(it.offerId || '').toLowerCase().includes(q) || String(it.name || '').toLowerCase().includes(q))
+      && artMatch(it.offerId, it.name, q)
       && (!onlyEmpty || it.cost === null) && (!onlySold || it.orders30 > 0));
     const val = it => {
       switch (sort.key) {
@@ -214,7 +216,7 @@ export default function Costs({ cabinet }) {
           <option value="">Все категории</option>
           {cats.map(c => <option key={c} value={c}>{'  '.repeat(c.split(' / ').length - 1)}{c.split(' / ').pop()}</option>)}
         </select>
-        <input className="a-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Артикул или название" style={{ minWidth: 220 }} />
+        <ArtSearch value={search} onChange={setSearch} options={artOpts} style={{ minWidth: 220 }} />
         <button type="button" className="a-toggle" onClick={() => setOnlyEmpty(v => !v)}><span className={`a-sw ${onlyEmpty ? 'on' : ''}`} />Только без себестоимости</button>
         <button type="button" className="a-toggle" onClick={() => setOnlySold(v => !v)}><span className={`a-sw ${onlySold ? 'on' : ''}`} />Только с продажами</button>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>

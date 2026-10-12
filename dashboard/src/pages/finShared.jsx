@@ -2,6 +2,7 @@ import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react'
 import { getAdsGroups } from '../api';
 import dayjs from 'dayjs';
 import DateRangePicker from '../components/DateRangePicker';
+import ArtSearch, { artMatch, registerArts } from '../components/ArtSearch';
 import { fmtInt, fmtBy, heatColor, naturalCompare, shortModel, CAT_COLORS, Delta, groupColorMap } from './AdsStats2';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -15,7 +16,7 @@ export const OTHER = 'var(--a-ink3)';
 export const pct1 = v => (v === null || v === undefined || !Number.isFinite(v)) ? '—' : `${v.toFixed(Math.abs(v) < 10 ? 1 : 0).replace('.', ',')}%`;
 
 export function useCats(articles, order) {
-  const arts = useMemo(() => (articles || []).map((a, i) => ({ ...a, i, parts: (a.cat || 'Без категории').split(SEP), short: shortModel(a.n) || a.n || a.o })), [articles]);
+  const arts = useMemo(() => { registerArts((articles || []).map(a => a.o)); return (articles || []).map((a, i) => ({ ...a, i, parts: (a.cat || 'Без категории').split(SEP), short: shortModel(a.n) || a.n || a.o })); }, [articles]);
   const rank = useMemo(() => new Map((order || []).map((x, i) => [x, i])), [order]);
   const sortNames = useCallback(names => [...names].sort((x, y) => ((rank.has(x) ? rank.get(x) : 1e6) - (rank.has(y) ? rank.get(y) : 1e6)) || naturalCompare(x, y)), [rank]);
   const topCats = useMemo(() => sortNames(new Set(arts.map(a => a.parts[0]))), [arts, sortNames]);
@@ -30,7 +31,8 @@ export function useCats(articles, order) {
 }
 
 export const inPath = (a, sel) => !sel || a.cat === sel || a.cat.startsWith(sel + SEP);
-export const matchQ = (a, q) => !q || String(a.o || '').toLowerCase().includes(q) || (a.n || '').toLowerCase().includes(q);
+// Точное совпадение с артикулом — только он; иначе — вхождение в артикул или название.
+export const matchQ = (a, q) => artMatch(a.o, a.n, q);
 
 // Шапка страницы: заголовок, период, поиск, вкладки категорий и «хлебные крошки».
 // Группы артикулов — те же, что в «Рекламе» и «Соинвесте».
@@ -60,7 +62,7 @@ export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFro
             <DateRangePicker from={dateFrom} to={dateTo} onChange={setRange} />
           </>
         )}
-        <input className="a-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Артикул или название" style={{ minWidth: 200 }} />
+        <ArtSearch value={search} onChange={setSearch} options={cats.arts} style={{ minWidth: 200 }} />
         {children}
         {loading && <span className="a-hint">обновляем…</span>}
       </div>
