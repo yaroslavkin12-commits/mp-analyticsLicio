@@ -738,7 +738,7 @@ function collectGeo_(cab, days, agg, buy) {
 }
 
 // Даты окна заменяются целиком (а не дописываются) — без дублей.
-function replaceWindow_(sheetName, headers, rows, window, dateCol, keepRow) {
+function replaceWindow_(sheetName, headers, rows, window, dateCol, keepRow, keyCols) {
   const from = mskDate_(window - 1);
   // Полное окно (≥ срока хранения) — старое не нужно вовсе: не читаем
   // вкладку (большая вкладка читается дольше лимита Таблиц).
@@ -747,12 +747,23 @@ function replaceWindow_(sheetName, headers, rows, window, dateCol, keepRow) {
   const last = sh.getLastRow();
   const keep = last > 1 ? sh.getRange(2, 1, last - 1, Math.min(headers.length + 2, sh.getMaxColumns())).getValues() : [];
   const cutoff = mskDate_(RETENTION_DAYS);
+  const dOf = function (r) { return r[dateCol] instanceof Date ? Utilities.formatDate(r[dateCol], 'GMT+3', 'yyyy-MM-dd') : String(r[dateCol]).slice(0, 10); };
+  // Ключ строки — все колонки до первой числовой (кабинет, дата, артикул, …).
+  // Повторы ключа в старой части — неполные копии дня с границы окна
+  // (ошибка прежней версии): оставляем первую, полную строку.
+  const seen = {};
   const old = keep.filter(function (r) {
-    const d = r[dateCol] instanceof Date ? Utilities.formatDate(r[dateCol], 'GMT+3', 'yyyy-MM-dd') : String(r[dateCol]).slice(0, 10);
-    return d < from && d >= cutoff && (!keepRow || keepRow(r));
+    const d = dOf(r);
+    if (!(d < from && d >= cutoff && (!keepRow || keepRow(r)))) return false;
+    const k = keyCols ? r.slice(0, keyCols).map(function (v, i) { return i === dateCol ? d : String(v); }).join('|') : null;
+    if (k !== null) { if (seen[k]) return false; seen[k] = true; }
+    return true;
   });
-  writeRows_(sheetName, headers, old.concat(rows));
-  return old.length + rows.length;
+  // Новые строки — только за окно: выгрузка «с now − N суток» захватывает
+  // часть дня перед окном, а этот день уже лежит в старой части целиком.
+  const fresh = rows.filter(function (r) { return dOf(r) >= from; });
+  writeRows_(sheetName, headers, old.concat(fresh));
+  return old.length + fresh.length;
 }
 
 // Каждые 3 часа — последние 10 дней (статусы и отмены успевают обновиться).
@@ -766,8 +777,8 @@ function syncGeo(days) {
   const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[6] = Math.round(r[6] * 100) / 100; return r; });
   const brows = Object.keys(buy).map(function (k) { return buy[k]; });
   // Строки старого формата (10 колонок: регион, город, …, кластер) отбрасываем.
-  const total = replaceWindow_(SHEET_NAMES.geo, GEO_HEADERS, rows, window, 1, function (r) { return r.length < 9 || r[8] === '' || r[8] === undefined; });
-  const btotal = replaceWindow_(SHEET_NAMES.buyout, BUYOUT_HEADERS, brows, window, 1);
+  const total = replaceWindow_(SHEET_NAMES.geo, GEO_HEADERS, rows, window, 1, function (r) { return r.length < 9 || r[8] === '' || r[8] === undefined; }, 5);
+  const btotal = replaceWindow_(SHEET_NAMES.buyout, BUYOUT_HEADERS, brows, window, 1, null, 3);
   const clusters = {};
   rows.forEach(function (r) { clusters[r[4]] = true; });
   Logger.log('syncGeo: строк за окно ' + rows.length + ' (всего ' + total + '), кластеров ' + Object.keys(clusters).length + '; выкуп: строк ' + brows.length + ' (всего ' + btotal + ')');

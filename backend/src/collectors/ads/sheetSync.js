@@ -360,9 +360,11 @@ async function syncGeoFromSheet(cabinet) {
     const city = '';
     const date = String(r.date).slice(0, 10);
     const k = [date, r.offer_id, region, city].join('|');
-    const cur = map.get(k) || [cabinet, date, r.offer_id, r.sku ? num(r.sku) || null : null, region, city, 0, 0, 0, new Date()];
-    cur[6] += Math.round(num(r.qty)); cur[7] += num(r.revenue); cur[8] += Math.round(num(r.cancelled));
-    map.set(k, cur);
+    // Строка на (день, артикул, кластер) в таблице одна. Повторы — «хвосты»
+    // старого скрипта на границе окна (неполные копии дня, дописанные ниже
+    // полной) — их не суммируем, берём первую, полную строку.
+    if (map.has(k)) continue;
+    map.set(k, [cabinet, date, r.offer_id, r.sku ? num(r.sku) || null : null, region, city, Math.round(num(r.qty)), num(r.revenue), Math.round(num(r.cancelled)), new Date()]);
   }
   const out = [...map.values()];
   if (!out.length) return { rows: 0 };
@@ -491,7 +493,9 @@ async function syncFinanceFromSheet(cabinet) {
   }
   const buy = await fetchSheetRows('Buyout');
   if (buy) {
-    const out = buy.filter(r => r.cabinet === cabinet && r.offer_id && r.date).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,
+    // Повторы (день, артикул) — неполные копии на границе окна; берём первую строку.
+    const seenB = new Set();
+    const out = buy.filter(r => { if (r.cabinet !== cabinet || !r.offer_id || !r.date) return false; const k = String(r.date).slice(0, 10) + '|' + r.offer_id; if (seenB.has(k)) return false; seenB.add(k); return true; }).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,
       r.sku ? num(r.sku) || null : null, Math.round(num(r.ordered)), Math.round(num(r.delivered)), Math.round(num(r.cancelled)), Math.round(num(r.in_progress)), Math.round(num(r.ordered_fbs))]);
     total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
   }
