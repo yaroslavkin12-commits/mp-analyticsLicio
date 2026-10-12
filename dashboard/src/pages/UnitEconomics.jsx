@@ -42,6 +42,8 @@ const ROWS = [
   { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', sub: true, signed: true, hint: 'Ставка × налоговая база' },
   { key: 'exp', label: 'Итого расходы', fmt: 'money0', good: 'neutral', signed: true, strong: true },
   { block: 'Прогноз результата', tone: 'conv' },
+  { key: 'pay', label: 'Поступление на счёт (прогноз), ₽', fmt: 'int', good: 'up', strong: true, hint: 'Ожидаемая выручка минус комиссия, логистика, эквайринг, хранение и реклама — столько придёт на счёт от Ozon (до себестоимости и налога)' },
+  { key: 'payUnit', label: 'Поступление на счёт с 1 выкупа, ₽', fmt: 'int', good: 'up', sub: true, hint: 'Поступление на счёт / ожидаемое число выкупов' },
   { key: 'drr', label: 'ДРР от заказов, %', fmt: 'pct', good: 'down', hint: 'Расход на рекламу / сумма заказов' },
   { key: 'perUnit', label: 'Прибыль на 1 выкуп, ₽', fmt: 'int', good: 'up', hint: 'Прогнозируемая прибыль / ожидаемое число выкупов' },
   { key: 'roi', label: 'ROI, %', fmt: 'pct', good: 'up', hint: 'Прибыль / себестоимость' },
@@ -53,6 +55,7 @@ const METRICS = [
   { key: 'margin', label: 'Маржа, %', fmt: 'pct', free: true },
   { key: 'ordRub', label: 'Заказано, ₽', fmt: 'int' },
   { key: 'expRev', label: 'Ожидаемая выручка, ₽', fmt: 'int' },
+  { key: 'pay', label: 'Поступление на счёт, ₽', fmt: 'int' },
   { key: 'adsAbs', label: 'Реклама, ₽', fmt: 'int' },
   { key: 'drr', label: 'ДРР, %', fmt: 'pct', free: true },
 ];
@@ -131,20 +134,23 @@ export default function UnitEconomics({ cabinet }) {
       for (const k of SUM_KEYS) { const s = x[k], t = v[k]; for (let i = 0; i < n; i++) t[i] += s[i]; }
       if (!K[a.i].cost) { let s = 0; for (let i = 0; i < n; i++) s += x.ordRub[i]; if (s > 0) { noCost++; noCostRub += s; } }
     }
-    const out = { ...v, buyout: [], exp: [], profit: [], margin: [], perUnit: [], roi: [], drr: [], adsAbs: [] };
+    const out = { ...v, buyout: [], exp: [], profit: [], margin: [], perUnit: [], roi: [], drr: [], adsAbs: [], pay: [], payUnit: [] };
     const tx = tax / 100;
     for (let i = 0; i < n; i++) {
       v.tax[i] = -v.taxBase[i] * tx;
       const e = v.comm[i] + v.logi[i] + v.acq[i] + v.other[i] + v.ads[i] + v.cost[i] + v.tax[i];
       const p = v.expRev[i] + e;
       out.buyout.push(v.ordRub[i] > 0 ? v.expRev[i] / v.ordRub[i] * 100 : null);
+      const py = v.expRev[i] + v.comm[i] + v.logi[i] + v.acq[i] + v.other[i] + v.ads[i];
+      out.pay.push(py); out.payUnit.push(v.expQty[i] > 0 ? py / v.expQty[i] : null);
       out.exp.push(e); out.profit.push(p); out.margin.push(v.expRev[i] > 0 ? p / v.expRev[i] * 100 : null);
       out.perUnit.push(v.expQty[i] > 0 ? p / v.expQty[i] : null); out.roi.push(v.cost[i] < 0 ? p / -v.cost[i] * 100 : null);
       out.drr.push(v.ordRub[i] > 0 ? -v.ads[i] / v.ordRub[i] * 100 : null); out.adsAbs.push(-v.ads[i]);
     }
     const sum = arr => { let s = 0; for (let i = 0; i < n; i++) s += arr[i] || 0; return s; };
     const T = {};
-    for (const k of [...SUM_KEYS, 'exp', 'profit', 'adsAbs']) T[k] = sum(out[k]);
+    for (const k of [...SUM_KEYS, 'exp', 'profit', 'adsAbs', 'pay']) T[k] = sum(out[k]);
+    T.payUnit = T.expQty > 0 ? T.pay / T.expQty : null;
     T.buyout = T.ordRub > 0 ? T.expRev / T.ordRub * 100 : null;
     T.margin = T.expRev > 0 ? T.profit / T.expRev * 100 : null;
     T.perUnit = T.expQty > 0 ? T.profit / T.expQty : null;
@@ -171,7 +177,7 @@ export default function UnitEconomics({ cabinet }) {
     return {
       ordRub: t.ordRub, buyout: t.buyout, expRev: t.expRev,
       commPct: t.expRev > 0 ? -t.comm / t.expRev * 100 : null, logiUnit: t.ordQty > 0 ? -t.logi / t.ordQty : null,
-      ads: 0 - t.ads, cost: 0 - t.cost, profit: t.profit, margin: t.margin, perUnit: t.perUnit,
+      ads: 0 - t.ads, cost: 0 - t.cost, pay: t.pay, payUnit: t.payUnit, profit: t.profit, margin: t.margin, perUnit: t.perUnit,
     };
   }, [calc]);
 
@@ -206,13 +212,15 @@ export default function UnitEconomics({ cabinet }) {
     { key: 'logiUnit', label: 'Логистика / шт', fmt: 'int' },
     { key: 'ads', label: 'Реклама', fmt: 'int' },
     { key: 'cost', label: 'Себестоимость', fmt: 'int' },
+    { key: 'pay', label: 'На счёт', fmt: 'int' },
+    { key: 'payUnit', label: 'На счёт / выкуп', fmt: 'int' },
     { key: 'profit', label: 'Прибыль', fmt: 'int' },
     { key: 'margin', label: 'Маржа', fmt: 'pct' },
     { key: 'perUnit', label: 'На 1 выкуп', fmt: 'int' },
   ];
   const todayIdx = dates.indexOf(today);
-  const payT = T.expRev + T.comm + T.logi + T.acq + T.other + T.ads;
-  const payUnit = T.expQty > 0 ? payT / T.expQty : null;
+  const payT = T.pay;
+  const payUnit = T.payUnit;
   const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
 
   return (
