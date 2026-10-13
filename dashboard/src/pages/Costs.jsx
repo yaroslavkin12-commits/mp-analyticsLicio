@@ -86,6 +86,8 @@ export default function Costs({ cabinet }) {
       setItems(prev => prev.map(it => byId.has(it.offerId) ? { ...it, cost: byId.get(it.offerId), updatedAt: byId.get(it.offerId) === null ? null : now } : it));
       setDraft(prev => { const n = { ...prev }; for (const x of list) delete n[x.offerId]; return n; });
       setMsg({ text: `Сохранено: ${r.data.saved}${r.data.removed ? `, очищено: ${r.data.removed}` : ''}.` });
+      // Остальные разделы (P&L, юнит-экономика, цены и маржа…) перечитают данные с новой себестоимостью.
+      window.dispatchEvent(new Event('mp-data-changed'));
     } catch (e) {
       setMsg({ bad: true, text: `Не сохранилось: ${e.response?.data?.error || e.message}` });
     } finally { setSaving(false); }

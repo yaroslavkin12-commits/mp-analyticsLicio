@@ -91,8 +91,22 @@ export default function App() {
   useEffect(() => { setVisited(prev => prev.has(page) ? prev : new Set(prev).add(page)); }, [page]);
   // Все разделы кабинета открываются в фоне по очереди — переключение между
   // вкладками мгновенное, данные уже загружены.
+  // Данные изменились (сохранили себестоимость и т. п.) — остальные разделы
+  // перезагружаются в фоне, открытый остаётся как есть.
+  const [gen, setGen] = useState(0);
+  const pageRef = React.useRef(page); pageRef.current = page;
+  const [pageGen, setPageGen] = useState({});
   useEffect(() => {
-    setVisited(new Set([page]));
+    const onChange = () => {
+      const cur = pageRef.current;
+      setPageGen(prev => { const n = { ...prev }; for (const id of allowed) if (id !== cur) n[id] = (n[id] || 0) + 1; return n; });
+      setGen(g => g + 1);
+    };
+    window.addEventListener('mp-data-changed', onChange);
+    return () => window.removeEventListener('mp-data-changed', onChange);
+  }, [allowed]);
+  useEffect(() => {
+    setVisited(new Set([pageRef.current]));
     let cancelled = false;
     const timers = [];
     // По одному разделу и только когда сеть свободна: сначала свои данные
@@ -108,7 +122,7 @@ export default function App() {
       }
     })();
     return () => { cancelled = true; timers.forEach(clearTimeout); };
-  }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cabinet, gen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { document.title = cabinet === 'defly' ? 'Defly — аналитика Ozon' : 'Licio — WB + Ozon'; }, [cabinet]);
 
@@ -139,7 +153,7 @@ export default function App() {
             const P = PAGES[id];
             const on = id === page;
             return (
-              <div key={cabinet + ':' + id} aria-hidden={!on} style={{
+              <div key={cabinet + ':' + id + ':' + (pageGen[id] || 0)} aria-hidden={!on} style={{
                 position:'absolute', inset:0, overflow:'auto', padding:18,
                 visibility: on ? 'visible' : 'hidden', zIndex: on ? 1 : 0, pointerEvents: on ? 'auto' : 'none',
               }}>
