@@ -989,24 +989,43 @@ export default function AdsStats2({ cabinet }) {
   const groups = groupsData.groups;
   const members = groupsData.members;
   const activeGroup = tab !== 'all' ? groups.find(g => g.id === tab) : null;
+  // Категории — как на других вкладках (вкладка 'cat:<путь>'), рядом с группами.
+  const CSEP = ' / ';
+  const catOf = useMemo(() => new Map((coefsData?.articles || []).map(a => [a.o, String(a.cat || 'Без категории')])), [coefsData]);
+  const isCat = tab.startsWith('cat:');
+  const catPath = isCat ? tab.slice(4) : '';
+  const inCat = (o, path) => { const c = catOf.get(o); return !!c && (c === path || c.startsWith(path + CSEP)); };
+  const catKids = useCallback(path => {
+    const depth = path ? path.split(CSEP).length : 0;
+    const cnt = new Map();
+    for (const a of articlesRaw) {
+      if (!a.campaigns.length) continue;
+      const c = catOf.get(a.offerId); if (!c) continue;
+      if (path && !(c === path || c.startsWith(path + CSEP))) continue;
+      const part = c.split(CSEP)[depth]; if (!part) continue;
+      cnt.set(part, (cnt.get(part) || 0) + 1);
+    }
+    const order = coefsData?.order || [];
+    return [...cnt.entries()].sort((x, y) => ((order.indexOf(x[0]) + 1 || 1e6) - (order.indexOf(y[0]) + 1 || 1e6)) || y[1] - x[1]);
+  }, [articlesRaw, catOf, coefsData]);
   const groupColors = useMemo(() => groupColorMap(groups), [groups]);
-  useEffect(() => { if (tab !== 'all' && !groups.find(g => g.id === tab)) setTab('all'); }, [groups, tab]);
+  useEffect(() => { if (tab !== 'all' && !tab.startsWith('cat:') && !groups.find(g => g.id === tab)) setTab('all'); }, [groups, tab]);
 
   function selectTab(id) {
     setTab(id);
-    setSort(id === 'all' ? { key: 'spend', dir: -1 } : { key: 'manual', dir: 1 });
+    setSort(id === 'all' || id.startsWith('cat:') ? { key: 'spend', dir: -1 } : { key: 'manual', dir: 1 });
   }
 
   // Видимые артикулы: вкладка-группа → фильтры → сортировка.
   const { rows, hiddenByFilter } = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = articlesRaw.filter(a => tab === 'all' ? a.campaigns.length > 0 : members[a.offerId] === tab);
+    let list = articlesRaw.filter(a => tab === 'all' ? a.campaigns.length > 0 : isCat ? a.campaigns.length > 0 && inCat(a.offerId, catPath) : members[a.offerId] === tab);
     const before = list.length;
     list = list.filter(a => {
       if (q && (isExactArt(q) ? String(a.offerId || '').toLowerCase() !== q : !(String(a.offerId || '').toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)
         || a.campaigns.some(c => (c.title || '').toLowerCase().includes(q))))) return false;
       if (!onlyActive && !payFilter) return true;
-      if (a.campaigns.length === 0) return tab !== 'all';
+      if (a.campaigns.length === 0) return tab !== 'all' && !isCat;
       return a.campaigns.some(c => (!onlyActive || c.state === 'CAMPAIGN_STATE_RUNNING')
         && (!payFilter || (payFilter === 'cpo') === isCpoCampaign(c)));
     });
@@ -1188,7 +1207,7 @@ export default function AdsStats2({ cabinet }) {
     sort: sort.key && sort.key !== 'manual' ? { k: sort.key, dir: sort.dir } : null,
     cycleSort: k => clickSort(k), filters: fctl.filters, setFilter: fctl.setFilter,
     changed: fctl.changed || !(sort.key === 'spend' && sort.dir === -1) && !(sort.key === 'manual'),
-    reset: () => { fctl.reset(); setSort(tab === 'all' ? { key: 'spend', dir: -1 } : { key: 'manual', dir: 1 }); },
+    reset: () => { fctl.reset(); setSort(tab === 'all' || isCat ? { key: 'spend', dir: -1 } : { key: 'manual', dir: 1 }); },
   };
   const clickSort = k => {
     if (!k) return;
@@ -1353,6 +1372,12 @@ export default function AdsStats2({ cabinet }) {
           <button type="button" className={`a-tab ${tab === 'all' ? 'on' : ''}`} onClick={() => selectTab('all')}>
             Все<span className="c">{articlesRaw.filter(a => a.campaigns.length > 0).length}</span>
           </button>
+          {catKids('').map(([c, n], i) => (
+            <button key={c} type="button" className={`a-tab ${isCat && (catPath === c || catPath.startsWith(c + CSEP)) ? 'on' : ''}`} onClick={() => selectTab('cat:' + c)} title="Все рекламируемые товары категории">
+              <i className="s-dot" style={{ background: CAT_COLORS[i] || 'var(--a-ink3)' }} />{c}<span className="c">{n}</span>
+            </button>
+          ))}
+          {groups.length > 0 && <span className="a-hint" style={{ margin: '0 2px 0 8px' }}>группы:</span>}
           {groups.map(g => {
             const cnt = Object.values(members).filter(x => x === g.id).length;
             return (
@@ -1394,6 +1419,22 @@ export default function AdsStats2({ cabinet }) {
           )}
         </div>
       </div>
+
+      {isCat && (
+        <div className="a-bar s-crumbs">
+          <button type="button" className="s-crumb" onClick={() => selectTab('all')}>Все</button>
+          {catPath.split(CSEP).map((part, i, arr) => {
+            const path = arr.slice(0, i + 1).join(CSEP);
+            return <React.Fragment key={path}><span className="a-hint">›</span><button type="button" className={`s-crumb ${path === catPath ? 'on' : ''}`} onClick={() => selectTab('cat:' + path)}>{part}</button></React.Fragment>;
+          })}
+          {catKids(catPath).length > 0 && <span className="a-hint" style={{ marginLeft: 8 }}>подкатегории:</span>}
+          {catKids(catPath).map(([c, n], i) => (
+            <button key={c} type="button" className="s-chip" onClick={() => selectTab('cat:' + catPath + CSEP + c)}>
+              <i className="s-dot" style={{ background: CAT_COLORS[i] || 'var(--a-ink3)' }} />{c} <span className="a-hint">{n}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="a-bar">
         <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ minWidth: 260 }} />
