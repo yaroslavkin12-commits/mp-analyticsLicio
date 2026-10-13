@@ -537,17 +537,23 @@ export default function SalesAnalytics({ cabinet }) {
     // Удержания без артикула (хранение, подписки, реклама без SKU) делим по
     // дням пропорционально выручке дня — так же, как в «P&L» и «Среднем чеке».
     const nd = pnl.dates.length;
-    const m = new Map(); let saleAll = 0, noSkuOz = 0;
+    const m = new Map(); let saleAll = 0, noSkuOz = 0, noSkuAds = 0, adsAll = 0;
     const noSkuDay = new Float64Array(nd), saleDay = new Float64Array(nd);
     for (const [pai, d, b, a, q] of pnl.rows) {
       const o = pnl.articles[pai]?.o; if (!o) continue;
       const k = pnl.buckets[b];
-      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, sDay: new Float64Array(nd) }; m.set(o, x); }
+      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, ad: 0, sDay: new Float64Array(nd) }; m.set(o, x); }
       if (k === 'sale' || k === 'return') { x.sRub += a; x.sDay[d] += a; saleDay[d] += a; x.sQty += k === 'sale' ? Math.abs(q) : -Math.abs(q); } else if (OZ.includes(k)) x.oz += a;
     }
-    for (const [d, b, a] of pnl.noSku || []) if (OZ.includes(pnl.buckets[b])) { noSkuOz += a; noSkuDay[d] += a; }
+    // Реклама без артикула — отдельно: делится по расходу рекламного кабинета.
+    for (const [d, b, a] of pnl.noSku || []) if (pnl.buckets[b] === 'ads') noSkuAds += a; else if (OZ.includes(pnl.buckets[b])) { noSkuOz += a; noSkuDay[d] += a; }
+    for (const [pai, , v] of pnl.ads || []) {
+      const o = pnl.articles[pai]?.o; if (!o) continue;
+      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, ad: 0, sDay: new Float64Array(nd) }; m.set(o, x); }
+      x.ad += v; adsAll += v;
+    }
     for (const x of m.values()) saleAll += x.sRub;
-    return { m, noSkuOz, saleAll, noSkuDay, saleDay, nd };
+    return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, saleDay, nd };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
   const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -605,11 +611,11 @@ export default function SalesAnalytics({ cabinet }) {
   // prevMode — прошлый период: финансы прошлого периода и заказы артикула за него (a.prev).
   const finCalc = (finPer, prevMode) => {
     if (!finPer && !unitK) return null;
-    let sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
+    let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
     const selDay = finPer ? new Float64Array(finPer.nd) : null;
     for (const a of node.arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
-      if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; }
+      if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; selAd += x.ad; }
       if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; taxBase += x.sRub * (k?.share ?? 1); if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
       // Прогноз — по дням, как в «Юнит-экономике»: комиссия по доле FBS
       // именно этого дня, реклама — и в дни без заказов.
@@ -635,6 +641,7 @@ export default function SalesAnalytics({ cabinet }) {
         const sh = finPer.saleDay[d] > 0 ? selDay[d] / finPer.saleDay[d] : shareAll;
         oz += finPer.noSkuDay[d] * sh;
       }
+      oz += finPer.noSkuAds * (finPer.adsAll > 0 ? selAd / finPer.adsAll : shareAll);
     }
     const pay = sRub + oz;
     return {

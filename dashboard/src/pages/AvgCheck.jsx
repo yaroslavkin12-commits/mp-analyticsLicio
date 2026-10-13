@@ -83,6 +83,10 @@ export default function AvgCheck({ cabinet }) {
       else if (k === 'return') { x.sRub[d] += a; x.sQty[d] -= Math.abs(q); }
       else if (OZON.includes(k)) x.oz[d] += a;
     }
+    for (const [pai, pd, v] of pnl.ads || []) {
+      const ai = byOffer.get(pnl.articles[pai]?.o); if (ai === undefined || pdi[pd] === undefined) continue;
+      const x = get(ai); x.ad = (x.ad || 0) + v;
+    }
     return P;
   }, [sales, pnl, cats.arts, n, dates]);
 
@@ -91,9 +95,18 @@ export default function AvgCheck({ cabinet }) {
     const v = new Float64Array(n);
     if (!pnl) return v;
     const di = new Map(dates.map((d, i) => [d, i]));
-    for (const [pd, b, a] of pnl.noSku) { const d = di.get(pnl.dates[pd]); if (d !== undefined && OZON.includes(pnl.buckets[b])) v[d] += a; }
+    for (const [pd, b, a] of pnl.noSku) { const d = di.get(pnl.dates[pd]); if (d !== undefined && OZON.includes(pnl.buckets[b]) && pnl.buckets[b] !== 'ads') v[d] += a; }
     return v;
   }, [pnl, dates, n]);
+  // Реклама без артикула — по дням, а делится по доле в расходе рекламного кабинета за период.
+  const noSkuAdsDay = useMemo(() => {
+    const v = new Float64Array(n);
+    if (!pnl) return v;
+    const di = new Map(dates.map((d, i) => [d, i]));
+    for (const [pd, b, a] of pnl.noSku) { const d = di.get(pnl.dates[pd]); if (d !== undefined && pnl.buckets[b] === 'ads') v[d] += a; }
+    return v;
+  }, [pnl, dates, n]);
+  const adsAll = useMemo(() => { let s = 0; for (const x of per) if (x) s += x.ad || 0; return s; }, [per]);
   const saleDayAll = useMemo(() => { const v = new Float64Array(n); for (const x of per) if (x) for (let i = 0; i < n; i++) v[i] += x.sRub[i]; return v; }, [per, n]);
 
   const sumOf = useCallback(items => {
@@ -102,9 +115,11 @@ export default function AvgCheck({ cabinet }) {
     // Без артикула — по дням пропорционально выручке дня; в день без выручки — по доле за период.
     let selT = 0, allT = 0; for (let i = 0; i < n; i++) { selT += S.sRub[i]; allT += saleDayAll[i]; }
     const shareAll = allT > 0 ? selT / allT : 0;
-    for (let i = 0; i < n; i++) S.oz[i] += noSkuDay[i] * (saleDayAll[i] > 0 ? S.sRub[i] / saleDayAll[i] : shareAll);
+    let selAd = 0; for (const a of items) selAd += per[a.i]?.ad || 0;
+    const adSh = adsAll > 0 ? selAd / adsAll : shareAll;
+    for (let i = 0; i < n; i++) S.oz[i] += noSkuDay[i] * (saleDayAll[i] > 0 ? S.sRub[i] / saleDayAll[i] : shareAll) + noSkuAdsDay[i] * adSh;
     return S;
-  }, [per, n, saleDayAll, noSkuDay]);
+  }, [per, n, saleDayAll, noSkuDay, noSkuAdsDay, adsAll]);
   const metricsOf = (S, idx) => {
     let oRub = 0, oQty = 0, sRub = 0, sQty = 0, oz = 0;
     for (const i of idx) { oRub += S.oRub[i]; oQty += S.oQty[i]; sRub += S.sRub[i]; sQty += S.sQty[i]; oz += S.oz[i]; }

@@ -103,6 +103,9 @@ export default function PnL({ cabinet }) {
   // Выручка (выкупы − возвраты) всех товаров по дням — для деления начислений без артикула.
   const netDayAll = useMemo(() => { const v = new Float64Array(n); for (const x of per) if (x) for (let i = 0; i < n; i++) v[i] += x.b[0][i] + x.b[1][i]; return v; }, [per, n]);
   const totalSale = useMemo(() => netDayAll.reduce((s, v) => s + v, 0), [netDayAll]);
+  // Расход рекламного кабинета всех товаров за период — реклама из начислений
+  // без артикула делится по нему: сколько артикул реально потратил, столько и несёт.
+  const adsAll = useMemo(() => { let s = 0; for (const x of per) if (x) for (let i = 0; i < n; i++) s += x.ads[i]; return s; }, [per, n]);
   const q = search.trim().toLowerCase();
   const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q) && grp.test(a)) }), [cats.arts, per, sel, q, grp.test]);
   const filtered = !!(sel || q || grp.sel);
@@ -134,7 +137,11 @@ export default function PnL({ cabinet }) {
       // (как в «Аналитике продаж» и «Среднем чеке»); в день без выручки — по доле за период.
       const sh = share === 1 ? () => 1 : d => (netDayAll[d] > 0 ? (v.sale[d] + v.return[d]) / netDayAll[d] : share);
       const shD = Array.from({ length: n }, (_, d) => sh(d));
-      for (const [d, bi, a] of data.noSku) { const k = data.buckets[bi]; v[B.includes(k) ? k : 'other'][d] += a * shD[d]; }
+      // Реклама без артикула («оплата за клик» и т. п.) — по доле в расходе
+      // рекламного кабинета за период (нет рекламы в кабинете — по выручке).
+      let selAds = 0; for (let i = 0; i < n; i++) selAds += v.adsRaw[i];
+      const adSh = share === 1 ? 1 : adsAll > 0 ? selAds / adsAll : null;
+      for (const [d, bi, a] of data.noSku) { const k = data.buckets[bi]; v[B.includes(k) ? k : 'other'][d] += a * (k === 'ads' && adSh !== null ? adSh : shD[d]); }
       if (!finAds) data.adNoSku.forEach((a, d) => { v.adsRaw[d] += a * shD[d]; });
     }
     if (finAds) for (let i = 0; i < n; i++) v.adsRaw[i] = -v.ads[i];
@@ -155,7 +162,7 @@ export default function PnL({ cabinet }) {
     T.drr = T.revenue > 0 ? -T.ads / T.revenue * 100 : null;
     T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;
     return { vals: out, totals: T, noCost };
-  }, [per, n, data, tax, finAds, bs.shareOf, netDayAll]);
+  }, [per, n, data, tax, finAds, bs.shareOf, netDayAll, adsAll]);
 
   const shareOf = useCallback(items => {
     if (!filtered && items === list.arts) return 1;
