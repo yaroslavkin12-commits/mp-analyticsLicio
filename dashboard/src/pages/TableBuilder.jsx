@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates } from '../api';
+import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, fmtPct } from './AdsStats2';
 
@@ -32,6 +32,9 @@ const METRICS = [
   { g: 'Заказы и трафик', k: 'cart', t: 'В корзину', kind: 'int' },
   { g: 'Заказы и трафик', k: 'crOrder', t: 'Конверсия в заказ', kind: 'pct' },
   { g: 'Заказы и трафик', k: 'position', t: 'Средняя позиция', kind: 'num' },
+  { g: 'Цена', k: 'price', t: 'Цена текущая', kind: 'rub', noDays: true, now: true, price: true },
+  { g: 'Цена', k: 'clientPrice', t: 'Цена для клиента', kind: 'rub', noDays: true, now: true, price: true },
+  { g: 'Цена', k: 'spp', t: 'Скидка Ozon (СПП)', kind: 'pct', noDays: true, now: true, price: true },
   { g: 'Реклама', k: 'spend', t: 'Расход на рекламу', kind: 'rub' },
   { g: 'Реклама', k: 'drr', t: 'ДРР', kind: 'pct' },
   { g: 'Реклама', k: 'adOrders', t: 'Заказы с рекламы', kind: 'int' },
@@ -96,13 +99,17 @@ function derive(k, S, D) {
     case 'position': return div(S.posSum, S.posCnt);
     case 'cover': { const pd = D ? S.orders / D : 0; return pd > 0 ? S.stock / pd : (S.stock > 0 ? null : 0); }
     case 'payUnit': return div(S.payout, S.buyQty);
+    case 'price': return div(S.priceSum, S.priceCnt);
+    case 'clientPrice': return div(S.clientSum, S.clientCnt);
+    case 'spp': { const p = div(S.priceSum2, S.priceCnt2), c = div(S.clientSum2, S.priceCnt2); return p && c !== null ? (1 - c / p) * 100 : null; }
     case 'profitUnit': return div(S.profit, S.buyQty);
     case 'margin': { const r = div(S.profit, S.buyRub); return r === null ? null : r * 100; }
     case 'roi': { const r = div(S.profit, S.cost); return r === null ? null : r * 100; }
     default: return S[k] ?? null;
   }
 }
-const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'posSum', 'posCnt', 'stock', 'sewing', 'buyQty', 'buyRub', 'payout', 'cost', 'profit'];
+const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'posSum', 'posCnt', 'stock', 'sewing', 'buyQty', 'buyRub', 'payout', 'cost', 'profit',
+  'priceSum', 'priceCnt', 'clientSum', 'clientCnt', 'priceSum2', 'clientSum2', 'priceCnt2'];
 
 let idSeq = Date.now();
 const newId = () => 'c' + (idSeq++).toString(36);
@@ -151,6 +158,25 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     return () => { off = true; };
   }, [cabinet, from, anchor, needFin]);
 
+  // Цены — текущие (как в «Ценах и марже» и калькуляторе): цена в кабинете и
+  // цена для покупателя (с Ozon-картой с сайта, иначе цена × (1 − СПП)).
+  const needPrice = cfg.cols.some(c => MET[c.m]?.price);
+  const [prices, setPrices] = useState(null);
+  useEffect(() => {
+    if (!needPrice) return undefined;
+    let off = false;
+    getCalcBase(cabinet).then(r => {
+      if (off) return;
+      const d = r.data.data, m = new Map();
+      for (const x of d.a || []) {
+        const o = d.articles[x[0]]?.o; if (!o || !x[1]) continue;
+        const client = x[34] || (x[11] !== null && x[11] !== undefined ? x[1] * (1 - x[11] / 100) : null);
+        m.set(o, { price: x[1], client });
+      }
+      setPrices(m);
+    }).catch(() => {});
+    return () => { off = true; };
+  }, [cabinet, needPrice]);
   const arts = useMemo(() => (data ? prepare(data) : []), [data, prepare]);
   const L = data?.dates.length || 0;
 
@@ -193,6 +219,11 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     }
     S.stock = a.stockArr[hi] ?? 0;
     S.sewing = isSeat(a) ? (sewLc.get(String(a.o).toLowerCase()) || 0) : 0;
+    const pr = prices?.get(a.o);
+    if (pr) {
+      S.priceSum = pr.price; S.priceCnt = 1;
+      if (pr.client) { S.clientSum = pr.client; S.clientCnt = 1; S.priceSum2 = pr.price; S.clientSum2 = pr.client; S.priceCnt2 = 1; }
+    }
     const x = finArt?.m.get(a.o);
     if (finArt && x) {
       let s = 0, q = 0, oz = 0, ad = 0, saleW = 0, adW = 0, nsA = 0;
@@ -210,7 +241,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       S.profit = pay - cost - s * (shareOf ? shareOf(a.o) : 1) * (tax || 0) / 100;
     }
     return S;
-  }, [finArt, shareOf, tax, sewLc]);
+  }, [finArt, shareOf, tax, sewLc, prices]);
 
   const inPath = a => !catPath || a.cat === catPath || a.cat.startsWith(catPath + SEP);
   const inScope = useMemo(() => arts.filter(a => (!scope || scope.has(a.o)) && inPath(a)), [arts, scope, catPath]); // eslint-disable-line react-hooks/exhaustive-deps
