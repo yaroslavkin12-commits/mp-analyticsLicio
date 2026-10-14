@@ -28,10 +28,10 @@ const ROWS = [
   { key: 'qty', label: 'Выкуплено, шт', fmt: 'int', good: 'up', sub: true },
   { block: 'Расходы Ozon (по факту списания)', tone: 'spend' },
   ...COST_KEYS.map(k => ({ key: k, label: LABEL[k], fmt: 'money0', good: 'neutral', sub: true, signed: true })),
+  { key: 'ads', label: 'Реклама (оплата за клик и за заказ)', fmt: 'money0', good: 'neutral', sub: true, signed: true, hint: 'Ozon удерживает рекламу из перечисления, поэтому она здесь. Сумма — по начислениям Ozon; за последние дни, которые Ozon ещё не провёл в начислениях (обычно 1–2 дня), — расход из рекламного кабинета' },
   { key: 'ozon', label: 'Итого расходы Ozon', fmt: 'money0', good: 'neutral', signed: true, strong: true },
-  { key: 'payout', label: 'К перечислению от Ozon', fmt: 'int', good: 'up', hint: 'Выручка минус все удержания Ozon' },
+  { key: 'payout', label: 'К перечислению от Ozon', fmt: 'int', good: 'up', hint: 'Выручка минус все удержания Ozon, включая рекламу' },
   { block: 'Свои расходы', tone: 'traffic' },
-  { key: 'ads', label: 'Реклама (по дню списания)', fmt: 'money0', good: 'neutral', signed: true, hint: 'Из начислений Ozon (оплата за клик / за заказ), если они там есть; иначе — расход из рекламного кабинета' },
   { key: 'cost', label: 'Себестоимость выкупленного', fmt: 'money0', good: 'neutral', signed: true },
   { key: 'taxBase', label: 'Оплачено покупателями (налоговая база), ₽', fmt: 'int', good: 'neutral', sub: true, hint: 'Сколько из выручки заплатили сами покупатели — цена после скидки Ozon (баллов за скидки), за вычетом возвратов. От этой суммы считается налог (письмо ФНС от 02.09.2026 № СД-35-3/11693@). Доля — по отчёту «Начисления», загруженному в «Сверку»' },
   { key: 'tax', label: 'Налог', fmt: 'money0', good: 'neutral', signed: true, hint: 'Ставка × налоговая база' },
@@ -92,13 +92,17 @@ export default function PnL({ cabinet }) {
   }, [data, cats.arts, n]);
   // Реклама: если Ozon списывает её в начислениях (PayPerClick и т. п.) —
   // берём оттуда, это и есть день списания; иначе — из рекламного кабинета.
-  const finAds = useMemo(() => {
-    if (!data) return false;
+  // Последний день, за который Ozon уже провёл рекламу в начислениях. Дальше
+  // (обычно 1–2 последних дня) рекламы в начислениях ещё нет — берём расход
+  // рекламного кабинета, иначе прибыль за свежие дни завышена.
+  const lastFin = useMemo(() => {
+    if (!data) return -1;
     const ai = data.buckets.indexOf('ads');
-    // Только если списания привязаны к товарам; без SKU (как сейчас у Ozon) —
-    // берём расход по товарам из рекламного кабинета, суммы совпадают.
-    return data.rows.some(r => r[2] === ai);
-  }, [data, cats.arts, n]);
+    let m = -1;
+    for (const r of data.rows) if (r[2] === ai && r[3]) m = Math.max(m, r[1]);
+    for (const [d, b, a] of data.noSku) if (b === ai && a) m = Math.max(m, d);
+    return m;
+  }, [data]);
 
   // Выручка (выкупы − возвраты) всех товаров по дням — для деления начислений без артикула.
   const netDayAll = useMemo(() => { const v = new Float64Array(n); for (const x of per) if (x) for (let i = 0; i < n; i++) v[i] += x.b[0][i] + x.b[1][i]; return v; }, [per, n]);
@@ -142,27 +146,29 @@ export default function PnL({ cabinet }) {
       let selAds = 0; for (let i = 0; i < n; i++) selAds += v.adsRaw[i];
       const adSh = share === 1 ? 1 : adsAll > 0 ? selAds / adsAll : null;
       for (const [d, bi, a] of data.noSku) { const k = data.buckets[bi]; v[B.includes(k) ? k : 'other'][d] += a * (k === 'ads' && adSh !== null ? adSh : shD[d]); }
-      if (!finAds) data.adNoSku.forEach((a, d) => { v.adsRaw[d] += a * shD[d]; });
+      data.adNoSku.forEach((a, d) => { v.adsRaw[d] += a * shD[d]; });
     }
-    if (finAds) for (let i = 0; i < n; i++) v.adsRaw[i] = -v.ads[i];
-    const out = { ...v, revenue: [], ozon: [], payout: [], ads: [], cost: [], tax: [], profit: [], margin: [], drr: [], ozonAbs: [], adsAbs: [] };
+    const out = { ...v, revenue: [], ozon: [], ozonX: [], payout: [], ads: [], cost: [], tax: [], profit: [], margin: [], drr: [], ozonAbs: [], adsAbs: [] };
     for (let i = 0; i < n; i++) {
       const rev = v.sale[i] + v.return[i];
-      const oz = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
+      const ozX = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
+      // Реклама — часть удержаний Ozon: по начислениям, а за ещё не проведённые дни — из кабинета.
+      const ad = i <= lastFin ? v.ads[i] : -v.adsRaw[i];
+      const oz = ozX + ad;
       const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
-      const p = rev + oz - v.adsRaw[i] - v.costRaw[i] + t;
-      out.revenue.push(rev); out.ozon.push(oz); out.payout.push(rev + oz + (v.ads[i] || 0)); out.ads.push(-v.adsRaw[i]); out.cost.push(-v.costRaw[i]);
-      out.tax.push(t); out.profit.push(p); out.margin.push(rev > 0 ? p / rev * 100 : null); out.drr.push(rev > 0 ? v.adsRaw[i] / rev * 100 : null);
-      out.ozonAbs.push(-oz); out.adsAbs.push(v.adsRaw[i]);
+      const p = rev + oz - v.costRaw[i] + t;
+      out.revenue.push(rev); out.ozon.push(oz); out.ozonX.push(ozX); out.payout.push(rev + oz); out.ads.push(ad); out.cost.push(-v.costRaw[i]);
+      out.tax.push(t); out.profit.push(p); out.margin.push(rev > 0 ? p / rev * 100 : null); out.drr.push(rev > 0 ? -ad / rev * 100 : null);
+      out.ozonAbs.push(-ozX); out.adsAbs.push(-ad);
     }
     const sum = arr => { let s = 0; for (let i = 0; i < n; i++) s += arr[i] || 0; return s; };
     const T = {};
-    for (const k of [...B, 'qty', 'taxBase', 'revenue', 'ozon', 'payout', 'ads', 'cost', 'tax', 'profit', 'ozonAbs', 'adsAbs']) T[k] = sum(out[k]);
+    for (const k of [...B, 'qty', 'taxBase', 'revenue', 'ozon', 'ozonX', 'payout', 'ads', 'cost', 'tax', 'profit', 'ozonAbs', 'adsAbs']) T[k] = sum(out[k]);
     T.margin = T.revenue > 0 ? T.profit / T.revenue * 100 : null;
     T.drr = T.revenue > 0 ? -T.ads / T.revenue * 100 : null;
     T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;
     return { vals: out, totals: T, noCost };
-  }, [per, n, data, tax, finAds, bs.shareOf, netDayAll, adsAll]);
+  }, [per, n, data, tax, lastFin, bs.shareOf, netDayAll, adsAll]);
 
   const shareOf = useCallback(items => {
     if (!filtered && items === list.arts) return 1;
@@ -173,7 +179,7 @@ export default function PnL({ cabinet }) {
   const main = useMemo(() => (data ? calc(list.arts, shareOf(list.arts)) : null), [data, calc, list, shareOf]);
   const aggOf = useCallback(items => {
     const { totals: t } = calc(items, shareOf(items));
-    return { revenue: t.revenue, ozon: 0 - t.ozon, ozonPct: t.revenue > 0 ? -t.ozon / t.revenue * 100 : null, ads: 0 - t.ads, cost: 0 - t.cost, profit: t.profit, margin: t.margin, qty: t.qty };
+    return { revenue: t.revenue, ozon: 0 - t.ozonX, ozonPct: t.revenue > 0 ? -t.ozonX / t.revenue * 100 : null, ads: 0 - t.ads, cost: 0 - t.cost, profit: t.profit, margin: t.margin, qty: t.qty };
   }, [calc, shareOf]);
 
   if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
@@ -221,12 +227,12 @@ export default function PnL({ cabinet }) {
         <>
           <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
             <Kpi label="Выручка" value={money(T.revenue)} sub={`${fmtInt(T.qty)} шт выкуплено`} />
-            <Kpi label="Расходы Ozon" value={money(-T.ozon)} sub={`${pct1(T.revenue > 0 ? -T.ozon / T.revenue * 100 : null)} от выручки`} />
+            <Kpi label="Расходы Ozon без рекламы" value={money(-T.ozonX)} sub={`${pct1(T.revenue > 0 ? -T.ozonX / T.revenue * 100 : null)} от выручки`} />
             <Kpi label="Реклама" value={money(-T.ads)} sub={`${pct1(T.drr)} от выручки`} />
             <Kpi label="Прибыль" value={<span className={T.profit < 0 ? 's-down' : ''}>{money(T.profit)}</span>} sub={`маржа ${pct1(T.margin)} · ROI ${pct1(T.roi)}`} />
           </div>
           {noCost > 0 && <div className="c-msg bad">У {noCost} арт. с выкупами нет себестоимости — прибыль по ним завышена. Заполните во вкладке «Себестоимость».</div>}
-          {filtered && <div className="a-hint">Начисления без артикула (хранение, подписки и т. п.) и реклама без привязки к товару распределены пропорционально выкупам: на выбранное — {pct1(shareOf(list.arts) * 100)}.</div>}
+          {filtered && <div className="a-hint">Начисления без артикула (хранение, подписки и т. п.) распределены пропорционально выкупам, реклама без привязки к товару — по расходу рекламного кабинета: на выбранное — {pct1(shareOf(list.arts) * 100)}.</div>}
 
           {T.revenue > 0 && strip.length > 0 && (
             <div className="a-card s-card">

@@ -548,10 +548,17 @@ export default function SalesAnalytics({ cabinet }) {
     }
     // Реклама без артикула — отдельно: делится по расходу рекламного кабинета.
     for (const [d, b, a] of pnl.noSku || []) if (pnl.buckets[b] === 'ads') noSkuAds += a; else if (OZ.includes(pnl.buckets[b])) { noSkuOz += a; noSkuDay[d] += a; }
-    for (const [pai, , v] of pnl.ads || []) {
+    // Последний день, когда Ozon уже провёл рекламу в начислениях; за более
+    // свежие дни реклама в начислениях ещё не появилась — вычитаем расход кабинета.
+    const ai = pnl.buckets.indexOf('ads');
+    let lastFin = -1;
+    for (const r of pnl.rows) if (r[2] === ai && r[3]) lastFin = Math.max(lastFin, r[1]);
+    for (const [d, b, a] of pnl.noSku || []) if (b === ai && a) lastFin = Math.max(lastFin, d);
+    for (const [pai, d, v] of pnl.ads || []) {
       const o = pnl.articles[pai]?.o; if (!o) continue;
       let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, ad: 0, sDay: new Float64Array(nd) }; m.set(o, x); }
       x.ad += v; adsAll += v;
+      if (d > lastFin) x.oz -= v;
     }
     for (const x of m.values()) saleAll += x.sRub;
     return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, saleDay, nd };

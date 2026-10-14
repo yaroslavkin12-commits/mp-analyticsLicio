@@ -171,12 +171,15 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       else if (OZ.includes(k) || k === 'ads') x.oz[d] += a;
     }
     for (const [pai, d0, v] of fin.ads || []) { const o = fin.articles[pai]?.o, d = pd[d0]; if (!o || d === undefined) continue; get(o).ad[d] += v; adDay[d] += v; }
+    let lastFin = -1;
     for (const [d0, b, a] of fin.noSku || []) {
       const d = pd[d0]; if (d === undefined) continue;
       const k = fin.buckets[b];
-      if (k === 'ads') nsAds[d] += a; else if (OZ.includes(k)) nsOther[d] += a;
+      if (k === 'ads') { nsAds[d] += a; if (a) lastFin = Math.max(lastFin, d); } else if (OZ.includes(k)) nsOther[d] += a;
     }
-    return { m, saleDay, adDay, nsOther, nsAds, mn: fin.available?.mn || null };
+    const ai = fin.buckets.indexOf('ads');
+    for (const r of fin.rows) if (r[2] === ai && r[3] && pd[r[1]] !== undefined) lastFin = Math.max(lastFin, pd[r[1]]);
+    return { m, saleDay, adDay, nsOther, nsAds, lastFin, mn: fin.available?.mn || null };
   }, [fin, data, L]);
 
   // Суммы окна по артикулу: window = [lo, hi] индексов.
@@ -199,7 +202,10 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       // Прочее без артикула — по выручке дня (как в P&L), реклама без артикула — по расходу кабинета.
       let other = 0;
       for (let d = l; d <= hi; d++) other += finArt.nsOther[d] * (finArt.saleDay[d] > 0 ? x.s[d] / finArt.saleDay[d] : shareW);
-      const pay = s + oz + other + nsA * (adW > 0 ? ad / adW : shareW);
+      // Дни, которые Ozon ещё не провёл в начислениях: рекламу берём из кабинета.
+      let adLate = 0;
+      for (let d = Math.max(l, finArt.lastFin + 1); d <= hi; d++) adLate += x.ad[d];
+      const pay = s + oz + other + nsA * (adW > 0 ? ad / adW : shareW) - adLate;
       const cost = (x.cost || 0) * Math.max(0, q);
       S.buyQty = q; S.buyRub = s; S.payout = pay; S.cost = cost;
       S.profit = pay - cost - s * (shareOf ? shareOf(a.o) : 1) * (tax || 0) / 100;

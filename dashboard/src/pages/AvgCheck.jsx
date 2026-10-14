@@ -83,9 +83,15 @@ export default function AvgCheck({ cabinet }) {
       else if (k === 'return') { x.sRub[d] += a; x.sQty[d] -= Math.abs(q); }
       else if (OZON.includes(k)) x.oz[d] += a;
     }
+    // Реклама за дни, которые Ozon ещё не провёл в начислениях, — из кабинета.
+    const iAds = pnl.buckets.indexOf('ads');
+    let lastFin = -1;
+    for (const r of pnl.rows) if (r[2] === iAds && r[3]) lastFin = Math.max(lastFin, r[1]);
+    for (const [pd, b, a] of pnl.noSku) if (b === iAds && a) lastFin = Math.max(lastFin, pd);
     for (const [pai, pd, v] of pnl.ads || []) {
       const ai = byOffer.get(pnl.articles[pai]?.o); if (ai === undefined || pdi[pd] === undefined) continue;
       const x = get(ai); x.ad = (x.ad || 0) + v;
+      if (pd > lastFin) x.oz[pdi[pd]] -= v;
     }
     return P;
   }, [sales, pnl, cats.arts, n, dates]);
