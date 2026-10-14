@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getPriceLog, uploadPriceLog, deletePriceLog, markPriceLog, getSalesData, getCalcBase } from '../api';
+import { getPriceLog, getPriceSnap, getPriceHistory, uploadPriceLog, deletePriceLog, markPriceLog, getSalesData, getCalcBase } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt } from './AdsStats2';
 import './ads2.css';
@@ -9,10 +9,10 @@ import './production.css';
 
 // ─────────────────────────────────────────────────────────────────────────
 // «Журнал цен» — что меняли в репрайсере и что из этого вышло.
-// Раз в неделю (по средам) загружается таблица «артикул → цена для клиента»
-// (сейчас Ozon, магазин «Дефлай»). Сервис сравнивает её с прошлой неделей:
-// сводка изменений (кому подняли/снизили, на сколько), цели и заметки по
-// артикулам, и результат — заказы Ozon за 7 дней до изменения и после.
+// Раз в неделю (по средам) загружается выгрузка репрайсера: артикул, цена
+// клиента сейчас и новая цена (сейчас Ozon, «Дефлай»). Сводка — сколько и как
+// поменяли (правила: +3%, +500 ₽, «поставили N ₽»…), разрез по категориям,
+// цели и заметки, заказы Ozon за 7 дней до и после, сверка с ценой на сайте.
 // ─────────────────────────────────────────────────────────────────────────
 
 const GOALS = [
@@ -28,18 +28,67 @@ const f1 = v => (v === null || v === undefined || !Number.isFinite(v) ? '—' : 
 const rub = v => (v === null || v === undefined || !Number.isFinite(v) ? '—' : `${fmtInt(v)} ₽`);
 const drub = v => (v === null || v === undefined || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmtInt(Math.abs(v))} ₽`);
 
-// Группа изменения: круглая сумма (кратная 100 ₽) — «−500 ₽», иначе процент с шагом 0,5.
-function groupOf(oldP, newP) {
-  const d = newP - oldP, pct = (newP / oldP - 1) * 100;
-  if (Math.abs(d) < 0.5) return null;
-  if (Math.abs(d) >= 100 && Math.abs(d - Math.round(d / 100) * 100) < 1) return { key: `r${Math.round(d)}`, label: drub(Math.round(d)), sort: d };
-  const p = Math.round(pct * 2) / 2;
-  if (p === 0) return { key: 'p0', label: 'меньше 0,5%', sort: 0 };
-  return { key: `p${p}`, label: `${p > 0 ? '+' : '−'}${Math.abs(p).toString().replace('.', ',')}%`, sort: p * 100 };
+const near = (x, y) => Math.abs(x - y) <= 0.5; // репрайсер считает процент до копеек
+const fmtPct = p => `${p > 0 ? '+' : '−'}${Math.abs(p).toString().replace('.', ',')}%`;
+
+// Правила изменения недели: как именно меняли цену. Порядок распознавания:
+//   1) ровный процент (шаг 0,5%): новая = было × (1 + p%) с точностью до 50 коп.;
+//   2) круглая сумма (кратно 100 ₽), если так же поменяли ещё хотя бы одному;
+//   3) «поставили N ₽», если эту же новую цену получили несколько артикулов;
+//   4) одиночные круглые суммы — тоже по сумме; остальное — «точечно ↑/↓».
+// Группы из одного артикула сливаются в «точечно», чтобы сводка читалась.
+function buildRules(changed) {
+  const pre = changed.map(x => {
+    const pct = (x.b / x.a - 1) * 100, p = Math.round(pct * 2) / 2;
+    if (p !== 0 && near(x.b, x.a * (1 + p / 100))) return { x, pk: `p${p}` , p };
+    const d = Math.round(x.b - x.a);
+    return { x, rk: Math.abs(d) >= 100 && Math.abs(d % 100) < 1 ? d : null };
+  });
+  const cnt = new Map(), inc = k => cnt.set(k, (cnt.get(k) || 0) + 1);
+  for (const v of pre) if (!v.pk) { if (v.rk !== null) inc(`r${v.rk}`); inc(`t${v.x.b}`); }
+  const first = pre.map(v => {
+    if (v.pk) return { ...v, g: { key: v.pk, label: fmtPct(v.p), sort: v.p * 100, kind: 'pct' } };
+    if (v.rk !== null && cnt.get(`r${v.rk}`) >= 2) return { ...v, g: { key: `r${v.rk}`, label: drub(v.rk), sort: v.rk, kind: 'rub' } };
+    if (cnt.get(`t${v.x.b}`) >= 2) return { ...v, g: { key: `t${v.x.b}`, label: `поставили ${rub(v.x.b)}`, sort: v.x.b - v.x.a, kind: 'to' } };
+    if (v.rk !== null) return { ...v, g: { key: `r${v.rk}`, label: drub(v.rk), sort: v.rk, kind: 'rub' } };
+    return { ...v, g: null };
+  });
+  const n = new Map(); for (const v of first) if (v.g) n.set(v.g.key, (n.get(v.g.key) || 0) + 1);
+  const out = new Map();
+  for (const v of first) {
+    let g = v.g;
+    if (!g || n.get(g.key) < 2) {
+      const up = v.x.b > v.x.a;
+      g = { key: up ? 'spot+' : 'spot-', label: up ? 'точечно ↑' : 'точечно ↓', sort: up ? 1e-6 : -1e-6, kind: 'spot', detail: v.g?.label || `${fmtPct(Math.round((v.x.b / v.x.a - 1) * 1000) / 10)}` };
+    }
+    out.set(v.x.o, g);
+  }
+  return out;
 }
 
-// Файл репрайсера: строка с «Дефлай» — шапка магазинов, артикул в 1-й колонке.
+// Файл репрайсера. Новый формат (лист «Озон»): «Артикул продавца | Название |
+// Цена клиента на удержание | Новые цены» — было и стало в одном файле, пустая
+// новая цена = без изменений. Старый формат: колонка «Дефлай» (только «стало»).
 function parsePrices(aoa) {
+  const num = v => (typeof v === 'number' ? v : v === '' || v === null || v === undefined ? NaN : Number(String(v).replace(/\s/g, '').replace(',', '.')));
+  for (let r = 0; r < Math.min(aoa.length, 6); r++) {
+    const row = aoa[r].map(c => String(c).toLowerCase());
+    const iNew = row.findIndex(c => /нов/.test(c) && /цен/.test(c));
+    const iOld = row.findIndex((c, i) => i !== iNew && /цен/.test(c) && /(клиент|текущ|удерж|сейчас|был)/.test(c));
+    const iArt = Math.max(0, row.findIndex(c => /артикул/.test(c)));
+    if (iNew >= 0 && iOld >= 0) {
+      const items = {}, old = {}, zero = [], names = {};
+      for (let i = r + 1; i < aoa.length; i++) {
+        const o = String(aoa[i][iArt] ?? '').trim(); if (!o) continue;
+        const a = num(aoa[i][iOld]), b = num(aoa[i][iNew]);
+        if (!(a > 0)) continue;
+        old[o] = a;
+        if (b === 0) { zero.push(o); items[o] = a; } else items[o] = b > 0 ? b : a;
+        const nm = String(aoa[i][iArt + 1] ?? '').trim(); if (nm) names[o] = nm.slice(0, 160);
+      }
+      return { items, old, zero, names, fmt: 'two' };
+    }
+  }
   let col = 1, start = 0;
   for (let r = 0; r < Math.min(aoa.length, 6); r++) {
     const i = aoa[r].findIndex(c => /дефлай|defly/i.test(String(c)));
@@ -48,10 +97,27 @@ function parsePrices(aoa) {
   const items = {};
   for (let r = start; r < aoa.length; r++) {
     const o = String(aoa[r][0] ?? '').trim(); if (!o || /^артикул/i.test(o)) continue;
-    const v = aoa[r][col]; const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/\s/g, '').replace(',', '.'));
+    const n = num(aoa[r][col]);
     if (Number.isFinite(n) && n > 0) items[o] = n;
   }
-  return items;
+  return { items, fmt: 'one' };
+}
+// Дата из имени файла: «… 14.10.xlsx», «14.10.2026», «2026-10-14».
+function dateFromName(name, fallbackYear) {
+  let m = name.match(/(20\d\d)-(\d\d)-(\d\d)/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = name.match(/(?:^|[^\d])(\d{1,2})[._](\d{1,2})(?:[._](\d{2,4}))?(?=[^\d]|$)/);
+  if (!m) return null;
+  const d = +m[1], mo = +m[2]; if (d < 1 || d > 31 || mo < 1 || mo > 12) return null;
+  let y = m[3] ? +m[3] : fallbackYear; if (y < 100) y += 2000;
+  let s = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  if (!m[3] && dayjs(s).isAfter(dayjs().add(7, 'day'))) s = `${y - 1}${s.slice(4)}`; // «28.12» в январе — прошлый год
+  return s;
+}
+// Лист с Ozon: «Озон»/«Ozon», иначе первый не служебный.
+function pickSheet(wb) {
+  const names = wb.SheetNames.filter(n => !/^hidden/i.test(n));
+  return names.find(n => /озон|ozon/i.test(n)) || names[0];
 }
 
 // Вердикт по цели и динамике заказов.
@@ -72,29 +138,51 @@ function verdict(dir, goal, before, after, days) {
   return { t: `продажи ${f1(ch)}`, cls: ch >= 0 ? 'up' : 'dn' };
 }
 
+const MIS = 3; // расхождение с ценой на сайте, %, при котором строка подсвечивается
+const lastSeg = c => (c || '').split(SEP).slice(-1)[0] || 'без категории';
+
 export default function PriceLog({ cabinet }) {
   const platform = 'ozon';
   const [log, setLog] = useState(null);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
   const [sel, setSel] = useState(null); // id недели
+  const [snapCache, setSnapCache] = useState({}); // id → снимок целиком
   const [sales, setSales] = useState(null);
   const [site, setSite] = useState(null);
   const [upDate, setUpDate] = useState(() => dayjs().format('YYYY-MM-DD'));
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => getPriceLog(cabinet, platform).then(r => { setLog(r.data.data); return r.data.data; }).catch(e => setErr(e.response?.data?.error || e.message)), [cabinet]);
-  useEffect(() => { load().then(d => { if (d?.snaps?.length) setSel(s => s || d.snaps[d.snaps.length - 1].id); }); }, [load]);
+  useEffect(() => { setSnapCache({}); load().then(d => { if (d?.snaps?.length) setSel(s => s || d.snaps[d.snaps.length - 1].id); }); }, [load]);
+
+  const snaps = log?.snaps || [];
+  const idx = snaps.findIndex(s => s.id === sel);
+  const curMeta = idx >= 0 ? snaps[idx] : null, prevMeta = idx > 0 ? snaps[idx - 1] : null;
+  const isLatest = idx >= 0 && idx === snaps.length - 1;
+  // Снимки выбранной недели и прошлой подгружаются по требованию.
+  useEffect(() => {
+    for (const m of [curMeta, prevMeta]) {
+      if (!m || snapCache[m.id]) continue;
+      getPriceSnap(cabinet, platform, m.id).then(r => setSnapCache(c => ({ ...c, [m.id]: r.data.data }))).catch(e => setMsg({ bad: true, text: 'Снимок не загрузился: ' + e.message }));
+    }
+  }, [curMeta?.id, prevMeta?.id, curMeta?.at]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cur = curMeta ? snapCache[curMeta.id] : null;
+  const prev = prevMeta ? snapCache[prevMeta.id] : null;
+  const two = !!cur?.old; // в файле есть и «было», и «стало»
+  const ready = cur && (two || !prevMeta || prev);
+
   // Заказы Ozon по дням и цены на сайте — для оценки результата и сверки.
   useEffect(() => {
-    if (!log?.snaps?.length) return;
-    const from = dayjs(log.snaps[0].date).subtract(14, 'day').format('YYYY-MM-DD');
+    if (!snaps.length) return;
+    const from = dayjs(snaps[0].date).subtract(14, 'day').format('YYYY-MM-DD');
     const to = dayjs().format('YYYY-MM-DD');
     getSalesData(cabinet, { dateFrom: dayjs(to).diff(from, 'day') > 400 ? dayjs(to).subtract(400, 'day').format('YYYY-MM-DD') : from, dateTo: to }).then(r => setSales(r.data.data)).catch(() => {});
-  }, [cabinet, log?.snaps?.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cabinet, snaps[0]?.date]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     getCalcBase(cabinet).then(r => {
       const d = r.data.data, m = new Map();
-      for (const x of d.a || []) { const o = d.articles[x[0]]?.o; if (o) m.set(o, { card: x[34] || null, site: x[35] || null, at: x[36] }); }
+      for (const x of d.a || []) { const o = d.articles[x[0]]?.o; if (o) m.set(o, { card: x[34] || null, site: x[35] || null, at: x[36] || '' }); }
       setSite(m);
     }).catch(() => {});
   }, [cabinet]);
@@ -116,91 +204,167 @@ export default function PriceLog({ cabinet }) {
     let s = 0; for (let i = 0; i < days; i++) s += m.get(dayjs(from).add(i, 'day').format('YYYY-MM-DD')) || 0;
     return s;
   };
-
-  const snaps = log?.snaps || [];
-  const idx = snaps.findIndex(s => s.id === sel);
-  const cur = idx >= 0 ? snaps[idx] : null, prev = idx > 0 ? snaps[idx - 1] : null;
   const marks = (log?.marks || {})[sel] || {};
-  const daysAfter = cur ? Math.min(7, dayjs().startOf('day').diff(dayjs(cur.date), 'day')) : 0;
+  const daysAfter = cur ? Math.max(0, Math.min(7, dayjs().startOf('day').diff(dayjs(cur.date), 'day'))) : 0;
 
-  // Изменения недели.
+  // Изменения недели: «было» из того же файла, а для старых файлов — из прошлой загрузки.
   const changes = useMemo(() => {
-    if (!cur) return [];
+    if (!ready) return [];
     const out = [];
-    const all = new Set([...Object.keys(cur.items), ...Object.keys(prev?.items || {})]);
-    for (const o of all) {
-      const a = prev?.items[o], b = cur.items[o];
-      const g = a && b ? groupOf(a, b) : null;
-      const kind = !prev ? 'first' : a && !b ? 'gone' : !a && b ? 'new' : g ? (b > a ? 'up' : 'down') : 'same';
-      out.push({ o, a, b, d: a && b ? b - a : null, pct: a && b ? (b / a - 1) * 100 : null, g, kind });
+    if (two) {
+      const zero = new Set(cur.zero || []);
+      for (const [o, b] of Object.entries(cur.items)) {
+        const a = cur.old[o];
+        const pp = prev?.items[o];
+        const kind = zero.has(o) ? 'zero' : Math.abs(b - a) < 0.5 ? 'same' : b > a ? 'up' : 'down';
+        out.push({ o, a, b: kind === 'zero' ? 0 : b, d: kind === 'zero' ? null : b - a, pct: kind === 'zero' ? null : (b / a - 1) * 100, kind,
+          drift: prev?.old && pp && Math.abs(a / pp - 1) > 0.005 ? pp : null });
+      }
+    } else {
+      const all = new Set([...Object.keys(cur.items), ...Object.keys(prev?.items || {})]);
+      for (const o of all) {
+        const a = prev?.items[o], b = cur.items[o];
+        const kind = !prev ? 'first' : a && !b ? 'gone' : !a && b ? 'new' : Math.abs(b - a) < 0.5 ? 'same' : b > a ? 'up' : 'down';
+        out.push({ o, a, b, d: a && b ? b - a : null, pct: a && b ? (b / a - 1) * 100 : null, kind });
+      }
     }
+    const rules = buildRules(out.filter(x => x.kind === 'up' || x.kind === 'down'));
+    for (const x of out) x.g = rules.get(x.o) || (x.kind === 'zero' ? { key: 'zero', label: 'новая цена 0', sort: -1e9, kind: 'zero' } : null);
     return out;
-  }, [cur, prev]);
-  const groups = useMemo(() => {
+  }, [cur, prev, two, ready]);
+
+  // Сверка с сайтом (цена с Ozon-картой). Для последней недели — живая цена:
+  // проверена после даты загрузки → должна совпасть с «стало»; в день загрузки —
+  // с «было» или «стало»; раньше — с «было». Для прошлых недель — цена,
+  // запомненная при загрузке, против «было».
+  const siteOf = useCallback(x => {
+    const live = site?.get(x.o);
+    const ref = x.kind === 'zero' ? x.a : x.b;
+    if (isLatest && live?.card) {
+      const day = (live.at || '').slice(0, 10), d = cur?.date || '';
+      const dev = p => (p ? (live.card / p - 1) * 100 : null);
+      let off;
+      if (day > d) off = dev(ref);
+      else if (day === d) { const u = dev(x.a), v = dev(ref); off = u === null ? v : v === null ? u : Math.abs(u) < Math.abs(v) ? u : v; }
+      else off = dev(x.a ?? ref);
+      return { card: live.card, noCard: live.site, at: day, off };
+    }
+    const st = cur?.site?.[x.o];
+    if (st && x.a) return { card: st, at: cur.date, off: (st / x.a - 1) * 100, stored: true };
+    return null;
+  }, [site, isLatest, cur]);
+
+  const rows = useMemo(() => changes.map(x => {
+    const before = cur ? sumOrders(x.o, dayjs(cur.date).subtract(7, 'day'), 7) : 0;
+    const after = cur ? sumOrders(x.o, cur.date, daysAfter) : 0;
+    const afterN = daysAfter > 0 ? after * 7 / daysAfter : null; // в пересчёте на 7 дней
+    const mk = marks[x.o] || {};
+    const st = siteOf(x);
+    const cat = ord?.cat.get(x.o) || '';
+    return { ...x, before, after, afterN, goal: mk.goal || '', note: mk.note || '', cat, cat1: lastSeg(cat), st, off: st?.off ?? null, mis: st?.off !== null && st?.off !== undefined && Math.abs(st.off) > MIS,
+      v: x.kind === 'up' || x.kind === 'down' ? verdict(x.d, mk.goal, before, afterN ?? 0, daysAfter) : null };
+  }), [changes, cur, daysAfter, marks, siteOf, ord]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cnt = k => rows.filter(x => x.kind === k).length;
+  const nMis = rows.filter(r => r.mis).length;
+  const nDrift = rows.filter(r => r.drift).length;
+  const changed = r => r.kind === 'up' || r.kind === 'down';
+
+  // Свод «как меняли»: по правилам и по категориям.
+  const ruleRows = useMemo(() => {
     const m = new Map();
-    for (const x of changes) if (x.g) { const v = m.get(x.g.key) || { ...x.g, n: 0 }; v.n++; m.set(x.g.key, v); }
-    return [...m.values()].sort((a, b) => b.n - a.n);
-  }, [changes]);
-  const cnt = k => changes.filter(x => x.kind === k).length;
+    for (const r of rows) {
+      if (!r.g) continue;
+      const v = m.get(r.g.key) || { ...r.g, n: 0, sa: 0, sb: 0, before: 0, after: 0, cats: new Map(), details: new Map() };
+      v.n++; v.sa += r.a || 0; v.sb += r.b || 0; v.before += r.before; v.after += r.afterN || 0;
+      v.cats.set(r.cat1, (v.cats.get(r.cat1) || 0) + 1);
+      if (r.g.detail) v.details.set(r.g.detail, (v.details.get(r.g.detail) || 0) + 1);
+      m.set(r.g.key, v);
+    }
+    return [...m.values()].sort((a, b) => (a.kind === 'zero') - (b.kind === 'zero') || (a.kind === 'spot') - (b.kind === 'spot') || b.n - a.n);
+  }, [rows]);
+  const catRows = useMemo(() => {
+    const m = new Map();
+    for (const r of rows) {
+      const v = m.get(r.cat1) || { cat: r.cat1, up: 0, down: 0, same: 0, zero: 0, pct: 0, nPct: 0, before: 0, after: 0, rules: new Map() };
+      if (r.kind === 'up') v.up++; else if (r.kind === 'down') v.down++; else if (r.kind === 'zero') v.zero++; else v.same++;
+      if (changed(r)) { v.pct += r.pct; v.nPct++; v.before += r.before; v.after += r.afterN || 0; v.rules.set(r.g.label, (v.rules.get(r.g.label) || 0) + 1); }
+      m.set(r.cat1, v);
+    }
+    return [...m.values()].filter(v => v.up + v.down + v.zero > 0).sort((a, b) => (b.up + b.down) - (a.up + a.down));
+  }, [rows]);
+  const [view, setView] = useState('rules');
 
   // Таблица.
   const [fKind, setFKind] = useState('changed');
   const [fGroup, setFGroup] = useState('');
+  const [fCat, setFCat] = useState('');
   const [fGoal, setFGoal] = useState('');
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState(new Set());
-  const [hist, setHist] = useState(null); // артикул для истории
-  useEffect(() => { setPicked(new Set()); setFGroup(''); }, [sel]);
-  const rows = useMemo(() => changes.map(x => {
-    const before = cur ? sumOrders(x.o, dayjs(cur.date).subtract(7, 'day'), 7) : 0;
-    const after = cur ? sumOrders(x.o, cur.date, Math.max(daysAfter, 0)) : 0;
-    const afterN = daysAfter > 0 ? after * 7 / daysAfter : null; // в пересчёте на 7 дней
-    const mk = marks[x.o] || {};
-    const s = site?.get(x.o);
-    const ref = s?.card || null;
-    const off = ref && x.b ? (ref / x.b - 1) * 100 : null;
-    return { ...x, before, after, afterN, goal: mk.goal || '', note: mk.note || '', cat: ord?.cat.get(x.o) || '', site: s, off,
-      v: x.kind === 'up' || x.kind === 'down' ? verdict(x.d, mk.goal, before, afterN ?? 0, daysAfter) : null };
-  }), [changes, cur, daysAfter, marks, site, ord]); // eslint-disable-line react-hooks/exhaustive-deps
-  const list = rows.filter(r => (fKind === 'all' || (fKind === 'changed' ? (r.kind === 'up' || r.kind === 'down') : r.kind === fKind))
-    && (!fGroup || r.g?.key === fGroup) && (!fGoal || (fGoal === '—' ? !r.goal : r.goal === fGoal))
+  const [hist, setHist] = useState(null); // { o, rows }
+  useEffect(() => { setPicked(new Set()); setFGroup(''); setFCat(''); }, [sel]);
+  const list = rows.filter(r => (fKind === 'all' || (fKind === 'changed' ? changed(r) || r.kind === 'zero' : fKind === 'mis' ? r.mis : fKind === 'drift' ? !!r.drift : r.kind === fKind))
+    && (!fGroup || r.g?.key === fGroup) && (!fCat || r.cat1 === fCat) && (!fGoal || (fGoal === '—' ? !r.goal : r.goal === fGoal))
     && (!q || r.o.toLowerCase().includes(q.toLowerCase()) || r.cat.toLowerCase().includes(q.toLowerCase())));
   const ctl = useTableCtl(`pricelog-${cabinet}`, { k: 'pct', dir: 1 });
-  const GET = { o: r => r.o, cat: r => r.cat, a: r => r.a, b: r => r.b, d: r => r.d, pct: r => r.pct, before: r => r.before, after: r => r.afterN, goal: r => r.goal, off: r => (r.off === null ? null : Math.abs(r.off)) };
+  const GET = { o: r => r.o, a: r => r.a, b: r => r.b, d: r => r.d, pct: r => r.pct, before: r => r.before, after: r => r.afterN, goal: r => r.goal, off: r => (r.off === null ? null : Math.abs(r.off)) };
   const shown = ctl.apply(list, (r, k) => (GET[k] ? GET[k](r) : null));
   const [full, setFull] = useState(false);
   const vis = full ? shown : shown.slice(0, 50);
+  const pickFilter = (kind, group, cat) => { setFKind(kind); setFGroup(group || ''); setFCat(cat || ''); setTimeout(() => document.getElementById('pl-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30); };
 
-  async function onFile(e) {
-    const f = e.target.files?.[0]; e.target.value = '';
-    if (!f) return;
+  async function onFiles(e) {
+    const files = [...(e.target.files || [])]; e.target.value = '';
+    if (!files.length) return;
     setMsg(null);
     try {
       const XLSX = await import('xlsx');
-      const wb = XLSX.read(await f.arrayBuffer());
-      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
-      const items = parsePrices(aoa);
-      const n = Object.keys(items).length;
-      if (!n) { setMsg({ bad: true, text: 'Не нашёл в файле колонку «Дефлай» с ценами.' }); return; }
-      if (/вб|wb|wildberries/i.test(f.name) && !window.confirm('Похоже, это файл WB, а журнал пока ведём только по Ozon. Всё равно загрузить как Ozon?')) return;
-      const exists = snaps.some(s => s.date === upDate);
-      if (!window.confirm(`Цены Ozon «Дефлай» на ${dayjs(upDate).format('DD.MM.YYYY')}: ${n} артикулов.${exists ? ' Снимок на эту дату заменится.' : ''} Загрузить?`)) return;
-      const r = await uploadPriceLog(cabinet, platform, upDate, items, f.name);
-      setLog(l => ({ ...l, snaps: r.data.data.snaps }));
-      setSel(upDate);
-      setMsg({ text: `Загружено: ${n} цен на ${dayjs(upDate).format('DD.MM.YYYY')}.` });
-    } catch (x) { setMsg({ bad: true, text: 'Не удалось прочитать файл: ' + x.message }); }
+      const year = dayjs(upDate).year();
+      const parsed = [];
+      for (const f of files) {
+        const wb = XLSX.read(await f.arrayBuffer());
+        const sh = pickSheet(wb);
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, defval: '' });
+        const p = parsePrices(aoa);
+        const n = Object.keys(p.items).length;
+        const date = files.length === 1 ? upDate : dateFromName(f.name, year);
+        const wbFile = /(^|[^а-я])вб|wb|wildberries/i.test(f.name) || /^(вб|wb)/i.test(sh);
+        parsed.push({ f, p, n, date, wbFile, sheet: sh });
+      }
+      const bad = parsed.filter(x => !x.n || !x.date);
+      const ok = parsed.filter(x => x.n && x.date && !x.wbFile);
+      const lines = ok.map(x => `• ${dayjs(x.date).format('DD.MM.YYYY')} — ${x.n} арт.${x.p.fmt === 'two' ? `, изменено ${Object.keys(x.p.items).filter(o => Math.abs(x.p.items[o] - x.p.old[o]) >= 0.5).length + x.p.zero.length}` : ' (только новые цены)'}${snaps.some(s => s.date === x.date) ? ' — заменит снимок' : ''}`);
+      const skipped = [...bad.map(x => `${x.f.name}: ${!x.n ? 'не нашёл цены' : 'нет даты в имени файла'}`), ...parsed.filter(x => x.wbFile).map(x => `${x.f.name}: файл WB, пока ведём только Ozon`)];
+      if (!ok.length) { setMsg({ bad: true, text: 'Нечего загружать. ' + skipped.join('; ') }); return; }
+      if (!window.confirm(`Загрузить цены Ozon «Дефлай»:\n${lines.join('\n')}${skipped.length ? `\n\nПропущу:\n${skipped.join('\n')}` : ''}`)) return;
+      setBusy(true);
+      let last = null;
+      for (const x of ok.sort((a, b) => (a.date < b.date ? -1 : 1))) {
+        // Цена на сайте в момент загрузки — только для свежих файлов (для прошлых недель её уже не узнать).
+        const fresh = Math.abs(dayjs().diff(dayjs(x.date), 'day')) <= 2;
+        const st = {};
+        if (fresh && site) for (const o of Object.keys(x.p.items)) { const c = site.get(o)?.card; if (c) st[o] = c; }
+        const body = { items: x.p.items, ...(x.p.fmt === 'two' ? { old: x.p.old, zero: x.p.zero } : {}), ...(fresh ? { site: st } : {}) };
+        const r = await uploadPriceLog(cabinet, platform, x.date, body, x.f.name);
+        last = r.data.data.snaps;
+        setSnapCache(c => { const n = { ...c }; delete n[x.date]; return n; });
+      }
+      setLog(l => ({ ...l, snaps: last }));
+      setSel(ok.length === 1 ? ok[0].date : last.at(-1).id);
+      setMsg({ text: `Загружено снимков: ${ok.length}.${skipped.length ? ' Пропущено: ' + skipped.join('; ') : ''}` });
+    } catch (x) { setMsg({ bad: true, text: 'Не удалось прочитать файл: ' + x.message }); } finally { setBusy(false); }
   }
   const mark = (offers, goal, note) => markPriceLog(cabinet, platform, sel, offers, goal, note).then(r => setLog(l => ({ ...l, marks: r.data.data.marks }))).catch(e => setMsg({ bad: true, text: e.message }));
   const [bulkGoal, setBulkGoal] = useState('');
   const [bulkNote, setBulkNote] = useState('');
   const togglePick = o => setPicked(p => { const n = new Set(p); if (n.has(o)) n.delete(o); else n.add(o); return n; });
+  const openHist = o => { setHist({ o, rows: null }); getPriceHistory(cabinet, platform, o).then(r => setHist(h => (h?.o === o ? { o, rows: r.data.data } : h))).catch(() => setHist(h => (h?.o === o ? { o, rows: [] } : h))); };
 
   // Итог по целям недели: сколько артикулов и как в среднем изменились заказы.
   const goalSummary = useMemo(() => {
     const m = new Map();
     for (const r of rows) {
-      if (!(r.kind === 'up' || r.kind === 'down')) continue;
+      if (!changed(r)) continue;
       const g = r.goal || (r.kind === 'down' ? '_down' : '_up');
       const v = m.get(g) || { n: 0, before: 0, after: 0 };
       v.n++; v.before += r.before; v.after += r.afterN || 0;
@@ -212,10 +376,15 @@ export default function PriceLog({ cabinet }) {
   if (err && !log) return <div className="mpui"><div className="a-empty" style={{ padding: 40 }}>Не удалось загрузить: {err}</div></div>;
   if (!log) return <div className="mpui"><div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div></div>;
 
-  const histRows = hist ? snaps.map((s, i) => {
-    const p = s.items[hist], pp = i > 0 ? snaps[i - 1].items[hist] : null;
-    return { s, p, pp, ch: p && pp ? (p / pp - 1) * 100 : null, ord: sumOrders(hist, s.date, 7), mk: (log.marks[s.id] || {})[hist] };
-  }).filter(x => x.p) : [];
+  const ordCh = (b, a) => (b > 0 && daysAfter > 0 ? (a / b - 1) * 100 : null);
+  const OrdCells = ({ before, after }) => (
+    <>
+      <td className="n r">{fmtInt(before)}</td>
+      <td className="n r">{daysAfter > 0 ? fmtInt(after) : '…'}</td>
+      <td className="n r">{ordCh(before, after) !== null ? <span className={ordCh(before, after) >= 0 ? 's-up' : 's-down'}>{f1(ordCh(before, after))}</span> : '—'}</td>
+    </>
+  );
+  const topList = (m, k = 3) => { const a = [...m.entries()].sort((x, y) => y[1] - x[1]); return a.slice(0, k).map(([t, n]) => `${t} ${n}`).join(' · ') + (a.length > k ? ` · ещё ${a.length - k}` : ''); };
 
   return (
     <div className="mpui">
@@ -233,48 +402,96 @@ export default function PriceLog({ cabinet }) {
           <b style={{ fontSize: 14 }}>Недели</b>
           <span className="pl-weeks">
             {snaps.map(s => (
-              <button key={s.id} type="button" className={`s-chip ${sel === s.id ? 'on' : ''}`} onClick={() => setSel(s.id)} title={s.file}>
-                {dayjs(s.date).format('DD.MM')}<b className="n">{Object.keys(s.items).length}</b>
+              <button key={s.id} type="button" className={`s-chip ${sel === s.id ? 'on' : ''}`} onClick={() => setSel(s.id)} title={`${s.file}${s.fmt === 'two' ? `\nподняли ${s.up}, снизили ${s.down}` : ''}`}>
+                {dayjs(s.date).format('DD.MM.YY')}<b className="n">{s.fmt === 'two' ? s.up + s.down : s.n}</b>
               </button>
             ))}
-            {!snaps.length && <span className="muted">пока нет — загрузите первую таблицу цен</span>}
+            {!snaps.length && <span className="muted">пока нет — загрузите первую выгрузку репрайсера</span>}
           </span>
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-            <input className="a-input" type="date" value={upDate} onChange={e => setUpDate(e.target.value)} title="Дата, на которую цены выставлены (обычно среда)" />
-            <label className="a-btn" style={{ cursor: 'pointer' }}>Загрузить цены<input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={onFile} /></label>
-            {cur && <button type="button" className="a-btn ghost" title="Удалить этот снимок" onClick={() => { if (window.confirm(`Удалить снимок цен на ${dayjs(cur.date).format('DD.MM.YYYY')}?`)) deletePriceLog(cabinet, platform, cur.id).then(r => { setLog(l => ({ ...l, snaps: r.data.data.snaps })); setSel(r.data.data.snaps.at(-1)?.id || null); }); }}>×</button>}
+            <input className="a-input" type="date" value={upDate} onChange={e => setUpDate(e.target.value)} title="Дата, с которой действуют новые цены (обычно среда). Если выбрать сразу несколько файлов, дата берётся из имени каждого" />
+            <label className={`a-btn ${busy ? 'dis' : ''}`} style={{ cursor: 'pointer' }}>{busy ? 'Загружаю…' : 'Загрузить цены'}<input type="file" multiple accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={busy} onChange={onFiles} /></label>
+            {curMeta && <button type="button" className="a-btn ghost" title="Удалить этот снимок" onClick={() => { if (window.confirm(`Удалить снимок цен на ${dayjs(curMeta.date).format('DD.MM.YYYY')}?`)) deletePriceLog(cabinet, platform, curMeta.id).then(r => { setLog(l => ({ ...l, snaps: r.data.data.snaps })); setSel(r.data.data.snaps.at(-1)?.id || null); }); }}>×</button>}
           </span>
         </div>
-        <div className="a-hint" style={{ marginTop: 6 }}>Файл из репрайсера: артикул в первой колонке, цены — в колонке «Дефлай». Остальные магазины пока не трогаем.</div>
+        <div className="a-hint" style={{ marginTop: 6 }}>
+          Выгрузка репрайсера, лист «Озон»: «Артикул продавца · Название · Цена клиента на удержание · Новые цены» — было и стало в одном файле, пустая новая цена = без изменений.
+          Прошлые недели можно догрузить: выберите сразу несколько файлов — дата возьмётся из имени («… 14.10.xlsx»).
+        </div>
       </div>
 
-      {cur && (
+      {curMeta && !ready && <div className="a-card pr-card"><div className="a-empty" style={{ padding: 20, textAlign: 'center' }}>Загрузка снимка…</div></div>}
+
+      {ready && (
         <div className="a-card pr-card">
           <div className="a-bar" style={{ marginBottom: 8, flexWrap: 'wrap', gap: 10 }}>
-            <b style={{ fontSize: 14 }}>{prev ? `Изменения ${dayjs(prev.date).format('DD.MM')} → ${dayjs(cur.date).format('DD.MM.YYYY')}` : `Первый снимок ${dayjs(cur.date).format('DD.MM.YYYY')} — изменения будут видны со следующей загрузки`}</b>
-            {prev && <span className="a-hint" style={{ margin: 0 }}>заказы Ozon: 7 дней до {dayjs(cur.date).format('DD.MM')} и {daysAfter > 0 ? `${daysAfter} дн после (в пересчёте на 7)` : 'после — ещё нет данных'}</span>}
+            <b style={{ fontSize: 14 }}>{two ? `Изменения цен с ${dayjs(cur.date).format('DD.MM.YYYY')}` : prev ? `Изменения ${dayjs(prev.date).format('DD.MM')} → ${dayjs(cur.date).format('DD.MM.YYYY')}` : `Первый снимок ${dayjs(cur.date).format('DD.MM.YYYY')} — изменения будут видны со следующей загрузки`}</b>
+            {(two || prev) && <span className="a-hint" style={{ margin: 0 }}>заказы Ozon: 7 дней до {dayjs(cur.date).format('DD.MM')} и {daysAfter > 0 ? `${daysAfter} дн после (в пересчёте на 7)` : 'после — ещё нет данных'}</span>}
           </div>
-          {prev && (
+          {(two || prev) && (
             <>
               <div className="pl-sum">
-                <button type="button" className={`pl-k up ${fKind === 'up' ? 'on' : ''}`} onClick={() => setFKind(k => (k === 'up' ? 'changed' : 'up'))}><b>{cnt('up')}</b> подняли</button>
-                <button type="button" className={`pl-k dn ${fKind === 'down' ? 'on' : ''}`} onClick={() => setFKind(k => (k === 'down' ? 'changed' : 'down'))}><b>{cnt('down')}</b> снизили</button>
-                <button type="button" className={`pl-k ${fKind === 'same' ? 'on' : ''}`} onClick={() => setFKind(k => (k === 'same' ? 'changed' : 'same'))}><b>{cnt('same')}</b> без изменений</button>
-                {cnt('new') > 0 && <button type="button" className={`pl-k ${fKind === 'new' ? 'on' : ''}`} onClick={() => setFKind(k => (k === 'new' ? 'changed' : 'new'))}><b>{cnt('new')}</b> новые</button>}
-                {cnt('gone') > 0 && <button type="button" className={`pl-k ${fKind === 'gone' ? 'on' : ''}`} onClick={() => setFKind(k => (k === 'gone' ? 'changed' : 'gone'))}><b>{cnt('gone')}</b> пропали</button>}
+                <button type="button" className={`pl-k up ${fKind === 'up' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'up' ? 'changed' : 'up')}><b>{cnt('up')}</b> подняли</button>
+                <button type="button" className={`pl-k dn ${fKind === 'down' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'down' ? 'changed' : 'down')}><b>{cnt('down')}</b> снизили</button>
+                <button type="button" className={`pl-k ${fKind === 'same' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'same' ? 'changed' : 'same')}><b>{cnt('same')}</b> без изменений</button>
+                {cnt('zero') > 0 && <button type="button" className={`pl-k warn ${fKind === 'zero' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'zero' ? 'changed' : 'zero')} title="В колонке «Новые цены» стоит 0 — проверить, что репрайсер с ними делает"><b>{cnt('zero')}</b> новая цена 0</button>}
+                {cnt('new') > 0 && <button type="button" className={`pl-k ${fKind === 'new' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'new' ? 'changed' : 'new')}><b>{cnt('new')}</b> новые</button>}
+                {cnt('gone') > 0 && <button type="button" className={`pl-k ${fKind === 'gone' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'gone' ? 'changed' : 'gone')}><b>{cnt('gone')}</b> пропали</button>}
+                {nMis > 0 && <button type="button" className={`pl-k dn ${fKind === 'mis' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'mis' ? 'changed' : 'mis')} title={`Цена с Ozon-картой на сайте отличается от цены в файле больше чем на ${MIS}%`}><b>{nMis}</b> расходится с сайтом</button>}
+                {nDrift > 0 && <button type="button" className={`pl-k ${fKind === 'drift' ? 'on' : ''}`} onClick={() => pickFilter(fKind === 'drift' ? 'changed' : 'drift')} title="«Было» в этом файле не совпадает с «стало» прошлой загрузки — цену меняли между загрузками"><b>{nDrift}</b> менялась между загрузками</button>}
               </div>
-              {groups.length > 0 && (
-                <div className="pl-groups">
-                  <span className="a-hint" style={{ margin: 0 }}>как меняли:</span>
-                  {groups.slice(0, 16).map(g => (
-                    <button key={g.key} type="button" className={`s-chip ${fGroup === g.key ? 'on' : ''}`} onClick={() => setFGroup(v => (v === g.key ? '' : g.key))}>
-                      <span className={g.sort > 0 ? 's-up' : 's-down'}>{g.label}</span> <b className="n">{g.n} арт.</b>
-                    </button>
-                  ))}
-                </div>
-              )}
+
+              <div className="a-bar" style={{ gap: 8, margin: '4px 0 6px' }}>
+                <b style={{ fontSize: 13.5 }}>Как меняли</b>
+                <span className="a-seg">{[['rules', 'По правилам'], ['cats', 'По категориям']].map(([k, t]) => <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => setView(k)}>{t}</button>)}</span>
+                <span className="a-hint" style={{ margin: 0 }}>клик по строке — показать эти артикулы в таблице ниже</span>
+              </div>
+              <div className="a-scroll">
+                {view === 'rules' ? (
+                  <table className="a-t pr-t pl-agg">
+                    <thead><tr>
+                      <th className="l">Правило</th><th className="r">Арт.</th><th className="l">Категории</th><th className="r">Средняя цена было</th><th className="r">стало</th>
+                      <th className="r" title="Заказы Ozon за 7 дней до изменения">Заказы до</th><th className="r" title="После изменения, в пересчёте на 7 дней">после</th><th className="r">изм.</th>
+                    </tr></thead>
+                    <tbody>
+                      {!ruleRows.length && <tr><td colSpan={8} className="muted" style={{ padding: 12 }}>Цены не менялись</td></tr>}
+                      {ruleRows.map(g => (
+                        <tr key={g.key} className={`pl-click ${fGroup === g.key ? 'pr-in-order' : ''}`} onClick={() => pickFilter('changed', fGroup === g.key ? '' : g.key)}>
+                          <td><b className={g.kind === 'zero' ? 's-down' : g.sort > 0 ? 's-up' : 's-down'}>{g.label}</b>{g.details.size > 0 && <small className="pr-sub2">{topList(g.details, 4)}</small>}</td>
+                          <td className="n r"><b>{g.n}</b></td>
+                          <td className="pl-cats">{topList(g.cats)}</td>
+                          <td className="n r">{rub(g.sa / g.n)}</td>
+                          <td className="n r">{g.kind === 'zero' ? '0 ₽' : rub(g.sb / g.n)}</td>
+                          <OrdCells before={g.before} after={g.after} />
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <table className="a-t pr-t pl-agg">
+                    <thead><tr>
+                      <th className="l">Категория</th><th className="r">Подняли</th><th className="r">Снизили</th><th className="r">Без изм.</th><th className="r" title="Среднее изменение цены у изменённых">Ср. изменение</th><th className="l">Как меняли</th>
+                      <th className="r" title="Заказы изменённых артикулов за 7 дней до">Заказы до</th><th className="r">после</th><th className="r">изм.</th>
+                    </tr></thead>
+                    <tbody>
+                      {catRows.map(c => (
+                        <tr key={c.cat} className={`pl-click ${fCat === c.cat ? 'pr-in-order' : ''}`} onClick={() => pickFilter('changed', '', fCat === c.cat ? '' : c.cat)}>
+                          <td><b>{c.cat}</b></td>
+                          <td className="n r">{c.up ? <span className="s-up">{c.up}</span> : '—'}</td>
+                          <td className="n r">{c.down ? <span className="s-down">{c.down}</span> : '—'}{c.zero ? <small className="pr-sub2">+ {c.zero} с ценой 0</small> : null}</td>
+                          <td className="n r">{c.same || '—'}</td>
+                          <td className="n r">{c.nPct ? <span className={c.pct > 0 ? 's-up' : 's-down'}>{f1(c.pct / c.nPct)}</span> : '—'}</td>
+                          <td className="pl-cats">{topList(c.rules)}</td>
+                          <OrdCells before={c.before} after={c.after} />
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
               {goalSummary.length > 0 && (
-                <div className="pl-goals">
+                <div className="pl-goals" style={{ marginTop: 12 }}>
                   {goalSummary.map(([g, v]) => {
                     const ch = v.before > 0 ? (v.after / v.before - 1) * 100 : null;
                     return (
@@ -291,17 +508,19 @@ export default function PriceLog({ cabinet }) {
         </div>
       )}
 
-      {cur && (
-        <div className="a-card pr-card">
+      {ready && (
+        <div className="a-card pr-card" id="pl-table">
           <div className="a-bar" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
             <b style={{ fontSize: 14 }}>Артикулы</b>
             <span className="a-seg">
               {[['changed', 'Изменённые'], ['all', 'Все']].map(([k, t]) => <button key={k} type="button" className={fKind === k ? 'on' : ''} onClick={() => setFKind(k)}>{t}</button>)}
             </span>
+            {(fGroup || fCat) && <button type="button" className="s-chip on" onClick={() => { setFGroup(''); setFCat(''); }} title="Снять отбор">{fGroup ? ruleRows.find(g => g.key === fGroup)?.label : fCat} ×</button>}
             <select className="a-input" value={fGoal} onChange={e => setFGoal(e.target.value)} style={{ padding: '5px 8px' }}>
               <option value="">Все цели</option><option value="—">Без цели</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
             </select>
             <input className="a-input" placeholder="Артикул или категория" value={q} onChange={e => setQ(e.target.value)} style={{ minWidth: 200 }} />
+            <span className="muted" style={{ fontSize: 12.5 }}>{shown.length} арт.</span>
             <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
           </div>
           {picked.size > 0 && (
@@ -324,30 +543,30 @@ export default function PriceLog({ cabinet }) {
                 <ThCtl ctl={ctl} k="pct" unit="%">%</ThCtl>
                 <ThCtl ctl={ctl} k="before" hint="Заказы Ozon за 7 дней до изменения цены">Заказы до</ThCtl>
                 <ThCtl ctl={ctl} k="after" hint="Заказы Ozon после изменения, в пересчёте на 7 дней">Заказы после</ThCtl>
+                <ThCtl ctl={ctl} k="off" unit="%" hint={`Цена для покупателя с Ozon-картой на сайте. Отличается от цены в файле больше чем на ${MIS}% — строка подсвечена: цена не применилась или её перебила акция`}>На сайте</ThCtl>
                 <ThCtl ctl={ctl} k="goal" className="" filter={false}>Цель и заметка</ThCtl>
-                <th className="" style={{ textAlign: 'left' }}>Итог</th>
-                <ThCtl ctl={ctl} k="off" unit="%" hint="Цена для покупателя с Ozon-картой на сайте (по расширению «Соинвест») против загруженной. Расхождение больше 3% — цена не применилась или её перебила акция">На сайте</ThCtl>
+                <th style={{ textAlign: 'left' }}>Итог</th>
               </tr></thead>
               <tbody>
-                {!vis.length && <tr><td colSpan={11} className="muted" style={{ padding: 14 }}>{prev ? 'Ничего не подходит под фильтр' : 'Изменения появятся после второй загрузки'}</td></tr>}
+                {!vis.length && <tr><td colSpan={11} className="muted" style={{ padding: 14 }}>{two || prev ? 'Ничего не подходит под фильтр' : 'Изменения появятся после второй загрузки'}</td></tr>}
                 {vis.map(r => (
-                  <tr key={r.o} className={picked.has(r.o) ? 'pr-in-order' : ''}>
+                  <tr key={r.o} className={`${picked.has(r.o) ? 'pr-in-order' : ''} ${r.mis ? 'pl-mis' : ''}`}>
                     <td><input type="checkbox" checked={picked.has(r.o)} onChange={() => togglePick(r.o)} /></td>
-                    <td><div className="a-art" style={{ cursor: 'pointer' }} onClick={() => setHist(r.o)} title="История цены и заказов"><div style={{ minWidth: 0 }}><div className="id">{r.o}</div><div className="model" title={r.cat}>{r.cat.split(SEP).slice(-1)[0] || ''}</div></div></div></td>
-                    <td className="n r">{rub(r.a)}</td>
-                    <td className="n r"><b>{rub(r.b)}</b></td>
+                    <td><div className="a-art" style={{ cursor: 'pointer' }} onClick={() => openHist(r.o)} title="История цены и заказов"><div style={{ minWidth: 0 }}><div className="id">{r.o}</div><div className="model" title={r.cat}>{r.cat1}</div></div></div></td>
+                    <td className="n r">{rub(r.a)}{r.drift ? <small className="pr-sub2 s-warn" title="Цена в прошлой загрузке («стало») — между загрузками цену меняли">в прошлой загрузке {rub(r.drift)}</small> : null}</td>
+                    <td className="n r"><b>{r.kind === 'zero' ? <span className="s-down">0 ₽</span> : rub(r.b)}</b></td>
                     <td className="n r"><span className={r.d > 0 ? 's-up' : r.d < 0 ? 's-down' : ''}>{r.d ? drub(r.d) : '—'}</span></td>
-                    <td className="n r"><span className={r.pct > 0 ? 's-up' : r.pct < 0 ? 's-down' : ''}>{r.pct ? f1(r.pct) : '—'}</span></td>
+                    <td className="n r"><span className={r.pct > 0 ? 's-up' : r.pct < 0 ? 's-down' : ''}>{r.pct ? f1(r.pct) : '—'}</span>{r.g && r.g.kind !== 'pct' ? <small className="pr-sub2">{r.g.kind === 'spot' ? 'точечно' : r.g.label}</small> : null}</td>
                     <td className="n r">{fmtInt(r.before)}</td>
                     <td className="n r">{daysAfter > 0 ? <>{fmtInt(r.afterN)}{r.before > 0 ? <small className={`pr-sub2 ${r.afterN >= r.before ? 's-up' : 's-down'}`}>{f1((r.afterN / r.before - 1) * 100)}</small> : null}</> : '…'}</td>
-                    <td className="pr-l" style={{ minWidth: 220 }}>
+                    <td className={`n r ${r.mis ? 'pl-bad' : ''}`}>{r.st?.card ? <span title={`с Ozon-картой ${rub(r.st.card)}${r.st.noCard ? `, без карты ${rub(r.st.noCard)}` : ''}, проверено ${r.st.at || '—'}${r.st.stored ? ' (запомнено при загрузке, против «было»)' : ''}`}>{rub(r.st.card)}{r.off !== null ? <small className={`pr-sub2 ${r.mis ? 's-down' : ''}`}>{r.mis ? 'расходится ' : ''}{f1(r.off)}</small> : null}</span> : '—'}</td>
+                    <td className="pr-l pl-gl" style={{ minWidth: 220 }}>
                       <select className="a-input pr-sel" value={r.goal} onChange={e => mark([r.o], e.target.value || null, undefined)}>
                         <option value="">— цель —</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
                       </select>
                       <input className="a-input pl-note" defaultValue={r.note} key={sel + r.o + r.note} placeholder="заметка" onBlur={e => { if (e.target.value !== r.note) mark([r.o], undefined, e.target.value || null); }} />
                     </td>
                     <td className="pr-l" style={{ whiteSpace: 'normal', minWidth: 220 }}>{r.v ? <span className={`pr-sig ${r.v.cls}`} style={{ whiteSpace: 'normal' }}>{r.v.t}</span> : <span className="muted">—</span>}</td>
-                    <td className="n r">{r.site?.card ? <span title={`с Ozon-картой ${rub(r.site.card)}, без карты ${rub(r.site.site)}, проверено ${r.site.at || '—'}`}>{rub(r.site.card)}{r.off !== null && Math.abs(r.off) > 3 ? <small className="pr-sub2 s-down">расходится {f1(r.off)}</small> : null}</span> : '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -360,22 +579,29 @@ export default function PriceLog({ cabinet }) {
       {hist && (
         <div className="pl-modal" onClick={() => setHist(null)}>
           <div className="a-card pl-modalc" onClick={e => e.stopPropagation()}>
-            <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 15 }}>{hist}</b><span className="a-hint" style={{ margin: 0 }}>{ord?.cat.get(hist) || ''}</span>
+            <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 15 }}>{hist.o}</b><span className="a-hint" style={{ margin: 0 }}>{ord?.cat.get(hist.o) || ''}</span>
               <button type="button" className="a-btn ghost" style={{ marginLeft: 'auto' }} onClick={() => setHist(null)}>×</button></div>
-            <table className="a-t s-slice">
-              <thead><tr><th>Неделя</th><th className="r">Цена</th><th className="r">Изменение</th><th className="r">Заказы за 7 дн после</th><th>Цель / заметка</th></tr></thead>
-              <tbody>
-                {histRows.slice().reverse().map(x => (
-                  <tr key={x.s.id}>
-                    <td>{dayjs(x.s.date).format('DD.MM.YYYY')}</td>
-                    <td className="n r"><b>{rub(x.p)}</b></td>
-                    <td className="n r"><span className={x.ch > 0 ? 's-up' : x.ch < 0 ? 's-down' : ''}>{x.ch ? f1(x.ch) : '—'}</span></td>
-                    <td className="n r">{fmtInt(x.ord)}</td>
-                    <td>{x.mk?.goal ? GOAL[x.mk.goal] : ''}{x.mk?.note ? <span className="muted"> — {x.mk.note}</span> : ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            {!hist.rows ? <div className="muted" style={{ padding: 12 }}>Загрузка…</div> : (
+              <table className="a-t pr-t">
+                <thead><tr><th className="l">Неделя</th><th className="r">Было</th><th className="r">Стало</th><th className="r">Изменение</th><th className="r">Заказы 7 дн до</th><th className="r">7 дн после</th><th className="l">Цель / заметка</th></tr></thead>
+                <tbody>
+                  {hist.rows.slice().reverse().map((x, i, arr) => {
+                    const a = x.a ?? arr[i + 1]?.p ?? null, ch = a && !x.zero ? (x.p / a - 1) * 100 : null, mk = (log.marks[x.id] || {})[hist.o];
+                    return (
+                      <tr key={x.id}>
+                        <td>{dayjs(x.date).format('DD.MM.YYYY')}</td>
+                        <td className="n r">{rub(a)}</td>
+                        <td className="n r"><b>{x.zero ? '0 ₽' : rub(x.p)}</b></td>
+                        <td className="n r"><span className={ch > 0 ? 's-up' : ch < 0 ? 's-down' : ''}>{ch && Math.abs(ch) >= 0.05 ? f1(ch) : '—'}</span></td>
+                        <td className="n r">{fmtInt(sumOrders(hist.o, dayjs(x.date).subtract(7, 'day'), 7))}</td>
+                        <td className="n r">{fmtInt(sumOrders(hist.o, x.date, 7))}</td>
+                        <td className="pr-l" style={{ whiteSpace: 'normal' }}>{mk?.goal ? GOAL[mk.goal] : ''}{mk?.note ? <span className="muted"> — {mk.note}</span> : ''}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

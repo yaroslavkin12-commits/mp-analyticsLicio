@@ -110,7 +110,7 @@ export function ThCtl({ ctl, k, children, hint, className = 'r', filter = true, 
     <th ref={thRef} className={`${className} tt-th ${s ? 'on' : ''}`} style={style} title={hint} {...(dnd || {})}>
       <span className="tt-in">
         <span className={sort ? 'tt-lbl' : ''} onClick={sort ? () => ctl.cycleSort(k) : undefined}>
-          {children}{s ? (s < 0 ? ' ↓' : ' ↑') : ''}
+          {children}{s ? <span className="tt-ar">{s < 0 ? '↓' : '↑'}</span> : null}
         </span>
         {filter && (
           <button type="button" className={`tt-f ${f ? 'on' : ''}`} title={f ? `Фильтр: ${f.min !== '' ? 'от ' + f.min : ''} ${f.max !== '' ? 'до ' + f.max : ''}` : 'Фильтр по значению'}

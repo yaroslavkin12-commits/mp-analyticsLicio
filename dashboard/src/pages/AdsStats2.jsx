@@ -1464,7 +1464,7 @@ export default function AdsStats2({ cabinet }) {
             <thead>
               <tr>
                 {COLS.map((c, i) => c.k ? (
-                  <ThCtl key={i} ctl={ctlAds} k={c.k} className={sort.key === c.k ? 'sorted' : ''} filter={c.k !== 'id'} hint={c.h} unit={c.u}>{c.t}</ThCtl>
+                  <ThCtl key={i} ctl={ctlAds} k={c.k} className={`${i === 0 ? '' : 'r'} ${sort.key === c.k ? 'sorted' : ''}`} filter={c.k !== 'id'} hint={c.h} unit={c.u}>{c.t}</ThCtl>
                 ) : <th key={i} title={c.h}>{c.t}</th>)}
               </tr>
             </thead>

@@ -60,3 +60,12 @@
 .mpui .pl-note{width:100%;margin-top:4px;padding:3px 6px;font-size:12px}
 .mpui .pl-modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:flex;align-items:flex-start;justify-content:center;padding:60px 16px;overflow:auto}
 .mpui .pl-modalc{width:760px;max-width:100%;padding:16px}
+.mpui .pl-k.warn b{color:var(--a-warn)}
+.mpui .pl-agg td{vertical-align:top}
+.mpui .pl-agg .pl-cats{text-align:left;white-space:normal;color:var(--a-ink2);font-size:12.5px;min-width:200px}
+.mpui tr.pl-click{cursor:pointer}
+.mpui tr.pl-click:hover>td{background:var(--a-panel2)}
+.mpui tr.pl-mis>td{background:color-mix(in srgb,var(--a-bad) 7%,transparent)}
+.mpui td.pl-bad{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--a-bad) 55%,transparent);border-radius:4px}
+.mpui .s-warn{color:var(--a-warn)}
+.mpui .pr-t td.pl-gl .pr-sel,.mpui .pr-t td.pl-gl .pl-note{display:block;width:100%;box-sizing:border-box}
