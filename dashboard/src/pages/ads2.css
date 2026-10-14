@@ -90,9 +90,11 @@
 .mpui .a-t td{padding:9px 12px;border-bottom:1px solid var(--a-line);text-align:right;white-space:nowrap;vertical-align:middle;font-size:13.5px}
 .mpui .a-t tr.row{cursor:pointer}
 /* Едва заметная подсветка строки под курсором — легче вести взгляд по строке. */
-.mpui .a-t tbody tr:hover>td{background:var(--a-hover)}
-.mpui .a-t tbody tr.a-detail:hover>td{background:transparent}
-.mpui .a-t tr.row:hover>td,.mpui .a-t tr.row.open>td{background:var(--a-panel2)}
+/* Только строки самой таблицы (>), не вложенных в раскрытую строку таблиц по дням —
+   иначе закреплённые ячейки слева становились прозрачными. */
+.mpui table.a-t>tbody>tr:hover>td{background:var(--a-hover)}
+.mpui table.a-t>tbody>tr.a-detail:hover>td{background:transparent}
+.mpui table.a-t>tbody>tr.row:hover>td,.mpui table.a-t>tbody>tr.row.open>td{background:var(--a-panel2)}
 .mpui .a-t tr.row.dragging{opacity:.4}
 .mpui .a-t tr.row.dropover>td{box-shadow:inset 0 2px 0 var(--a-accent)}
 .mpui .a-art{display:flex;align-items:center;gap:10px;min-width:0}
