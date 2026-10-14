@@ -42,7 +42,11 @@ export function calcRow(row, data, settings = DEFAULT_SETTINGS) {
   const sew = Number(data.sew?.[row.o]) || 0;
   const cycle = Number(row.cycle) || 21, buffer = Number(row.buffer) || 21, batch = Number(row.batch) || 10;
   const H = year / 365;
-  const P = 0.6 * H + 0.4 * (w4 / 28);
+  // «Под рекламу» (focus): ждём рост продаж — прогноз в день × коэффициент
+  // (по умолчанию 1,5), но не меньше вписанного минимума; приоритет выше.
+  const fK = row.focus ? (Number(row.focusK) > 0 ? Number(row.focusK) : 1.5) : 1;
+  const base = 0.6 * H + 0.4 * (w4 / 28);
+  const P = row.focus ? Math.max(base * fK, Number(row.focusMin) || 0) : base;
   const Q = H > 0 ? (w4 / 28) / H : null;
   const R = Q === null ? 1 : Q > 1.2 ? 1.2 : Q < 0.8 ? 0.8 : 1;
   const S = Math.ceil(P * (cycle + buffer) * R - 1e-9);
@@ -53,7 +57,7 @@ export function calcRow(row, data, settings = DEFAULT_SETTINGS) {
   const W = V === 'NO ORDER' ? 0 : need > 0 ? Math.ceil(need / batch - 1e-9) * batch : 0;
   // Как в Excel: нет продаж за год (тренд не посчитать) — бонус как за рост; нет покрытия — 0.
   const trendB = Q === null ? 120 : Q > 1.2 ? 120 : Q < 0.8 ? -40 : 40;
-  const Y = Math.round(((T === null ? 0 : Math.max(0, 45 - T) * 20) + P * 300 + trendB + TOP_BONUS(row.top)) * 100) / 100;
+  const Y = Math.round(((T === null ? 0 : Math.max(0, 45 - T) * 20) + P * 300 + trendB + TOP_BONUS(row.top) + (row.focus ? 800 : 0)) * 100) / 100;
   let U;
   if (P < 0.1 && ((Q !== null && Q < 0.8) || year < 20)) U = 'REVIEW SKU';
   else if (T === null) U = 'REVIEW SKU';
@@ -61,7 +65,7 @@ export function calcRow(row, data, settings = DEFAULT_SETTINGS) {
   else if (T <= 45) U = 'KEEP PRICE';
   else if (T > 60) U = (Q !== null && Q < 0.8) || P < 0.3 ? 'DROP -5%' : 'DROP -3%';
   else U = 'DROP -3%';
-  return { year, w4, w8, stock, sew, H, P, Q, R, S, T, V, W, Y, U, ahead: w4 >= year / 12 };
+  return { year, w4, w8, stock, sew, H, P, base, Q, R, S, T, V, W, Y, U, ahead: w4 >= year / 12 };
 }
 
 // Распределение по цеху. limit: { tasks } или { pcs } или null (без лимита).
@@ -91,5 +95,29 @@ export function allocate(rows, limit, settings = DEFAULT_SETTINGS) {
     usedTasks += Math.ceil(tasks - 1e-9); usedPcs += qty;
     out.set(r.o, { qty, tasks });
   }
-  return { map: out, usedTasks, usedPcs };
+  // Не вошло: потребность, которая не уместилась в лимит (целиком или частично).
+  const left = [];
+  for (const r of cand) {
+    const got = out.get(r.o)?.qty || 0;
+    if (got < r.c.W) left.push({ r, qty: r.c.W - got, tasks: Math.ceil((r.c.W - got) / taskSizeOf(r, settings) - 1e-9) });
+  }
+  // Добор до лимита заданий, если потребности меньше: по одному заданию тем,
+  // у кого после заказа меньше всего дней запаса (не дальше 90 дней).
+  const added = new Map();
+  if (limit && limit.fill && limit.tasks && usedTasks < Number(limit.tasks)) {
+    const pool = rows.filter(r => SHOPS.includes(r.shop) && r.c.P > 0 && r.c.U !== 'REVIEW SKU');
+    const k = settings.transitK ?? 0.5;
+    const cov = r => (r.c.stock + r.c.sew * k + (out.get(r.o)?.qty || 0)) / r.c.P;
+    for (let guard = 0; guard < 1000 && usedTasks < Number(limit.tasks); guard++) {
+      let best = null, bc = Infinity;
+      for (const r of pool) { const c = cov(r); if (c < 90 && (c < bc || (c === bc && best && r.c.Y > best.c.Y))) { best = r; bc = c; } }
+      if (!best) break;
+      const ts = taskSizeOf(best, settings);
+      const cur = out.get(best.o) || { qty: 0, tasks: 0 };
+      out.set(best.o, { qty: cur.qty + ts, tasks: (cur.qty + ts) / ts, fill: (cur.fill || 0) + ts });
+      added.set(best.o, (added.get(best.o) || 0) + ts);
+      usedTasks += 1; usedPcs += ts;
+    }
+  }
+  return { map: out, usedTasks, usedPcs, left, added };
 }

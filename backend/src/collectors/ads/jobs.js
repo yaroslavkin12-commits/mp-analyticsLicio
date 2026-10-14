@@ -203,7 +203,13 @@ async function tickDigest(cabinet) {
   if (digestBusy.has(cabinet)) return;
   digestBusy.add(cabinet);
   try {
-    const settings = await getSettings(cabinet);
+    let settings = await getSettings(cabinet);
+    // 14.10.2026: поштучные уведомления СПП убраны — вместо них сводка раз в день,
+    // поэтому один раз включаем её всем (дальше её можно выключить в настройках).
+    if (!settings.digestV2 && cabinet === 'defly') {
+      const { setSettings } = require('./discountSettings');
+      settings = await setSettings(cabinet, { digestEnabled: true, digestV2: true }).catch(() => settings);
+    }
     if (!settings.digestEnabled) return;
     const tz = settings.timezone || 'Europe/Moscow';
     const now = dayjs().tz(tz);

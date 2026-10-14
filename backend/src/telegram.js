@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getCabinet } = require('./config/cabinets');
 const { query } = require('./db');
 const { getSettings, isQuietNow } = require('./collectors/ads/discountSettings');
+const { autoPath } = require('./lib/categories');
 
 // Уведомления в Telegram об изменении Соинвеста Ozon. Настройка через
 // переменные окружения (одна и та же пара для всех кабинетов):
@@ -25,34 +26,10 @@ async function sendMessage(text) {
   return true;
 }
 
-async function notifyDiscountChange(cabinet, changed) {
-  if (!TOKEN || !CHAT_ID) return;
-  const settings = await getSettings(cabinet).catch(() => null);
-  const threshold = settings?.thresholdPct ?? THRESHOLD;
-  const significant = changed.filter(c => Math.abs(c.pct - c.prevPct) >= threshold);
-  if (!significant.length) return;
-  // В тихие часы не шлём поштучные уведомления — они попадут в утренний
-  // дайджест (если он включён) или молча останутся в истории.
-  if (settings && isQuietNow(settings)) return;
-
-  const label = getCabinet(cabinet).label;
-  // Названия товаров для читаемого сообщения — берём из каталога, если есть.
-  const offerIds = significant.map(c => c.offerId);
-  const names = await query(
-    `SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND offer_id = ANY($2::text[])`,
-    [cabinet, offerIds]).catch(() => []);
-  const nameByOffer = new Map(names.map(r => [r.offer_id, r.product_name]));
-
-  const lines = significant.slice(0, 15).map(c => {
-    const dir = c.pct > c.prevPct ? '📈' : '📉';
-    const name = nameByOffer.get(c.offerId);
-    const title = name ? `${c.offerId} (${name.slice(0, 40)})` : c.offerId;
-    return `${dir} <b>${title}</b>: ${c.prevPct.toFixed(1)}% → ${c.pct.toFixed(1)}% (цена для покупателя ${Math.round(c.marketingPrice)} ₽)`;
-  });
-  const text = `⚠️ <b>${label}: изменился Соинвест Ozon</b>\n\n${lines.join('\n')}` +
-    (significant.length > 15 ? `\n\n…и ещё ${significant.length - 15}` : '');
-  await sendMessage(text);
-}
+// Поштучные уведомления об изменении СПП отключены по просьбе владельца
+// (14.10.2026): их было слишком много. Вместо них — одна сводка в день по
+// категориям и сильным изменениям (sendDiscountDigest).
+async function notifyDiscountChange() { /* отключено */ }
 
 // Ежедневный дайджест — топ-3 изменения Соинвеста за последние сутки одним
 // сообщением, в заданное в настройках время (аналог дайджеста TrueStats).
@@ -61,8 +38,10 @@ async function notifyDiscountChange(cabinet, changed) {
 async function sendDiscountDigest(cabinet) {
   if (!TOKEN || !CHAT_ID) return false;
   const label = getCabinet(cabinet).label;
+  const settings = await getSettings(cabinet).catch(() => null);
+  const strongPp = Math.max(5, settings?.thresholdPct ?? 0); // «сильное» изменение, п.п.
   const rows = await query(
-    `SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct, marketing_price, collected_at
+    `SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct, marketing_price
        FROM product_discount_history
       WHERE cabinet = $1 AND platform = 'ozon' AND collected_at >= NOW() - INTERVAL '24 hours'
       ORDER BY offer_id, collected_at DESC`, [cabinet]).catch(() => []);
@@ -72,33 +51,42 @@ async function sendDiscountDigest(cabinet) {
       WHERE cabinet = $1 AND platform = 'ozon' AND collected_at < NOW() - INTERVAL '24 hours'
       ORDER BY offer_id, collected_at DESC`, [cabinet]).catch(() => []);
   const prevByOffer = new Map(prevRows.map(r => [r.offer_id, Number(r.ozon_discount_pct)]));
+  const pairs = rows.map(r => ({ o: r.offer_id, prev: prevByOffer.get(r.offer_id), pct: Number(r.ozon_discount_pct), price: Number(r.marketing_price) }))
+    .filter(x => x.prev !== undefined && Number.isFinite(x.prev) && Number.isFinite(x.pct));
+  if (!pairs.length) return false;
 
-  const changes = rows
-    .map(r => {
-      const prev = prevByOffer.get(r.offer_id);
-      if (prev === undefined) return null;
-      const pct = Number(r.ozon_discount_pct);
-      return { offerId: r.offer_id, prevPct: prev, pct, delta: pct - prev, marketingPrice: Number(r.marketing_price) };
-    })
-    .filter(c => c && Math.abs(c.delta) >= 0.1)
-    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
-    .slice(0, 3);
-
-  if (!changes.length) return false;
-
-  const offerIds = changes.map(c => c.offerId);
-  const names = await query(
-    `SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND offer_id = ANY($2::text[])`,
-    [cabinet, offerIds]).catch(() => []);
-  const nameByOffer = new Map(names.map(r => [r.offer_id, r.product_name]));
-
-  const lines = changes.map(c => {
-    const dir = c.delta > 0 ? '📈' : '📉';
-    const name = nameByOffer.get(c.offerId);
-    const title = name ? `${c.offerId} (${name.slice(0, 40)})` : c.offerId;
-    return `${dir} <b>${title}</b>: ${c.prevPct.toFixed(1)}% → ${c.pct.toFixed(1)}%`;
-  });
-  const text = `📋 <b>${label}: дайджест Соинвеста Ozon за сутки</b>\n\n${lines.join('\n')}`;
+  // Категория артикула — как в сервисе: ручная правка или автоматическая (2 уровня).
+  const offers = pairs.map(x => x.o);
+  const [names, ovs] = await Promise.all([
+    query(`SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND offer_id = ANY($2::text[])`, [cabinet, offers]).catch(() => []),
+    query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1 AND offer_id = ANY($2::text[])`, [cabinet, offers]).catch(() => []),
+  ]);
+  const nameBy = new Map(names.map(r => [r.offer_id, r.product_name || '']));
+  const ovBy = new Map(ovs.map(r => [r.offer_id, r.path]));
+  const catOf = o => {
+    const path = ovBy.get(o) || autoPath(cabinet, nameBy.get(o) || '', o).join(' / ');
+    return String(path || 'Без категории').split(' / ').slice(0, 2).join(' / ');
+  };
+  const cats = new Map();
+  for (const x of pairs) {
+    const c = catOf(x.o);
+    const g = cats.get(c) || { n: 0, prev: 0, now: 0, up: 0, down: 0 };
+    g.n++; g.prev += x.prev; g.now += x.pct;
+    if (x.pct - x.prev >= 0.1) g.up++; else if (x.prev - x.pct >= 0.1) g.down++;
+    cats.set(c, g);
+  }
+  const pp = v => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1).replace('.', ',')} п.п.`;
+  const f1 = v => v.toFixed(1).replace('.', ',');
+  const catLines = [...cats.entries()].filter(([, g]) => g.n >= 3)
+    .map(([c, g]) => ({ c, g, a0: g.prev / g.n, a1: g.now / g.n }))
+    .sort((x, y) => Math.abs(y.a1 - y.a0) - Math.abs(x.a1 - x.a0))
+    .map(({ c, g, a0, a1 }) => `${Math.abs(a1 - a0) < 0.1 ? '▫️' : a1 > a0 ? '📈' : '📉'} <b>${c}</b>: ${f1(a0)}% → ${f1(a1)}% (${pp(a1 - a0)}; выросла у ${g.up}, снизилась у ${g.down} из ${g.n})`);
+  const strong = pairs.filter(x => Math.abs(x.pct - x.prev) >= strongPp).sort((a, b) => Math.abs(b.pct - b.prev) - Math.abs(a.pct - a.prev));
+  const strongLines = strong.slice(0, 10).map(x => `${x.pct > x.prev ? '📈' : '📉'} <b>${x.o}</b> (${catOf(x.o).split(' / ').pop()}): ${f1(x.prev)}% → ${f1(x.pct)}%${x.price ? `, цена для покупателя ${Math.round(x.price)} ₽` : ''}`);
+  const anyChange = [...cats.values()].some(g => g.up || g.down);
+  if (!anyChange && !strong.length) return false;
+  let text = `📋 <b>${label}: СПП Ozon за сутки</b>\n\n<b>По категориям</b> (средняя СПП):\n${catLines.join('\n')}`;
+  if (strongLines.length) text += `\n\n<b>Сильные изменения</b> (от ${strongPp} п.п.):\n${strongLines.join('\n')}${strong.length > 10 ? `\n…и ещё ${strong.length - 10}` : ''}`;
   await sendMessage(text);
   return true;
 }

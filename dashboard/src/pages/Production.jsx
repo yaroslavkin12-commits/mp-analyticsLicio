@@ -90,7 +90,7 @@ export default function Production({ cabinet }) {
     const res = {};
     for (const shop of SHOPS) {
       const t = tasks[shop];
-      const lim = t !== undefined && t !== '' && t !== null ? { tasks: Number(t) } : { pcs: settings.capacity[shop] };
+      const lim = t !== undefined && t !== '' && t !== null ? { tasks: Number(t), fill: !!tasks[shop + ':fill'] } : { pcs: settings.capacity[shop] };
       const a = allocate(rows.filter(r => r.shop === shop), lim, settings);
       // Ручные правки: вписанное количество заменяет расчётное.
       for (const r of rows) {
@@ -105,7 +105,7 @@ export default function Production({ cabinet }) {
         byMat[m] = byMat[m] || { pcs: 0, tasks: 0 }; byMat[m].pcs += v.qty; byMat[m].tasks += Math.ceil(v.tasks - 1e-9);
       }
       const need = rows.filter(r => r.shop === shop && r.c.W > 0);
-      res[shop] = { map: a.map, pcs, tasks: tsk, byMat, lim, needPcs: need.reduce((s, r) => s + r.c.W, 0), needTasks: need.reduce((s, r) => s + Math.ceil(r.c.W / taskSizeOf(r, settings) - 1e-9), 0) };
+      res[shop] = { map: a.map, pcs, tasks: tsk, byMat, lim, left: a.left.filter(x => over[x.r.o] === undefined || over[x.r.o] === ''), added: a.added, needPcs: need.reduce((s, r) => s + r.c.W, 0), needTasks: need.reduce((s, r) => s + Math.ceil(r.c.W / taskSizeOf(r, settings) - 1e-9), 0) };
     }
     return res;
   }, [rows, tasks, over, settings]);
@@ -190,17 +190,16 @@ export default function Production({ cabinet }) {
   // ── Заказ: выгрузка и фиксация ──
   const orderRows = shop => [...alloc[shop].map.entries()].map(([o, v]) => ({ r: rows.find(x => x.o === o), ...v }))
     .filter(x => x.r).sort((a, b) => b.r.c.Y - a.r.c.Y);
+  // Выгрузка: отдельный файл на каждый цех — «Потребность <цех> <дата>.xlsx».
   async function exportOrder() {
     const XLSX = await import('xlsx');
-    const wb = XLSX.utils.book_new();
     for (const shop of shopsOn) {
-      const aoa = [['№', 'Артикул', 'Наименование', 'Материал', 'Кол-во, шт', 'Заданий', 'Приоритет', 'Покрытие, дн']];
-      orderRows(shop).forEach((x, i) => aoa.push([i + 1, x.r.o, x.r.n, x.r.mat, x.qty, Math.round(x.tasks * 10) / 10, x.r.c.Y, x.r.c.T === null ? '' : Math.round(x.r.c.T)]));
-      aoa.push([], ['', 'Итого', '', '', alloc[shop].pcs, alloc[shop].tasks]);
-      const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 4 }, { wch: 16 }, { wch: 70 }, { wch: 10 }, { wch: 11 }, { wch: 9 }, { wch: 10 }, { wch: 12 }];
-      XLSX.utils.book_append_sheet(wb, ws, shop.slice(0, 30));
+      const aoa = [['Артикул', 'Наименование', 'Цех', 'Материал', 'Кол-во, шт', 'Кол-во заданий']];
+      orderRows(shop).forEach(x => aoa.push([x.r.o, x.r.n, shop, x.r.mat, x.qty, Math.round(x.tasks * 10) / 10]));
+      const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 16 }, { wch: 80 }, { wch: 12 }, { wch: 10 }, { wch: 11 }, { wch: 14 }];
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, shop.slice(0, 30));
+      XLSX.writeFile(wb, `Потребность ${shop} ${today.format('DD.MM.YYYY')}.xlsx`);
     }
-    XLSX.writeFile(wb, `Заказ в цех ${shopsOn.join(', ')} ${today.format('DD.MM.YYYY')}.xlsx`);
   }
   async function fixOrder() {
     if (!shopsOn.length) return;
@@ -228,13 +227,14 @@ export default function Production({ cabinet }) {
   const [fDec, setFDec] = useState('');
   const [fMat, setFMat] = useState('');
   const [onlyOrder, setOnlyOrder] = useState(false);
+  const [onlyFocus, setOnlyFocus] = useState(false);
   const [q, setQ] = useState('');
   const [edit, setEdit] = useState(false);
   const ctl = useTableCtl(`prod-${cabinet}`, { k: 'pr', dir: -1 });
   const inOrder = o => { for (const s of SHOPS) { const v = alloc[s]?.map.get(o); if (v) return v; } return null; };
   const list = useMemo(() => rows.filter(r => (!fShop || r.shop === fShop) && (!fDec || r.c.V === fDec) && (!fMat || r.mat === fMat)
-    && (!onlyOrder || inOrder(r.o)) && (!q || r.o.toLowerCase().includes(q.toLowerCase()) || String(r.n || '').toLowerCase().includes(q.toLowerCase()))),
-  [rows, fShop, fDec, fMat, onlyOrder, q, alloc]); // eslint-disable-line react-hooks/exhaustive-deps
+    && (!onlyOrder || inOrder(r.o)) && (!onlyFocus || r.focus) && (!q || r.o.toLowerCase().includes(q.toLowerCase()) || String(r.n || '').toLowerCase().includes(q.toLowerCase()))),
+  [rows, fShop, fDec, fMat, onlyOrder, onlyFocus, q, alloc]); // eslint-disable-line react-hooks/exhaustive-deps
   const GET = {
     o: r => r.o, shop: r => r.shop, mat: r => r.mat, top: r => r.top, year: r => r.c.year, w4: r => r.c.w4, w8: r => r.c.w8, stock: r => r.c.stock, sew: r => r.c.sew,
     p: r => r.c.P, trend: r => r.c.Q, s: r => r.c.S, cov: r => r.c.T, dec: r => ['ORDER', 'PLAN', 'HOLD', 'NO ORDER'].indexOf(r.c.V), w: r => r.c.W, pr: r => r.c.Y,
@@ -319,6 +319,24 @@ export default function Production({ cabinet }) {
                   {Object.entries(a.byMat).map(([m, v]) => <span key={m}>{m}: {v.pcs} шт / {v.tasks} зад.</span>)}
                 </div>
                 <div className="pr-sub muted">потребность: {a.needTasks} зад., {fmtInt(a.needPcs)} шт{a.lim.tasks !== undefined && a.needTasks < a.lim.tasks ? ' — меньше, чем просит цех' : ''}</div>
+                {a.lim.tasks !== undefined && a.needTasks < a.lim.tasks && (
+                  <button type="button" className="a-toggle pr-fill" onClick={() => setTasks(t => ({ ...t, [s + ':fill']: !t[s + ':fill'] }))}
+                    title="Добрать задания до нужного числа: по одному заданию артикулам, у которых после заказа меньше всего дней запаса (до 90 дней)">
+                    <span className={`a-sw ${tasks[s + ':fill'] ? 'on' : ''}`} />добрать до {a.lim.tasks} заданий{a.added?.size ? ` (добрано ${[...a.added.values()].reduce((x, y) => x + y, 0)} шт)` : ''}
+                  </button>
+                )}
+                {a.left.length > 0 && (
+                  <details className="pr-left">
+                    <summary>Не вошло: {a.left.reduce((x, y) => x + y.tasks, 0)} зад. по {a.left.length} арт.</summary>
+                    {a.left.slice(0, 15).map(x => (
+                      <div key={x.r.o} className="pr-leftr">
+                        <span><b>{x.r.o}</b> — {x.qty} шт ({x.tasks} зад.){x.r.focus ? ' ★' : ''}</span>
+                        <button type="button" className="a-btn ghost" title="Добавить в заказ всю потребность артикула" onClick={() => setOver(v => ({ ...v, [x.r.o]: String((a.map.get(x.r.o)?.qty || 0) + x.qty) }))}>+ в заказ</button>
+                      </div>
+                    ))}
+                    {a.left.length > 15 && <div className="muted">…и ещё {a.left.length - 15}</div>}
+                  </details>
+                )}
                 <label className="pr-in sm">Мощность, шт/нед
                   <input className="a-input" type="number" min="0" value={cap} onChange={e => setCapacity(s, e.target.value)} />
                 </label>
@@ -346,6 +364,7 @@ export default function Production({ cabinet }) {
             <button key={k} type="button" className={`s-chip ${fDec === k ? 'on' : ''}`} onClick={() => setFDec(v => (v === k ? '' : k))}>{DECISION[k]} <b className="n">{decCount(k)}</b></button>
           ))}
           <button type="button" className="a-toggle" onClick={() => setOnlyOrder(v => !v)}><span className={`a-sw ${onlyOrder ? 'on' : ''}`} />Только в заказе</button>
+          <button type="button" className={`s-chip ${onlyFocus ? 'on' : ''}`} onClick={() => setOnlyFocus(v => !v)} title="Артикулы, отмеченные звёздочкой: тестируем в рекламе или готовим к ней">★ под рекламу <b className="n">{rows.filter(r => r.focus).length}</b></button>
           <button type="button" className="a-toggle" onClick={() => setEdit(v => !v)} title="Править цех, материал, цикл, буфер, партию, TOP и продажи за год (для новинок)"><span className={`a-sw ${edit ? 'on' : ''}`} />Править справочник</button>
           <input className="a-input" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} style={{ minWidth: 220 }} />
           <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
@@ -377,7 +396,15 @@ export default function Production({ cabinet }) {
                 const c = r.c, io = inOrder(r.o), sg = SIGNAL[c.U] || [c.U, ''];
                 return (
                   <tr key={r.o} className={io ? 'pr-in-order' : ''}>
-                    <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{r.o}</div><div className="model" title={r.n}>{r.car || r.n}</div></div></div></td>
+                    <td><div className="a-art">
+                      <button type="button" className={`pr-star ${r.focus ? 'on' : ''}`} onClick={() => editMaster(r.o, { focus: !r.focus })}
+                        title={r.focus ? `Под рекламу: прогноз продаж × ${r.focusK || 1.5}${r.focusMin ? `, не меньше ${r.focusMin} в день` : ''}, приоритет +800. Нажмите, чтобы снять` : 'Отметить «под рекламу»: ждём рост продаж — подсорт заранее и выше в очереди'}>★</button>
+                      <div style={{ minWidth: 0 }}><div className="id">{r.o}</div><div className="model" title={r.n}>{r.car || r.n}</div>
+                        {r.focus && edit && <div className="pr-edrow">
+                          <label title="Во сколько раз ждём рост продаж">×<input className="a-input pr-num" type="number" step="0.1" defaultValue={r.focusK || 1.5} onBlur={e => editMaster(r.o, { focusK: Number(e.target.value) || 1.5 })} /></label>
+                          <label title="Не меньше столько продаж в день (для новинок без истории)">мин/день<input className="a-input pr-num" type="number" step="0.1" defaultValue={r.focusMin ?? ''} onBlur={e => editMaster(r.o, { focusMin: e.target.value === '' ? null : Number(e.target.value) })} /></label>
+                        </div>}
+                      </div></div></td>
                     <td className="pr-l">{edit ? (
                       <select className="a-input pr-sel" value={r.shop || ''} onChange={e => editMaster(r.o, { shop: e.target.value })}>
                         {[...SHOPS, 'выводим', ''].map(s => <option key={s} value={s}>{s || '—'}</option>)}
@@ -398,7 +425,7 @@ export default function Production({ cabinet }) {
                     <td className="n r">{fmtInt(c.w8)}</td>
                     <td className="n r">{fmtInt(c.stock)}</td>
                     <td className="n r">{c.sew ? fmtInt(c.sew) : '—'}</td>
-                    <td className="n r">{num1(c.P)}</td>
+                    <td className="n r">{num1(c.P)}{r.focus && c.base !== c.P ? <small className="pr-sub2" title="Без поправки на рекламу">было {num1(c.base)}</small> : null}</td>
                     <td className="n r"><span className={c.Q === null ? '' : c.Q > 1.2 ? 's-up' : c.Q < 0.8 ? 's-down' : ''}>{c.Q === null ? '—' : num1(c.Q)}</span></td>
                     <td className="n r">{fmtInt(c.S)}</td>
                     <td className="n r">{c.T === null ? '—' : fmtInt(c.T)}</td>
