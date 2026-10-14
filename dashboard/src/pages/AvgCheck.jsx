@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl } from '../api';
+import { getSalesData, getFinancePnl, latestOnly } from '../api';
 import { fmtInt, useTip, ChartPane, niceScale, CAT_COLORS, Delta } from './AdsStats2';
 import { bucketsOf } from './SalesAnalytics';
 import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, inPath, matchQ, pct1, SEP, OTHER } from './finShared';
@@ -55,10 +55,11 @@ export default function AvgCheck({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
+    const ok = latestOnly('check:' + cabinet);
     Promise.all([getSalesData(cabinet, { dateFrom, dateTo }), getFinancePnl(cabinet, { dateFrom, dateTo })])
-      .then(([s, p]) => { setSales(s.data.data); setPnl(p.data.data); })
-      .catch(e => setError(e.response?.data?.error || e.message))
-      .finally(() => setLoading(false));
+      .then(ok(([s, p]) => { setSales(s.data.data); setPnl(p.data.data); }))
+      .catch(ok(e => setError(e.response?.data?.error || e.message)))
+      .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
 

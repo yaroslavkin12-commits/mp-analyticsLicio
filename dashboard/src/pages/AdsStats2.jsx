@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
 import {
   getAdsStats, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder,
   getAdsGroups, addAdsGroup, removeAdsGroup, renameAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
-  reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs,
+  reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs, latestOnly,
 } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
 import { useBuyerShare } from './buyerShare';
@@ -965,12 +965,13 @@ export default function AdsStats2({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true);
+    const ok = latestOnly('ads:' + cabinet), okE = latestOnly('adsev:' + cabinet);
     getAdsStats(cabinet, { dateFrom, dateTo, compare: 1 })
-      .then(r => setData(r.data.data))
+      .then(ok(r => setData(r.data.data)))
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(ok(() => setLoading(false)));
     getAdsEvents(cabinet, dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), dateTo)
-      .then(r => setEvents(r.data.data || [])).catch(() => setEvents([]));
+      .then(okE(r => setEvents(r.data.data || []))).catch(okE(() => setEvents([])));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
 

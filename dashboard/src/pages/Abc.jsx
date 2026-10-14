@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getFinanceCoefs } from '../api';
+import { getSalesData, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
 import { fmtInt, Delta, CAT_COLORS, SparkBars } from './AdsStats2';
 import { unitCoefs, unitProfit } from './unitModel';
 import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, useBuyerShare, OTHER } from './finShared';
@@ -64,14 +64,15 @@ export default function Abc({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
+    const ok = latestOnly('abc:' + cabinet);
     getSalesData(cabinet, { dateFrom, dateTo, compare: 1 })
-      .then(r => setSales(r.data.data))
-      .catch(e => setError(e.response?.data?.error || e.message))
-      .finally(() => setLoading(false));
+      .then(ok(r => setSales(r.data.data)))
+      .catch(ok(e => setError(e.response?.data?.error || e.message)))
+      .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
   // Выкупы и прибыль — по требованию.
-  useEffect(() => { if (metric === 'sales') getFinancePnl(cabinet, { dateFrom, dateTo }).then(r => setPnl(r.data.data)).catch(() => {}); }, [metric, cabinet, dateFrom, dateTo]);
+  useEffect(() => { if (metric === 'sales') { const ok = latestOnly('abcpnl:' + cabinet); getFinancePnl(cabinet, { dateFrom, dateTo }).then(ok(r => setPnl(r.data.data))).catch(() => {}); } }, [metric, cabinet, dateFrom, dateTo]);
   useEffect(() => { if (metric === 'profit' && !coefs) getFinanceCoefs(cabinet).then(r => setCoefs(r.data.data)).catch(() => {}); }, [metric, cabinet, coefs]);
 
   const cats = useCats(sales?.articles, sales?.order);

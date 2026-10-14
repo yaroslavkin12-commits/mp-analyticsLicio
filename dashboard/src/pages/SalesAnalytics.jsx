@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
-import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs } from '../api';
+import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { useTax, useBuyerShare } from './finShared';
@@ -504,10 +504,11 @@ export default function SalesAnalytics({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
+    const ok = latestOnly('sales:' + cabinet);
     getSalesData(cabinet, { dateFrom, dateTo, compare: 1 })
-      .then(r => setData(r.data.data))
-      .catch(e => setError(e.response?.data?.error || e.message))
-      .finally(() => setLoading(false));
+      .then(ok(r => setData(r.data.data)))
+      .catch(ok(e => setError(e.response?.data?.error || e.message)))
+      .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setSel(''); setBrand(''); setOpenArt(null); }, [cabinet]);

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
-import { getSalesGeo } from '../api';
+import { getSalesGeo, latestOnly } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
 import { fmtInt, fmtPct, Delta, useTip, naturalCompare, shortModel, CAT_COLORS } from './AdsStats2';
 import { StackChart, bucketsOf, ORIGINS, ORIGIN_OF } from './SalesAnalytics';
@@ -129,10 +129,11 @@ export default function Geography({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
+    const ok = latestOnly('geo:' + cabinet);
     getSalesGeo(cabinet, { dateFrom, dateTo, compare: 1 })
-      .then(r => setData(r.data.data))
-      .catch(e => setError(e.response?.data?.error || e.message))
-      .finally(() => setLoading(false));
+      .then(ok(r => setData(r.data.data)))
+      .catch(ok(e => setError(e.response?.data?.error || e.message)))
+      .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
 

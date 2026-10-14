@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getBuyoutData } from '../api';
+import { getBuyoutData, latestOnly } from '../api';
 import { fmtInt, useTip, DualChart, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, SEP, OTHER } from './finShared';
 import './ads2.css';
@@ -47,10 +47,11 @@ export default function Buyout({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
+    const ok = latestOnly('buyout:' + cabinet);
     getBuyoutData(cabinet, { dateFrom, dateTo })
-      .then(r => setData(r.data.data))
-      .catch(e => setError(e.response?.data?.error || e.message))
-      .finally(() => setLoading(false));
+      .then(ok(r => setData(r.data.data)))
+      .catch(ok(e => setError(e.response?.data?.error || e.message)))
+      .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
 

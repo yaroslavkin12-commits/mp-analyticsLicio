@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getFinancePnl } from '../api';
+import { getFinancePnl, latestOnly } from '../api';
 import { fmtInt, useTip, DualChart, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, useBuyerShare } from './finShared';
 import './ads2.css';
@@ -68,10 +68,11 @@ export default function PnL({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
+    const ok = latestOnly('pnl:' + cabinet);
     getFinancePnl(cabinet, { dateFrom, dateTo })
-      .then(r => setData(r.data.data))
-      .catch(e => setError(e.response?.data?.error || e.message))
-      .finally(() => setLoading(false));
+      .then(ok(r => setData(r.data.data)))
+      .catch(ok(e => setError(e.response?.data?.error || e.message)))
+      .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
 

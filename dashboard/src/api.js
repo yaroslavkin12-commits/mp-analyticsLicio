@@ -139,3 +139,15 @@ export const getQuerySeries = (cabinet, offerId, q, days) => api.get('/queries/s
 export const getSeason = cabinet => api.get('/queries/season', { params: { cabinet }, timeout: 90000 });
 export const getRestock = (cabinet, days = 14) => api.get('/tracked-articles/restock', { params: { cabinet, days } });
 export const saveRestockSettings = (cabinet, s) => api.post('/tracked-articles/restock/settings', { cabinet, ...s });
+
+// Ответ только на ПОСЛЕДНИЙ запрос раздела. Если период меняли быстро (или
+// выбор дат прошёл в два шага), более ранний запрос мог прийти позже нового
+// и показать данные за другой период, чем стоит в календаре.
+//   const ok = latestOnly('sales');
+//   getX().then(ok(r => setData(...))).finally(ok(() => setLoading(false)));
+const LATEST = new Map();
+export function latestOnly(key) {
+  const n = (LATEST.get(key) || 0) + 1;
+  LATEST.set(key, n);
+  return fn => (...args) => (LATEST.get(key) === n ? fn(...args) : undefined);
+}

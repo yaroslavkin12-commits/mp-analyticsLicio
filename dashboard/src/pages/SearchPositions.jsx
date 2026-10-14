@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getQueries, getQuerySeries, getAdsEvents } from '../api';
+import { getQueries, getQuerySeries, getAdsEvents, latestOnly } from '../api';
 import { fmtInt, useTip, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, Kpi, Empty, inPath, matchQ, OTHER } from './finShared';
 import './ads2.css';
@@ -40,7 +40,8 @@ export default function SearchPositions({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
-    getQueries(cabinet, { dateFrom, dateTo }).then(r => setData(r.data.data)).catch(e => setError(e.response?.data?.error || e.message)).finally(() => setLoading(false));
+    const ok = latestOnly('queries:' + cabinet);
+    getQueries(cabinet, { dateFrom, dateTo }).then(ok(r => setData(r.data.data))).catch(ok(e => setError(e.response?.data?.error || e.message))).finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
   const cats = useCats(data?.articles, data?.order);
