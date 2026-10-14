@@ -153,3 +153,11 @@ export function latestOnly(key) {
   LATEST.set(key, n);
   return fn => (...args) => (LATEST.get(key) === n ? fn(...args) : undefined);
 }
+
+// «Производство» — потребность в пошив
+export const getProduction = cabinet => api.get('/production', { params: { cabinet } });
+export const uploadProduction = (cabinet, kind, items, file) => api.post('/production/upload', { cabinet, kind, items, file });
+export const saveProductionMaster = (cabinet, items, replace) => api.post('/production/master', { cabinet, items, replace });
+export const saveProductionSettings = (cabinet, settings) => api.post('/production/settings', { cabinet, settings });
+export const saveProductionOrder = (cabinet, order) => api.post('/production/orders', { cabinet, order });
+export const removeProductionOrder = (cabinet, id) => api.post('/production/orders', { cabinet, remove: id });
