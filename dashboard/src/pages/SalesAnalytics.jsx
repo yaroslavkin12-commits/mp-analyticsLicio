@@ -429,7 +429,10 @@ const sliceVal = (c, r) => {
   const t = v.replace(/[\s\u00a0₽%]/g, '').replace(',', '.').replace('−', '-');
   return t !== '' && Number.isFinite(Number(t)) ? Number(t) : v;
 };
-function SliceTable({ rows, cols, onOpen, empty, id }) {
+// У артикульных срезов после «Артикул» — колонка категории (сортируется по клику).
+const CAT_COL = { t: 'Категория', v: r => { const p = r.a.parts || String(r.a.cat || '').split(SEP); return <span className="s-catcell" title={p.join(SEP)}>{p.slice(1).join(SEP) || p[0]}</span>; }, s: r => r.a.cat };
+function SliceTable({ rows, cols: cols0, onOpen, empty, id }) {
+  const cols = cols0[0]?.t === 'Артикул' && rows[0]?.a ? [cols0[0], CAT_COL, ...cols0.slice(1)] : cols0;
   // Сортировка (клик по названию колонки) и фильтр «от … до» (воронка) — как в других таблицах.
   const ctl = useTableCtl(id ? `slice-${id}` : null);
   if (!rows.length) return <div className="a-empty" style={{ padding: 18 }}>{empty}</div>;
