@@ -26,7 +26,7 @@ const METRICS = [
   { g: 'Заказы и трафик', k: 'orders', t: 'Заказы, шт', kind: 'int' },
   { g: 'Заказы и трафик', k: 'revenue', t: 'Заказы, ₽', kind: 'rub' },
   { g: 'Заказы и трафик', k: 'perDay', t: 'Заказов в день', kind: 'num' },
-  { g: 'Заказы и трафик', k: 'avgCheck', t: 'Средний чек заказа', kind: 'rub' },
+  { g: 'Заказы и трафик', k: 'avgCheck', t: 'Средняя цена заказа', kind: 'rub', d30: true },
   { g: 'Заказы и трафик', k: 'views', t: 'Показы', kind: 'int' },
   { g: 'Заказы и трафик', k: 'pdp', t: 'Переходы в карточку', kind: 'int' },
   { g: 'Заказы и трафик', k: 'cart', t: 'В корзину', kind: 'int' },
@@ -43,6 +43,7 @@ const METRICS = [
   { g: 'Остатки', k: 'sewing', t: 'В пути (отшивается)', kind: 'int', noDays: true, now: true },
   { g: 'Финансы (начисления Ozon)', k: 'buyQty', t: 'Выкупы, шт', kind: 'int', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'buyRub', t: 'Выкупы, ₽', kind: 'rub', fin: true },
+  { g: 'Финансы (начисления Ozon)', k: 'buyCheck', t: 'Средняя цена выкупа', kind: 'rub', fin: true, d30: true },
   { g: 'Финансы (начисления Ozon)', k: 'payout', t: 'Поступление на счёт', kind: 'rub', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'payUnit', t: 'Поступление на 1 выкуп', kind: 'rub', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'cost', t: 'Себестоимость выкупов', kind: 'rub', fin: true },
@@ -94,6 +95,7 @@ function derive(k, S, D) {
   switch (k) {
     case 'perDay': return D ? S.orders / D : null;
     case 'avgCheck': return div(S.revenue, S.orders);
+    case 'buyCheck': return div(S.buyRub, S.buyQty);
     case 'crOrder': { const r = div(S.orders, S.pdp); return r === null ? null : r * 100; }
     case 'drr': { const r = div(S.spend, S.revenue); return r === null ? null : r * 100; }
     case 'position': return div(S.posSum, S.posCnt);
@@ -484,9 +486,12 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   }, [cfg.cols]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const csv = () => {
-    const head = [ROW_MODES.find(r => r[0] === cfg.rows)[1], ...cfg.cols.flatMap(c => (c.cmp && !MET[c.m]?.noDays ? [colTitle(c), colTitle(c) + ' (пред.)'] : [colTitle(c)]))];
+    // Для артикулов: отдельно артикул, модель и категория — чтобы артикул можно было сопоставлять в Excel.
+    const isArt = cfg.rows === 'art';
+    const lead = r => (isArt ? (r.a ? [r.a.o, r.a.short || '', r.cat || ''] : [r.name, '', '']) : [r.name]);
+    const head = [...(isArt ? ['Артикул', 'Модель', 'Категория'] : [ROW_MODES.find(r => r[0] === cfg.rows)[1]]), ...cfg.cols.flatMap(c => (c.cmp && !MET[c.m]?.noDays ? [colTitle(c), colTitle(c) + ' (пред.)'] : [colTitle(c)]))];
     const num = v => (v === null || v === undefined || !Number.isFinite(v) ? '' : String(Math.round(v * 100) / 100).replace('.', ','));
-    const lines = [head, ...[table.total, ...shown].map(r => [r.name + (r.cat ? ` (${r.cat})` : ''), ...r.vals.flatMap((x, i) => (cfg.cols[i].cmp && !MET[cfg.cols[i].m]?.noDays ? [num(x.v), num(x.p)] : [num(x.v)]))])];
+    const lines = [head, ...[table.total, ...shown].map(r => [...lead(r), ...r.vals.flatMap((x, i) => (cfg.cols[i].cmp && !MET[cfg.cols[i].m]?.noDays ? [num(x.v), num(x.p)] : [num(x.v)]))])];
     const text = '﻿' + lines.map(l => l.map(s => `"${String(s).replace(/"/g, '""')}"`).join(';')).join('\n');
     const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
     const el = document.createElement('a'); el.href = url; el.download = `таблица-${anchor}.csv`; el.click();
@@ -612,7 +617,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       {ed && (
         <div className="tb-ed">
           <label>Метрика
-            <select className="a-input" value={ed.m} onChange={e => setCol(ed.id, { m: e.target.value })}>
+            <select className="a-input" value={ed.m} onChange={e => { const m = e.target.value; setCol(ed.id, MET[m]?.d30 ? { m, days: 30, unit: 'd', off: 0 } : { m }); }}>
               {GROUPS.map(g => <optgroup key={g} label={g}>{METRICS.filter(m => m.g === g).map(m => <option key={m.k} value={m.k}>{m.t}</option>)}</optgroup>)}
             </select>
           </label>
