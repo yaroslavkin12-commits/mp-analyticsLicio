@@ -1270,8 +1270,7 @@ export default function SalesAnalytics({ cabinet }) {
 
       <TableBuilder cabinet={cabinet} anchor={dateTo} prepare={prepare} tax={tax} shareOf={builderShare}
         scope={sel || brand || search.trim() ? cached(`bscope|${sel}`, () => new Set(node.arts.map(a => a.o))) : null}
-        onOpenArticle={o => { const a = all.find(x => x.o === o); if (a) openArticle(a); }}
-        onOpenCat={path => { setSel(path); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
+        onOpenArticle={o => { const a = all.find(x => x.o === o); if (a) openArticle(a); }} />
 
       {tip.node}
     </div>

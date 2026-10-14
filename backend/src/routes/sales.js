@@ -391,6 +391,35 @@ router.post('/category', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── «В пути (отшивается)» — сколько штук чехлов на сиденья сейчас шьётся ──
+// Список целиком загружается из файла (артикул → количество) и заменяет прежний.
+// GET  /api/sales/sewing?cabinet=defly → { items: { offer: qty }, updatedAt }
+// POST /api/sales/sewing { cabinet, items: { offer: qty } }
+const sewKey = c => `sewing:${c}`;
+router.get('/sewing', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const rows = await query(`SELECT value, updated_at FROM app_settings WHERE key = $1`, [sewKey(cabinet)]);
+    const v = rows[0] ? JSON.parse(rows[0].value) : {};
+    res.json({ success: true, data: { items: v.items || {}, updatedAt: v.updatedAt || rows[0]?.updated_at || null } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+router.post('/sewing', async (req, res) => {
+  try {
+    const { cabinet, items } = req.body || {};
+    if (!cabinet || !items || typeof items !== 'object') return res.status(400).json({ success: false, error: 'Нужны cabinet и items' });
+    const clean = {};
+    for (const [o, q] of Object.entries(items)) {
+      const k = String(o).trim().slice(0, 128), n = Math.round(Number(q));
+      if (k && Number.isFinite(n) && n > 0) clean[k] = n;
+    }
+    const v = { items: clean, updatedAt: new Date().toISOString() };
+    await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [sewKey(cabinet), JSON.stringify(v)]);
+    res.json({ success: true, data: v });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // ── Себестоимость ──────────────────────────────────────────────────────
 // GET /api/sales/costs?cabinet=defly — все артикулы кабинета с себестоимостью
 // и средней ценой продажи за 30 дней (для ориентира).

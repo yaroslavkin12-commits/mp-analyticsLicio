@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl } from '../api';
+import { getSalesData, getFinancePnl, getSewing, saveSewing } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, fmtPct } from './AdsStats2';
 
@@ -15,6 +15,9 @@ import { fmtInt, fmtPct } from './AdsStats2';
 // ─────────────────────────────────────────────────────────────────────────
 
 const SEP = ' / ';
+// «В пути (отшивается)» — только для чехлов на сиденья.
+const SEAT = 'Чехлы / Чехлы на сиденья';
+const isSeat = a => a.cat === SEAT || a.cat.startsWith(SEAT + SEP);
 const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other'];
 
 // kind: int — штуки, rub — рубли, pct — проценты, num — дробное.
@@ -34,6 +37,7 @@ const METRICS = [
   { g: 'Реклама', k: 'adOrders', t: 'Заказы с рекламы', kind: 'int' },
   { g: 'Остатки', k: 'stock', t: 'Остаток', kind: 'int', noDays: true },
   { g: 'Остатки', k: 'cover', t: 'Запаса хватит, дней', kind: 'int' },
+  { g: 'Остатки', k: 'sewing', t: 'В пути (отшивается)', kind: 'int', noDays: true, now: true },
   { g: 'Финансы (начисления Ozon)', k: 'buyQty', t: 'Выкупы, шт', kind: 'int', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'buyRub', t: 'Выкупы, ₽', kind: 'rub', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'payout', t: 'Поступление на счёт', kind: 'rub', fin: true },
@@ -69,7 +73,7 @@ const colTitle = c => {
   const m = MET[c.m]; if (!m) return '?';
   let t = m.t;
   if (!m.noDays) t += ` · ${perTxt(c.days, c.unit)}`;
-  if (c.off) t += ` · ${perTxt(c.off, c.unit)} назад`;
+  if (c.off && !m.now) t += ` · ${perTxt(c.off, c.unit)} назад`;
   else if (m.noDays) t += ' · сейчас';
   return t;
 };
@@ -98,18 +102,28 @@ function derive(k, S, D) {
     default: return S[k] ?? null;
   }
 }
-const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'posSum', 'posCnt', 'stock', 'buyQty', 'buyRub', 'payout', 'cost', 'profit'];
+const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'posSum', 'posCnt', 'stock', 'sewing', 'buyQty', 'buyRub', 'payout', 'cost', 'profit'];
 
 let idSeq = Date.now();
 const newId = () => 'c' + (idSeq++).toString(36);
 
-export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, onOpenArticle, onOpenCat }) {
+export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, onOpenArticle }) {
   const storeKey = `mp-builder:${cabinet}`;
   const [cfg, setCfg] = useState(() => { const s = load(storeKey); return s?.cols?.length ? { rows: s.rows || 'art', cols: s.cols } : DEFAULT; });
   const [templates, setTemplates] = useState(() => load(storeKey + ':tpl') || {});
   const [edit, setEdit] = useState(null); // id столбца в редакторе
   const [hideEmpty, setHideEmpty] = useState(() => load(storeKey + ':empty') !== false);
   useEffect(() => { save(storeKey + ':empty', hideEmpty); }, [storeKey, hideEmpty]);
+  // Своя категория конструктора (хлебные крошки): «Все / Чехлы / Чехлы на сиденья».
+  const [catPath, setCatPath] = useState(() => load(storeKey + ':cat') || '');
+  useEffect(() => { save(storeKey + ':cat', catPath); }, [storeKey, catPath]);
+  const [drag, setDrag] = useState(null); // id перетаскиваемого столбца
+  const [over, setOver] = useState(null);
+  // Отшивается: артикул → шт (загружается файлом, хранится на сервере).
+  const [sew, setSew] = useState({ items: {}, updatedAt: null });
+  const [sewMsg, setSewMsg] = useState(null);
+  useEffect(() => { getSewing(cabinet).then(r => setSew(r.data.data || { items: {} })).catch(() => {}); }, [cabinet]);
+  const sewLc = useMemo(() => { const m = new Map(); for (const [o, q] of Object.entries(sew.items || {})) m.set(o.toLowerCase(), q); return m; }, [sew]);
   const [data, setData] = useState(null);
   const [fin, setFin] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -176,6 +190,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       if (a.pos[d] !== null) { S.posSum += a.pos[d]; S.posCnt++; }
     }
     S.stock = a.stockArr[hi] ?? 0;
+    S.sewing = isSeat(a) ? (sewLc.get(String(a.o).toLowerCase()) || 0) : 0;
     const x = finArt?.m.get(a.o);
     if (finArt && x) {
       let s = 0, q = 0, oz = 0, ad = 0, saleW = 0, adW = 0, nsA = 0;
@@ -190,14 +205,28 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       S.profit = pay - cost - s * (shareOf ? shareOf(a.o) : 1) * (tax || 0) / 100;
     }
     return S;
-  }, [finArt, shareOf, tax]);
+  }, [finArt, shareOf, tax, sewLc]);
 
-  const inScope = useMemo(() => arts.filter(a => !scope || scope.has(a.o)), [arts, scope]);
+  const inPath = a => !catPath || a.cat === catPath || a.cat.startsWith(catPath + SEP);
+  const inScope = useMemo(() => arts.filter(a => (!scope || scope.has(a.o)) && inPath(a)), [arts, scope, catPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Подкатегории текущей категории (для выпадающего списка и режима «Категории»).
+  const depth = catPath ? catPath.split(SEP).length : 0;
+  const kidsOf = useMemo(() => {
+    const m = new Map();
+    for (const a of arts) {
+      if ((scope && !scope.has(a.o)) || !inPath(a) || a.parts.length <= depth) continue;
+      const k = a.parts.slice(0, depth + 1).join(SEP);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return [...m.entries()];
+  }, [arts, scope, catPath, depth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Значения: строки → [ { v, prev } по каждому столбцу ].
   const table = useMemo(() => {
     if (!L) return { rows: [], total: null };
-    const groupOf = a => (cfg.rows === 'art' ? a.o : cfg.rows === 'cat' ? a.parts[0] : cfg.rows === 'sub' ? a.cat : (a.brand || 'Не определена'));
+    const groupOf = a => (cfg.rows === 'art' ? a.o
+      : cfg.rows === 'cat' ? (a.parts.length > depth ? a.parts.slice(0, depth + 1).join(SEP) : catPath)
+        : cfg.rows === 'sub' ? a.cat : (a.brand || 'Не определена'));
     const groups = new Map();
     for (const a of inScope) { const g = groupOf(a); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(a); }
     const colsSpec = cfg.cols.map(c => {
@@ -218,16 +247,18 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     });
     const rows = [...groups.entries()].map(([key, list]) => {
       const a = cfg.rows === 'art' ? list[0] : null;
-      return { key, a, list, name: a ? a.o : key, sub: a ? a.short : `${list.length} арт.`, vals: calc(list) };
+      const name = a ? a.o : (cfg.rows === 'cat' || cfg.rows === 'sub') && catPath && key.startsWith(catPath + SEP) ? key.slice(catPath.length + SEP.length) : key === catPath && cfg.rows === 'cat' ? `${key.split(SEP).pop()} (без подкатегории)` : key;
+      return { key, a, list, name, cat: a ? a.cat : '', sub: a ? a.short : `${list.length} арт.`, vals: calc(list) };
     });
     return { rows, total: { key: '__t', name: 'Итого', sub: `${inScope.length} арт.`, vals: calc(inScope) }, colsSpec };
-  }, [L, cfg, inScope, sumsOf, finArt, data]);
+  }, [L, cfg, inScope, sumsOf, finArt, data, depth, catPath]);
 
   const ctl = useTableCtl(`builder-${cabinet}`);
   // «Пустые» строки — все значения нулевые или пустые (обычно артикулы без движения).
   const rowsIn = useMemo(() => (hideEmpty ? table.rows.filter(r => r.vals.some(x => (x.v && Number.isFinite(x.v)) || (x.p && Number.isFinite(x.p)))) : table.rows), [table.rows, hideEmpty]);
   const shown = useMemo(() => ctl.apply(rowsIn, (r, k) => {
     if (k === '__name') return r.name;
+    if (k === '__cat') return r.cat;
     const i = cfg.cols.findIndex(c => c.id === k);
     return i < 0 ? null : r.vals[i]?.v ?? null;
   }), [ctl, rowsIn, cfg.cols]);
@@ -241,6 +272,75 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   });
   const addCol = () => { const id = newId(); setCfg(s => ({ ...s, cols: [...s.cols, { id, m: 'orders', days: 7, unit: 'd', off: 0, cmp: false }] })); setEdit(id); };
   const delCol = id => { setCfg(s => ({ ...s, cols: s.cols.filter(c => c.id !== id) })); setEdit(null); };
+  // Перетаскивание столбца (за плашку сверху или за заголовок таблицы): ставим перед тем, на который бросили.
+  const dropCol = (src, dst) => setCfg(s => {
+    if (!src || src === dst) return s;
+    const cols = s.cols.filter(c => c.id !== src), moved = s.cols.find(c => c.id === src);
+    const j = dst ? cols.findIndex(c => c.id === dst) : cols.length;
+    const si = s.cols.findIndex(c => c.id === src), di = s.cols.findIndex(c => c.id === dst);
+    cols.splice(j < 0 ? cols.length : j + (di > si ? 1 : 0), 0, moved);
+    return { ...s, cols };
+  });
+  const dnd = id => ({
+    draggable: true,
+    onDragStart: e => { setDrag(id); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', id); } catch (x) { /* ignore */ } },
+    onDragOver: e => { if (drag) { e.preventDefault(); setOver(id); } },
+    onDragLeave: () => setOver(o => (o === id ? null : o)),
+    onDrop: e => { e.preventDefault(); dropCol(drag, id); setDrag(null); setOver(null); },
+    onDragEnd: () => { setDrag(null); setOver(null); },
+  });
+  const openRow = r => {
+    if (r.a) return onOpenArticle?.(r.a.o);
+    if (cfg.rows === 'cat' || cfg.rows === 'sub') {
+      // Провалиться внутрь: дальше — подкатегории, а если их нет — артикулы.
+      const hasKids = arts.some(a => a.parts.length > r.key.split(SEP).length && (a.cat.startsWith(r.key + SEP)));
+      setCatPath(r.key);
+      if (!hasKids || cfg.rows === 'sub') setCfg(s => ({ ...s, rows: 'art' }));
+    }
+    return null;
+  };
+
+  // Загрузка файла «отшивается»: 1-я колонка — артикул, 2-я — количество.
+  const seatArts = useMemo(() => arts.filter(isSeat), [arts]);
+  async function onSewFile(e) {
+    const f = e.target.files?.[0]; e.target.value = '';
+    if (!f) return;
+    setSewMsg(null);
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.read(await f.arrayBuffer());
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+      const byLc = new Map(arts.map(a => [String(a.o).toLowerCase(), a]));
+      const items = {}, unknown = [], notSeat = [];
+      let bad = 0;
+      for (const row of aoa) {
+        const o = String(row[0] ?? '').trim(); if (!o) continue;
+        const q = Number(String(row[1] ?? '').replace(/\s/g, '').replace(',', '.'));
+        if (!Number.isFinite(q)) { bad++; continue; } // шапка или пустое количество
+        const a = byLc.get(o.toLowerCase());
+        if (!a) { unknown.push(o); continue; }
+        if (!isSeat(a)) { notSeat.push(a.o); continue; }
+        if (q > 0) items[a.o] = (items[a.o] || 0) + Math.round(q);
+      }
+      const n = Object.keys(items).length, tot = Object.values(items).reduce((x, y) => x + y, 0);
+      const warn = [unknown.length ? `не нашёл артикулы: ${unknown.slice(0, 6).join(', ')}${unknown.length > 6 ? ` и ещё ${unknown.length - 6}` : ''}` : '',
+        notSeat.length ? `не чехлы на сиденья (пропущены): ${notSeat.slice(0, 6).join(', ')}${notSeat.length > 6 ? ` и ещё ${notSeat.length - 6}` : ''}` : ''].filter(Boolean).join('; ');
+      if (!n && !window.confirm('В файле нет ни одного чехла на сиденья с количеством. Очистить список «отшивается»?')) return;
+      if (n && !window.confirm(`Загрузить «отшивается»: ${n} арт., ${tot} шт? Прежний список заменится.${warn ? '\n\n' + warn : ''}`)) return;
+      const r = await saveSewing(cabinet, items);
+      setSew(r.data.data);
+      setSewMsg({ bad: !!warn, text: `Загружено: ${n} арт., ${tot} шт.${warn ? ' ' + warn[0].toUpperCase() + warn.slice(1) + '.' : ''}` });
+    } catch (x) { setSewMsg({ bad: true, text: 'Не удалось прочитать файл: ' + x.message }); }
+  }
+  async function sewTemplate() {
+    const XLSX = await import('xlsx');
+    const aoa = [['Артикул', 'Отшивается, шт'], ...[...seatArts].sort((x, y) => String(x.o).localeCompare(String(y.o), 'ru', { numeric: true })).map(a => [a.o, sewLc.get(String(a.o).toLowerCase()) || ''])];
+    const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 20 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Отшивается');
+    XLSX.writeFile(wb, `Отшивается_${cabinet}_${dayjs().format('YYYY-MM-DD')}.xlsx`);
+  }
+  const sewTotal = Object.values(sew.items || {}).reduce((x, y) => x + y, 0);
+  const hasSewCol = cfg.cols.some(c => c.m === 'sewing');
 
   const saveTpl = () => {
     const name = window.prompt('Название шаблона', '');
@@ -253,7 +353,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const csv = () => {
     const head = [ROW_MODES.find(r => r[0] === cfg.rows)[1], ...cfg.cols.flatMap(c => (c.cmp && !MET[c.m]?.noDays ? [colTitle(c), colTitle(c) + ' (пред.)'] : [colTitle(c)]))];
     const num = v => (v === null || v === undefined || !Number.isFinite(v) ? '' : String(Math.round(v * 100) / 100).replace('.', ','));
-    const lines = [head, ...[table.total, ...shown].map(r => [r.name, ...r.vals.flatMap((x, i) => (cfg.cols[i].cmp && !MET[cfg.cols[i].m]?.noDays ? [num(x.v), num(x.p)] : [num(x.v)]))])];
+    const lines = [head, ...[table.total, ...shown].map(r => [r.name + (r.cat ? ` (${r.cat})` : ''), ...r.vals.flatMap((x, i) => (cfg.cols[i].cmp && !MET[cfg.cols[i].m]?.noDays ? [num(x.v), num(x.p)] : [num(x.v)]))])];
     const text = '﻿' + lines.map(l => l.map(s => `"${String(s).replace(/"/g, '""')}"`).join(';')).join('\n');
     const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
     const el = document.createElement('a'); el.href = url; el.download = `таблица-${anchor}.csv`; el.click();
@@ -308,14 +408,43 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         </button>
       </div>
       <div className="tb-bar">
+        <span className="tb-lbl">Категория</span>
+        <span className="tb-crumbs">
+          <button type="button" className={!catPath ? 'on' : ''} onClick={() => setCatPath('')}>Все</button>
+          {catPath && catPath.split(SEP).map((p, i, arr) => {
+            const path = arr.slice(0, i + 1).join(SEP);
+            return <React.Fragment key={path}><span className="sep">/</span><button type="button" className={path === catPath ? 'on' : ''} onClick={() => setCatPath(path)}>{p}</button></React.Fragment>;
+          })}
+        </span>
+        {kidsOf.length > 0 && (
+          <select className="a-input tb-sel" value="" onChange={e => e.target.value && setCatPath(e.target.value)} title="Выбрать подкатегорию">
+            <option value="">{catPath ? 'подкатегория…' : 'выбрать категорию…'}</option>
+            {kidsOf.map(([k, n]) => <option key={k} value={k}>{k.split(SEP).pop()} · {n}</option>)}
+          </select>
+        )}
+      </div>
+      <div className="tb-bar">
         <span className="tb-lbl">Столбцы</span>
         {cfg.cols.map(c => (
-          <button key={c.id} type="button" className={`tb-chip ${edit === c.id ? 'on' : ''}`} onClick={() => setEdit(e => (e === c.id ? null : c.id))}>
+          <button key={c.id} type="button" {...dnd(c.id)} title="Нажмите — изменить; перетащите — поменять местами"
+            className={`tb-chip ${edit === c.id ? 'on' : ''} ${drag === c.id ? 'drag' : ''} ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} onClick={() => setEdit(e => (e === c.id ? null : c.id))}>
             {colTitle(c)}{c.cmp && !MET[c.m]?.noDays ? ' · Δ' : ''}
           </button>
         ))}
         <button type="button" className="tb-chip add" onClick={addCol}>+ столбец</button>
       </div>
+
+      {hasSewCol && (
+        <div className="tb-bar tb-sew">
+          <span className="tb-lbl">Отшивается</span>
+          <span>{sewTotal ? `${fmtInt(sewTotal)} шт по ${Object.keys(sew.items).length} арт.` : 'пока не загружено'}{sew.updatedAt ? ` · загружено ${dayjs(sew.updatedAt).format('DD.MM.YYYY HH:mm')}` : ''}</span>
+          <label className="a-btn ghost" style={{ cursor: 'pointer' }} title="Excel или CSV: 1-я колонка — артикул, 2-я — сколько штук шьётся. Прежний список заменится.">
+            Загрузить файл<input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={onSewFile} />
+          </label>
+          <button type="button" className="a-btn ghost" onClick={sewTemplate} title="Все чехлы на сиденья с текущими количествами">Скачать шаблон</button>
+          {sewMsg && <span className={sewMsg.bad ? 'tb-warn' : 'muted'}>{sewMsg.text}</span>}
+        </div>
+      )}
 
       {ed && (
         <div className="tb-ed">
@@ -335,13 +464,14 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
               </span>
             </label>
           )}
-          <label>{MET[ed.m]?.noDays ? 'На дату' : 'Сдвиг назад'}
+          {!MET[ed.m]?.now && <label title="На сколько отступить назад от конца периода страницы. 0 — период заканчивается сегодня (концом периода); 4 нед — те же 4 недели, но месяц назад.">{MET[ed.m]?.noDays ? 'На дату' : 'Сдвиг назад'}
             <span className="tb-pair">
               <input className="a-input" type="number" min="0" value={ed.unit === 'w' ? (ed.off || 0) / 7 : ed.off || 0}
                 onChange={e => { const n = Math.max(0, Math.round(Number(e.target.value) || 0)); setCol(ed.id, { off: Math.min(MAX_SPAN - 1, ed.unit === 'w' ? n * 7 : n) }); }} />
               <span className="tb-u">{ed.unit === 'w' ? 'нед' : 'дн'} {MET[ed.m]?.noDays ? 'назад' : ''}</span>
             </span>
-          </label>
+          </label>}
+          {ed.m === 'sewing' && <span className="a-hint" style={{ margin: 0, maxWidth: 360 }}>Только чехлы на сиденья. Количество загружается файлом — строка «Отшивается» под столбцами.</span>}
           {!MET[ed.m]?.noDays && (
             <label className="tb-chk"><input type="checkbox" checked={!!ed.cmp} onChange={e => setCol(ed.id, { cmp: e.target.checked })} />изменение к предыдущим {perTxt(ed.days, ed.unit)}</label>
           )}
@@ -369,8 +499,10 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
             <table className="a-t s-slice tb-t">
               <thead><tr>
                 <ThCtl ctl={ctl} k="__name" className="" filter={false}>{ROW_MODES.find(r => r[0] === cfg.rows)[1]}</ThCtl>
+                {cfg.rows === 'art' && <ThCtl ctl={ctl} k="__cat" className="" filter={false} hint="Сортировка по категории">Категория</ThCtl>}
                 {cfg.cols.map((c, i) => (
-                  <ThCtl key={c.id} ctl={ctl} k={c.id} unit={MET[c.m]?.kind === 'pct' ? '%' : MET[c.m]?.kind === 'rub' ? '₽' : ''}>
+                  <ThCtl key={c.id} ctl={ctl} k={c.id} unit={MET[c.m]?.kind === 'pct' ? '%' : MET[c.m]?.kind === 'rub' ? '₽' : ''}
+                    className={`r tb-th ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} dnd={dnd(c.id)}>
                     {colTitle(c)}{table.colsSpec?.[i]?.partial ? '*' : ''}
                   </ThCtl>
                 ))}
@@ -379,13 +511,15 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
                 {table.total && (
                   <tr className="tb-total">
                     <td><b>Итого</b> <span className="muted" style={{ fontSize: 11.5 }}>{table.total.sub}</span></td>
+                    {cfg.rows === 'art' && <td className="muted">{catPath ? catPath.split(SEP).pop() : ''}</td>}
                     {table.total.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
                   </tr>
                 )}
-                {!shown.length && <tr><td colSpan={cfg.cols.length + 1} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
+                {!shown.length && <tr><td colSpan={cfg.cols.length + 2} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
                 {shown.slice(0, LIMIT).map(r => (
-                  <tr key={r.key} className="row" onClick={() => (r.a ? onOpenArticle?.(r.a.o) : cfg.rows !== 'brand' ? onOpenCat?.(r.key) : null)}>
-                    <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{r.name}</div><div className="model" title={r.a?.n || ''}>{r.sub}</div></div></div></td>
+                  <tr key={r.key} className="row" onClick={() => openRow(r)} title={r.a ? 'Открыть артикул в дереве выше' : cfg.rows !== 'brand' ? 'Показать, что внутри' : ''}>
+                    <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{r.name}{!r.a && cfg.rows !== 'brand' ? ' ›' : ''}</div><div className="model" title={r.a?.n || ''}>{r.sub}</div></div></div></td>
+                    {cfg.rows === 'art' && <td className="muted tb-cat" title={r.cat}>{(catPath && r.cat.startsWith(catPath + SEP) ? r.cat.slice(catPath.length + SEP.length) : r.cat.split(SEP).slice(-2).join(SEP)) || '—'}</td>}
                     {r.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
                   </tr>
                 ))}

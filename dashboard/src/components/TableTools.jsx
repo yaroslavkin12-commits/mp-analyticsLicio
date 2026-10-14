@@ -85,12 +85,12 @@ function FilterPop({ value, onApply, onClose, unit }) {
 }
 
 // Заголовок колонки. filter=false — только сортировка; sort=false — без сортировки.
-export function ThCtl({ ctl, k, children, hint, className = 'r', filter = true, sort = true, unit, style }) {
+export function ThCtl({ ctl, k, children, hint, className = 'r', filter = true, sort = true, unit, style, dnd }) {
   const [open, setOpen] = useState(false);
   const s = ctl.sort && ctl.sort.k === k ? ctl.sort.dir : 0;
   const f = ctl.filters[k];
   return (
-    <th className={`${className} tt-th ${s ? 'on' : ''}`} style={style} title={hint}>
+    <th className={`${className} tt-th ${s ? 'on' : ''}`} style={style} title={hint} {...(dnd || {})}>
       <span className="tt-in">
         <span className={sort ? 'tt-lbl' : ''} onClick={sort ? () => ctl.cycleSort(k) : undefined}>
           {children}{s ? (s < 0 ? ' ↓' : ' ↑') : ''}

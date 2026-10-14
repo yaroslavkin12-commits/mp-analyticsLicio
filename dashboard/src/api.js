@@ -111,6 +111,8 @@ export const testTelegram = () => api.post('/tracked-articles/test-telegram');
 
 // «Аналитика продаж» и «Себестоимость»
 export const getSalesData = (cabinet, p) => api.get('/sales/data', { params: { cabinet, ...p }, timeout: 90000 });
+export const getSewing = cabinet => api.get('/sales/sewing', { params: { cabinet } });
+export const saveSewing = (cabinet, items) => api.post('/sales/sewing', { cabinet, items });
 export const setSalesCategory = (cabinet, offerIds, path) => api.post('/sales/category', { cabinet, offerIds, path });
 export const getCostList = cabinet => api.get('/sales/costs', { params: { cabinet }, timeout: 60000 });
 export const saveCostList = (cabinet, items) => api.post('/sales/costs', { cabinet, items }, { timeout: 120000 });
