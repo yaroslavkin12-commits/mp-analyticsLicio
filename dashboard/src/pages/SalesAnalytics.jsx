@@ -5,6 +5,7 @@ import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs } from '
 import { unitCoefs, unitProfit } from './unitModel';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { useTax, useBuyerShare } from './finShared';
+import TableBuilder from './TableBuilder';
 import DateRangePicker from '../components/DateRangePicker';
 import {
   fmtInt, fmtPct, fmtBy, heatColor, naturalCompare, shortModel, derive, changePct, Delta,
@@ -571,6 +572,8 @@ export default function SalesAnalytics({ cabinet }) {
     const ks = unitCoefs(c, coefArts, bs.shareOf);
     return new Map(coefArts.map((a, i) => [a.o, ks[i]]));
   }, [fin, coefArts, bs.shareOf]);
+  // Для конструктора таблицы: доля цены, с которой платится налог.
+  const builderShare = useCallback(o => unitK?.get(o)?.share ?? 1, [unitK]);
 
   const dates = data?.dates || [];
   const N = dates.length;
@@ -1264,6 +1267,11 @@ export default function SalesAnalytics({ cabinet }) {
           </div>
         )}
       </div>
+
+      <TableBuilder cabinet={cabinet} anchor={dateTo} prepare={prepare} tax={tax} shareOf={builderShare}
+        scope={sel || brand || search.trim() ? cached(`bscope|${sel}`, () => new Set(node.arts.map(a => a.o))) : null}
+        onOpenArticle={o => { const a = all.find(x => x.o === o); if (a) openArticle(a); }}
+        onOpenCat={path => { setSel(path); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
 
       {tip.node}
     </div>
