@@ -246,3 +246,5 @@
 .mpui .tb-active button{border:0;background:transparent;color:var(--a-accent);cursor:pointer;font-size:12px;padding:0 2px}
 .mpui .a-btn.on{border-color:var(--a-accent)}
 .mpui .s-slice .s-catcell{display:inline-block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;font-size:12px;color:var(--a-ink2)}
+.mpui .s-fold{display:block;width:100%;margin-top:6px;padding:7px 0;border:1px dashed var(--a-line2);border-radius:8px;background:transparent;color:var(--a-accent);font-size:12.5px;cursor:pointer}
+.mpui .s-fold:hover{background:var(--a-panel2)}

@@ -129,7 +129,7 @@ export default function Margin({ cabinet }) {
   const counts = Object.fromEntries(FILTERS.map(([k]) => [k, base.filter(r => r.status === k).length]));
   const GET = {
     o: r => r.a.o, price: r => r.r.P, buyer: r => (r.v.spp ? r.r.buyerPrice : null), cost: r => r.v.cost || null, profit: r => r.r.profit,
-    margin: r => (r.status === 'nocost' ? null : r.r.margin), roi: r => r.r.roi, be: r => r.be || null, tp: r => r.tp || null,
+    margin: r => (r.status === 'nocost' ? null : r.r.margin), roi: r => r.r.roi, be: r => r.be || null, be2: r => (r.be && r.v.spp ? r.be * (1 - r.v.spp / 100) : null), tp: r => r.tp || null,
     gap: r => (r.tp ? r.tp - r.r.P : null), rev: r => r.rev, drr: r => r.v.drr, pay: r => r.r.payout,
   };
   const shown = ctl.apply(flt ? base.filter(r => r.status === flt) : base, (r, k) => GET[k](r)).slice(0, 500);
@@ -185,7 +185,8 @@ export default function Margin({ cabinet }) {
               <ThCtl ctl={ctl} k="pay" hint="Средняя сумма поступления на счёт с 1 проданной штуки: цена минус комиссия, эквайринг, логистика (с учётом невыкупов), хранение и реклама">На счёт / шт</ThCtl>
               <ThCtl ctl={ctl} k="profit" hint="Прибыль с одной проданной (выкупленной) штуки после всех расходов, рекламы и налога">Прибыль / шт</ThCtl>
               <ThCtl ctl={ctl} k="margin" hint="Прибыль / выручка с продажи; ниже — ROI (прибыль / себестоимость)">Маржа</ThCtl>
-              <ThCtl ctl={ctl} k="be" hint="Цена, при которой прибыль = 0">Без&shy;убыток</ThCtl>
+              <ThCtl ctl={ctl} k="be" hint="Цена в кабинете (цена реализации), при которой прибыль = 0">Безубыток: цена реализации</ThCtl>
+              <ThCtl ctl={ctl} k="be2" hint="Сколько при безубыточной цене заплатит покупатель — со скидкой Ozon (СПП) по текущей проверке цены">Безубыток: цена для клиента</ThCtl>
               <ThCtl ctl={ctl} k="tp" hint={`Какой должна стать цена в кабинете, чтобы маржа была ${target}%; ниже — на сколько поднять или можно снизить текущую. Сортировка — по этой цене. «ценой не достичь» — комиссия, реклама и налог в % от цены не дают марже дойти до цели`}>Цена для {target}%</ThCtl>
               <ThCtl ctl={ctl} k="rev" hint="Заказы за 30 дней: сумма, ниже — штуки">Заказы 30 дн</ThCtl>
             </tr></thead>
@@ -214,12 +215,13 @@ export default function Margin({ cabinet }) {
                       <b style={{ color: r.profit < 0 ? 'var(--a-bad)' : undefined }}>{fmtInt(r.profit)}</b></td>
                     <td className="r"><span className={`pill ${status === 'nocost' ? 'm' : r.profit < 0 ? 'b' : r.margin < target ? 'w' : 'g'}`}>{pct1(r.margin)}</span><small className="m-sub">ROI {pct1(r.roi)}</small></td>
                     <td className="n r">{be ? fmtInt(be) : beNo && v.cost ? (maxM > 0 ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь</span>) : '—'}</td>
+                    <td className="n r muted" title={v.spp ? `СПП ${pct1(v.spp)}` : 'Нет данных о скидке Ozon'}>{be && v.spp ? fmtInt(be * (1 - v.spp / 100)) : be ? fmtInt(be) : '—'}</td>
                     <td className="n r">{tp ? <>{fmtInt(tp)}<small className={`m-sub ${gap > 0 ? 's-down' : 's-up'}`} title={gap > 0 ? `Поднять цену на ${fmtInt(gap)} ₽: ${fmtInt(r.P)} → ${fmtInt(tp)}` : `Можно снизить на ${fmtInt(-gap)} ₽: ${fmtInt(r.P)} → ${fmtInt(tp)}`}>{gap > 0 ? 'поднять на ' : 'можно −'}{fmtInt(Math.abs(gap))} ({gap > 0 ? '+' : '−'}{Math.abs(gap / r.P * 100).toFixed(0)}%)</small></> : tpNo && v.cost ? (maxM > target ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь<small className="m-sub">макс. {pct1(maxM)}</small></span>) : '—'}</td>
                     <td className="n r">{fmtInt(rev)}<small className="m-sub">{fmtInt(orders)} шт</small></td>
                   </tr>
                 );
               })}
-              {!shown.length && <tr><td colSpan={10} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
+              {!shown.length && <tr><td colSpan={11} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
             </tbody>
           </table>
         </div>

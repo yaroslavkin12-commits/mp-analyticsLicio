@@ -431,12 +431,24 @@ const sliceVal = (c, r) => {
 };
 // У артикульных срезов после «Артикул» — колонка категории (сортируется по клику).
 const CAT_COL = { t: 'Категория', v: r => { const p = r.a.parts || String(r.a.cat || '').split(SEP); return <span className="s-catcell" title={p.join(SEP)}>{p.slice(1).join(SEP) || p[0]}</span>; }, s: r => r.a.cat };
+const ROWS_FOLDED = 10;
+export function FoldBtn({ total, full, setFull, limit = ROWS_FOLDED }) {
+  if (total <= limit) return null;
+  return (
+    <button type="button" className="s-fold" onClick={() => setFull(f => !f)}>
+      {full ? 'Свернуть ▲' : `Показать все ${total} ▼`}
+    </button>
+  );
+}
 function SliceTable({ rows, cols: cols0, onOpen, empty, id }) {
   const cols = cols0[0]?.t === 'Артикул' && rows[0]?.a ? [cols0[0], CAT_COL, ...cols0.slice(1)] : cols0;
   // Сортировка (клик по названию колонки) и фильтр «от … до» (воронка) — как в других таблицах.
   const ctl = useTableCtl(id ? `slice-${id}` : null);
+  // Свёрнуто — первые 10 строк; «Показать все» разворачивает таблицу целиком.
+  const [full, setFull] = useState(false);
   if (!rows.length) return <div className="a-empty" style={{ padding: 18 }}>{empty}</div>;
   const shown = ctl.apply(rows, (r, k) => { const c = cols.find(x => x.t === k); return c ? sliceVal(c, r) : null; });
+  const vis = full ? shown : shown.slice(0, ROWS_FOLDED);
   return (
     <div className="a-scroll">
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctl} /></div>
@@ -444,13 +456,14 @@ function SliceTable({ rows, cols: cols0, onOpen, empty, id }) {
         <thead><tr>{cols.map(c => <ThCtl key={c.t} ctl={ctl} k={c.t} className={c.num ? 'r' : ''} filter={!!c.num}>{c.t}</ThCtl>)}</tr></thead>
         <tbody>
           {!shown.length && <tr><td colSpan={cols.length} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
-          {shown.map(r => (
+          {vis.map(r => (
             <tr key={r.key} className="row" onClick={onOpen ? () => onOpen(r) : undefined}>
               {cols.map(c => <td key={c.t} className={c.num ? 'n r' : ''}>{c.v(r)}</td>)}
             </tr>
           ))}
         </tbody>
       </table>
+      <FoldBtn total={shown.length} full={full} setFull={setFull} />
     </div>
   );
 }
@@ -1208,12 +1221,12 @@ export default function SalesAnalytics({ cabinet }) {
           {slice === 'superprofit' && <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'var(--a-ink2)' }}>маржа от
             <input className="a-input" type="number" value={superPct} onChange={e => setSuperPct(Number(e.target.value) || 0)} style={{ width: 64, padding: '3px 6px' }} />%</label>}
         </div>}
-        {['superprofit', 'stars', 'lowmargin', 'adeats'].includes(slice) && <SliceTable id={`f-${slice}`} rows={finder[slice].slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет таких артикулов"
+        {['superprofit', 'stars', 'lowmargin', 'adeats'].includes(slice) && <SliceTable key={slice} id={`f-${slice}`} rows={finder[slice].slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет таких артикулов"
           cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev },
             { t: 'Прибыль (прогноз), ₽', num: 1, v: r => <span className={r.fc.profit < 0 ? 's-down' : 's-up'}>{fmtInt(r.fc.profit)}</span>, s: r => r.fc.profit },
             { t: 'Маржа', num: 1, v: r => fmtPct(r.fc.margin), s: r => r.fc.margin }, { t: 'ДРР', num: 1, v: r => fmtPct(r.drr), s: r => r.drr },
             { t: 'Выкуп', num: 1, v: r => fmtPct(r.fc.buyout), s: r => r.fc.buyout }, { t: 'Запас, дн', num: 1, v: r => (r.sd === null ? '∞' : fmtInt(r.sd)), s: r => (r.sd === null ? 1e9 : r.sd) }]} />}
-        {['growth', 'fall'].includes(slice) && <SliceTable id={`f-${slice}`} rows={finder[slice].slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет таких артикулов"
+        {['growth', 'fall'].includes(slice) && <SliceTable key={slice} id={`f-${slice}`} rows={finder[slice].slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет таких артикулов"
           cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Заказы было', num: 1, v: r => fmtInt(r.porders), s: r => r.porders }, { t: 'Заказы стало', num: 1, v: r => fmtInt(r.orders), s: r => r.orders },
             { t: 'Изменение', num: 1, s: r => (r.orders / r.porders - 1) * 100, v: r => <Delta value={(r.orders / r.porders - 1) * 100} /> },
             { t: 'Показы было', num: 1, v: r => fmtInt(r.pviews), s: r => r.pviews }, { t: 'Показы стало', num: 1, v: r => fmtInt(r.views), s: r => r.views },

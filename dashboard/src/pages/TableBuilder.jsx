@@ -121,6 +121,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const [cfg, setCfg] = useState(() => { const s = load(storeKey); return s?.cols?.length ? { rows: s.rows || 'art', cols: s.cols } : DEFAULT; });
   const [templates, setTemplates] = useState(() => load(storeKey + ':tpl') || {});
   const [edit, setEdit] = useState(null); // id столбца в редакторе
+  const [full, setFull] = useState(false); // свёрнуто — первые 10 строк
   const [hideEmpty, setHideEmpty] = useState(() => load(storeKey + ':empty') !== false);
   useEffect(() => { save(storeKey + ':empty', hideEmpty); }, [storeKey, hideEmpty]);
   // Своя категория конструктора (хлебные крошки): «Все / Чехлы / Чехлы на сиденья».
@@ -681,7 +682,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
                   </tr>
                 )}
                 {!shown.length && <tr><td colSpan={cfg.cols.length + 2} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
-                {shown.slice(0, LIMIT).map(r => (
+                {shown.slice(0, full ? LIMIT : 10).map(r => (
                   <tr key={r.key} className="row" onClick={() => openRow(r)} title={r.a ? 'Открыть артикул в дереве выше' : cfg.rows !== 'brand' ? 'Показать, что внутри' : ''}>
                     <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{r.name}{!r.a && cfg.rows !== 'brand' ? ' ›' : ''}</div><div className="model" title={r.a?.n || ''}>{r.sub}</div></div></div></td>
                     {cfg.rows === 'art' && <td className="muted tb-cat" title={r.cat}>{(catPath && r.cat.startsWith(catPath + SEP) ? r.cat.slice(catPath.length + SEP.length) : r.cat.split(SEP).slice(-2).join(SEP)) || '—'}</td>}
@@ -690,7 +691,8 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
                 ))}
               </tbody>
             </table>
-            {shown.length > LIMIT && <div className="a-hint">Показаны первые {LIMIT} из {shown.length} — уточните фильтр или скачайте CSV.</div>}
+            {shown.length > 10 && <button type="button" className="s-fold" onClick={() => setFull(f => !f)}>{full ? 'Свернуть ▲' : `Показать все ${Math.min(shown.length, LIMIT)}${shown.length > LIMIT ? ` из ${shown.length}` : ''} ▼`}</button>}
+            {full && shown.length > LIMIT && <div className="a-hint">Показаны первые {LIMIT} из {shown.length} — уточните фильтр или скачайте CSV.</div>}
           </div>
         )}
     </div>
