@@ -433,8 +433,11 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     setTemplates(t => ({ ...t, [k]: snap() }));
     setActiveTpl(k); setNewName('');
   };
+  // Таблица «до шаблона» — чтобы можно было выйти из шаблона и вернуться к ней.
+  const baseRef = React.useRef(null);
   const applyTpl = name => {
     const t = templates[name]; if (!t) return;
+    if (!activeTpl) baseRef.current = { cfg, catPath, hideEmpty, sort: ctl.sort || null, filters: ctl.filters || {}, page: page ? { dateFrom: page.dateFrom, dateTo: page.dateTo, sel: page.sel || '', brand: page.brand || '', search: page.search || '' } : null };
     if (t.page && setPage) {
       const p = t.page;
       const dateTo = p.rel ? page.today : p.dateTo;
@@ -450,6 +453,19 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     setEdit(null);
     setActiveTpl(name);
     setTplOpen(false);
+  };
+  // Закрыть шаблон: вернуть таблицу и фильтры страницы, какими они были до его открытия.
+  const closeTpl = () => {
+    const b = baseRef.current;
+    if (b) {
+      if (b.page && setPage) setPage(b.page);
+      setCfg(b.cfg); setCatPath(b.catPath || ''); setHideEmpty(b.hideEmpty);
+      ctl.reset();
+      if (b.sort) ctl.setSort(b.sort);
+      for (const [k, f] of Object.entries(b.filters || {})) ctl.setFilter(k, f);
+    }
+    baseRef.current = null;
+    setActiveTpl(null); setEdit(null);
   };
   const delTpl = name => {
     if (!window.confirm(`Удалить шаблон «${name}»?`)) return;
@@ -531,6 +547,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
               Шаблон: <b>{activeTpl}</b>{tplDirty ? ' · изменён' : ''}
               {tplDirty && <button type="button" onClick={() => saveTplAs(activeTpl)} title="Записать текущую таблицу в этот шаблон">сохранить</button>}
               {tplDirty && <button type="button" onClick={() => applyTpl(activeTpl)} title="Вернуть как было в шаблоне">вернуть</button>}
+              <button type="button" className="tb-x" onClick={closeTpl} title="Закрыть шаблон — вернуть таблицу и фильтры, какими они были до его открытия">× закрыть</button>
             </span>
           )}
           <span className="tb-tplwrap" ref={tplRef}>

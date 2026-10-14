@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Сортировка и фильтры для таблиц.
@@ -61,7 +62,9 @@ export function useTableCtl(storeKey, defaultSort = null) {
   return { sort, setSort, cycleSort, filters, setFilter, reset, changed, apply };
 }
 
-function FilterPop({ value, onApply, onClose, unit }) {
+// Окошко фильтра рисуется поверх страницы (не внутри таблицы): иначе в
+// короткой или пустой таблице с прокруткой его обрезало и не нажать «применить».
+function FilterPop({ value, onApply, onClose, unit, anchor }) {
   const [min, setMin] = useState(value?.min ?? '');
   const [max, setMax] = useState(value?.max ?? '');
   const ref = useRef(null);
@@ -70,9 +73,20 @@ function FilterPop({ value, onApply, onClose, unit }) {
     setTimeout(() => document.addEventListener('mousedown', h), 0);
     return () => document.removeEventListener('mousedown', h);
   }, [onClose]);
+  // При прокрутке окошко едет вместе с колонкой.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    let raf = 0;
+    const h = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; setTick(t => t + 1); }); };
+    document.addEventListener('scroll', h, true); window.addEventListener('resize', h);
+    return () => { document.removeEventListener('scroll', h, true); window.removeEventListener('resize', h); if (raf) cancelAnimationFrame(raf); };
+  }, []);
   const ok = () => { onApply({ min, max }); onClose(); };
-  return (
-    <div ref={ref} className="tt-pop" onClick={e => e.stopPropagation()}>
+  const r = anchor?.getBoundingClientRect();
+  const W = 190;
+  const pos = r ? { position: 'fixed', top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.max(8, Math.min(r.right - W, window.innerWidth - W - 8)), right: 'auto', marginTop: 0, zIndex: 1000 } : {};
+  const node = (
+    <div ref={ref} className="tt-pop" style={pos} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
       <div className="tt-row"><span>от</span><input className="a-input" type="number" value={min} autoFocus onChange={e => setMin(e.target.value)} onKeyDown={e => e.key === 'Enter' && ok()} /></div>
       <div className="tt-row"><span>до</span><input className="a-input" type="number" value={max} onChange={e => setMax(e.target.value)} onKeyDown={e => e.key === 'Enter' && ok()} /></div>
       {unit && <div className="tt-unit">{unit}</div>}
@@ -82,15 +96,18 @@ function FilterPop({ value, onApply, onClose, unit }) {
       </div>
     </div>
   );
+  const host = anchor?.closest('.mpui') || document.body;
+  return anchor ? createPortal(node, host) : node;
 }
 
 // Заголовок колонки. filter=false — только сортировка; sort=false — без сортировки.
 export function ThCtl({ ctl, k, children, hint, className = 'r', filter = true, sort = true, unit, style, dnd }) {
   const [open, setOpen] = useState(false);
+  const thRef = useRef(null);
   const s = ctl.sort && ctl.sort.k === k ? ctl.sort.dir : 0;
   const f = ctl.filters[k];
   return (
-    <th className={`${className} tt-th ${s ? 'on' : ''}`} style={style} title={hint} {...(dnd || {})}>
+    <th ref={thRef} className={`${className} tt-th ${s ? 'on' : ''}`} style={style} title={hint} {...(dnd || {})}>
       <span className="tt-in">
         <span className={sort ? 'tt-lbl' : ''} onClick={sort ? () => ctl.cycleSort(k) : undefined}>
           {children}{s ? (s < 0 ? ' ↓' : ' ↑') : ''}
@@ -100,7 +117,7 @@ export function ThCtl({ ctl, k, children, hint, className = 'r', filter = true, 
             onClick={e => { e.stopPropagation(); setOpen(o => !o); }}>⏷</button>
         )}
       </span>
-      {open && <FilterPop value={f} unit={unit} onApply={v => ctl.setFilter(k, v)} onClose={() => setOpen(false)} />}
+      {open && <FilterPop value={f} unit={unit} anchor={thRef.current} onApply={v => ctl.setFilter(k, v)} onClose={() => setOpen(false)} />}
     </th>
   );
 }
