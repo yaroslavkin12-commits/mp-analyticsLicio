@@ -348,13 +348,38 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const sewTotal = Object.values(sew.items || {}).reduce((x, y) => x + y, 0);
   const hasSewCol = cfg.cols.some(c => c.m === 'sewing');
 
+  // Шаблон — всё, что видно: строки, столбцы, категория, «скрыть пустые»,
+  // сортировка и фильтры столбцов.
+  const snap = () => ({ rows: cfg.rows, cols: cfg.cols, catPath, hideEmpty, sort: ctl.sort || null, filters: ctl.filters || {} });
+  const [activeTpl, setActiveTpl] = useState(null);
+  const tplDirty = activeTpl && templates[activeTpl]
+    ? JSON.stringify({ rows: cfg.rows, cols: cfg.cols, catPath }) !== JSON.stringify({ rows: templates[activeTpl].rows, cols: templates[activeTpl].cols, catPath: templates[activeTpl].catPath ?? catPath })
+    : true;
   const saveTpl = () => {
-    const name = window.prompt('Название шаблона', '');
-    if (!name) return;
-    setTemplates(t => ({ ...t, [name.trim()]: { rows: cfg.rows, cols: cfg.cols } }));
+    const name = window.prompt('Название шаблона (то же название — перезаписать)', activeTpl || '');
+    if (!name || !name.trim()) return;
+    const k = name.trim();
+    setTemplates(t => ({ ...t, [k]: snap() }));
+    setActiveTpl(k);
   };
-  const applyTpl = name => { const t = templates[name]; if (t) { setCfg({ rows: t.rows, cols: t.cols.map(c => ({ ...c })) }); setEdit(null); } };
-  const delTpl = name => setTemplates(t => { const n = { ...t }; delete n[name]; return n; });
+  const applyTpl = name => {
+    const t = templates[name]; if (!t) return;
+    setCfg({ rows: t.rows || 'art', cols: (t.cols || []).map(c => ({ ...c })) });
+    if (t.catPath !== undefined) setCatPath(t.catPath || '');
+    if (t.hideEmpty !== undefined) setHideEmpty(!!t.hideEmpty);
+    ctl.reset();
+    if (t.sort) ctl.setSort(t.sort);
+    for (const [k, f] of Object.entries(t.filters || {})) ctl.setFilter(k, f);
+    setEdit(null);
+    setActiveTpl(name);
+  };
+  const delTpl = name => { setTemplates(t => { const n = { ...t }; delete n[name]; return n; }); if (activeTpl === name) setActiveTpl(null); };
+  // Сортировка и фильтры по столбцу, которого больше нет, не должны прятать всю таблицу.
+  useEffect(() => {
+    const ok = new Set(['__name', '__cat', ...cfg.cols.map(c => c.id)]);
+    for (const k of Object.keys(ctl.filters || {})) if (!ok.has(k)) ctl.setFilter(k, null);
+    if (ctl.sort && !ok.has(ctl.sort.k)) ctl.setSort(null);
+  }, [cfg.cols]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const csv = () => {
     const head = [ROW_MODES.find(r => r[0] === cfg.rows)[1], ...cfg.cols.flatMap(c => (c.cmp && !MET[c.m]?.noDays ? [colTitle(c), colTitle(c) + ' (пред.)'] : [colTitle(c)]))];
@@ -394,8 +419,8 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         <span className="a-hint" style={{ margin: 0 }}>периоды считаются назад от {dayjs(anchor).format('DD.MM.YYYY')} (конец периода страницы)</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           {Object.keys(templates).length > 0 && (
-            <select className="a-input tb-sel" value="" onChange={e => e.target.value && applyTpl(e.target.value)} title="Сохранённые шаблоны">
-              <option value="">Шаблоны…</option>
+            <select className="a-input tb-sel" value={activeTpl && !tplDirty ? activeTpl : ''} onChange={e => e.target.value && applyTpl(e.target.value)} title="Открыть сохранённый шаблон">
+              <option value="">{activeTpl && tplDirty ? `${activeTpl} (изменён)` : 'Шаблоны…'}</option>
               {Object.keys(templates).map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           )}
