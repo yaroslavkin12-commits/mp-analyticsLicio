@@ -229,3 +229,9 @@
 .mpui .a-ev.ev-bad{background:var(--a-bad-soft);border-radius:6px;padding-left:6px;padding-right:6px}
 .mpui .a-ev.ev-good .dt{color:var(--a-good)}
 .mpui .a-ev.ev-bad .dt{color:var(--a-bad)}
+/* Таблицы по дням: при наведении на любую ячейку строки подсвечиваем только
+   закреплённую левую часть (артикул/показатель, итог, остаток) — серым
+   поверх её фона; цветные ячейки по дням не трогаем. */
+.mpui .a-dt{--a-rowhl:rgba(255,255,255,.09)}
+[data-theme="light"] .mpui .a-dt{--a-rowhl:rgba(20,30,60,.07)}
+.mpui .a-dt tbody tr:not(.blk):hover>td.lbl,.mpui .a-dt tbody tr:not(.blk):hover>td.tot,.mpui .a-dt tbody tr:not(.blk):hover>td.stk{background-image:linear-gradient(var(--a-rowhl),var(--a-rowhl));color:var(--a-ink)}
