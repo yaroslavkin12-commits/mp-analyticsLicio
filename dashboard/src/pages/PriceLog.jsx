@@ -32,7 +32,8 @@ const near = (x, y) => Math.abs(x - y) <= 0.5; // репрайсер счита�
 const fmtPct = p => `${p > 0 ? '+' : '−'}${Math.abs(p).toString().replace('.', ',')}%`;
 
 // Правила изменения недели: как именно меняли цену. Порядок распознавания:
-//   1) ровный процент (шаг 0,5%): новая = было × (1 + p%) с точностью до 50 коп.;
+//   1) ровный процент (шаг 0,5%): новая = было × (1 + p%) до копеек (круглая сумма важнее
+//      процента, совпавшего с точностью до рубля);
 //   2) круглая сумма (кратно 100 ₽), если так же поменяли ещё хотя бы одному;
 //   3) «поставили N ₽», если эту же новую цену получили несколько артикулов;
 //   4) одиночные круглые суммы — тоже по сумме; остальное — «точечно ↑/↓».
@@ -40,9 +41,13 @@ const fmtPct = p => `${p > 0 ? '+' : '−'}${Math.abs(p).toString().replace('.',
 function buildRules(changed) {
   const pre = changed.map(x => {
     const pct = (x.b / x.a - 1) * 100, p = Math.round(pct * 2) / 2;
-    if (p !== 0 && near(x.b, x.a * (1 + p / 100))) return { x, pk: `p${p}` , p };
-    const d = Math.round(x.b - x.a);
-    return { x, rk: Math.abs(d) >= 100 && Math.abs(d % 100) < 1 ? d : null };
+    const d = Math.round(x.b - x.a), round = Math.abs(d) >= 100 && Math.abs(x.b - x.a - Math.round(d / 100) * 100) < 1;
+    // Процент точно до копеек (формула «цена + 3%») — это процент. Круглая сумма
+    // (9 990 → 9 490) — это рубли, даже если случайно похожа на −5%.
+    if (p !== 0 && Math.abs(x.b - x.a * (1 + p / 100)) <= 0.05) return { x, pk: `p${p}`, p };
+    if (round) return { x, rk: d };
+    if (p !== 0 && near(x.b, x.a * (1 + p / 100))) return { x, pk: `p${p}`, p };
+    return { x, rk: null };
   });
   const cnt = new Map(), inc = k => cnt.set(k, (cnt.get(k) || 0) + 1);
   for (const v of pre) if (!v.pk) { if (v.rk !== null) inc(`r${v.rk}`); inc(`t${v.x.b}`); }
@@ -59,7 +64,7 @@ function buildRules(changed) {
     let g = v.g;
     if (!g || n.get(g.key) < 2) {
       const up = v.x.b > v.x.a;
-      g = { key: up ? 'spot+' : 'spot-', label: up ? 'точечно ↑' : 'точечно ↓', sort: up ? 1e-6 : -1e-6, kind: 'spot', detail: v.g?.label || `${fmtPct(Math.round((v.x.b / v.x.a - 1) * 1000) / 10)}` };
+      g = { key: up ? 'spot+' : 'spot-', label: up ? 'точечно ↑' : 'точечно ↓', sort: up ? 1e-6 : -1e-6, kind: 'spot', detail: v.rk !== null && v.rk !== undefined ? drub(v.rk) : v.g?.label || `${fmtPct(Math.round((v.x.b / v.x.a - 1) * 1000) / 10)}` };
     }
     out.set(v.x.o, g);
   }
