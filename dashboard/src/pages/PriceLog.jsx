@@ -77,16 +77,16 @@ function parsePrices(aoa) {
     const iOld = row.findIndex((c, i) => i !== iNew && /цен/.test(c) && /(клиент|текущ|удерж|сейчас|был)/.test(c));
     const iArt = Math.max(0, row.findIndex(c => /артикул/.test(c)));
     if (iNew >= 0 && iOld >= 0) {
-      const items = {}, old = {}, zero = [], names = {};
+      // Пустая новая цена и 0 (формула на пустую ячейку в рабочем файле) — цена не меняется.
+      // Артикул может встретиться дважды: строка с новой ценой важнее строки без неё.
+      const items = {}, old = {}, set = new Set();
       for (let i = r + 1; i < aoa.length; i++) {
         const o = String(aoa[i][iArt] ?? '').trim(); if (!o) continue;
         const a = num(aoa[i][iOld]), b = num(aoa[i][iNew]);
         if (!(a > 0)) continue;
-        old[o] = a;
-        if (b === 0) { zero.push(o); items[o] = a; } else items[o] = b > 0 ? b : a;
-        const nm = String(aoa[i][iArt + 1] ?? '').trim(); if (nm) names[o] = nm.slice(0, 160);
+        if (b > 0) { old[o] = a; items[o] = b; set.add(o); } else if (!set.has(o)) { old[o] = a; items[o] = a; }
       }
-      return { items, old, zero, names, fmt: 'two' };
+      return { items, old, zero: [], fmt: 'two' };
     }
   }
   let col = 1, start = 0;
@@ -212,7 +212,7 @@ export default function PriceLog({ cabinet }) {
     if (!ready) return [];
     const out = [];
     if (two) {
-      const zero = new Set(cur.zero || []);
+      const zero = new Set(); // 0 в файле = без изменений (см. parsePrices)
       for (const [o, b] of Object.entries(cur.items)) {
         const a = cur.old[o];
         const pp = prev?.items[o];
@@ -376,12 +376,12 @@ export default function PriceLog({ cabinet }) {
   if (err && !log) return <div className="mpui"><div className="a-empty" style={{ padding: 40 }}>Не удалось загрузить: {err}</div></div>;
   if (!log) return <div className="mpui"><div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div></div>;
 
-  const ordCh = (b, a) => (b > 0 && daysAfter > 0 ? (a / b - 1) * 100 : null);
+  const ordCh = (b, a) => (b > 0 && daysAfter >= 3 ? (a / b - 1) * 100 : null);
   const OrdCells = ({ before, after }) => (
     <>
       <td className="n r">{fmtInt(before)}</td>
       <td className="n r">{daysAfter > 0 ? fmtInt(after) : '…'}</td>
-      <td className="n r">{ordCh(before, after) !== null ? <span className={ordCh(before, after) >= 0 ? 's-up' : 's-down'}>{f1(ordCh(before, after))}</span> : '—'}</td>
+      <td className="n r">{ordCh(before, after) !== null ? <span className={ordCh(before, after) >= 0 ? 's-up' : 's-down'}>{f1(ordCh(before, after))}</span> : daysAfter > 0 && before > 0 ? <span className="muted" title="Меньше 3 дней после изменения — по одному-двум дням судить рано">рано</span> : '—'}</td>
     </>
   );
   const topList = (m, k = 3) => { const a = [...m.entries()].sort((x, y) => y[1] - x[1]); return a.slice(0, k).map(([t, n]) => `${t} ${n}`).join(' · ') + (a.length > k ? ` · ещё ${a.length - k}` : ''); };
@@ -497,7 +497,7 @@ export default function PriceLog({ cabinet }) {
                     return (
                       <div key={g} className="pl-goal">
                         <div className="pl-goalt">{g === '_down' ? 'Снизили, цель не указана' : g === '_up' ? 'Подняли, цель не указана' : GOAL[g] || g}</div>
-                        <div><b>{v.n}</b> арт. · заказы {fmtInt(v.before)} → {daysAfter > 0 ? fmtInt(v.after) : '…'} шт/нед {daysAfter > 0 && ch !== null ? <b className={ch >= 0 ? 's-up' : 's-down'}>{f1(ch)}</b> : null}</div>
+                        <div><b>{v.n}</b> арт. · заказы {fmtInt(v.before)} → {daysAfter > 0 ? fmtInt(v.after) : '…'} шт/нед {daysAfter >= 3 && ch !== null ? <b className={ch >= 0 ? 's-up' : 's-down'}>{f1(ch)}</b> : null}</div>
                       </div>
                     );
                   })}
@@ -558,7 +558,7 @@ export default function PriceLog({ cabinet }) {
                     <td className="n r"><span className={r.d > 0 ? 's-up' : r.d < 0 ? 's-down' : ''}>{r.d ? drub(r.d) : '—'}</span></td>
                     <td className="n r"><span className={r.pct > 0 ? 's-up' : r.pct < 0 ? 's-down' : ''}>{r.pct ? f1(r.pct) : '—'}</span>{r.g && r.g.kind !== 'pct' ? <small className="pr-sub2">{r.g.kind === 'spot' ? 'точечно' : r.g.label}</small> : null}</td>
                     <td className="n r">{fmtInt(r.before)}</td>
-                    <td className="n r">{daysAfter > 0 ? <>{fmtInt(r.afterN)}{r.before > 0 ? <small className={`pr-sub2 ${r.afterN >= r.before ? 's-up' : 's-down'}`}>{f1((r.afterN / r.before - 1) * 100)}</small> : null}</> : '…'}</td>
+                    <td className="n r">{daysAfter > 0 ? <>{fmtInt(r.afterN)}{r.before > 0 && daysAfter >= 3 ? <small className={`pr-sub2 ${r.afterN >= r.before ? 's-up' : 's-down'}`}>{f1((r.afterN / r.before - 1) * 100)}</small> : null}</> : '…'}</td>
                     <td className={`n r ${r.mis ? 'pl-bad' : ''}`}>{r.st?.card ? <span title={`с Ozon-картой ${rub(r.st.card)}${r.st.noCard ? `, без карты ${rub(r.st.noCard)}` : ''}, проверено ${r.st.at || '—'}${r.st.stored ? ' (запомнено при загрузке, против «было»)' : ''}`}>{rub(r.st.card)}{r.off !== null ? <small className={`pr-sub2 ${r.mis ? 's-down' : ''}`}>{r.mis ? 'расходится ' : ''}{f1(r.off)}</small> : null}</span> : '—'}</td>
                     <td className="pr-l pl-gl" style={{ minWidth: 220 }}>
                       <select className="a-input pr-sel" value={r.goal} onChange={e => mark([r.o], e.target.value || null, undefined)}>
@@ -586,12 +586,12 @@ export default function PriceLog({ cabinet }) {
                 <thead><tr><th className="l">Неделя</th><th className="r">Было</th><th className="r">Стало</th><th className="r">Изменение</th><th className="r">Заказы 7 дн до</th><th className="r">7 дн после</th><th className="l">Цель / заметка</th></tr></thead>
                 <tbody>
                   {hist.rows.slice().reverse().map((x, i, arr) => {
-                    const a = x.a ?? arr[i + 1]?.p ?? null, ch = a && !x.zero ? (x.p / a - 1) * 100 : null, mk = (log.marks[x.id] || {})[hist.o];
+                    const a = x.a ?? arr[i + 1]?.p ?? null, ch = a ? (x.p / a - 1) * 100 : null, mk = (log.marks[x.id] || {})[hist.o];
                     return (
                       <tr key={x.id}>
                         <td>{dayjs(x.date).format('DD.MM.YYYY')}</td>
                         <td className="n r">{rub(a)}</td>
-                        <td className="n r"><b>{x.zero ? '0 ₽' : rub(x.p)}</b></td>
+                        <td className="n r"><b>{rub(x.p)}</b></td>
                         <td className="n r"><span className={ch > 0 ? 's-up' : ch < 0 ? 's-down' : ''}>{ch && Math.abs(ch) >= 0.05 ? f1(ch) : '—'}</span></td>
                         <td className="n r">{fmtInt(sumOrders(hist.o, dayjs(x.date).subtract(7, 'day'), 7))}</td>
                         <td className="n r">{fmtInt(sumOrders(hist.o, x.date, 7))}</td>
