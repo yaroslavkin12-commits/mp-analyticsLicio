@@ -161,3 +161,9 @@ export const saveProductionMaster = (cabinet, items, replace) => api.post('/prod
 export const saveProductionSettings = (cabinet, settings) => api.post('/production/settings', { cabinet, settings });
 export const saveProductionOrder = (cabinet, order) => api.post('/production/orders', { cabinet, order });
 export const removeProductionOrder = (cabinet, id) => api.post('/production/orders', { cabinet, remove: id });
+
+// «Журнал цен» (репрайсер)
+export const getPriceLog = (cabinet, platform = 'ozon') => api.get('/pricelog', { params: { cabinet, platform }, timeout: 60000 });
+export const uploadPriceLog = (cabinet, platform, date, items, file) => api.post('/pricelog/upload', { cabinet, platform, date, items, file });
+export const deletePriceLog = (cabinet, platform, id) => api.post('/pricelog/delete', { cabinet, platform, id });
+export const markPriceLog = (cabinet, platform, snapId, offers, goal, note) => api.post('/pricelog/marks', { cabinet, platform, snapId, offers, goal, note });

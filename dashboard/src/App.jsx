@@ -18,6 +18,7 @@ import PnL from './pages/PnL';
 import Buyout from './pages/Buyout';
 import Inventory from './pages/Inventory';
 import Production from './pages/Production';
+import PriceLog from './pages/PriceLog';
 import AvgCheck from './pages/AvgCheck';
 import Abc from './pages/Abc';
 import Recon from './pages/Recon';
@@ -45,7 +46,7 @@ class PageBoundary extends React.Component {
   }
 }
 
-const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
@@ -55,7 +56,7 @@ const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl:
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET = {
   licio: ['dashboard', 'ads', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['sales', 'plan', 'ads', 'search', 'inventory', 'production', 'geo', 'check', 'abc', 'season', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
+  defly: ['sales', 'plan', 'ads', 'search', 'inventory', 'production', 'pricelog', 'geo', 'check', 'abc', 'season', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 
 const THEME_KEY = 'mp-theme';
@@ -130,7 +131,7 @@ export default function App() {
   useEffect(() => { document.title = cabinet === 'defly' ? 'Defly — аналитика Ozon' : 'Licio — WB + Ozon'; }, [cabinet]);
 
   // Переключатель WB/Ozon нужен только старым разделам Licio.
-  const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'inventory', 'production', 'check', 'abc', 'recon', 'margin', 'plan', 'search', 'season', 'calculator', 'notifications'].includes(page);
+  const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'inventory', 'production', 'pricelog', 'check', 'abc', 'recon', 'margin', 'plan', 'search', 'season', 'calculator', 'notifications'].includes(page);
 
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
