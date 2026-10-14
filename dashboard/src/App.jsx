@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { whenIdle } from './api';
 import Sidebar from './components/Sidebar';
+import { startStickyHeads } from './lib/stickyHeads';
+startStickyHeads();
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
 import AdsStats from './pages/AdsStats2';

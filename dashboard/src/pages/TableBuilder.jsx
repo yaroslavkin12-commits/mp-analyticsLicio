@@ -505,7 +505,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
             <table className="a-t s-slice tb-t">
               <thead><tr>
                 <ThCtl ctl={ctl} k="__name" className="" filter={false}>{ROW_MODES.find(r => r[0] === cfg.rows)[1]}</ThCtl>
-                {cfg.rows === 'art' && <ThCtl ctl={ctl} k="__cat" className="" filter={false} hint="Сортировка по категории">Категория</ThCtl>}
+                {cfg.rows === 'art' && <ThCtl ctl={ctl} k="__cat" className="tb-catth" filter={false} hint="Сортировка по категории">Категория</ThCtl>}
                 {cfg.cols.map((c, i) => (
                   <ThCtl key={c.id} ctl={ctl} k={c.id} unit={MET[c.m]?.kind === 'pct' ? '%' : MET[c.m]?.kind === 'rub' ? '₽' : ''}
                     className={`r tb-th ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} dnd={dnd(c.id)}>

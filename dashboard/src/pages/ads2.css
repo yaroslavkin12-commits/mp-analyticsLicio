@@ -235,3 +235,10 @@
 .mpui .a-dt{--a-rowhl:rgba(255,255,255,.09)}
 [data-theme="light"] .mpui .a-dt{--a-rowhl:rgba(20,30,60,.07)}
 .mpui .a-dt tbody tr:not(.blk):hover>td.lbl,.mpui .a-dt tbody tr:not(.blk):hover>td.tot,.mpui .a-dt tbody tr:not(.blk):hover>td.stk{background-image:linear-gradient(var(--a-rowhl),var(--a-rowhl));color:var(--a-ink)}
+/* Закреплённая шапка длинных таблиц: при прокрутке страницы шапку сдвигает
+   вниз lib/stickyHeads.js (обычный position:sticky не работает внутри
+   области с горизонтальной прокруткой). */
+.mpui table.a-t > thead th,.mpui table.a-campaigns > thead th,.mpui table.abc-mx > thead th,.mpui table.a-dt > thead th:not(.lbl):not(.tot):not(.stk){position:relative}
+.mpui table.a-t > thead th,.mpui table.a-dt > thead th,.mpui table.abc-mx > thead th,.mpui table.a-campaigns > thead th{z-index:4;background:var(--a-panel);will-change:transform}
+.mpui table.a-dt > thead th.lbl,.mpui table.a-dt > thead th.tot,.mpui table.a-dt > thead th.stk{z-index:6}
+.mpui thead.sh-on th{box-shadow:inset 0 -1px 0 var(--a-line),0 6px 8px -6px rgba(0,0,0,.35)}

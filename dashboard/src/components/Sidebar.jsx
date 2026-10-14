@@ -15,6 +15,9 @@ const CABINETS = [['licio','Licio'],['defly','Defly']];
 
 export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCabinet }) {
   const [open, setOpen] = useState(false);
+  // Свёрнутое меню — только значки (помнится в браузере).
+  const [mini, setMini] = useState(() => { try { return localStorage.getItem('mp-side-mini') === '1'; } catch (e) { return false; } });
+  useEffect(() => { try { localStorage.setItem('mp-side-mini', mini ? '1' : '0'); } catch (e) { /* ignore */ } }, [mini]);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -27,16 +30,16 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
   const nav = NAV_BY_CABINET[cabinet] || NAV_BY_CABINET.licio;
 
   return (
-    <div style={{ width:210, background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
-      <div ref={ref} style={{ padding:'18px 16px 10px', position:'relative' }}>
+    <div style={{ width: mini ? 58 : 210, transition:'width .15s', background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
+      <div ref={ref} style={{ padding: mini ? '16px 8px 10px' : '18px 16px 10px', position:'relative' }}>
         <button onClick={() => setOpen(o => !o)} style={{
           display:'flex', alignItems:'center', gap:10, width:'100%', background:'transparent', border:'none',
           padding:0, cursor:'pointer', textAlign:'left', color:'var(--text)',
         }}>
           {cabinet === 'defly' ? (
             <>
-              <img src="/defly-logo.png" alt="Defly" style={{ height:32, width:'auto', maxWidth:110, borderRadius:5, flexShrink:0, display:'block' }} />
-              <span style={{ fontSize:10, color:'var(--text3)', marginLeft:'auto' }}>▾</span>
+              <img src="/defly-logo.png" alt="Defly" style={{ height: mini ? 24 : 32, width: mini ? 42 : 'auto', objectFit: mini ? 'cover' : undefined, objectPosition:'left center', maxWidth:110, borderRadius:5, flexShrink:0, display:'block' }} />
+              {!mini && <span style={{ fontSize:10, color:'var(--text3)', marginLeft:'auto' }}>▾</span>}
             </>
           ) : (
             <>
@@ -45,20 +48,20 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
                 alt="Кабинет"
                 style={{ height:26, width:'auto', flexShrink:0, filter: theme === 'dark' ? 'invert(1)' : 'none' }}
               />
-              <div style={{ flex:1 }}>
+              {!mini && <div style={{ flex:1 }}>
                 <div style={{ fontSize:15, fontWeight:700, display:'flex', alignItems:'center', gap:5 }}>
                   {cabinetLabel}
                   <span style={{ fontSize:10, color:'var(--text3)' }}>▾</span>
                 </div>
                 <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>WB + Ozon</div>
-              </div>
+              </div>}
             </>
           )}
         </button>
 
         {open && (
           <div style={{
-            position:'absolute', top:'100%', left:16, right:16, marginTop:6, zIndex:20,
+            position:'absolute', top:'100%', left: mini ? 8 : 16, right: mini ? 'auto' : 16, minWidth: mini ? 140 : undefined, marginTop:6, zIndex:20,
             background:'var(--surface)', border:'1px solid var(--border)', borderRadius:10,
             boxShadow:'0 8px 24px rgba(0,0,0,.25)', overflow:'hidden',
           }}>
@@ -75,28 +78,32 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
           </div>
         )}
       </div>
-      <nav style={{ flex:1, padding:'4px 8px', overflowY:'auto' }}>
+      <nav style={{ flex:1, padding: mini ? '4px 6px' : '4px 8px', overflowY:'auto', overflowX:'hidden' }}>
         {nav.map(([id,icon,label]) => id === '__h' ? (
-          <div key={'h' + icon} style={{ fontSize:10.5, fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)', padding:'10px 12px 4px' }}>{icon}</div>
+          mini ? <div key={'h' + icon} style={{ height:1, background:'var(--border)', margin:'8px 6px' }} title={icon} />
+            : <div key={'h' + icon} style={{ fontSize:10.5, fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)', padding:'10px 12px 4px' }}>{icon}</div>
         ) : (
-          <button key={id} onClick={() => setPage(id)} style={{
-            display:'flex', alignItems:'center', gap:9, width:'100%', padding:'7px 12px', borderRadius:8,
-            border:'none', marginBottom:2, background:page===id?'var(--surface2)':'transparent',
-            color:page===id?'var(--text)':'var(--text2)', fontWeight:page===id?600:400, fontSize:13, textAlign:'left', transition:'all .12s',
+          <button key={id} onClick={() => setPage(id)} title={mini ? label : undefined} style={{
+            display:'flex', alignItems:'center', justifyContent: mini ? 'center' : 'flex-start', gap:9, width:'100%', padding: mini ? '7px 0' : '7px 12px', borderRadius:8,
+            border:'none', marginBottom:2, background:page===id?'var(--surface2)':'transparent', position:'relative',
+            color:page===id?'var(--text)':'var(--text2)', fontWeight:page===id?600:400, fontSize:13, textAlign:'left', transition:'all .12s', whiteSpace:'nowrap',
           }}>
-            <span style={{ fontSize:15 }}>{icon}</span>{label}
-            {page===id && <span style={{ marginLeft:'auto', width:3, height:16, borderRadius:2, background:'var(--accent-wb)' }}/>}
+            <span style={{ fontSize: mini ? 17 : 15 }}>{icon}</span>{!mini && label}
+            {page===id && <span style={{ marginLeft:'auto', width:3, height:16, borderRadius:2, background:'var(--accent-wb)', ...(mini ? { position:'absolute', right:2 } : {}) }}/>}
           </button>
         ))}
       </nav>
-      <div style={{ padding:'10px 12px', borderTop:'1px solid var(--border)', display:'flex', alignItems:'center', gap:8 }}>
+      <div style={{ padding: mini ? '10px 6px' : '10px 12px', borderTop:'1px solid var(--border)', display:'flex', flexDirection: mini ? 'column' : 'row', alignItems:'center', gap:8 }}>
         <button onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} title="Переключить тему" style={{
           display:'flex', alignItems:'center', gap:8, padding:'7px 10px', borderRadius:8, border:'1px solid var(--border)',
           background:'var(--surface2)', color:'var(--text2)', fontSize:12.5, cursor:'pointer',
         }}>
-          <span style={{ fontSize:14 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>{theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+          <span style={{ fontSize:14 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>{!mini && (theme === 'dark' ? 'Светлая тема' : 'Тёмная тема')}
         </button>
-        <span style={{ marginLeft:'auto', fontSize:11, color:'var(--text3)' }}>v1.5</span>
+        <button onClick={() => setMini(m => !m)} title={mini ? 'Развернуть меню' : 'Свернуть меню — оставить только значки'} style={{
+          marginLeft: mini ? 0 : 'auto', padding:'6px 8px', borderRadius:8, border:'1px solid var(--border)', background:'transparent',
+          color:'var(--text2)', fontSize:13, cursor:'pointer', lineHeight:1,
+        }}>{mini ? '»' : '«'}</button>
       </div>
     </div>
   );
