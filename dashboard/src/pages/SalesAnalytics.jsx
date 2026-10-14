@@ -463,6 +463,12 @@ const FINDER_HINT = {
   lowbuy: 'Выкуп ниже 65% (по фактическим доставкам и отменам за 30–45 дней): описание, размеры/совместимость, качество — каждый невыкуп стоит двух логистик.',
   check: 'Средний чек заказа изменился больше чем на 10% к прошлому периоду — изменилась цена, СПП или скидка.',
   scale: 'Маржа по прогнозу от 25% и запаса хватит минимум на 3 недели — сюда выгодно добавить рекламу/трафик.',
+  superprofit: 'Маржа по прогнозу юнит-экономики не ниже порога (с учётом рекламы, комиссии, логистики, себестоимости и налога). Порог можно поменять справа.',
+  stars: 'Звёзды: в верхних 20% по сумме заказов и при этом маржа от 15%. Главные кормильцы — следить за остатками и позициями в первую очередь.',
+  lowmargin: 'Продаются, но маржа по прогнозу от 0 до 10%: любое удорожание логистики или рекламы уведёт в минус. Кандидаты поднять цену или снизить ДРР.',
+  adeats: 'Реклама съедает больше половины прибыли: ДРР больше, чем маржа после рекламы. Выручку даёт, но деньги уходят Ozon.',
+  growth: 'Заказы выросли в 1,5 раза и больше к прошлому периоду (было от 3). Проверьте остатки — рост легко упрётся в дефицит.',
+  fall: 'Заказы упали на 40% и больше к прошлому периоду (было от 5): позиции, цена, остатки на складах, конкуренты.',
   noads: 'От 3 заказов за период без рекламы — органика работает, стоит протестировать рекламу.',
   highcr: 'Конверсия в заказ в 1,5 раза выше средней, а показов меньше средних — карточка продаёт, ей не хватает трафика.',
 };
@@ -489,6 +495,9 @@ export default function SalesAnalytics({ cabinet }) {
   const [openArt, setOpenArt] = useState(null);
   const [showAll, setShowAll] = useState(() => new Set());
   const [slice, setSlice] = useState('loss');
+  // Порог «сверхприбыльных» (маржа от N%), помнится в браузере.
+  const [superPct, setSuperPctRaw] = useState(() => { try { return Number(localStorage.getItem('mp-superpct')) || 20; } catch (e) { return 20; } });
+  const setSuperPct = v => { setSuperPctRaw(v); try { localStorage.setItem('mp-superpct', String(v)); } catch (e) { /* ignore */ } };
   const [matrixMetric, setMatrixMetric] = useState('revenue');
   const tip = useTip();
   // Ширина видимой части таблицы: карточка артикула внутри широкой таблицы
@@ -912,10 +921,22 @@ export default function SalesAnalytics({ cabinet }) {
     check: ext.filter(x => x.pcheck && x.check && x.orders >= 3 && Math.abs(x.check / x.pcheck - 1) > 0.1).sort((x, y) => Math.abs(y.check / y.pcheck - 1) - Math.abs(x.check / x.pcheck - 1)),
     scale: ext.filter(x => x.fc && !x.fc.noCost && x.fc.margin >= 25 && x.orders > 0 && (x.sd === null || x.sd >= 21)).sort((x, y) => y.fc.profit - x.fc.profit),
     noads: ext.filter(x => x.spend === 0 && x.orders >= 3).sort((x, y) => y.rev - x.rev),
+    superprofit: ext.filter(x => x.fc && !x.fc.noCost && x.orders > 0 && x.fc.margin >= superPct).sort((x, y) => y.fc.profit - x.fc.profit),
+    stars: (() => {
+      const withRev = ext.filter(x => x.rev > 0).sort((x, y) => y.rev - x.rev);
+      const cut = withRev.length ? withRev[Math.max(0, Math.ceil(withRev.length * 0.2) - 1)].rev : Infinity;
+      return withRev.filter(x => x.rev >= cut && x.fc && !x.fc.noCost && x.fc.margin >= 15);
+    })(),
+    lowmargin: ext.filter(x => x.fc && !x.fc.noCost && x.orders >= 2 && x.fc.margin >= 0 && x.fc.margin < 10).sort((x, y) => y.rev - x.rev),
+    adeats: ext.filter(x => x.fc && !x.fc.noCost && x.orders >= 2 && x.drr !== null && x.drr > 0 && x.fc.margin >= 0 && x.drr > x.fc.margin).sort((x, y) => y.spend - x.spend),
+    growth: ext.filter(x => x.porders >= 3 && x.orders >= x.porders * 1.5).sort((x, y) => (y.orders - y.porders) - (x.orders - x.porders)),
+    fall: ext.filter(x => x.porders >= 5 && x.orders <= x.porders * 0.6).sort((x, y) => (y.porders - y.orders) - (x.porders - x.orders)),
     highcr: medCr === null ? [] : ext.filter(x => x.pdp >= 10 && x.cr !== null && x.cr >= medCr * 1.5 && medViews !== null && x.views <= medViews).sort((x, y) => y.cr - x.cr),
   };
   const SLICE_GROUPS = [
     ['Проблемы', [['loss', 'Убыточные'], ['adwaste', 'Реклама без отдачи'], ['crdrop', 'Упала конверсия'], ['viewsdrop', 'Упали показы'], ['lowbuy', 'Низкий выкуп'], ['check', 'Сменился чек'], ['deficit', 'Дефицит'], ['sleep', 'Спящие']]],
+    ['Прибыль', [['superprofit', 'Сверхприбыльные'], ['stars', 'Звёзды'], ['lowmargin', 'На грани (маржа < 10%)'], ['adeats', 'Реклама съедает прибыль']]],
+    ['Динамика', [['growth', 'Резкий рост'], ['fall', 'Резкое падение']]],
     ['Точки роста', [['scale', 'Масштабировать'], ['noads', 'Продаются без рекламы'], ['highcr', 'Сильная карточка, мало показов']]],
     ['Обзор', [['movers', 'Растут / падают'], ['abc', 'ABC'], ...(brandTable ? [['brands', 'Марки авто']] : []), ['funnel', 'Воронка']]],
   ];
@@ -1179,7 +1200,21 @@ export default function SalesAnalytics({ cabinet }) {
             </div>
           ))}
         </div>
-        {FINDER_HINT[slice] && <div className="a-hint" style={{ margin: '4px 0 8px' }}>{FINDER_HINT[slice]}</div>}
+        {FINDER_HINT[slice] && <div className="a-hint" style={{ margin: '4px 0 8px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>{FINDER_HINT[slice]}</span>
+          {slice === 'superprofit' && <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: 'var(--a-ink2)' }}>маржа от
+            <input className="a-input" type="number" value={superPct} onChange={e => setSuperPct(Number(e.target.value) || 0)} style={{ width: 64, padding: '3px 6px' }} />%</label>}
+        </div>}
+        {['superprofit', 'stars', 'lowmargin', 'adeats'].includes(slice) && <SliceTable id={`f-${slice}`} rows={finder[slice].slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет таких артикулов"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev },
+            { t: 'Прибыль (прогноз), ₽', num: 1, v: r => <span className={r.fc.profit < 0 ? 's-down' : 's-up'}>{fmtInt(r.fc.profit)}</span>, s: r => r.fc.profit },
+            { t: 'Маржа', num: 1, v: r => fmtPct(r.fc.margin), s: r => r.fc.margin }, { t: 'ДРР', num: 1, v: r => fmtPct(r.drr), s: r => r.drr },
+            { t: 'Выкуп', num: 1, v: r => fmtPct(r.fc.buyout), s: r => r.fc.buyout }, { t: 'Запас, дн', num: 1, v: r => (r.sd === null ? '∞' : fmtInt(r.sd)), s: r => (r.sd === null ? 1e9 : r.sd) }]} />}
+        {['growth', 'fall'].includes(slice) && <SliceTable id={`f-${slice}`} rows={finder[slice].slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Нет таких артикулов"
+          cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Заказы было', num: 1, v: r => fmtInt(r.porders), s: r => r.porders }, { t: 'Заказы стало', num: 1, v: r => fmtInt(r.orders), s: r => r.orders },
+            { t: 'Изменение', num: 1, s: r => (r.orders / r.porders - 1) * 100, v: r => <Delta value={(r.orders / r.porders - 1) * 100} /> },
+            { t: 'Показы было', num: 1, v: r => fmtInt(r.pviews), s: r => r.pviews }, { t: 'Показы стало', num: 1, v: r => fmtInt(r.views), s: r => r.views },
+            { t: 'Маржа (прогноз)', num: 1, v: r => (r.fc && !r.fc.noCost ? fmtPct(r.fc.margin) : '—'), s: r => (r.fc && !r.fc.noCost ? r.fc.margin : null) }, { t: 'Запас, дн', num: 1, v: r => (r.sd === null ? '∞' : fmtInt(r.sd)), s: r => (r.sd === null ? 1e9 : r.sd) }]} />}
         {slice === 'loss' && <SliceTable id="f-loss" rows={finder.loss.slice(0, 200)} onOpen={r => openArticle(r.a)} empty="Убыточных по прогнозу нет"
           cols={[{ t: 'Артикул', v: r => artCell(r.a), s: r => r.a.o }, { t: 'Заказано, ₽', num: 1, v: r => fmtInt(r.rev), s: r => r.rev }, { t: 'Заказы', num: 1, v: r => fmtInt(r.orders), s: r => r.orders },
             { t: 'ДРР', num: 1, v: r => fmtPct(r.drr), s: r => r.drr }, { t: 'Выкуп', num: 1, v: r => fmtPct(r.fc.buyout), s: r => r.fc.buyout },
@@ -1277,6 +1312,8 @@ export default function SalesAnalytics({ cabinet }) {
       </div>
 
       <TableBuilder cabinet={cabinet} anchor={dateTo} prepare={prepare} tax={tax} shareOf={builderShare}
+        page={{ dateFrom, dateTo, today, sel, brand, search }}
+        setPage={p => { setDateFrom(p.dateFrom); setDateTo(p.dateTo); setSel(p.sel); setBrand(p.brand); setSearch(p.search); }}
         scope={sel || brand || search.trim() ? cached(`bscope|${sel}`, () => new Set(node.arts.map(a => a.o))) : null}
         onOpenArticle={o => { const a = all.find(x => x.o === o); if (a) openArticle(a); }} />
 

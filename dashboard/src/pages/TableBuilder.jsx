@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getSewing, saveSewing } from '../api';
+import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, fmtPct } from './AdsStats2';
 
@@ -107,7 +107,7 @@ const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrde
 let idSeq = Date.now();
 const newId = () => 'c' + (idSeq++).toString(36);
 
-export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, onOpenArticle }) {
+export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, onOpenArticle, page, setPage }) {
   const storeKey = `mp-builder:${cabinet}`;
   const [cfg, setCfg] = useState(() => { const s = load(storeKey); return s?.cols?.length ? { rows: s.rows || 'art', cols: s.cols } : DEFAULT; });
   const [templates, setTemplates] = useState(() => load(storeKey + ':tpl') || {});
@@ -129,7 +129,6 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   useEffect(() => { save(storeKey, cfg); }, [storeKey, cfg]);
-  useEffect(() => { save(storeKey + ':tpl', templates); }, [storeKey, templates]);
 
   // Сколько дней истории нужно под все столбцы.
   const span = useMemo(() => Math.min(MAX_SPAN, Math.max(1, ...cfg.cols.map(c => (MET[c.m]?.noDays ? 1 : c.days) * (c.cmp ? 2 : 1) + (c.off || 0)))), [cfg.cols]);
@@ -348,32 +347,104 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const sewTotal = Object.values(sew.items || {}).reduce((x, y) => x + y, 0);
   const hasSewCol = cfg.cols.some(c => c.m === 'sewing');
 
-  // Шаблон — всё, что видно: строки, столбцы, категория, «скрыть пустые»,
-  // сортировка и фильтры столбцов.
-  const snap = () => ({ rows: cfg.rows, cols: cfg.cols, catPath, hideEmpty, sort: ctl.sort || null, filters: ctl.filters || {} });
+  // ── Шаблоны ─────────────────────────────────────────────────────────
+  // Шаблон — всё, что видно: период и фильтры страницы (категория, марка,
+  // поиск), строки и столбцы конструктора, его категория, «скрыть пустые»,
+  // сортировка и фильтры столбцов. Период «до сегодня» хранится скользящим
+  // («последние N дней»), иначе — конкретными датами. Хранятся на сервере.
+  const pageSnap = () => {
+    if (!page) return null;
+    const rel = page.dateTo === page.today ? dayjs(page.dateTo).diff(dayjs(page.dateFrom), 'day') + 1 : null;
+    return { rel, dateFrom: page.dateFrom, dateTo: page.dateTo, sel: page.sel || '', brand: page.brand || '', search: page.search || '' };
+  };
+  const snap = () => ({ rows: cfg.rows, cols: cfg.cols, catPath, hideEmpty, sort: ctl.sort || null, filters: ctl.filters || {}, page: pageSnap(), savedAt: new Date().toISOString() });
   const [activeTpl, setActiveTpl] = useState(null);
+  const [tplOpen, setTplOpen] = useState(false);
+  const [renaming, setRenaming] = useState(null); // [старое имя, новое]
+  const [newName, setNewName] = useState('');
+  const tplRef = React.useRef(null);
+  useEffect(() => {
+    if (!tplOpen) return undefined;
+    const h = e => { if (tplRef.current && !tplRef.current.contains(e.target)) setTplOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [tplOpen]);
+  const sig = t => JSON.stringify({ rows: t.rows, cols: t.cols, catPath: t.catPath || '', hideEmpty: !!t.hideEmpty, sort: t.sort || null, filters: t.filters || {},
+    page: t.page ? { rel: t.page.rel || null, dateFrom: t.page.rel ? null : t.page.dateFrom, dateTo: t.page.rel ? null : t.page.dateTo, sel: t.page.sel || '', brand: t.page.brand || '', search: t.page.search || '' } : null });
   const tplDirty = activeTpl && templates[activeTpl]
-    ? JSON.stringify({ rows: cfg.rows, cols: cfg.cols, catPath }) !== JSON.stringify({ rows: templates[activeTpl].rows, cols: templates[activeTpl].cols, catPath: templates[activeTpl].catPath ?? catPath })
+    ? sig({ ...snap(), page: templates[activeTpl].page ? pageSnap() : null }) !== sig(templates[activeTpl])
     : true;
-  const saveTpl = () => {
-    const name = window.prompt('Название шаблона (то же название — перезаписать)', activeTpl || '');
-    if (!name || !name.trim()) return;
-    const k = name.trim();
+  // Загрузка с сервера; старые шаблоны из браузера переносятся туда.
+  const [tplReady, setTplReady] = useState(false);
+  useEffect(() => {
+    let off = false;
+    setTplReady(false);
+    getBuilderTemplates(cabinet).then(r => {
+      if (off) return;
+      const srv = r.data.data?.templates;
+      const local = load(storeKey + ':tpl') || {};
+      setTemplates(srv ? { ...local, ...srv } : local);
+      setTplReady(true);
+    }).catch(() => { if (!off) setTplReady(true); });
+    return () => { off = true; };
+  }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!tplReady) return;
+    saveBuilderTemplates(cabinet, templates).catch(() => {});
+  }, [templates, tplReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveTplAs = name => {
+    const k = String(name || '').trim(); if (!k) return;
+    if (templates[k] && k !== activeTpl && !window.confirm(`Шаблон «${k}» уже есть. Перезаписать его текущей таблицей?`)) return;
     setTemplates(t => ({ ...t, [k]: snap() }));
-    setActiveTpl(k);
+    setActiveTpl(k); setNewName('');
   };
   const applyTpl = name => {
     const t = templates[name]; if (!t) return;
+    if (t.page && setPage) {
+      const p = t.page;
+      const dateTo = p.rel ? page.today : p.dateTo;
+      const dateFrom = p.rel ? dayjs(page.today).subtract(p.rel - 1, 'day').format('YYYY-MM-DD') : p.dateFrom;
+      setPage({ dateFrom, dateTo, sel: p.sel || '', brand: p.brand || '', search: p.search || '' });
+    }
     setCfg({ rows: t.rows || 'art', cols: (t.cols || []).map(c => ({ ...c })) });
-    if (t.catPath !== undefined) setCatPath(t.catPath || '');
-    if (t.hideEmpty !== undefined) setHideEmpty(!!t.hideEmpty);
+    setCatPath(t.catPath || '');
+    setHideEmpty(t.hideEmpty !== undefined ? !!t.hideEmpty : true);
     ctl.reset();
     if (t.sort) ctl.setSort(t.sort);
     for (const [k, f] of Object.entries(t.filters || {})) ctl.setFilter(k, f);
     setEdit(null);
     setActiveTpl(name);
+    setTplOpen(false);
   };
-  const delTpl = name => { setTemplates(t => { const n = { ...t }; delete n[name]; return n; }); if (activeTpl === name) setActiveTpl(null); };
+  const delTpl = name => {
+    if (!window.confirm(`Удалить шаблон «${name}»?`)) return;
+    setTemplates(t => { const n = { ...t }; delete n[name]; return n; });
+    if (activeTpl === name) setActiveTpl(null);
+  };
+  const renameTpl = (from, to) => {
+    const k = String(to || '').trim();
+    setRenaming(null);
+    if (!k || k === from) return;
+    if (templates[k]) { window.alert(`Шаблон «${k}» уже есть — выберите другое название.`); return; }
+    // Порядок сохраняем: пересобираем объект с новым ключом на том же месте.
+    setTemplates(t => Object.fromEntries(Object.entries(t).map(([n, v]) => [n === from ? k : n, v])));
+    if (activeTpl === from) setActiveTpl(k);
+  };
+  const tplDesc = t => {
+    const parts = [ROW_MODES.find(r => r[0] === t.rows)?.[1] || ''];
+    if (t.page) {
+      parts.push(t.page.rel ? `последние ${t.page.rel} дн` : `${dayjs(t.page.dateFrom).format('DD.MM')}–${dayjs(t.page.dateTo).format('DD.MM.YY')}`);
+      if (t.page.sel) parts.push(t.page.sel.split(SEP).pop());
+      if (t.page.brand) parts.push(t.page.brand);
+      if (t.page.search) parts.push(`«${t.page.search}»`);
+    }
+    if (t.catPath) parts.push(t.catPath.split(SEP).pop());
+    parts.push(`${(t.cols || []).length} столб.`);
+    const nf = Object.keys(t.filters || {}).length;
+    if (nf) parts.push(`фильтров: ${nf}`);
+    return parts.filter(Boolean).join(' · ');
+  };
   // Сортировка и фильтры по столбцу, которого больше нет, не должны прятать всю таблицу.
   useEffect(() => {
     const ok = new Set(['__name', '__cat', ...cfg.cols.map(c => c.id)]);
@@ -418,13 +489,43 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         <b style={{ fontSize: 14 }}>Конструктор таблицы</b>
         <span className="a-hint" style={{ margin: 0 }}>периоды считаются назад от {dayjs(anchor).format('DD.MM.YYYY')} (конец периода страницы)</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          {Object.keys(templates).length > 0 && (
-            <select className="a-input tb-sel" value={activeTpl && !tplDirty ? activeTpl : ''} onChange={e => e.target.value && applyTpl(e.target.value)} title="Открыть сохранённый шаблон">
-              <option value="">{activeTpl && tplDirty ? `${activeTpl} (изменён)` : 'Шаблоны…'}</option>
-              {Object.keys(templates).map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
+          {activeTpl && (
+            <span className={`tb-active ${tplDirty ? 'dirty' : ''}`} title={tplDirty ? 'Таблицу меняли после открытия шаблона' : 'Открыт шаблон'}>
+              Шаблон: <b>{activeTpl}</b>{tplDirty ? ' · изменён' : ''}
+              {tplDirty && <button type="button" onClick={() => saveTplAs(activeTpl)} title="Записать текущую таблицу в этот шаблон">сохранить</button>}
+              {tplDirty && <button type="button" onClick={() => applyTpl(activeTpl)} title="Вернуть как было в шаблоне">вернуть</button>}
+            </span>
           )}
-          <button type="button" className="a-btn ghost" onClick={saveTpl} title="Запомнить текущие строки и столбцы под именем">Сохранить шаблон</button>
+          <span className="tb-tplwrap" ref={tplRef}>
+            <button type="button" className={`a-btn ghost ${tplOpen ? 'on' : ''}`} onClick={() => setTplOpen(o => !o)}>Шаблоны{Object.keys(templates).length ? ` (${Object.keys(templates).length})` : ''} ▾</button>
+            {tplOpen && (
+              <div className="tb-tplpop">
+                {!Object.keys(templates).length && <div className="muted" style={{ padding: '6px 4px' }}>Шаблонов пока нет. Настройте период, фильтры и столбцы — и сохраните.</div>}
+                {Object.entries(templates).map(([n, t]) => (
+                  <div key={n} className={`tb-tplrow ${activeTpl === n ? 'on' : ''}`}>
+                    {renaming && renaming[0] === n ? (
+                      <input className="a-input" autoFocus value={renaming[1]} onChange={e => setRenaming([n, e.target.value])}
+                        onKeyDown={e => { if (e.key === 'Enter') renameTpl(n, renaming[1]); if (e.key === 'Escape') setRenaming(null); }} onBlur={() => renameTpl(n, renaming[1])} />
+                    ) : (
+                      <button type="button" className="tb-tplname" onClick={() => applyTpl(n)} title="Открыть шаблон">
+                        <b>{n}</b><span>{tplDesc(t)}</span>
+                      </button>
+                    )}
+                    <span className="tb-tplact">
+                      <button type="button" title="Переименовать" onClick={() => setRenaming([n, n])}>✎</button>
+                      <button type="button" title="Записать в этот шаблон текущую таблицу" onClick={() => { if (window.confirm(`Перезаписать «${n}» текущей таблицей?`)) { setTemplates(x => ({ ...x, [n]: snap() })); setActiveTpl(n); } }}>⤓</button>
+                      <button type="button" title="Удалить шаблон" onClick={() => delTpl(n)}>×</button>
+                    </span>
+                  </div>
+                ))}
+                <form className="tb-tplnew" onSubmit={e => { e.preventDefault(); saveTplAs(newName); }}>
+                  <input className="a-input" placeholder="Название нового шаблона" value={newName} onChange={e => setNewName(e.target.value)} />
+                  <button type="submit" className="a-btn" disabled={!newName.trim()}>Сохранить текущий</button>
+                </form>
+                <div className="a-hint" style={{ margin: '6px 2px 0' }}>Шаблон запоминает период и фильтры страницы, строки, столбцы, сортировку и фильтры таблицы. Период «до сегодня» открывается как «последние N дней».</div>
+              </div>
+            )}
+          </span>
           <button type="button" className="a-btn ghost" onClick={csv} title="Скачать таблицу (Excel откроет)">⬇ CSV</button>
         </span>
       </div>
@@ -512,9 +613,6 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
             <button type="button" className="a-btn ghost" onClick={() => delCol(ed.id)}>удалить</button>
             <button type="button" className="a-btn" onClick={() => setEdit(null)}>готово</button>
           </span>
-          {Object.keys(templates).length > 0 && (
-            <span className="tb-tpls">Шаблоны: {Object.keys(templates).map(n => <span key={n} className="tb-tpl">{n}<span onClick={() => delTpl(n)} title="Удалить шаблон">×</span></span>)}</span>
-          )}
         </div>
       )}
 

@@ -391,6 +391,29 @@ router.post('/category', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── Шаблоны конструктора таблицы (общие для всех устройств) ──
+// GET  /api/sales/builder-templates?cabinet= → { templates: { name: {...} } }
+// POST /api/sales/builder-templates { cabinet, templates } — список целиком.
+const tplKey = c => `builder-tpl:${c}`;
+router.get('/builder-templates', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [tplKey(cabinet)]);
+    res.json({ success: true, data: { templates: rows[0] ? JSON.parse(rows[0].value) : null } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+router.post('/builder-templates', async (req, res) => {
+  try {
+    const { cabinet, templates } = req.body || {};
+    if (!cabinet || !templates || typeof templates !== 'object') return res.status(400).json({ success: false, error: 'Нужны cabinet и templates' });
+    const str = JSON.stringify(templates);
+    if (str.length > 500000) return res.status(400).json({ success: false, error: 'Слишком много шаблонов' });
+    await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [tplKey(cabinet), str]);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // ── «В пути (отшивается)» — сколько штук чехлов на сиденья сейчас шьётся ──
 // Список целиком загружается из файла (артикул → количество) и заменяет прежний.
 // GET  /api/sales/sewing?cabinet=defly → { items: { offer: qty }, updatedAt }

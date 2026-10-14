@@ -26,6 +26,8 @@ const dataVersion = require('./lib/dataVersion');
 const cacheFresh = h => h && h.ver === dataVersion.get() && Date.now() - h.at < CACHE_TTL;
 const CACHED = ['/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout', '/api/finance/calc-base', '/api/stocks/data', '/api/queries/data', '/api/queries/season'];
 app.use((req, res, next) => {
+  // Шаблоны конструктора и «отшивается» отчёты не меняют — кэш не трогаем.
+  if (req.method !== 'GET' && (req.path === '/api/sales/builder-templates' || req.path === '/api/sales/sewing')) return next();
   if (req.method !== 'GET') {
     // Любое сохранение может поменять отчёты (себестоимость, категории, группы…).
     // Расширение СПП присылает цены часто — от него сбрасываем только калькулятор.

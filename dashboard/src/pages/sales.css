@@ -226,3 +226,22 @@
 .mpui .tb-t > tbody td:first-child .a-art .model{max-width:140px;overflow:hidden;text-overflow:ellipsis}
 .mpui .tb-t th.tb-catth,.mpui .tb-t td.tb-cat{width:1%;max-width:170px;min-width:0;padding-left:6px;padding-right:14px}
 .mpui .tb-t td.tb-cat{white-space:nowrap}
+/* Шаблоны конструктора */
+.mpui .tb-tplwrap{position:relative;display:inline-block}
+.mpui .tb-tplpop{position:absolute;right:0;top:calc(100% + 6px);z-index:40;width:440px;max-width:86vw;max-height:60vh;overflow:auto;background:var(--a-panel);border:1px solid var(--a-line2);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.28);padding:8px}
+.mpui .tb-tplrow{display:flex;align-items:center;gap:6px;border-radius:8px;padding:2px}
+.mpui .tb-tplrow.on{background:var(--a-panel2)}
+.mpui .tb-tplrow:hover{background:var(--a-panel2)}
+.mpui .tb-tplrow input{flex:1;font-size:13px}
+.mpui .tb-tplname{flex:1;min-width:0;text-align:left;border:0;background:transparent;color:var(--a-ink);padding:6px 8px;cursor:pointer;display:flex;flex-direction:column;gap:2px}
+.mpui .tb-tplname b{font-size:13px}
+.mpui .tb-tplname span{font-size:11.5px;color:var(--a-ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mpui .tb-tplact{display:inline-flex;gap:2px}
+.mpui .tb-tplact button{border:0;background:transparent;color:var(--a-ink3);cursor:pointer;font-size:14px;width:26px;height:26px;border-radius:6px}
+.mpui .tb-tplact button:hover{background:var(--a-line);color:var(--a-ink)}
+.mpui .tb-tplnew{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--a-line)}
+.mpui .tb-tplnew input{flex:1;font-size:13px}
+.mpui .tb-active{font-size:12.5px;color:var(--a-ink2);display:inline-flex;gap:6px;align-items:center;padding:4px 10px;border-radius:999px;background:var(--a-panel2)}
+.mpui .tb-active.dirty{color:var(--a-warn)}
+.mpui .tb-active button{border:0;background:transparent;color:var(--a-accent);cursor:pointer;font-size:12px;padding:0 2px}
+.mpui .a-btn.on{border-color:var(--a-accent)}
