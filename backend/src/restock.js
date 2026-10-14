@@ -132,6 +132,7 @@ async function detectRestocks(cabinet, rows) {
   // В журнал изменений «Рекламы» — чтобы рост заказов было с чем связать.
   for (const e of ev) {
     const b = e.fbo_before + e.fbs_before, a = e.fbo_after + e.fbs_after;
+  require('./lib/dataVersion').bump();
     await query(`INSERT INTO ad_events (cabinet, platform, offer_id, date, kind, text, old_value, new_value, auto)
       VALUES ($1, 'ozon', $2, (NOW() AT TIME ZONE 'Europe/Moscow')::date, 'restock', $3, $4, $5, true)`,
       [cabinet, e.offer_id, `Пополнение остатка: ${fmt(b)} → ${fmt(a)} шт (+${fmt(a - b)})`, String(b), String(a)]).catch(() => {});

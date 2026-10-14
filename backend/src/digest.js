@@ -20,7 +20,15 @@ const pct = (a, b) => (b > 0 ? (a - b) / b * 100 : null);
 const arrow = v => (v === null || !Number.isFinite(v) ? '' : ` ${v >= 0 ? '▲' : '▼'}${Math.abs(v).toFixed(0)}%`);
 const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+const DS_MEMO = new Map(); // чтобы 5-минутная проверка не будила базу
 async function getDigestSettings(cabinet) {
+  const m = DS_MEMO.get(cabinet);
+  if (m && Date.now() - m.at < 30 * 60 * 1000) return { ...m.v };
+  const v = await readDigestSettings(cabinet);
+  DS_MEMO.set(cabinet, { at: Date.now(), v });
+  return { ...v };
+}
+async function readDigestSettings(cabinet) {
   const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [`morning_digest:${cabinet}`]).catch(() => []);
   const def = { enabled: cabinet === 'defly', time: '09:00', tax: 6 };
   try { return { ...def, ...(rows[0] ? JSON.parse(rows[0].value) : {}) }; } catch (e) { return def; }
@@ -30,6 +38,7 @@ async function saveDigestSettings(cabinet, s) {
   const next = { ...cur, ...s };
   await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [`morning_digest:${cabinet}`, JSON.stringify(next)]);
+  DS_MEMO.set(cabinet, { at: Date.now(), v: next });
   return next;
 }
 

@@ -3,6 +3,7 @@ const { clusterOfWarehouse } = require('../../lib/warehouses');
 const { campLabel } = require('../../lib/adZone');
 const { query } = require('../../db');
 const { bulkUpsert, bulkInsert } = require('./ozonHttp');
+const rowDiff = require('../../lib/rowDiff');
 
 // Запасной источник данных Ozon, когда прямые запросы с Render блокируются
 // сетью (см. /api/netcheck). Google Apps Script (другой скрипт, живёт в
@@ -117,7 +118,7 @@ async function syncCatalogFromSheet(cabinet) {
   const out = filtered.map(r => [cabinet, 'ozon', r.offer_id, r.sku || null, r.product_name ? String(r.product_name).slice(0, 500) : null, new Date()]);
   const saved = await bulkUpsert('ad_product_catalog',
     ['cabinet', 'platform', 'offer_id', 'sku', 'product_name', 'updated_at'],
-    out, ['cabinet', 'platform', 'offer_id']);
+    out, ['cabinet', 'platform', 'offer_id'], undefined, { diff: `catalog:${cabinet}`, skip: ['updated_at'] });
   console.log(`[SheetCatalog:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
 }
@@ -125,6 +126,9 @@ async function syncCatalogFromSheet(cabinet) {
 async function syncAnalyticsFromSheet(cabinet) {
   const rows = await fetchSheetRows('Analytics');
   if (rows === null) return { rows: 0 };
+  const mine = rows.filter(r => r.cabinet === cabinet);
+  const same = rowDiff.sameAsLast(`analytics:${cabinet}`, mine);
+  if (same.same) return { rows: 0 };
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
   const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
   const out = rows
@@ -137,7 +141,8 @@ async function syncAnalyticsFromSheet(cabinet) {
   const saved = await bulkUpsert('product_analytics_daily',
     ['cabinet', 'platform', 'date', 'sku', 'offer_id', 'hits_view', 'hits_view_search', 'hits_view_pdp',
      'hits_tocart', 'orders_item', 'revenue', 'position_category', 'collected_at'],
-    out, ['cabinet', 'platform', 'date', 'sku']);
+    out, ['cabinet', 'platform', 'date', 'sku'], undefined, { diff: `pad:${cabinet}`, skip: ['collected_at'] });
+  same.save();
   console.log(`[SheetAnalytics:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
 }
@@ -150,9 +155,13 @@ async function syncStocksFromSheet(cabinet) {
   const today = new Date().toISOString().slice(0, 10);
   const out = filtered.map(r => [cabinet, 'ozon', today, r.product_id || null, r.offer_id,
     num(r.fbo_present), num(r.fbo_reserved), num(r.fbs_present), num(r.fbs_reserved)]);
+  // Остатки те же, что час назад, — в базу не пишем (и пополнений быть не может).
+  const same = rowDiff.sameAsLast(`stocks:${cabinet}`, out);
+  if (same.same) return { rows: 0 };
   await query(`DELETE FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date = $2`, [cabinet, today]);
   await bulkInsert('ad_product_stocks',
     ['cabinet', 'platform', 'snapshot_date', 'sku', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'], out);
+  same.save();
   console.log(`[SheetStocks:${cabinet}] ${out.length} (из Google-таблицы)`);
   // Пополнения остатков → уведомления (см. restock.js).
   try {
@@ -166,6 +175,8 @@ async function syncCampaignsFromSheet(cabinet) {
   const rows = await fetchSheetRows('Campaigns');
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.campaign_id);
+  const same = rowDiff.sameAsLast(`campaigns:${cabinet}`, filtered);
+  if (same.same) return { rows: 0 };
   const out = filtered.map(r => [cabinet, 'ozon', r.campaign_id, r.title || null, r.state || null, r.adv_object_type || null,
     r.payment_type || null, r.autopilot_strategy || null, r.placement || null, r.expense_strategy || null, new Date()]);
   // Прежние статусы — чтобы записать в журнал включение/выключение РК.
@@ -173,7 +184,7 @@ async function syncCampaignsFromSheet(cabinet) {
   const saved = await bulkUpsert('ad_campaigns',
     ['cabinet', 'platform', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type',
      'autopilot_strategy', 'placement', 'expense_strategy', 'updated_at'],
-    out, ['cabinet', 'platform', 'campaign_id']);
+    out, ['cabinet', 'platform', 'campaign_id'], undefined, { diff: `camps:${cabinet}`, skip: ['updated_at'] });
 
   // Привязка кампании к артикулу по вхождению offer_id в название — тот же
   // запасной вариант, что и в ozonPerf.js, только без похода за товарами
@@ -197,6 +208,7 @@ async function syncCampaignsFromSheet(cabinet) {
       [cabinet, ids, matches]);
   }
   try { await logCampaignSwitches(cabinet, filtered, prevCamps); } catch (e) { console.warn(`[SheetCampaigns:${cabinet}] журнал:`, e.message); }
+  same.save();
   console.log(`[SheetCampaigns:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
 }
@@ -237,7 +249,7 @@ async function syncStatsFromSheet(cabinet) {
     ['cabinet', 'platform', 'date', 'campaign_id', 'views', 'clicks', 'ctr', 'avg_bid', 'orders', 'orders_money', 'spend', 'collected_at'],
     out, ['cabinet', 'platform', 'date', 'campaign_id'],
     ['views', 'clicks', 'ctr', 'avg_bid', 'orders', 'orders_money', 'collected_at',
-     'spend = GREATEST(COALESCE(ad_stats_daily.spend, 0), EXCLUDED.spend)']);
+     'spend = GREATEST(COALESCE(ad_stats_daily.spend, 0), EXCLUDED.spend)'], { diff: `stats:${cabinet}`, skip: ['collected_at'] });
   console.log(`[SheetStats:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
 }
@@ -256,7 +268,7 @@ async function syncCampaignSkusFromSheet(cabinet) {
   const out = filtered.map(r => [cabinet, 'ozon', r.campaign_id, num(r.sku), new Date()]);
   const saved = await bulkUpsert('ad_campaign_skus',
     ['cabinet', 'platform', 'campaign_id', 'sku', 'updated_at'],
-    out, ['cabinet', 'platform', 'campaign_id', 'sku']);
+    out, ['cabinet', 'platform', 'campaign_id', 'sku'], undefined, { diff: `campskus:${cabinet}`, skip: ['updated_at'] });
   console.log(`[SheetCampaignSkus:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
 }
@@ -270,18 +282,22 @@ async function syncSkuStatsFromSheet(cabinet) {
       num(r.orders), num(r.sales), num(r.expense), num(r.avg_cpc), new Date()]);
   const saved = await bulkUpsert('ad_sku_stats_daily',
     ['cabinet', 'platform', 'date', 'campaign_id', 'sku', 'views', 'clicks', 'to_cart', 'orders', 'sales', 'expense', 'avg_cpc', 'updated_at'],
-    out, ['cabinet', 'platform', 'date', 'campaign_id', 'sku']);
+    out, ['cabinet', 'platform', 'date', 'campaign_id', 'sku'], undefined, { diff: `skustats:${cabinet}`, skip: ['updated_at'] });
   return { rows: saved };
 }
 
+let cpoColsReady = false;
 async function syncCpoOrdersFromSheet(cabinet) {
   const rows = await fetchSheetRows('CpoOrders');
   if (rows === null) return { rows: 0 };
   // Колонки дня заказа могло ещё не быть (таблица создана раньше).
-  await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_date DATE`).catch(() => {});
-  await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(64)`).catch(() => {});
-  // kind: '' — «выбранные товары» (продвижение в поиске), 'all' — «все товары».
-  await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS kind VARCHAR(8) NOT NULL DEFAULT ''`).catch(() => {});
+  if (!cpoColsReady) {
+    await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_date DATE`).catch(() => {});
+    await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(64)`).catch(() => {});
+    // kind: '' — «выбранные товары» (продвижение в поиске), 'all' — «все товары».
+    await query(`ALTER TABLE ad_cpo_orders ADD COLUMN IF NOT EXISTS kind VARCHAR(8) NOT NULL DEFAULT ''`).catch(() => {});
+    cpoColsReady = true;
+  }
   const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
   const out = rows.filter(r => r.cabinet === cabinet && isDate(r.date) && (r.sku || r.promoted_sku))
     .map(r => [cabinet, 'ozon', r.date, String(r.order_id || ''), String(r.sku || ''), String(r.promoted_sku || ''),
@@ -292,13 +308,14 @@ async function syncCpoOrdersFromSheet(cabinet) {
   for (const r of out) uniq.set([r[3], r[4], r[5], r[2]].join('|'), r);
   const saved = await bulkUpsert('ad_cpo_orders',
     ['cabinet', 'platform', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number', 'updated_at', 'kind'],
-    [...uniq.values()], ['cabinet', 'platform', 'order_id', 'sku', 'promoted_sku', 'date']);
+    [...uniq.values()], ['cabinet', 'platform', 'order_id', 'sku', 'promoted_sku', 'date'], undefined, { diff: `cpo:${cabinet}`, skip: ['updated_at'] });
   return { rows: saved };
 }
 
 // Запись в журнал (ad_events) при реальном изменении — кто бы ни менял:
 // продавец в личном кабинете или автостратегия Ozon.
 async function addAutoEvent(cabinet, offerId, kind, text, oldValue, newValue) {
+  require('../../lib/dataVersion').bump();
   await query(
     `INSERT INTO ad_events (cabinet, platform, offer_id, date, kind, text, old_value, new_value, auto)
      VALUES ($1, 'ozon', $2, (NOW() AT TIME ZONE 'Europe/Moscow')::date, $3, $4, $5, $6, true)`,
@@ -311,6 +328,8 @@ async function syncCpoProductsFromSheet(cabinet) {
   if (rows === null) return { rows: 0 };
   const list = rows.filter(r => r.cabinet === cabinet && r.sku);
   if (!list.length) return { rows: 0 };
+  const same = rowDiff.sameAsLast(`cpoprod:${cabinet}`, list);
+  if (same.same) return { rows: 0 };
   const prev = await query(`SELECT sku, offer_id, enabled, bid_pct FROM ad_cpo_products WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
   const prevBySku = new Map(prev.map(r => [String(r.sku), r]));
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
@@ -332,7 +351,8 @@ async function syncCpoProductsFromSheet(cabinet) {
   }
   const saved = await bulkUpsert('ad_cpo_products',
     ['cabinet', 'platform', 'sku', 'offer_id', 'enabled', 'available', 'bid_pct', 'bid_rub', 'checked_at'],
-    out, ['cabinet', 'platform', 'sku']);
+    out, ['cabinet', 'platform', 'sku'], undefined, { diff: `cpoprod:${cabinet}`, skip: ['checked_at'] });
+  same.save();
   return { rows: saved };
 }
 
@@ -345,6 +365,8 @@ async function syncCpcBidsFromSheet(cabinet) {
   if (rows === null) return { rows: 0 };
   const list = rows.filter(r => r.cabinet === cabinet && r.sku && r.campaign_id);
   if (!list.length) return { rows: 0 };
+  const same = rowDiff.sameAsLast(`bids:${cabinet}`, list);
+  if (same.same) return { rows: 0 };
   const prev = await query(`SELECT campaign_id, sku, bid FROM ad_cpc_bids WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
   const prevByKey = new Map(prev.map(r => [`${r.campaign_id}|${r.sku}`, r]));
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
@@ -362,7 +384,8 @@ async function syncCpcBidsFromSheet(cabinet) {
     }
   }
   const saved = await bulkUpsert('ad_cpc_bids', ['cabinet', 'platform', 'campaign_id', 'sku', 'bid', 'checked_at'],
-    out, ['cabinet', 'platform', 'campaign_id', 'sku']);
+    out, ['cabinet', 'platform', 'campaign_id', 'sku'], undefined, { diff: `bids:${cabinet}`, skip: ['checked_at'] });
+  same.save();
   return { rows: saved };
 }
 
@@ -397,10 +420,8 @@ async function syncGeoFromSheet(cabinet) {
   }
   const out = [...map.values()];
   if (!out.length) return { rows: 0 };
-  const dates = out.map(r => r[1]).sort();
-  await query(`DELETE FROM sales_geo_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, dates[0], dates[dates.length - 1]]);
-  const saved = await bulkUpsert('sales_geo_daily', ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled', 'updated_at'],
-    out, ['cabinet', 'date', 'offer_id', 'region', 'city']);
+  const saved = await replaceRange('sales_geo_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'region', 'city', 'qty', 'revenue', 'cancelled', 'updated_at'],
+    ['cabinet', 'date', 'offer_id', 'region', 'city'], ['updated_at']);
   return { rows: saved };
 }
 
@@ -429,11 +450,28 @@ async function ensureFinTables() {
   finTablesReady = true;
 }
 // Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
-async function replaceRange(table, cabinet, rows, columns, conflict) {
+// Чтобы не переписывать каждый час десятки тысяч одинаковых строк: если
+// память (lib/rowDiff) знает, что лежит в базе, и ни одна строка диапазона
+// не пропала — пишем только новые и изменившиеся. Иначе — как раньше:
+// удаляем диапазон и записываем его целиком.
+async function replaceRange(table, cabinet, rows, columns, conflict, skip = []) {
   if (!rows.length) return 0;
-  const dates = rows.map(r => r[1]).sort();
-  await query(`DELETE FROM ${table} WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, dates[0], dates[dates.length - 1]]);
-  return bulkUpsert(table, columns, rows, conflict);
+  const id = `${table}:${cabinet}`;
+  const di = columns.indexOf('date');
+  const dates = rows.map(r => r[di]).sort();
+  const lo = dates[0], hi = dates[dates.length - 1];
+  const mem = rowDiff.state(id);
+  if (mem) {
+    const keyIdx = conflict.map(c => columns.indexOf(c));
+    const keys = new Set(rows.map(r => keyIdx.map(i => String(r[i])).join('|')));
+    const dPos = conflict.indexOf('date');
+    let removed = false;
+    for (const k of mem.keys()) { const d = k.split('|')[dPos]; if (d >= lo && d <= hi && !keys.has(k)) { removed = true; break; } }
+    if (!removed) return bulkUpsert(table, columns, rows, conflict, undefined, { diff: id, skip });
+  }
+  rowDiff.drop(id);
+  await query(`DELETE FROM ${table} WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, lo, hi]);
+  return bulkUpsert(table, columns, rows, conflict, undefined, { diff: id, skip });
 }
 // Поисковые запросы: вкладка большая (десятки тысяч строк в день), поэтому
 // тянем не всю, а только дни, где число строк в таблице изменилось с
@@ -494,11 +532,12 @@ async function importPrices(cabinet) {
       num(r.price), num(r.seller_price), num(r.acquiring), num(r.pct_fbo), num(r.pct_fbs), num(r.fbo_deliv), num(r.fbo_direct_max), num(r.fbo_return),
       num(r.fbs_deliv), num(r.fbs_direct_max), num(r.fbs_return), r.checked_at ? new Date(r.checked_at) : new Date(), r.volume_weight === undefined || r.volume_weight === '' ? null : num(r.volume_weight)]);
     total += await bulkUpsert('product_prices', ['cabinet', 'offer_id', 'product_id', 'price', 'seller_price', 'acquiring', 'pct_fbo', 'pct_fbs',
-      'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at', 'volume_weight'], out, ['cabinet', 'offer_id']);
+      'fbo_deliv', 'fbo_direct_max', 'fbo_return', 'fbs_deliv', 'fbs_direct_max', 'fbs_return', 'checked_at', 'volume_weight'], out, ['cabinet', 'offer_id'], undefined, { diff: `prices:${cabinet}` });
   }
   return total;
 }
 
+let whCleanDay = null;
 async function syncFinanceFromSheet(cabinet) {
   // Отдельная задача 'finance' раз в час (см. jobs.js) — со своим, более
   // длинным таймаутом: вкладки большие (Finance ~30 тыс. строк).
@@ -512,7 +551,7 @@ async function syncFinanceFromSheet(cabinet) {
   if (mon) {
     const out = mon.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}/.test(String(r.month)))
       .map(r => [cabinet, String(r.month).slice(0, 7), num(r.sku), num(r.revenue), Math.round(num(r.orders))]);
-    if (out.length) total += await bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku']);
+    if (out.length) total += await bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku'], undefined, { diff: `monthly:${cabinet}` });
   }
   // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
   const wh = await fetchSheetRows('StocksWh');
@@ -529,10 +568,13 @@ async function syncFinanceFromSheet(cabinet) {
       if (cur) { cur[6] += row[6]; cur[7] += row[7]; cur[8] += row[8]; } else map.set(key, row);
     }
     if (map.size) {
-      await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date = $2`, [cabinet, today]);
-      await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date < $2`, [cabinet, new Date(Date.now() - 120 * 86400e3).toISOString().slice(0, 10)]);
-      total += await bulkUpsert('stock_cluster_daily', ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
-        [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse']);
+      // Старше 120 дней — чистим раз в сутки, не каждый час.
+      if (whCleanDay !== today) {
+        await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date < $2`, [cabinet, new Date(Date.now() - 120 * 86400e3).toISOString().slice(0, 10)]);
+        whCleanDay = today;
+      }
+      total += await replaceRange('stock_cluster_daily', cabinet, [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
+        ['cabinet', 'date', 'offer_id', 'warehouse']);
     }
   }
   const buy = await fetchSheetRows('Buyout');

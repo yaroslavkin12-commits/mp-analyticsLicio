@@ -251,14 +251,23 @@ async function tickMorning(cabinet) {
   }
 }
 
+// Статусы задач держим в памяти (читаем из базы один раз после запуска):
+// проверка «пора ли» каждые 5 минут не должна будить базу — иначе она не
+// засыпает никогда и платный тариф Neon считает часы круглые сутки.
+const STATUS = new Map(); // cabinet -> Map(job -> row)
 async function getStatus(cabinet) {
+  if (STATUS.has(cabinet)) return STATUS.get(cabinet);
   try {
     const rows = await query(`SELECT * FROM ad_job_status WHERE cabinet = $1`, [cabinet]);
-    return new Map(rows.map(r => [r.job, r]));
+    const m = new Map(rows.map(r => [r.job, r]));
+    STATUS.set(cabinet, m);
+    return m;
   } catch (e) { return new Map(); }
 }
 
 async function mark(cabinet, job, patch) {
+  const mem = STATUS.get(cabinet);
+  if (mem) mem.set(job, { ...(mem.get(job) || { cabinet, job }), ...patch });
   const cols = Object.keys(patch);
   const sets = cols.map((c, i) => `${c} = $${i + 3}`).join(', ');
   try {
@@ -360,8 +369,13 @@ async function tickCabinet(cabinet) {
     }
     const st = await getStatus(cabinet);
     const now = Date.now();
+    // Ночью (01:00–07:00 МСК) частые задачи — не чаще раза в час: данные
+    // почти не меняются, а база в это время может поспать.
+    const h = (new Date(now).getUTCHours() + 3) % 24;
+    const night = h >= 1 && h < 7;
     for (const job of JOBS) {
-      if (!isDue(job, st.get(job.id), now)) continue;
+      const j = night && job.every < HOUR ? { ...job, every: HOUR } : job;
+      if (!isDue(j, st.get(job.id), now)) continue;
       busy.set(cabinet, job.id);
       await runJobGuarded(cabinet, job);
     }

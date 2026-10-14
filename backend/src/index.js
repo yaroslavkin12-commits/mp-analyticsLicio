@@ -17,18 +17,28 @@ app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISO
 // повторное открытие раздела отдаётся сразу. Любое изменение (POST/PUT/
 // DELETE) в этих разделах кэш сбрасывает; данные с маркетплейса и так
 // обновляются раз в несколько минут.
+// Кэш живёт, пока не изменились данные (lib/dataVersion: сбор реально что-то
+// записал или пользователь что-то сохранил), но не дольше 2 часов — так
+// повторные открытия разделов не гоняют из базы одно и то же.
 const reportCache = new Map();
-const CACHE_TTL = 3 * 60 * 1000;
+const CACHE_TTL = 2 * 60 * 60 * 1000;
+const dataVersion = require('./lib/dataVersion');
+const cacheFresh = h => h && h.ver === dataVersion.get() && Date.now() - h.at < CACHE_TTL;
 const CACHED = ['/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout', '/api/finance/calc-base', '/api/stocks/data', '/api/queries/data', '/api/queries/season'];
 app.use((req, res, next) => {
   if (req.method !== 'GET') {
+    // Любое сохранение может поменять отчёты (себестоимость, категории, группы…).
+    // Расширение СПП присылает цены часто — от него сбрасываем только калькулятор.
+    if (req.path.startsWith('/api/discounts')) { for (const k of reportCache.keys()) if (k.startsWith('/api/finance/calc-base')) reportCache.delete(k); }
+    else dataVersion.bump();
+    if (req.path.startsWith('/api/tracked-articles')) require('./collectors/trackedOrdersPoll').dropTrackedCache();
     if (req.path.startsWith('/api/ads') || req.path.startsWith('/api/promo') || req.path.startsWith('/api/sales') || req.path.startsWith('/api/settings')) reportCache.clear();
     return next();
   }
   if (!CACHED.includes(req.path) || req.query.fresh) return next();
   const key = req.originalUrl;
   const hit = reportCache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_TTL) { res.set('X-Cache', 'hit'); return res.type('json').send(hit.body); }
+  if (cacheFresh(hit)) { res.set('X-Cache', 'hit'); return res.type('json').send(hit.body); }
   // Тяжёлые отчёты считаются не больше двух одновременно (остальные ждут
   // очереди): при открытии сервиса все разделы просят данные разом, и
   // параллельный расчёт не помещался в память сервера (512 МБ).
@@ -59,12 +69,13 @@ function runHeavy(req, res, next, key) {
     // Страховка: место в очереди не держим дольше 2 минут.
     setTimeout(free, 120000).unref?.();
     const again = reportCache.get(key);
-    if (again && Date.now() - again.at < CACHE_TTL) { res.set('X-Cache', 'hit'); return res.type('json').send(again.body); }
+    if (cacheFresh(again)) { res.set('X-Cache', 'hit'); return res.type('json').send(again.body); }
+    const ver = dataVersion.get(); // версия на момент начала расчёта
     const json = res.json.bind(res);
     res.json = body => {
       if (res.statusCode === 200 && body && body.success) {
         const str = JSON.stringify(body);
-        reportCache.set(key, { at: Date.now(), body: str, size: str.length });
+        reportCache.set(key, { at: Date.now(), ver, body: str, size: str.length });
         // Кэш не больше ~60 МБ: выкидываем самые старые записи.
         let total = 0; for (const v of reportCache.values()) total += v.size || 0;
         for (const [k, v] of reportCache) { if (total <= 60e6) break; total -= v.size || 0; reportCache.delete(k); }

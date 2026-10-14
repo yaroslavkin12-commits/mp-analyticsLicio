@@ -17,12 +17,17 @@ const DEFAULTS = {
 
 function keyFor(cabinet) { return `discount_notify_${cabinet}`; }
 
+// Настройки читаются на каждом 5-минутном тике — держим их в памяти,
+// чтобы не будить базу (сбрасываются при сохранении).
+const MEMO = new Map();
 async function getSettings(cabinet) {
+  const m = MEMO.get(cabinet);
+  if (m && Date.now() - m.at < 30 * 60 * 1000) return { ...m.v };
   try {
     const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [keyFor(cabinet)]);
-    if (!rows.length) return { ...DEFAULTS };
-    const parsed = JSON.parse(rows[0].value);
-    return { ...DEFAULTS, ...parsed };
+    const v = rows.length ? { ...DEFAULTS, ...JSON.parse(rows[0].value) } : { ...DEFAULTS };
+    MEMO.set(cabinet, { at: Date.now(), v });
+    return { ...v };
   } catch (e) { return { ...DEFAULTS }; }
 }
 
@@ -33,6 +38,7 @@ async function setSettings(cabinet, patch) {
     `INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
     [keyFor(cabinet), JSON.stringify(next)]);
+  MEMO.set(cabinet, { at: Date.now(), v: next });
   return next;
 }
 

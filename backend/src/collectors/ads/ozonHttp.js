@@ -2,6 +2,8 @@ const axios = require('axios');
 const dayjs = require('dayjs');
 const { getPool } = require('../../db');
 const { getCabinet } = require('../../config/cabinets');
+const rowDiff = require('../../lib/rowDiff');
+const dataVersion = require('../../lib/dataVersion');
 
 // Общие помощники для всех сборщиков кабинета (Defly и т.п.).
 //
@@ -77,7 +79,7 @@ function parseRuNumber(v) {
 // INSERT. columns — список колонок, rows — массив массивов значений в том же
 // порядке, conflict — колонки уникального ключа, update — какие колонки
 // обновлять при конфликте (по умолчанию все, кроме ключа).
-async function bulkUpsert(table, columns, rows, conflict, update, { chunk } = {}) {
+async function bulkUpsert(table, columns, rows, conflict, update, { chunk, diff, skip } = {}) {
   // Postgres принимает до 65535 параметров в одной команде — берём пачку
   // побольше (меньше обращений к удалённой БД), но в пределах лимита.
   chunk = chunk || Math.floor(60000 / columns.length);
@@ -85,9 +87,20 @@ async function bulkUpsert(table, columns, rows, conflict, update, { chunk } = {}
   // Postgres не даёт одной командой обновить одну и ту же строку дважды —
   // убираем дубли по ключу (последнее значение побеждает).
   const keyIdx = conflict.map(c => columns.indexOf(c));
+  const keyOf = row => keyIdx.map(i => String(row[i])).join('|');
   const byKey = new Map();
-  for (const row of rows) byKey.set(keyIdx.map(i => String(row[i])).join('|'), row);
+  for (const row of rows) byKey.set(keyOf(row), row);
   rows = [...byKey.values()];
+  // diff — id памяти (lib/rowDiff): пишем только строки, которых в базе ещё
+  // нет или которые изменились. skip — колонки, не влияющие на «изменилось»
+  // (время сбора и т. п.).
+  let hashes = null;
+  if (diff) {
+    const skipIdx = new Set((skip || []).map(c => columns.indexOf(c)).filter(i => i >= 0));
+    const mem = rowDiff.state(diff);
+    hashes = rows.map(r => [keyOf(r), rowDiff.hashRow(r, skipIdx)]);
+    if (mem) rows = rows.filter((r, i) => mem.get(hashes[i][0]) !== hashes[i][1]);
+  }
   const upd = (update || columns.filter(c => !conflict.includes(c)))
     .map(c => (c.includes('=') ? c : `${c} = EXCLUDED.${c}`));
   const pool = getPool();
@@ -104,6 +117,8 @@ async function bulkUpsert(table, columns, rows, conflict, update, { chunk } = {}
     await pool.query(sql, params);
     done += part.length;
   }
+  if (done) dataVersion.bump();
+  if (hashes) rowDiff.remember(diff, hashes);
   return done;
 }
 
@@ -117,6 +132,7 @@ async function bulkInsert(table, columns, rows, { chunk } = {}) {
     const values = part.map(row => `(${row.map(v => { params.push(v); return `$${params.length}`; }).join(',')})`);
     await pool.query(`INSERT INTO ${table} (${columns.join(',')}) VALUES ${values.join(',')}`, params);
   }
+  dataVersion.bump();
   return rows.length;
 }
 

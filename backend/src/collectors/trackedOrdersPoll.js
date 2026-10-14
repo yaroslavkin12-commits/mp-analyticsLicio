@@ -110,26 +110,54 @@ async function pollOzonForCabinet(cabinet) {
 // Уведомляем только о заказах не старше NOTIFY_MAX_AGE_HOURS — иначе при
 // первом запуске пришли бы уведомления по всем заказам за 2 дня разом.
 const NOTIFY_MAX_AGE_HOURS = 3;
+// Уже виденные заказы держим в памяти: опрос идёт каждые 4 минуты, и раньше
+// каждая строка вкладки (сотни заказов за 2 дня) шла в базу отдельным
+// INSERT — база не засыпала никогда. Теперь в базу идут только новые,
+// одним запросом. Список отслеживаемых — тоже из памяти (на 10 минут).
+const SEEN = new Map();     // cabinet -> Set('posting|sku')
+const TRACKED = new Map();  // cabinet -> { at, list }
+function dropTrackedCache(cabinet) { if (cabinet) TRACKED.delete(cabinet); else TRACKED.clear(); }
+async function trackedOf(cabinet) {
+  const t = TRACKED.get(cabinet);
+  if (t && Date.now() - t.at < 10 * 60 * 1000) return t.list;
+  const list = await getActiveTracked(cabinet, 'ozon').catch(() => []);
+  TRACKED.set(cabinet, { at: Date.now(), list });
+  return list;
+}
 async function pollOrdersFromSheet(cabinet) {
-  const tracked = await getActiveTracked(cabinet, 'ozon').catch(() => []);
+  const tracked = await trackedOf(cabinet);
   if (!tracked.length) return 0;
   const { fetchSheetRows } = require('./ads/sheetSync');
   const rows = await fetchSheetRows('Orders');
   if (!rows) return 0;
   const cutoff = Date.now() - NOTIFY_MAX_AGE_HOURS * 3600 * 1000;
-  const newOrders = [];
+  let seen = SEEN.get(cabinet);
+  if (!seen) { seen = new Set(); SEEN.set(cabinet, seen); }
+  const fresh = new Map();
   for (const r of rows) {
     if (r.cabinet !== cabinet || !r.posting_number) continue;
     if (String(r.status).toLowerCase() === 'cancelled') continue;
     const sku = Number(r.sku) || 0;
-    let inserted;
-    try {
-      inserted = await query(
-        `INSERT INTO tracked_orders_seen (cabinet, posting_number, sku) VALUES (?,?,?)
-         ON CONFLICT (cabinet, posting_number, sku) DO NOTHING RETURNING id`,
-        [cabinet, r.posting_number, sku]);
-    } catch (e) { continue; }
-    if (!inserted.length) continue;
+    const k = `${r.posting_number}|${sku}`;
+    if (seen.has(k) || fresh.has(k)) continue;
+    fresh.set(k, { r, sku });
+  }
+  if (!fresh.size) return 0;
+  const list = [...fresh.values()];
+  let inserted;
+  try {
+    inserted = await query(
+      `INSERT INTO tracked_orders_seen (cabinet, posting_number, sku)
+       SELECT $1, p, s FROM unnest($2::text[], $3::bigint[]) AS t(p, s)
+       ON CONFLICT (cabinet, posting_number, sku) DO NOTHING RETURNING posting_number, sku`,
+      [cabinet, list.map(x => String(x.r.posting_number)), list.map(x => x.sku)]);
+  } catch (e) { console.warn(`[Orders:${cabinet}]`, e.message); return 0; }
+  for (const k of fresh.keys()) seen.add(k);
+  if (seen.size > 20000) { const keep = [...seen].slice(-10000); seen.clear(); keep.forEach(k => seen.add(k)); }
+  const isNew = new Set(inserted.map(x => `${x.posting_number}|${Number(x.sku) || 0}`));
+  const newOrders = [];
+  for (const [k, { r, sku }] of fresh) {
+    if (!isNew.has(k)) continue;
     const created = r.created_at ? new Date(r.created_at).getTime() : Date.now();
     if (Number.isFinite(created) && created < cutoff) continue; // старый заказ — просто запомнили
     newOrders.push({
@@ -141,4 +169,4 @@ async function pollOrdersFromSheet(cabinet) {
   return newOrders.length;
 }
 
-module.exports = { pollOzonForCabinet, pollOrdersFromSheet };
+module.exports = { pollOzonForCabinet, pollOrdersFromSheet, dropTrackedCache };
