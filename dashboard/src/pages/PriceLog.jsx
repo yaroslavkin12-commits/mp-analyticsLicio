@@ -280,7 +280,7 @@ export default function PriceLog({ cabinet }) {
     for (const r of rows) {
       if (!r.g) continue;
       const v = m.get(r.g.key) || { ...r.g, n: 0, sa: 0, sb: 0, before: 0, after: 0, cats: new Map(), details: new Map() };
-      v.n++; v.sa += r.a || 0; v.sb += r.b || 0; v.before += r.before; v.after += r.afterN || 0;
+      v.n++; v.sa += r.a || 0; v.sb += r.b || 0; v.before += r.before; v.after += r.after || 0;
       v.cats.set(r.cat1, (v.cats.get(r.cat1) || 0) + 1);
       if (r.g.detail) v.details.set(r.g.detail, (v.details.get(r.g.detail) || 0) + 1);
       m.set(r.g.key, v);
@@ -292,7 +292,7 @@ export default function PriceLog({ cabinet }) {
     for (const r of rows) {
       const v = m.get(r.cat1) || { cat: r.cat1, up: 0, down: 0, same: 0, zero: 0, pct: 0, nPct: 0, before: 0, after: 0, rules: new Map() };
       if (r.kind === 'up') v.up++; else if (r.kind === 'down') v.down++; else if (r.kind === 'zero') v.zero++; else v.same++;
-      if (changed(r)) { v.pct += r.pct; v.nPct++; v.before += r.before; v.after += r.afterN || 0; v.rules.set(r.g.label, (v.rules.get(r.g.label) || 0) + 1); }
+      if (changed(r)) { v.pct += r.pct; v.nPct++; v.before += r.before; v.after += r.after || 0; v.rules.set(r.g.label, (v.rules.get(r.g.label) || 0) + 1); }
       m.set(r.cat1, v);
     }
     return [...m.values()].filter(v => v.up + v.down + v.zero > 0).sort((a, b) => (b.up + b.down) - (a.up + a.down));
@@ -312,7 +312,7 @@ export default function PriceLog({ cabinet }) {
     && (!fGroup || r.g?.key === fGroup) && (!fCat || r.cat1 === fCat) && (!fGoal || (fGoal === '—' ? !r.goal : r.goal === fGoal))
     && (!q || r.o.toLowerCase().includes(q.toLowerCase()) || r.cat.toLowerCase().includes(q.toLowerCase())));
   const ctl = useTableCtl(`pricelog-${cabinet}`, { k: 'pct', dir: 1 });
-  const GET = { o: r => r.o, a: r => r.a, b: r => r.b, d: r => r.d, pct: r => r.pct, before: r => r.before, after: r => r.afterN, goal: r => r.goal, off: r => (r.off === null ? null : Math.abs(r.off)) };
+  const GET = { o: r => r.o, a: r => r.a, b: r => r.b, d: r => r.d, pct: r => r.pct, before: r => r.before, after: r => r.after, goal: r => r.goal, off: r => (r.off === null ? null : Math.abs(r.off)) };
   const shown = ctl.apply(list, (r, k) => (GET[k] ? GET[k](r) : null));
   const [full, setFull] = useState(false);
   const vis = full ? shown : shown.slice(0, 50);
@@ -372,7 +372,7 @@ export default function PriceLog({ cabinet }) {
       if (!changed(r)) continue;
       const g = r.goal || (r.kind === 'down' ? '_down' : '_up');
       const v = m.get(g) || { n: 0, before: 0, after: 0 };
-      v.n++; v.before += r.before; v.after += r.afterN || 0;
+      v.n++; v.before += r.before; v.after += r.after || 0;
       m.set(g, v);
     }
     return [...m.entries()];
@@ -381,11 +381,11 @@ export default function PriceLog({ cabinet }) {
   if (err && !log) return <div className="mpui"><div className="a-empty" style={{ padding: 40 }}>Не удалось загрузить: {err}</div></div>;
   if (!log) return <div className="mpui"><div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div></div>;
 
-  const ordCh = (b, a) => (b > 0 && daysAfter >= 3 ? (a / b - 1) * 100 : null);
+  const ordCh = (b, a) => (b > 0 && daysAfter >= 3 ? ((a / daysAfter) / (b / 7) - 1) * 100 : null);
   const OrdCells = ({ before, after }) => (
     <>
       <td className="n r">{fmtInt(before)}</td>
-      <td className="n r">{daysAfter > 0 ? fmtInt(after) : '…'}</td>
+      <td className="n r">{daysAfter > 0 ? <>{fmtInt(after)}<small className="pr-sub2">за {daysAfter} дн</small></> : '…'}</td>
       <td className="n r">{ordCh(before, after) !== null ? <span className={ordCh(before, after) >= 0 ? 's-up' : 's-down'}>{f1(ordCh(before, after))}</span> : daysAfter > 0 && before > 0 ? <span className="muted" title="Меньше 3 дней после изменения — по одному-двум дням судить рано">рано</span> : '—'}</td>
     </>
   );
@@ -431,7 +431,7 @@ export default function PriceLog({ cabinet }) {
         <div className="a-card pr-card">
           <div className="a-bar" style={{ marginBottom: 8, flexWrap: 'wrap', gap: 10 }}>
             <b style={{ fontSize: 14 }}>{two ? `Изменения цен с ${dayjs(cur.date).format('DD.MM.YYYY')}` : prev ? `Изменения ${dayjs(prev.date).format('DD.MM')} → ${dayjs(cur.date).format('DD.MM.YYYY')}` : `Первый снимок ${dayjs(cur.date).format('DD.MM.YYYY')} — изменения будут видны со следующей загрузки`}</b>
-            {(two || prev) && <span className="a-hint" style={{ margin: 0 }}>заказы Ozon: 7 дней до {dayjs(cur.date).format('DD.MM')} и {daysAfter > 0 ? `${daysAfter} дн после (в пересчёте на 7)` : 'после — ещё нет данных'}</span>}
+            {(two || prev) && <span className="a-hint" style={{ margin: 0 }}>заказы Ozon: 7 дней до {dayjs(cur.date).format('DD.MM')} и {daysAfter > 0 ? `${daysAfter} дн после (изменение — по заказам в день)` : 'после — ещё нет данных'}</span>}
           </div>
           {(two || prev) && (
             <>
@@ -456,7 +456,7 @@ export default function PriceLog({ cabinet }) {
                   <table className="a-t pr-t pl-agg">
                     <thead><tr>
                       <th className="l">Правило</th><th className="r">Арт.</th><th className="l">Категории</th><th className="r">Средняя цена было</th><th className="r">стало</th>
-                      <th className="r" title="Заказы Ozon за 7 дней до изменения">Заказы до</th><th className="r" title="После изменения, в пересчёте на 7 дней">после</th><th className="r">изм.</th>
+                      <th className="r" title="Заказы Ozon за 7 дней до изменения">Заказы 7 дн до</th><th className="r" title="Заказы Ozon после изменения — фактически, за прошедшие дни">после</th><th className="r">изм.</th>
                     </tr></thead>
                     <tbody>
                       {!ruleRows.length && <tr><td colSpan={8} className="muted" style={{ padding: 12 }}>Цены не менялись</td></tr>}
@@ -498,11 +498,11 @@ export default function PriceLog({ cabinet }) {
               {goalSummary.length > 0 && (
                 <div className="pl-goals" style={{ marginTop: 12 }}>
                   {goalSummary.map(([g, v]) => {
-                    const ch = v.before > 0 ? (v.after / v.before - 1) * 100 : null;
+                    const ch = v.before > 0 && daysAfter > 0 ? ((v.after / daysAfter) / (v.before / 7) - 1) * 100 : null;
                     return (
                       <div key={g} className="pl-goal">
                         <div className="pl-goalt">{g === '_down' ? 'Снизили, цель не указана' : g === '_up' ? 'Подняли, цель не указана' : GOAL[g] || g}</div>
-                        <div><b>{v.n}</b> арт. · заказы {fmtInt(v.before)} → {daysAfter > 0 ? fmtInt(v.after) : '…'} шт/нед {daysAfter >= 3 && ch !== null ? <b className={ch >= 0 ? 's-up' : 's-down'}>{f1(ch)}</b> : null}</div>
+                        <div><b>{v.n}</b> арт. · заказы {fmtInt(v.before)} за 7 дн → {daysAfter > 0 ? `${fmtInt(v.after)} за ${daysAfter} дн` : '…'} {daysAfter >= 3 && ch !== null ? <b className={ch >= 0 ? 's-up' : 's-down'}>{f1(ch)}</b> : null}</div>
                       </div>
                     );
                   })}
@@ -547,7 +547,7 @@ export default function PriceLog({ cabinet }) {
                 <ThCtl ctl={ctl} k="d" unit="₽">Изменение</ThCtl>
                 <ThCtl ctl={ctl} k="pct" unit="%">%</ThCtl>
                 <ThCtl ctl={ctl} k="before" hint="Заказы Ozon за 7 дней до изменения цены">Заказы до</ThCtl>
-                <ThCtl ctl={ctl} k="after" hint="Заказы Ozon после изменения, в пересчёте на 7 дней">Заказы после</ThCtl>
+                <ThCtl ctl={ctl} k="after" hint="Заказы Ozon после изменения — фактически, за прошедшие дни; % — по заказам в день к неделе до">Заказы после</ThCtl>
                 <ThCtl ctl={ctl} k="off" unit="%" hint={`Цена для покупателя с Ozon-картой на сайте. Отличается от цены в файле больше чем на ${MIS}% — строка подсвечена: цена не применилась или её перебила акция`}>На сайте</ThCtl>
                 <ThCtl ctl={ctl} k="goal" className="" filter={false}>Цель и заметка</ThCtl>
                 <th style={{ textAlign: 'left' }}>Итог</th>
@@ -563,7 +563,7 @@ export default function PriceLog({ cabinet }) {
                     <td className="n r"><span className={r.d > 0 ? 's-up' : r.d < 0 ? 's-down' : ''}>{r.d ? drub(r.d) : '—'}</span></td>
                     <td className="n r"><span className={r.pct > 0 ? 's-up' : r.pct < 0 ? 's-down' : ''}>{r.pct ? f1(r.pct) : '—'}</span>{r.g && r.g.kind !== 'pct' ? <small className="pr-sub2">{r.g.kind === 'spot' ? 'точечно' : r.g.label}</small> : null}</td>
                     <td className="n r">{fmtInt(r.before)}</td>
-                    <td className="n r">{daysAfter > 0 ? <>{fmtInt(r.afterN)}{r.before > 0 && daysAfter >= 3 ? <small className={`pr-sub2 ${r.afterN >= r.before ? 's-up' : 's-down'}`}>{f1((r.afterN / r.before - 1) * 100)}</small> : null}</> : '…'}</td>
+                    <td className="n r">{daysAfter > 0 ? <>{fmtInt(r.after)}{r.before > 0 && daysAfter >= 3 ? <small className={`pr-sub2 ${r.afterN >= r.before ? 's-up' : 's-down'}`}>{f1((r.afterN / r.before - 1) * 100)}</small> : <small className="pr-sub2">за {daysAfter} дн</small>}</> : '…'}</td>
                     <td className={`n r ${r.mis ? 'pl-bad' : ''}`}>{r.st?.card ? <span title={`с Ozon-картой ${rub(r.st.card)}${r.st.noCard ? `, без карты ${rub(r.st.noCard)}` : ''}, проверено ${r.st.at || '—'}${r.st.stored ? ' (запомнено при загрузке, против «было»)' : ''}`}>{rub(r.st.card)}{r.off !== null ? <small className={`pr-sub2 ${r.mis ? 's-down' : ''}`}>{r.mis ? 'расходится ' : ''}{f1(r.off)}</small> : null}</span> : '—'}</td>
                     <td className="pr-l pl-gl" style={{ minWidth: 220 }}>
                       <select className="a-input pr-sel" value={r.goal} onChange={e => mark([r.o], e.target.value || null, undefined)}>
