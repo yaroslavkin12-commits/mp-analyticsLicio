@@ -12,12 +12,14 @@ const NAV_BY_CABINET = {
   ],
 };
 const CABINETS = [['licio','Licio'],['defly','Defly']];
+export const navLabel = (cabinet, page) => ((NAV_BY_CABINET[cabinet] || NAV_BY_CABINET.licio).find(([id]) => id === page) || [])[2] || '';
 
-export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCabinet }) {
+export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCabinet, mobile }) {
   const [open, setOpen] = useState(false);
   // Свёрнутое меню — только значки (помнится в браузере).
-  const [mini, setMini] = useState(() => { try { return localStorage.getItem('mp-side-mini') === '1'; } catch (e) { return false; } });
-  useEffect(() => { try { localStorage.setItem('mp-side-mini', mini ? '1' : '0'); } catch (e) { /* ignore */ } }, [mini]);
+  const [miniPref, setMini] = useState(() => { try { return localStorage.getItem('mp-side-mini') === '1'; } catch (e) { return false; } });
+  const mini = miniPref && !mobile; // в мобильном меню всегда с подписями
+  useEffect(() => { try { localStorage.setItem('mp-side-mini', miniPref ? '1' : '0'); } catch (e) { /* ignore */ } }, [miniPref]);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -30,7 +32,7 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
   const nav = NAV_BY_CABINET[cabinet] || NAV_BY_CABINET.licio;
 
   return (
-    <div style={{ width: mini ? 58 : 210, transition:'width .15s', background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
+    <div style={{ width: mobile ? '100%' : mini ? 58 : 210, height: mobile ? '100%' : undefined, transition:'width .15s', background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
       <div ref={ref} style={{ padding: mini ? '16px 8px 10px' : '18px 16px 10px', position:'relative' }}>
         <button onClick={() => setOpen(o => !o)} style={{
           display:'flex', alignItems:'center', gap:10, width:'100%', background:'transparent', border:'none',
@@ -100,10 +102,10 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
         }}>
           <span style={{ fontSize:14 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>{!mini && (theme === 'dark' ? 'Светлая тема' : 'Тёмная тема')}
         </button>
-        <button onClick={() => setMini(m => !m)} title={mini ? 'Развернуть меню' : 'Свернуть меню — оставить только значки'} style={{
+        {!mobile && <button onClick={() => setMini(m => !m)} title={mini ? 'Развернуть меню' : 'Свернуть меню — оставить только значки'} style={{
           marginLeft: mini ? 0 : 'auto', padding:'6px 8px', borderRadius:8, border:'1px solid var(--border)', background:'transparent',
           color:'var(--text2)', fontSize:13, cursor:'pointer', lineHeight:1,
-        }}>{mini ? '»' : '«'}</button>
+        }}>{mini ? '»' : '«'}</button>}
       </div>
     </div>
   );

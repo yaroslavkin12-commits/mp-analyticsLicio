@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initArtLinks } from './lib/artLinks';
 import { whenIdle } from './api';
-import Sidebar from './components/Sidebar';
+import Sidebar, { navLabel } from './components/Sidebar';
 import { startStickyHeads } from './lib/stickyHeads';
 startStickyHeads();
 import Dashboard from './pages/Dashboard';
@@ -61,6 +61,19 @@ const PAGES_BY_CABINET = {
 };
 
 const THEME_KEY = 'mp-theme';
+// Телефон: узкий экран. Все мобильные правки — только при этом условии (и в CSS
+// под тем же @media), чтобы компьютерная версия не менялась.
+const MOBILE_Q = '(max-width: 760px)';
+function useIsMobile() {
+  const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia && window.matchMedia(MOBILE_Q).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_Q);
+    const on = () => setM(mq.matches);
+    mq.addEventListener ? mq.addEventListener('change', on) : mq.addListener(on);
+    return () => (mq.removeEventListener ? mq.removeEventListener('change', on) : mq.removeListener(on));
+  }, []);
+  return m;
+}
 const CABINET_KEY = 'mp-cabinet';
 
 export default function App() {
@@ -73,6 +86,8 @@ export default function App() {
   const [cabinet, setCabinet] = useState(() => {
     try { return localStorage.getItem(CABINET_KEY) || 'licio'; } catch(e) { return 'licio'; }
   });
+  const isMobile = useIsMobile();
+  const [drawer, setDrawer] = useState(false);
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch(e) { return 'dark'; }
   });
@@ -117,6 +132,8 @@ export default function App() {
     // По одному разделу и только когда сеть свободна: сначала свои данные
     // получает открытая страница, потом фоном — остальные.
     const order = allowed.filter(id => id !== page);
+    // На телефоне фоном ничего не грузим — только открытый раздел (память).
+    if (window.matchMedia && window.matchMedia(MOBILE_Q).matches) return () => {};
     (async () => {
       await new Promise(r => timers.push(setTimeout(r, 1500)));
       for (const id of order) {
@@ -136,9 +153,18 @@ export default function App() {
   const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'inventory', 'production', 'pricelog', 'check', 'abc', 'recon', 'margin', 'plan', 'search', 'season', 'calculator', 'notifications'].includes(page);
 
   return (
-    <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
-      <Sidebar page={page} setPage={setPage} theme={theme} setTheme={setTheme} cabinet={cabinet} setCabinet={setCabinet}/>
+    <div className={`app-root ${isMobile ? 'is-mobile' : ''}`} style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
+      {isMobile ? (drawer && <>
+        <div className="m-drawer-bg" onClick={() => setDrawer(false)} />
+        <div className="m-drawer"><Sidebar mobile page={page} setPage={id => { setPage(id); setDrawer(false); }} theme={theme} setTheme={setTheme} cabinet={cabinet} setCabinet={c => { setCabinet(c); setDrawer(false); }}/></div>
+      </>) : <Sidebar page={page} setPage={setPage} theme={theme} setTheme={setTheme} cabinet={cabinet} setCabinet={setCabinet}/>}
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
+        {isMobile && (
+          <div className="m-topbar">
+            <button type="button" className="m-burger" onClick={() => setDrawer(true)} aria-label="Меню">☰</button>
+            <span className="m-title">{navLabel(cabinet, page)}</span>
+          </div>
+        )}
         {showPlatform && (
           <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 18px',
             borderBottom:'1px solid var(--border)', background:'var(--surface)', flexShrink:0 }}>
@@ -155,12 +181,12 @@ export default function App() {
         )}
 
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
-          {allowed.filter(id => visited.has(id) && PAGES[id]).map(id => {
+          {allowed.filter(id => visited.has(id) && PAGES[id] && (!isMobile || id === page)).map(id => {
             const P = PAGES[id];
             const on = id === page;
             return (
-              <div key={cabinet + ':' + id + ':' + (pageGen[id] || 0)} aria-hidden={!on} style={{
-                position:'absolute', inset:0, overflow:'auto', padding:18,
+              <div key={cabinet + ':' + id + ':' + (pageGen[id] || 0)} aria-hidden={!on} className="app-page" style={{
+                position:'absolute', inset:0, overflow:'auto',
                 visibility: on ? 'visible' : 'hidden', zIndex: on ? 1 : 0, pointerEvents: on ? 'auto' : 'none',
               }}>
                 <PageBoundary>

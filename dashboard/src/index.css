@@ -31,3 +31,50 @@ button{font-family:inherit;cursor:pointer}
 .art-cp:hover{opacity:.9}
 .art-cp.ok{opacity:1;color:var(--a-good,#3a9b5c)}
 @media print{.art-cp{display:none}}
+
+/* Отступ страницы раздела */
+.app-page{padding:18px}
+
+/* ───────────── Телефон (≤ 760px). На компьютере ничего из этого не действует. ───────────── */
+@media (max-width:760px){
+  body{font-size:13.5px}
+  .app-page{padding:10px;-webkit-overflow-scrolling:touch}
+  /* Верхняя панель с кнопкой меню и меню-шторка */
+  .m-topbar{display:flex;align-items:center;gap:10px;height:46px;padding:0 10px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0}
+  .m-burger{border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:8px;width:36px;height:32px;font-size:17px;line-height:1}
+  .m-title{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .m-drawer-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000}
+  .m-drawer{position:fixed;top:0;left:0;bottom:0;width:min(280px,82vw);z-index:1001;box-shadow:4px 0 24px rgba(0,0,0,.35)}
+  .m-drawer nav button{padding-top:10px!important;padding-bottom:10px!important;font-size:14.5px!important}
+  /* Шапка раздела на телефоне не закрепляется — иначе занимает пол-экрана */
+  .page-sticky{position:relative;top:auto;margin:-10px -10px 12px;padding:10px 10px 8px;gap:8px}
+  .mpui > .page-sticky{margin-bottom:0}
+  .mpui .a-top{gap:8px}
+  .mpui .a-top h1{display:none} /* название раздела — в верхней панели */
+  .mpui .a-seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+  .mpui .a-seg::-webkit-scrollbar{display:none}
+  .mpui .a-seg button{padding:6px 10px}
+  .mpui .a-bar{gap:8px}
+  .mpui .a-input,.mpui input.a-input,.mpui select.a-input{min-width:0!important;max-width:100%;font-size:16px} /* 16px — iOS не зумит поле при вводе */
+  .mpui .a-btn{padding:7px 11px}
+  /* Карточки показателей — по две в ряд */
+  .mpui .a-kpis,.mpui .s-kpis{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px}
+  .mpui .a-kpi{padding:10px 11px 8px}
+  .mpui .a-kpi .lbl{white-space:normal;font-size:11.5px;line-height:1.25}
+  .mpui .a-kpi .val{font-size:19px}
+  .mpui .a-kpi .sub{font-size:11px;gap:5px}
+  .mpui .a-card{border-radius:10px}
+  /* Таблицы: листаются вбок, первая колонка (артикул/название) закреплена */
+  .mpui .a-t th,.mpui .a-t td{padding:7px 8px;font-size:12.5px}
+  .mpui .a-scroll{-webkit-overflow-scrolling:touch}
+  .mpui .a-scroll > table > thead > tr > th:first-child,
+  .mpui .a-scroll > table > tbody > tr > td:first-child{position:sticky;left:0;z-index:2;background:var(--a-panel);box-shadow:1px 0 0 var(--a-line)}
+  .mpui .a-scroll > table > thead > tr > th:first-child{z-index:3}
+  .mpui .a-scroll > table > tbody > tr > td:first-child{max-width:52vw;overflow:hidden;text-overflow:ellipsis}
+  .mpui .a-scroll > table > tbody > tr > td:first-child .model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mpui .a-art .model{max-width:150px}
+  /* Всплывающие окна — на весь экран */
+  .mpui .pl-modal{padding:10px}
+  .mpui .pl-modalc{width:100%}
+  .art-cp{opacity:.45;font-size:.9em;padding:2px 3px}
+}
