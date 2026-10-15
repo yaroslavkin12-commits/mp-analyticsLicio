@@ -153,7 +153,7 @@ function ArticleDetailModal({ article, onClose }) {
           {[
             ['Текущий Соинвест', article.current ? fmtPct(article.current.pct) : '—'],
             ['Мин / Макс за период', `${fmtPct(article.minPct)} / ${fmtPct(article.maxPct)}`],
-            ['Цена покупателя', article.current ? fmtMoney(article.current.marketingPrice) : '—'],
+            ['Цена клиента', article.current ? fmtMoney(article.current.marketingPrice) : '—'],
             ['Изменений за период', article.changesCount],
           ].map(([l, v]) => (
             <div key={l}>
@@ -187,13 +187,13 @@ function ArticleDetailModal({ article, onClose }) {
                 <YAxis stroke="var(--text3)" fontSize={11} tickLine={false} axisLine={false} width={56}
                   tickFormatter={v => `${Math.round(v / 1000)}k`} domain={['dataMin - 100', 'dataMax + 100']} />
                 <Tooltip content={<PriceTooltip />} />
-                <Line type="stepAfter" dataKey="price" name="Цена продавца" stroke="var(--text3)" strokeWidth={2} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
-                <Line type="stepAfter" dataKey="marketingPrice" name="Цена на витрине" stroke="var(--accent-oz)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
+                <Line type="stepAfter" dataKey="price" name="Цена реализации" stroke="var(--text3)" strokeWidth={2} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                <Line type="stepAfter" dataKey="marketingPrice" name="Цена клиента" stroke="var(--accent-oz)" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
             <div style={{ display: 'flex', gap: 16, marginTop: 6 }}>
-              <LegendDot color="var(--text3)" dashed label="Цена продавца" />
-              <LegendDot color="var(--accent-oz)" label="Цена на витрине" />
+              <LegendDot color="var(--text3)" dashed label="Цена реализации" />
+              <LegendDot color="var(--accent-oz)" label="Цена клиента" />
             </div>
           </>
         )}
@@ -214,7 +214,7 @@ function ArticleHistory({ history }) {
           <tr style={{ color: 'var(--text3)', textAlign: 'left' }}>
             <th style={{ padding: '3px 8px', fontWeight: 500 }}>Когда</th>
             <th style={{ padding: '3px 8px', fontWeight: 500 }}>Соинвест</th>
-            <th style={{ padding: '3px 8px', fontWeight: 500 }}>Цена продавца</th>
+            <th style={{ padding: '3px 8px', fontWeight: 500 }}>Цена реализации</th>
             <th style={{ padding: '3px 8px', fontWeight: 500 }}>Цена на сайте</th>
             <th style={{ padding: '3px 8px', fontWeight: 500 }}>С Ozon Картой</th>
           </tr>

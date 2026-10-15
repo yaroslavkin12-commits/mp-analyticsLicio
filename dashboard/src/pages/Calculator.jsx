@@ -78,7 +78,7 @@ export function baseOf(rows, scheme) {
 
 const FIELDS = [
   // key, label, suffix, источник в базе
-  ['price', 'Цена до скидки (ваша цена)', '₽'],
+  ['price', 'Цена реализации (до скидки Ozon)', '₽'],
   ['spp', 'Скидка для покупателя (СПП), налог — от цены после неё', '%'],
   ['cost', 'Себестоимость', '₽'],
   ['buyout', 'Процент выкупа', '%'],
@@ -292,7 +292,7 @@ export default function Calculator({ cabinet }) {
       {tab === 'hist' && (
         <div className="a-card">
           <table className="a-t s-slice">
-            <thead><tr><th>Расчёт</th><th>Схема</th><th className="r">Цена</th><th className="r">Прибыль</th><th className="r">Маржа</th><th className="r">ROI</th><th>Когда</th><th /></tr></thead>
+            <thead><tr><th>Расчёт</th><th>Схема</th><th className="r">Цена реализации</th><th className="r">Прибыль</th><th className="r">Маржа</th><th className="r">ROI</th><th>Когда</th><th /></tr></thead>
             <tbody>
               {hist.map(h => (
                 <tr key={h.id} className="row" style={{ cursor: 'pointer' }} onClick={() => loadHist(h)}>
@@ -348,7 +348,7 @@ export default function Calculator({ cabinet }) {
                 <span className="k-inp"><input value={name} onChange={e => setName(e.target.value)} placeholder="Например: чехлы экокожа, новая модель" /></span>
               </label>
               <div className="k-two">{field('price')}{field('spp')}{field('cost')}{field('buyout')}{field('defect')}</div>
-              {res && <div className="k-note">Цена для покупателя ≈ <b>{rub(res.buyerPrice)}</b> · отправок на 1 продажу <b>{res.trips.toFixed(2).replace('.', ',')}</b> (100 / выкуп) · к перечислению от Ozon <b>{rub(res.payout)}</b></div>}
+              {res && <div className="k-note">Цена клиента ≈ <b>{rub(res.buyerPrice)}</b> · отправок на 1 продажу <b>{res.trips.toFixed(2).replace('.', ',')}</b> (100 / выкуп) · к перечислению от Ozon <b>{rub(res.payout)}</b></div>}
             </div>
 
             <div className="a-card k-card">
@@ -405,8 +405,8 @@ export default function Calculator({ cabinet }) {
               <div className="k-head"><b>Результат на 1 проданную штуку</b></div>
               {!res ? <div className="a-hint">Укажите цену или выберите товар / категорию.</div> : (
                 <>
-                  <Row label="Цена до скидки" value={rub(res.P)} />
-                  <Row label="Цена для покупателя (после СПП)" value={rub(res.buyerPrice)} hint="СПП оплачивает Ozon — на вашу выручку не влияет" />
+                  <Row label="Цена реализации" value={rub(res.P)} />
+                  <Row label="Цена клиента (после СПП)" value={rub(res.buyerPrice)} hint="СПП оплачивает Ozon — на вашу выручку не влияет" />
                   <Row label="Расходы Ozon" value={rub(-res.mp)} strong neg />
                   <Row sub label={`Комиссия ${pct1(V.commission)}`} value={rub(-res.commission)} neg />
                   <Row sub label={`Эквайринг ${pct1(V.acquiring)}`} value={rub(-res.acquiring)} neg />
@@ -416,7 +416,7 @@ export default function Calculator({ cabinet }) {
                     hint={`Из ${res.trips.toFixed(2).replace('.', ',')} отправок одна выкуплена, остальные ${(res.trips - 1).toFixed(2).replace('.', ',')} — невыкупы, и за каждый платится обратная логистика. То же самое на 1 заказ: обратная × (1 − выкуп) = ${rub(V.ret)} × ${(1 - V.buyout / 100).toFixed(2).replace('.', ',')}; на 1 продажу это делится на выкуп`} />
                   <Row sub label={`Хранение и прочее ${pct1(V.other)}`} value={rub(-res.other)} neg />
                   <Row sub label={`Реклама ${pct1(V.drr)}`} value={rub(-res.ads)} neg />
-                  <Row label="Средняя сумма поступления на счёт" value={rub(res.payout)} strong hint="Цена до скидки минус все расходы Ozon (комиссия, эквайринг, логистика с учётом невыкупов, хранение, реклама) — столько в среднем приходит на расчётный счёт с 1 проданной штуки" />
+                  <Row label="Средняя сумма поступления на счёт" value={rub(res.payout)} strong hint="Цена реализации минус все расходы Ozon (комиссия, эквайринг, логистика с учётом невыкупов, хранение, реклама) — столько в среднем приходит на расчётный счёт с 1 проданной штуки" />
                   <Row label="Расходы вне Ozon" value={rub(-res.outside)} strong neg />
                   <Row sub label="Себестоимость" value={rub(-res.cost)} neg />
                   <Row sub label="Брак" value={rub(-res.defect)} neg />
@@ -434,7 +434,7 @@ export default function Calculator({ cabinet }) {
               <div className="a-card k-card">
                 <div className="k-head"><b>Прогнозная цена</b></div>
                 <table className="a-t s-slice">
-                  <thead><tr><th>Цель</th><th className="r" title="Цена в кабинете (до скидки Ozon)">Цена</th><th className="r" title={`Цена для покупателя со скидкой Ozon (СПП ${pct1(V.spp)})`}>Для клиента</th><th className="r">Прибыль</th><th className="r">ROI</th></tr></thead>
+                  <thead><tr><th>Цель</th><th className="r" title="Цена в кабинете (до скидки Ozon)">Цена реализации</th><th className="r" title={`Цена для покупателя со скидкой Ozon (СПП ${pct1(V.spp)})`}>Для клиента</th><th className="r">Прибыль</th><th className="r">ROI</th></tr></thead>
                   <tbody>
                     {[0, 10, 20, 30].map(t => { const p = priceFor(V, taxMode, t); const r = p ? compute(V, p, taxMode) : null; return (
                       <tr key={t} className="row" style={{ cursor: p ? 'pointer' : 'default' }} title="Подставить эту цену" onClick={() => p && set('price', String(Math.ceil(p)))}>
@@ -456,7 +456,7 @@ export default function Calculator({ cabinet }) {
                     <Row label="Количество, шт" value={fmtInt(qty)} />
                     <Row label="Прогнозная выручка" value={rub(qty * res.P)} />
                     <Row label="Расходы Ozon" value={rub(-qty * res.mp)} neg />
-                    <Row label="Средняя сумма поступления на счёт" value={rub(res.payout)} strong hint="Цена до скидки минус все расходы Ozon (комиссия, эквайринг, логистика с учётом невыкупов, хранение, реклама) — столько в среднем приходит на расчётный счёт с 1 проданной штуки" />
+                    <Row label="Средняя сумма поступления на счёт" value={rub(res.payout)} strong hint="Цена реализации минус все расходы Ozon (комиссия, эквайринг, логистика с учётом невыкупов, хранение, реклама) — столько в среднем приходит на расчётный счёт с 1 проданной штуки" />
                   <Row label="Расходы вне Ozon" value={rub(-qty * res.outside)} neg />
                     <Row label="Прогнозируемая прибыль" value={rub(qty * res.profit)} strong />
                   </>

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import dayjs from 'dayjs';
 import { getCalcBase, refreshPrices } from '../api';
 import { fmtInt, CAT_COLORS } from './AdsStats2';
 import { baseOf, compute, priceFor, DEFAULTS } from './Calculator';
@@ -16,6 +17,15 @@ import './sales.css';
 // Схема товара — та, через которую идёт большинство его заказов.
 // ─────────────────────────────────────────────────────────────────────────
 
+// Колонки таблицы (выбираются кнопкой «Колонки»). money — можно показать «на 1 шт» или «всего за 30 дней».
+const COL_LIST = [
+  ['price', 'Цена реализации'], ['client', 'Цена клиента'], ['set', 'Установить цену'], ['cost', 'Себестоимость', 1], ['drr', 'ДРР'], ['comm', 'Комиссия', 1], ['logi', 'Логистика', 1],
+  ['ads', 'Реклама', 1], ['tax', 'Налог', 1], ['pay', 'На счёт', 1], ['profit', 'Прибыль', 1], ['margin', 'Маржа и ROI'], ['buyout', 'Выкуп %'], ['spp', 'СПП %'],
+  ['be', 'Безубыток: цена реализации'], ['be2', 'Безубыток: цена клиента'], ['tp', 'Цена реализации для цели'], ['tpc', 'Цена клиента для цели'], ['rev', 'Заказы 30 дн'],
+];
+const MONEY = new Set(COL_LIST.filter(c => c[2]).map(c => c[0]));
+const DEF_COLS = ['price', 'client', 'cost', 'drr', 'pay', 'profit', 'margin', 'be', 'be2', 'tp', 'rev', 'set'];
+
 const FILTERS = [['loss', 'Убыточные', 'b'], ['below', 'Ниже цели', 'w'], ['nocost', 'Нет себестоимости', 'm'], ['ok', 'В норме', 'g']];
 
 // Поле в ячейке: показывает текущее значение; вписали своё — подсвечивается,
@@ -31,6 +41,32 @@ function EditNum({ value, base, onChange, fmt, width, step = '1', title }) {
   );
 }
 
+// Выбор колонок таблицы — как в конструкторе: включить/выключить, «по умолчанию».
+function ColPicker({ cols, setCols, target }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const on = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', on);
+    return () => document.removeEventListener('mousedown', on);
+  }, [open]);
+  const tog = k => setCols(c => (c.includes(k) ? c.filter(x => x !== k) : [...c, k]));
+  return (
+    <span ref={ref} style={{ position: 'relative' }}>
+      <button type="button" className="a-btn ghost" onClick={() => setOpen(o => !o)}>Колонки ({cols.length}) ▾</button>
+      {open && (
+        <div className="m-colpop">
+          {COL_LIST.map(([k, t]) => (
+            <label key={k}><input type="checkbox" checked={cols.includes(k)} onChange={() => tog(k)} />{t.replace('для цели', `для ${target}%`)}</label>
+          ))}
+          <div className="m-colact"><button type="button" className="tt-reset" onClick={() => setCols(DEF_COLS)}>↺ по умолчанию</button><button type="button" className="tt-reset" onClick={() => setCols(COL_LIST.map(c => c[0]))}>все</button></div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 export default function Margin({ cabinet }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -42,19 +78,30 @@ export default function Margin({ cabinet }) {
   const lsKey = `mp-margin-drr:${cabinet}`;
   const [drrAll, setDrrAll] = useState('');
   const [drrOver, setDrrOver] = useState({});
+  // Новые цены: { артикул: { v, m } }, m — в какой цене вписано ('real' — реализации, 'client' — клиента).
   const [priceOver, setPriceOver] = useState({});
+  const [setMode, setSetMode] = useState(() => { try { return localStorage.getItem('mp-margin-setmode') || 'client'; } catch (e) { return 'client'; } });
+  useEffect(() => { try { localStorage.setItem('mp-margin-setmode', setMode); } catch (e) { /* ignore */ } }, [setMode]);
+  const [per, setPer] = useState('unit'); // unit — на 1 шт, total — всего за 30 дней
+  const pinKey = `mp-margin-pin:${cabinet}`;
+  const [pinned, setPinned] = useState([]);
+  useEffect(() => { try { setPinned(JSON.parse(localStorage.getItem(pinKey) || '[]')); } catch (e) { setPinned([]); } }, [pinKey]);
+  useEffect(() => { try { localStorage.setItem(pinKey, JSON.stringify(pinned)); } catch (e) { /* ignore */ } }, [pinKey, pinned]);
+  const [cols, setCols] = useState(() => { try { const v = JSON.parse(localStorage.getItem('mp-margin-cols') || 'null'); return Array.isArray(v) ? v : DEF_COLS; } catch (e) { return DEF_COLS; } });
+  useEffect(() => { try { localStorage.setItem('mp-margin-cols', JSON.stringify(cols)); } catch (e) { /* ignore */ } }, [cols]);
   const [withAds, setWithAds] = useState(true);
   const [allArts, setAllArts] = useState(false); // показывать и товары без заказов за 30 дней
   const [ready, setReady] = useState(false);
   useEffect(() => {
     setReady(false);
-    try { const v = JSON.parse(localStorage.getItem(lsKey) || '{}'); setDrrAll(v.all ?? ''); setDrrOver(v.over || {}); setPriceOver(v.price || {}); setWithAds(v.ads !== false); }
+    try { const v = JSON.parse(localStorage.getItem(lsKey) || '{}'); setDrrAll(v.all ?? ''); setDrrOver(v.over || {}); setPriceOver(Object.fromEntries(Object.entries(v.price || {}).map(([o, x]) => [o, typeof x === 'object' ? x : { v: Number(x), m: 'real' }]))); setWithAds(v.ads !== false); }
     catch (e) { setDrrAll(''); setDrrOver({}); setPriceOver({}); setWithAds(true); }
     setReady(true);
   }, [lsKey]);
   useEffect(() => { if (ready) try { localStorage.setItem(lsKey, JSON.stringify({ all: drrAll, over: drrOver, price: priceOver, ads: withAds })); } catch (e) { /* ignore */ } }, [ready, lsKey, drrAll, drrOver, priceOver, withAds]);
   const upd = set => (o, val) => set(m => { const n = { ...m }; if (val === '' || val === null || val === undefined) delete n[o]; else n[o] = val; return n; });
-  const setOver = upd(setDrrOver), setPrice = upd(setPriceOver);
+  const setOver = upd(setDrrOver);
+  const setPrice = (o, val, m = setMode) => setPriceOver(mm => { const n = { ...mm }; if (val === '' || val === null || val === undefined || !(Number(val) > 0)) delete n[o]; else n[o] = { v: Number(val), m }; return n; });
   const [flt, setFlt] = useState(null);
   const [tax] = useTax(cabinet);
   const grp = useGroups(cabinet);
@@ -79,6 +126,7 @@ export default function Margin({ cabinet }) {
   const cats = useCats(data?.articles, data?.order);
   const bs = useBuyerShare(cabinet, cats.arts);
 
+  const pinSet = useMemo(() => new Set(pinned), [pinned]);
   // Входные данные расчёта по каждому товару: свои → категория → кабинет.
   const rows = useMemo(() => {
     if (!data) return [];
@@ -95,7 +143,7 @@ export default function Margin({ cabinet }) {
       const x = byArt.get(a.i);
       if (!x || !x[1]) { skipped.noPrice++; continue; }
       const hasOrd = x[13] > 0 || x[25] > 0 || x[24] > 0;
-      if (!hasOrd) { skipped.noOrd++; if (!allArts) continue; } // по умолчанию — только товары с заказами за 30 дней
+      if (!hasOrd) { skipped.noOrd++; if (!allArts && !pinSet.has(a.o)) continue; } // по умолчанию — только товары с заказами за 30 дней
       const scheme = x[13] > 0 && x[14] / x[13] > 0.5 ? 'fbs' : 'fbo';
       const own = baseOf([x], scheme), cb = catBase(a.cat, scheme), ab = allBase[scheme];
       const pick = (k, minOwn) => { for (const b of [own, cb, ab]) if (b && b[k] !== null && b[k] !== undefined && (b !== own || !minOwn || minOwn(b))) return b[k]; return DEFAULTS[k] ?? 0; };
@@ -113,7 +161,11 @@ export default function Margin({ cabinet }) {
       const drrSrc = !withAds ? 'off' : ov !== undefined && ov !== '' ? 'own' : drrAll !== '' ? 'all' : 'fact';
       const curPrice = x[1];
       const po = priceOver[a.o];
-      const price = po !== undefined && po !== '' && Number(po) > 0 ? Number(po) : curPrice;
+      // Новая цена: вписана как цена клиента — переводим в цену реализации через текущую СПП.
+      const sppK = 1 - (v.spp || 0) / 100;
+      const price = po && Number(po.v) > 0 ? (po.m === 'client' && sppK > 0 ? Number(po.v) / sppK : Number(po.v)) : curPrice;
+      // Цена клиента сейчас: с сайта (с Ozon-картой), иначе — цена реализации со скидкой Ozon.
+      const curClient = x[34] || curPrice * sppK;
       const r = compute(v, price, 'usn_income');
       // Предел маржи: при любой цене процентные расходы (комиссия, реклама как % от цены,
       // эквайринг, налог) не дают марже подняться выше этого значения.
@@ -124,23 +176,129 @@ export default function Margin({ cabinet }) {
       const be = cap(beRaw), tp = cap(tpRaw);
       const tpNo = !tp, beNo = !be;
       const status = !x[12] ? 'nocost' : r.profit < 0 ? 'loss' : r.margin < target ? 'below' : 'ok';
-      out.push({ a, x, scheme, v, r, be, tp, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drrSrc, curPrice, priceEd: price !== curPrice });
+      const tpc = tp ? tp * sppK : null;
+      // Для сортировки — показатели при текущей цене, чтобы строка не «убегала», пока вписываешь новую.
+      const rb = price !== curPrice ? compute(v, curPrice, 'usn_income') : r;
+      const units = (x[25] || 0) * (v.buyout || 0) / 100; // ожидаемо продано за 30 дней (заказы × выкуп)
+      out.push({ a, x, scheme, v, r, rb, be, tp, tpc, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drrSrc, curPrice, curClient, sppK, units, po, priceEd: !!(po && Number(po.v) > 0) });
     }
     return out;
-  }, [data, cats.arts, target, drrAll, drrOver, priceOver, withAds, tax, bs.shareOf, allArts]);
+  }, [data, cats.arts, target, drrAll, drrOver, priceOver, withAds, tax, bs.shareOf, allArts, pinSet]);
 
   const q = search.trim().toLowerCase();
-  const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a));
+  const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a) && !pinSet.has(r.a.o));
+  const pinRows = pinned.map(o => rows.find(r => r.a.o === o)).filter(Boolean);
   const counts = Object.fromEntries(FILTERS.map(([k]) => [k, base.filter(r => r.status === k).length]));
   const GET = {
-    o: r => r.a.o, price: r => r.r.P, buyer: r => (r.v.spp ? r.r.buyerPrice : null), cost: r => r.v.cost || null, profit: r => r.r.profit,
-    margin: r => (r.status === 'nocost' ? null : r.r.margin), roi: r => r.r.roi, be: r => r.be || null, be2: r => (r.be && r.v.spp ? r.be * (1 - r.v.spp / 100) : null), tp: r => r.tp || null,
-    gap: r => (r.tp ? r.tp - r.r.P : null), rev: r => r.rev, drr: r => r.v.drr, pay: r => r.r.payout,
+    o: r => r.a.o, price: r => r.rb.P, buyer: r => (r.v.spp ? r.rb.buyerPrice : null), cost: r => r.v.cost || null, profit: r => r.rb.profit,
+    margin: r => (r.status === 'nocost' ? null : r.rb.margin), roi: r => r.rb.roi, be: r => r.be || null, be2: r => (r.be && r.v.spp ? r.be * (1 - r.v.spp / 100) : null), tp: r => r.tp || null,
+    gap: r => (r.tp ? r.tp - r.rb.P : null), rev: r => r.rev, drr: r => r.v.drr, pay: r => r.rb.payout,
+    client: r => r.curClient, comm: r => r.rb.commission, logi: r => r.rb.logistics, ads: r => r.rb.ads, tax: r => r.rb.tax, buyout: r => r.v.buyout, spp: r => r.v.spp,
+    tpc: r => r.tpc, set: r => (r.priceEd ? r.r.P : null),
   };
-  const shown = ctl.apply(flt ? base.filter(r => r.status === flt) : base, (r, k) => GET[k](r)).slice(0, 2000);
+  const getK = (r, k) => { const v = GET[k] ? GET[k](r) : null; return per === 'total' && MONEY.has(k) && v !== null ? v * r.units : v; };
+  const shown = ctl.apply(flt ? base.filter(r => r.status === flt) : base, getK).slice(0, 2000);
   const withCost = base.filter(r => r.status !== 'nocost');
   const avgMargin = (() => { let p = 0, rv = 0; for (const r of withCost) { p += r.r.profit * r.orders; rv += r.r.P * r.orders; } return rv ? p / rv * 100 : null; })();
   const lossRev = base.filter(r => r.status === 'loss').reduce((s, r) => s + r.rev, 0);
+
+  const pin = offers => setPinned(p => { const n = [...p]; for (const o of offers) if (!n.includes(o)) n.push(o); return n; });
+  const unpin = o => setPinned(p => p.filter(x => x !== o));
+  // Цена строки в выбранном виде (клиента / реализации): вписанная новая или текущая.
+  const newIn = (r, mode = setMode) => {
+    if (r.priceEd) return mode === 'client' ? r.r.P * r.sppK : r.r.P;
+    return mode === 'client' ? r.curClient : r.curPrice;
+  };
+  const inputVal = r => {
+    if (!r.po) return '';
+    if (r.po.m === setMode) return r.po.v;
+    return Math.round(setMode === 'client' ? r.po.v * r.sppK : r.po.v / (r.sppK || 1));
+  };
+  async function exportXlsx(list) {
+    if (!list.length) return;
+    const XLSX = await import('xlsx');
+    const aoa = [['Артикул', 'Новая цена'], ...list.map(r => [r.a.o, Math.round(newIn(r))])];
+    const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 18 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Цены');
+    XLSX.writeFile(wb, `Новые цены (${setMode === 'client' ? 'цена клиента' : 'цена реализации'}) ${dayjs().format('DD.MM.YYYY')}.xlsx`);
+  }
+  const tot = per === 'total';
+  const mul = r => (tot ? r.units : 1);
+  const money = (r, v) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : fmtInt(v * mul(r)));
+  const H = {
+    price: ['Цена реализации', 'Цена в кабинете (до скидки Ozon). Если вписана новая цена — ниже стрелкой, и все колонки считаются по ней'],
+    client: ['Цена клиента', 'Цена для покупателя с Ozon-картой (с сайта; нет — цена реализации со скидкой Ozon). Ниже — СПП'],
+    cost: [`Себест.${tot ? ' за 30 дн' : ''}`, 'Себестоимость штуки' + (tot ? ' × ожидаемо продано за 30 дней' : '')],
+    drr: ['ДРР', 'Реклама в % от цены. По умолчанию свой фактический за 30 дней; впишите свой — пересчитаются прибыль, маржа и цены'],
+    comm: [`Комиссия${tot ? ' за 30 дн' : ''}`, 'Комиссия Ozon, ₽; ниже — %'],
+    logi: [`Логистика${tot ? ' за 30 дн' : ''}`, 'Логистика с учётом невыкупов (отправка и возврат)'],
+    ads: [`Реклама${tot ? ' за 30 дн' : ''}`, 'Реклама по ДРР'],
+    tax: [`Налог${tot ? ' за 30 дн' : ''}`, 'Налог от оплаты покупателя'],
+    pay: [`На счёт${tot ? ' за 30 дн' : ' / шт'}`, 'Поступление на счёт: цена минус комиссия, эквайринг, логистика, хранение и реклама'],
+    profit: [`Прибыль${tot ? ' за 30 дн' : ' / шт'}`, tot ? 'Прибыль за 30 дней: прибыль со штуки × ожидаемо продано (заказы × выкуп)' : 'Прибыль с одной проданной штуки после всех расходов, рекламы и налога'],
+    margin: ['Маржа', 'Прибыль / выручка; ниже — ROI (прибыль / себестоимость)'],
+    buyout: ['Выкуп', 'Доля выкупа, по которой считается логистика'],
+    spp: ['СПП', 'Скидка Ozon для покупателя'],
+    be: ['Безубыток: цена реализации', 'Цена реализации, при которой прибыль = 0'],
+    be2: ['Безубыток: цена клиента', 'Сколько при безубыточной цене заплатит покупатель — со скидкой Ozon'],
+    tp: [`Цена реализации для ${target}%`, `Цена реализации, при которой маржа ${target}%; ниже — на сколько поднять или можно снизить`],
+    tpc: [`Цена клиента для ${target}%`, `Цена клиента (со скидкой Ozon) при марже ${target}%`],
+    rev: ['Заказы 30 дн', 'Заказы за 30 дней: сумма, ниже — штуки'],
+    set: [`Установить цену (${setMode === 'client' ? 'клиента' : 'реализации'})`, 'Впишите новую цену — пересчитаются все колонки строки. Переключатель «новая цена —» над таблицей: в какой цене вписывать и выгружать. Пустая — в файл уйдёт текущая'],
+  };
+  const why = (v, maxM) => `Даже при очень высокой цене маржа не выше ${pct1(maxM)}: комиссия ${pct1(v.commission)}, реклама ${pct1(v.drr)}, эквайринг ${pct1(v.acquiring)}, прочее ${pct1(v.other)}, налог ${pct1(v.tax)} от оплаты покупателя`;
+  const CELL = {
+    price: row => (<td className="n r" key="price">{fmtInt(row.curPrice)}{row.priceEd ? <small className="m-sub m-new">→ {fmtInt(row.r.P)}</small> : null}</td>),
+    client: row => (<td className="n r" key="client">{fmtInt(row.curClient)}{row.priceEd ? <small className="m-sub m-new">→ {fmtInt(row.r.P * row.sppK)}</small> : row.v.spp ? <small className="m-sub">СПП {pct1(row.v.spp)}</small> : null}</td>),
+    cost: row => (<td className="n r" key="cost">{row.v.cost ? money(row, row.v.cost) : <span className="pill m">нет</span>}</td>),
+    drr: row => (<td className="r" key="drr">{row.drrSrc === 'off' ? <span className="muted">—</span> : <>
+      <EditNum value={drrOver[row.a.o] ?? ''} base={row.drrSrc === 'all' ? Number(drrAll) : row.factDrr} onChange={val => setOver(row.a.o, val)} fmt={x => String(Math.round(x * 10) / 10).replace('.', ',')} width={52} step="0.5" title={`Фактический ДРР за 30 дней: ${pct1(row.factDrr)}`} />
+      {row.drrSrc !== 'fact' && <button type="button" className="m-was" title="Вернуть фактический ДРР" onClick={() => setOver(row.a.o, '')}>↺ {pct1(row.factDrr)}</button>}</>}</td>),
+    comm: row => (<td className="n r" key="comm">{money(row, row.r.commission)}<small className="m-sub">{pct1(row.v.commission)}</small></td>),
+    logi: row => (<td className="n r" key="logi">{money(row, row.r.logistics)}</td>),
+    ads: row => (<td className="n r" key="ads">{money(row, row.r.ads)}</td>),
+    tax: row => (<td className="n r" key="tax">{money(row, row.r.tax)}</td>),
+    pay: row => (<td className="n r" key="pay">{money(row, row.r.payout)}</td>),
+    profit: row => (<td className="n r" key="profit" title={`На 1 шт: комиссия ${fmtInt(row.r.commission)}, логистика ${fmtInt(row.r.logistics)} (×${row.r.trips.toFixed(2)}), эквайринг ${fmtInt(row.r.acquiring)}, прочее ${fmtInt(row.r.other)}, реклама ${fmtInt(row.r.ads)}, налог ${fmtInt(row.r.tax)}${tot ? ` · продано ≈ ${fmtInt(row.units)} шт` : ''}`}>
+      <b style={{ color: row.r.profit < 0 ? 'var(--a-bad)' : undefined }}>{money(row, row.r.profit)}</b>{tot ? <small className="m-sub">≈ {fmtInt(row.units)} шт</small> : null}</td>),
+    margin: row => (<td className="r" key="margin"><span className={`pill ${row.status === 'nocost' ? 'm' : row.r.profit < 0 ? 'b' : row.r.margin < target ? 'w' : 'g'}`}>{pct1(row.r.margin)}</span><small className="m-sub">ROI {pct1(row.r.roi)}</small></td>),
+    buyout: row => (<td className="n r" key="buyout">{pct1(row.v.buyout)}</td>),
+    spp: row => (<td className="n r" key="spp">{row.v.spp ? pct1(row.v.spp) : '—'}</td>),
+    be: row => (<td className="n r" key="be">{row.be ? fmtInt(row.be) : row.beNo && row.v.cost ? (row.maxM > 0 ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей">&gt; 3× цены</span> : <span className="m-no" title={why(row.v, row.maxM)}>ценой не достичь</span>) : '—'}</td>),
+    be2: row => (<td className="n r muted" key="be2" title={row.v.spp ? `СПП ${pct1(row.v.spp)}` : 'Нет данных о скидке Ozon'}>{row.be ? fmtInt(row.be * row.sppK) : '—'}</td>),
+    tp: row => { const gap = row.tp ? row.tp - row.r.P : null; return (<td className="n r" key="tp">{row.tp ? <>{fmtInt(row.tp)}<small className={`m-sub ${gap > 0 ? 's-down' : 's-up'}`}>{gap > 0 ? 'поднять на ' : 'можно −'}{fmtInt(Math.abs(gap))} ({gap > 0 ? '+' : '−'}{Math.abs(gap / row.r.P * 100).toFixed(0)}%)</small></> : row.tpNo && row.v.cost ? (row.maxM > target ? <span className="m-no">&gt; 3× цены</span> : <span className="m-no" title={why(row.v, row.maxM)}>ценой не достичь<small className="m-sub">макс. {pct1(row.maxM)}</small></span>) : '—'}</td>); },
+    tpc: row => (<td className="n r" key="tpc">{row.tpc ? fmtInt(row.tpc) : '—'}</td>),
+    rev: row => (<td className="n r" key="rev">{fmtInt(row.rev)}<small className="m-sub">{fmtInt(row.orders)} шт</small></td>),
+    set: row => (<td className="r m-setc" key="set">
+      <input className={`a-input m-ed ${row.priceEd ? 'ed' : ''}`} style={{ width: 86 }} inputMode="decimal" value={inputVal(row)} placeholder={fmtInt(setMode === 'client' ? row.curClient : row.curPrice)}
+        onChange={e => setPrice(row.a.o, e.target.value.replace(',', '.').replace(/[^\d.]/g, ''))} title={`Новая ${setMode === 'client' ? 'цена клиента' : 'цена реализации'}; пусто — останется текущая`} />
+      {row.priceEd ? <small className="m-sub">маржа <b className={row.r.profit < 0 ? 's-down' : row.r.margin < target ? 's-warn' : 's-up'}>{pct1(row.r.margin)}</b> <button type="button" className="m-was" title="Убрать новую цену" onClick={() => setPrice(row.a.o, '')}>↺</button></small> : null}
+    </td>),
+  };
+  const colOn = COL_LIST.filter(([k]) => cols.includes(k)).map(([k]) => k);
+  const renderTable = (list, pinnedMode) => (
+    <div className="a-scroll">
+      <table className="a-t s-slice m-tbl">
+        <thead><tr>
+          <ThCtl ctl={ctl} k="o" className="" filter={false}>Товар</ThCtl>
+          {colOn.map(k => <ThCtl key={k} ctl={ctl} k={k} hint={H[k][1]} filter={k !== 'set'}>{H[k][0]}</ThCtl>)}
+        </tr></thead>
+        <tbody>
+          {list.map(row => (
+            <tr key={row.a.i} className={row.status === 'loss' ? 's-hole' : ''}>
+              <td className="m-prod"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>{pinnedMode
+                ? <button type="button" className="m-pinb" title="Вернуть в общую таблицу" onClick={() => unpin(row.a.o)}>✕</button>
+                : <button type="button" className="m-pinb" title="Перенести в набор для репрайсера (вниз)" onClick={() => pin([row.a.o])}>📌</button>}<i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(row.a.parts[0])] || OTHER }} />
+                <span title={`${row.a.n}\n${row.a.cat.split(SEP).join(' › ')}`}><b>{row.a.o}</b><small className="m-sub">{row.a.short} · {row.scheme.toUpperCase()} {pct1(row.v.commission)}</small></span></span></td>
+              {colOn.map(k => CELL[k](row))}
+
+            </tr>
+          ))}
+          {!list.length && <tr><td colSpan={colOn.length + 1} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
 
   if (error) return <div className="mpui"><div className="a-empty" style={{ padding: 40 }}>Не удалось загрузить: {error}</div></div>;
   if (!data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
@@ -157,7 +315,7 @@ export default function Margin({ cabinet }) {
         {withAds && <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} title="Пусто — у каждого товара его фактический ДРР за 30 дней. Число — один ДРР для всех (кроме заданных вручную в таблице)">ДРР для всех
           <input className="a-input" type="number" min="0" max="100" step="0.5" value={drrAll} placeholder="факт" onChange={e => setDrrAll(e.target.value)} style={{ width: 64, padding: '4px 8px' }} />%
         </label>}
-        {(drrAll !== '' || Object.keys(drrOver).length > 0 || Object.keys(priceOver).length > 0) && <button type="button" className="tt-reset" onClick={() => { setDrrAll(''); setDrrOver({}); setPriceOver({}); }} title="Вернуть текущие цены и фактический ДРР всем товарам">↺ вернуть цены и ДРР</button>}
+        {(drrAll !== '' || Object.keys(drrOver).length > 0) && <button type="button" className="tt-reset" onClick={() => { setDrrAll(''); setDrrOver({}); }} title="Вернуть фактический ДРР всем товарам">↺ вернуть ДРР</button>}
       </FinHeader>
 
       <div className="a-kpis s-kpis">
@@ -189,57 +347,39 @@ export default function Margin({ cabinet }) {
       </div>
 
       <div className="a-card">
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctl} /></div>
-        <div className="a-scroll">
-          <table className="a-t s-slice m-tbl">
-            <thead><tr>
-              <ThCtl ctl={ctl} k="o" className="" filter={false}>Товар</ThCtl>
-              <ThCtl ctl={ctl} k="price" hint="Цена в кабинете (до скидки Ozon) — можно вписать свою и посмотреть, как изменится маржа. Ниже — цена для покупателя со скидкой Ozon или прежняя цена, если вы её поменяли">Цена</ThCtl>
-              <ThCtl ctl={ctl} k="cost">Себест.</ThCtl>
-              <ThCtl ctl={ctl} k="drr" hint="ДРР — реклама в % от цены. По умолчанию свой фактический за 30 дней (расход на рекламу по товару / сумма его заказов; не рекламировался — 0). Впишите свой — пересчитаются прибыль, маржа и цены">ДРР</ThCtl>
-              <ThCtl ctl={ctl} k="pay" hint="Средняя сумма поступления на счёт с 1 проданной штуки: цена минус комиссия, эквайринг, логистика (с учётом невыкупов), хранение и реклама">На счёт / шт</ThCtl>
-              <ThCtl ctl={ctl} k="profit" hint="Прибыль с одной проданной (выкупленной) штуки после всех расходов, рекламы и налога">Прибыль / шт</ThCtl>
-              <ThCtl ctl={ctl} k="margin" hint="Прибыль / выручка с продажи; ниже — ROI (прибыль / себестоимость)">Маржа</ThCtl>
-              <ThCtl ctl={ctl} k="be" hint="Цена в кабинете (цена реализации), при которой прибыль = 0">Безубыток: цена реализации</ThCtl>
-              <ThCtl ctl={ctl} k="be2" hint="Сколько при безубыточной цене заплатит покупатель — со скидкой Ozon (СПП) по текущей проверке цены">Безубыток: цена для клиента</ThCtl>
-              <ThCtl ctl={ctl} k="tp" hint={`Какой должна стать цена в кабинете, чтобы маржа была ${target}%; ниже — на сколько поднять или можно снизить текущую. Сортировка — по этой цене. «ценой не достичь» — комиссия, реклама и налог в % от цены не дают марже дойти до цели`}>Цена для {target}%</ThCtl>
-              <ThCtl ctl={ctl} k="rev" hint="Заказы за 30 дней: сумма, ниже — штуки">Заказы 30 дн</ThCtl>
-            </tr></thead>
-            <tbody>
-              {shown.map(({ a, scheme, v, r, be, tp, beNo, tpNo, maxM, status, rev, orders, factDrr, drrSrc, curPrice, priceEd }) => {
-                const gap = tp ? tp - r.P : null;
-                const why = `Даже при очень высокой цене маржа не выше ${pct1(maxM)}: комиссия ${pct1(v.commission)}, реклама ${pct1(v.drr)}, эквайринг ${pct1(v.acquiring)}, прочее ${pct1(v.other)}, налог ${pct1(v.tax)} от оплаты покупателя. Поднять маржу можно снижением ДРР или комиссии (другая схема / категория)`;
-                return (
-                  <tr key={a.i} className={status === 'loss' ? 's-hole' : ''}>
-                    <td className="m-prod"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(a.parts[0])] || OTHER }} />
-                      <span title={`${a.n}\n${a.cat.split(SEP).join(' › ')}`}><b>{a.o}</b><small className="m-sub">{a.short} · {scheme.toUpperCase()} {pct1(v.commission)}</small></span></span></td>
-                    <td className="r">
-                      <EditNum value={priceOver[a.o] ?? ''} base={curPrice} onChange={val => setPrice(a.o, val)} fmt={fmtInt} width={78} title="Впишите цену — пересчитаются прибыль, маржа и поступление" />
-                      {priceEd ? <button type="button" className="m-was" title="Вернуть текущую цену" onClick={() => setPrice(a.o, '')}>↺ {fmtInt(curPrice)}</button>
-                        : v.spp ? <small className="m-sub" title="Цена для покупателя со скидкой Ozon">{fmtInt(r.buyerPrice)}</small> : null}
-                    </td>
-                    <td className="n r">{v.cost ? fmtInt(v.cost) : <span className="pill m">нет</span>}</td>
-                    <td className="r">
-                      {drrSrc === 'off' ? <span className="muted">—</span> : <>
-                        <EditNum value={drrOver[a.o] ?? ''} base={drrSrc === 'all' ? Number(drrAll) : factDrr} onChange={val => setOver(a.o, val)} fmt={x => String(Math.round(x * 10) / 10).replace('.', ',')} width={52} step="0.5" title={`Фактический ДРР за 30 дней: ${pct1(factDrr)}`} />
-                        {drrSrc !== 'fact' && <button type="button" className="m-was" title="Вернуть фактический ДРР" onClick={() => { setOver(a.o, ''); }}>↺ {pct1(factDrr)}</button>}
-                      </>}
-                    </td>
-                    <td className="n r">{fmtInt(r.payout)}</td>
-                    <td className="n r" title={`Комиссия ${fmtInt(r.commission)}, логистика ${fmtInt(r.logistics)} (×${r.trips.toFixed(2)}), эквайринг ${fmtInt(r.acquiring)}, прочее ${fmtInt(r.other)}, реклама ${fmtInt(r.ads)}, налог ${fmtInt(r.tax)}`}>
-                      <b style={{ color: r.profit < 0 ? 'var(--a-bad)' : undefined }}>{fmtInt(r.profit)}</b></td>
-                    <td className="r"><span className={`pill ${status === 'nocost' ? 'm' : r.profit < 0 ? 'b' : r.margin < target ? 'w' : 'g'}`}>{pct1(r.margin)}</span><small className="m-sub">ROI {pct1(r.roi)}</small></td>
-                    <td className="n r">{be ? fmtInt(be) : beNo && v.cost ? (maxM > 0 ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь</span>) : '—'}</td>
-                    <td className="n r muted" title={v.spp ? `СПП ${pct1(v.spp)}` : 'Нет данных о скидке Ozon'}>{be && v.spp ? fmtInt(be * (1 - v.spp / 100)) : be ? fmtInt(be) : '—'}</td>
-                    <td className="n r">{tp ? <>{fmtInt(tp)}<small className={`m-sub ${gap > 0 ? 's-down' : 's-up'}`} title={gap > 0 ? `Поднять цену на ${fmtInt(gap)} ₽: ${fmtInt(r.P)} → ${fmtInt(tp)}` : `Можно снизить на ${fmtInt(-gap)} ₽: ${fmtInt(r.P)} → ${fmtInt(tp)}`}>{gap > 0 ? 'поднять на ' : 'можно −'}{fmtInt(Math.abs(gap))} ({gap > 0 ? '+' : '−'}{Math.abs(gap / r.P * 100).toFixed(0)}%)</small></> : tpNo && v.cost ? (maxM > target ? <span className="m-no" title="Нужна цена больше чем в 3 раза выше текущей — пересмотрите себестоимость, рекламу или логистику">&gt; 3× цены</span> : <span className="m-no" title={why}>ценой не достичь<small className="m-sub">макс. {pct1(maxM)}</small></span>) : '—'}</td>
-                    <td className="n r">{fmtInt(rev)}<small className="m-sub">{fmtInt(orders)} шт</small></td>
-                  </tr>
-                );
-              })}
-              {!shown.length && <tr><td colSpan={11} className="muted" style={{ padding: 16 }}>Нет товаров</td></tr>}
-            </tbody>
-          </table>
+        <div className="a-bar m-tools">
+          <span className="a-seg" title="Денежные колонки (себестоимость, комиссия, логистика, реклама, налог, на счёт, прибыль): на одну проданную штуку или всего за 30 дней (заказы × выкуп)">
+            <button type="button" className={per === 'unit' ? 'on' : ''} onClick={() => setPer('unit')}>на 1 шт</button>
+            <button type="button" className={per === 'total' ? 'on' : ''} onClick={() => setPer('total')}>всего за 30 дн</button>
+          </span>
+          <ColPicker cols={cols} setCols={setCols} target={target} />
+          <span className="a-seg" title="В какой цене вписывать новую цену и выгружать файл для репрайсера">
+            <span className="m-seglbl">новая цена —</span>
+            <button type="button" className={setMode === 'client' ? 'on' : ''} onClick={() => setSetMode('client')}>цена клиента</button>
+            <button type="button" className={setMode === 'real' ? 'on' : ''} onClick={() => setSetMode('real')}>цена реализации</button>
+          </span>
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {shown.some(r => r.priceEd) && <button type="button" className="a-btn" onClick={() => exportXlsx(shown.filter(r => r.priceEd))} title="Строки таблицы, где вписана новая цена">⬇ Excel: с новой ценой ({shown.filter(r => r.priceEd).length})</button>}
+            <button type="button" className="a-btn ghost" onClick={() => exportXlsx(shown)} title="Все строки таблицы с учётом фильтров; где новая цена не вписана — текущая">⬇ все в таблице ({shown.length})</button>
+            <button type="button" className="a-btn ghost" onClick={() => pin(shown.map(r => r.a.o))} title="Перенести все показанные строки в набор ниже">📌 все показанные</button>
+            {Object.keys(priceOver).length > 0 && <button type="button" className="tt-reset" onClick={() => { if (window.confirm(`Стереть все вписанные новые цены (${Object.keys(priceOver).length})?`)) setPriceOver({}); }}>стереть новые цены ({Object.keys(priceOver).length})</button>}
+            <ResetCtl ctl={ctl} />
+          </span>
         </div>
+        {renderTable(shown)}
+      </div>
+
+      <div className="a-card m-pinned">
+        <div className="a-bar m-tools">
+          <b style={{ fontSize: 14 }}>Набор для репрайсера</b>
+          <span className="a-hint" style={{ margin: 0 }}>{pinRows.length ? `${pinRows.length} арт. · новых цен ${pinRows.filter(r => r.priceEd).length}` : 'нажмите 📌 у строки — она перенесётся сюда; так можно собрать цены по разным артикулам и выгрузить одним файлом'}</span>
+          {pinRows.length > 0 && <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
+            <button type="button" className="a-btn" onClick={() => exportXlsx(pinRows)} title="Артикул и новая цена; где не вписана — текущая">⬇ Excel ({pinRows.length})</button>
+            <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Вернуть все строки из набора в общую таблицу? Вписанные цены сохранятся.')) setPinned([]); }}>вернуть все</button>
+            <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Очистить набор и стереть вписанные в нём новые цены?')) { setPriceOver(m => { const n = { ...m }; for (const o of pinned) delete n[o]; return n; }); setPinned([]); } }}>очистить</button>
+          </span>}
+        </div>
+        {pinRows.length > 0 && renderTable(pinRows, true)}
       </div>
     </div>
   );

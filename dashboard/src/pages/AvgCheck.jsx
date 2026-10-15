@@ -194,7 +194,7 @@ export default function AvgCheck({ cabinet }) {
 
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         <Kpi label="Средний чек заказа" value={T.orders ? `${fmtInt(T.orders)} ₽` : '—'} sub={<span><Delta value={ch('orders')} /> последние 7 дн к 7 до них</span>} />
-        <Kpi label="Средний чек выкупа" value={T.sales ? `${fmtInt(T.sales)} ₽` : '—'} sub={<span><Delta value={ch('sales')} /> · цена продавца с баллами Ozon</span>} />
+        <Kpi label="Средний чек выкупа" value={T.sales ? `${fmtInt(T.sales)} ₽` : '—'} sub={<span><Delta value={ch('sales')} /> · цена реализации с баллами Ozon</span>} />
         <Kpi label="Поступление на счёт за 1 выкуп" value={T.payout ? `${fmtInt(T.payout)} ₽` : '—'} sub={<span><Delta value={ch('payout')} /> · за вычетом удержаний Ozon</span>} />
         <Kpi label="Доходит до счёта" value={pct1(T.share)} sub={`${fmtInt(T.pRub)} ₽ из ${fmtInt(T.sRub)} ₽ выручки`} />
       </div>

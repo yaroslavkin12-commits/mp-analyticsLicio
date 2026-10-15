@@ -250,3 +250,18 @@
 .mpui .s-fold:hover{background:var(--a-panel2)}
 .mpui .tb-active button.tb-x{color:var(--a-ink3)}
 .mpui .tb-active button.tb-x:hover{color:var(--a-ink)}
+/* Цены и маржа: панель таблицы, выбор колонок, новая цена, набор для репрайсера */
+.mpui .m-tools{padding:10px 12px;gap:8px;border-bottom:1px solid var(--a-line)}
+.mpui .m-seglbl{font-size:12px;color:var(--a-ink3);padding:5px 4px 5px 8px;white-space:nowrap;align-self:center}
+.mpui .m-colpop{position:absolute;top:100%;left:0;margin-top:4px;z-index:40;background:var(--a-panel);border:1px solid var(--a-line2);border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:3px;min-width:240px}
+.mpui .m-colpop label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--a-ink);cursor:pointer;padding:2px 0;white-space:nowrap}
+.mpui .m-colact{display:flex;justify-content:space-between;margin-top:4px;border-top:1px solid var(--a-line);padding-top:6px}
+.mpui .m-tbl td.m-setc input.m-ed{border-color:var(--a-line2);background:var(--a-panel)}
+.mpui .m-tbl td.m-setc input.m-ed.ed{border-color:var(--a-accent);background:var(--a-accent-soft)}
+.mpui .m-tbl td.m-setc .m-was{display:inline;margin:0 0 0 4px}
+.mpui .m-tbl .m-sub.m-new{color:var(--a-accent);font-weight:600}
+.mpui .m-tbl .m-sub .s-warn{color:var(--a-warn)}
+.mpui .m-pinb{border:0;background:none;cursor:pointer;opacity:.45;font-size:14px;padding:2px 4px}
+.mpui .m-pinb:hover{opacity:1}
+.mpui .m-tbl th.m-pinth,.mpui .m-tbl td.m-pinc{width:34px;padding-left:4px;padding-right:8px}
+.mpui .m-pinned{margin-top:14px}
