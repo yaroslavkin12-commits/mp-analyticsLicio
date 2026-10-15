@@ -23,3 +23,11 @@ button{font-family:inherit;cursor:pointer}
 /* Закреплённая шапка раздела (название, даты, фильтры) — остаётся сверху при прокрутке. */
 .page-sticky{position:sticky;top:-18px;z-index:30;background:var(--bg);margin:-18px -18px 16px;padding:18px 18px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:10px}
 .mpui > .page-sticky{margin-bottom:0}
+
+/* Артикулы: клик — карточка на Ozon, ⧉ — копировать (lib/artLinks.js) */
+.art-link{cursor:pointer}
+.art-link:hover{text-decoration:underline;text-decoration-color:color-mix(in srgb,currentColor 45%,transparent);text-underline-offset:2px}
+.art-cp{display:inline-block;margin-left:4px;font-size:.82em;line-height:1;opacity:.28;cursor:pointer;user-select:none;font-weight:400;vertical-align:baseline;transition:opacity .12s}
+.art-cp:hover{opacity:.9}
+.art-cp.ok{opacity:1;color:var(--a-good,#3a9b5c)}
+@media print{.art-cp{display:none}}

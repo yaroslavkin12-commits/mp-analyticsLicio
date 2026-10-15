@@ -5,7 +5,8 @@ import {
 } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt } from './AdsStats2';
-import { SHOPS, MATERIALS, TOPS, DEFAULT_SETTINGS, calcRow, allocate, taskSizeOf, matOf } from '../lib/production';
+import { SHOPS, MATERIALS, TOPS, DEFAULT_SETTINGS, calcRow, allocate, taskSizeOf, matOf, buildJournal, J_STATUS } from '../lib/production';
+import ProdJournal from './ProdJournal';
 import './ads2.css';
 import './sales.css';
 import './production.css';
@@ -67,6 +68,10 @@ export default function Production({ cabinet }) {
     const u = d?.uploads || {};
     return { year: u.year?.items || {}, w4: u.w4?.items || {}, w8: u.w8?.items || {}, stock: u.stock?.items || {}, sew: u.sew?.items || {} };
   }, [d]);
+
+  // Журнал заявок: открытые заявки и сверка с пошивом 1С.
+  const journal = useMemo(() => (d ? buildJournal(d.orders, d.closed, data, d.uploads) : []), [d, data]);
+  const jmap = useMemo(() => new Map(journal.filter(r => !r.closed).map(r => [r.o, r])), [journal]);
 
   // Подача: какие цеха сегодня.
   const today = dayjs();
@@ -208,7 +213,7 @@ export default function Production({ cabinet }) {
     try {
       let list = null;
       for (const shop of shopsOn) {
-        const r = await saveProductionOrder(cabinet, { date: today.format('YYYY-MM-DD'), shop, tasks: alloc[shop].tasks, pcs: alloc[shop].pcs, items: orderRows(shop).map(x => [x.r.o, x.qty, Math.round(x.tasks * 10) / 10]) });
+        const r = await saveProductionOrder(cabinet, { date: today.format('YYYY-MM-DD'), shop, tasks: alloc[shop].tasks, pcs: alloc[shop].pcs, items: orderRows(shop).map(x => [x.r.o, x.qty, Math.round(x.tasks * 10) / 10, x.r.c.sew, x.r.c.stock, x.fill || 0]) });
         list = r.data.data;
       }
       setD(prev => ({ ...prev, orders: list }));
@@ -439,6 +444,9 @@ export default function Production({ cabinet }) {
                       {SHOPS.includes(r.shop) ? <input className={`a-input pr-num ${over[r.o] !== undefined && over[r.o] !== '' ? 'manual' : ''}`} type="number" min="0" value={over[r.o] ?? ''} placeholder={io ? String(io.qty) : '0'}
                         onChange={e => setOver(v => ({ ...v, [r.o]: e.target.value }))} title="Пусто — по расчёту; впишите своё количество" /> : '—'}
                       {io && <small className="pr-sub2">{Math.round(io.tasks * 10) / 10} зад.</small>}
+                      {jmap.get(r.o) && (() => { const j = jmap.get(r.o), js = J_STATUS[j.st] || ['', '']; return (
+                        <small className={`pr-sub2 pr-sig ${js[1]}`} title={`Открытые заявки: ${j.lines.map(l => `${dayjs(l.date).format('DD.MM')} — ${l.qty} шт`).join(', ')}. Пошив при заявке ${j.sew0 ?? '—'}, сейчас ${j.sewNow}. Подробнее — в журнале заявок ниже`}>
+                          заявка {dayjs(j.first.date).format('DD.MM')}: {j.qty} шт · {js[0]}</small>); })()}
                       {io?.fill ? <small className="pr-sub2 pr-fillb" title={`Добрано до числа заданий: потребность ${c.W} шт, добор +${io.fill} шт`}>добор +{io.fill}</small> : null}
                     </td>
                     <td><span className={`pr-sig ${sg[1]}`}>{sg[0]}</span></td>
@@ -450,6 +458,8 @@ export default function Production({ cabinet }) {
         </div>
         {shown.length > 60 && <button type="button" className="s-fold" onClick={() => setFull(f => !f)}>{full ? 'Свернуть ▲' : `Показать все ${shown.length} ▼`}</button>}
       </div>
+
+      <ProdJournal cabinet={cabinet} journal={journal} master={d.master} setD={setD} setMsg={setMsg} />
 
       {/* История */}
       {(d.orders || []).length > 0 && (

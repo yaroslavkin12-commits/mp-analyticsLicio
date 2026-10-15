@@ -35,13 +35,13 @@ const cleanItems = items => {
 router.get('/', async (req, res) => {
   try {
     const c = req.query.cabinet || 'defly';
-    const [master, settings, orders, sew, ...ups] = await Promise.all([
-      getJson(key(c, 'master'), {}), getJson(key(c, 'settings'), null), getJson(key(c, 'orders'), []),
+    const [master, settings, orders, closed, sew, ...ups] = await Promise.all([
+      getJson(key(c, 'master'), {}), getJson(key(c, 'settings'), null), getJson(key(c, 'orders'), []), getJson(key(c, 'jclosed'), {}),
       getJson(`sewing:${c}`, {}), ...KINDS.map(k => getJson(key(c, k), null)),
     ]);
     const uploads = Object.fromEntries(KINDS.map((k, i) => [k, ups[i]]));
     uploads.sew = { at: sew.updatedAt || null, items: sew.items || {} };
-    res.json({ success: true, data: { master, settings, orders, uploads } });
+    res.json({ success: true, data: { master, settings, orders, closed, uploads } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -90,7 +90,8 @@ router.post('/settings', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// POST /orders { cabinet, order: { date, shop, tasks, pcs, items: [[артикул, шт, заданий]] } }
+// POST /orders { cabinet, order: { date, shop, tasks, pcs, items: [[артикул, шт, заданий, пошив, остаток, добор]] } }
+// (пошив и остаток — на момент заявки, для журнала заявок)
 router.post('/orders', async (req, res) => {
   try {
     const { cabinet, order, remove } = req.body || {};
@@ -100,6 +101,20 @@ router.post('/orders', async (req, res) => {
     if (order) list = [{ ...order, id: Date.now().toString(36), savedAt: new Date().toISOString() }, ...list].slice(0, 60);
     await setJson(key(cabinet, 'orders'), list);
     res.json({ success: true, data: list });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /journal { cabinet, offers: [...], close } — журнал заявок: закрыть артикулы
+// (все заявки по ним до этого момента считаются выполненными) или вернуть.
+router.post('/journal', async (req, res) => {
+  try {
+    const { cabinet, offers, close } = req.body || {};
+    if (!cabinet || !Array.isArray(offers)) return res.status(400).json({ success: false, error: 'Нужны cabinet и offers' });
+    const m = await getJson(key(cabinet, 'jclosed'), {});
+    const at = new Date().toISOString();
+    for (const o of offers) { const k = String(o).slice(0, 128); if (close) m[k] = at; else delete m[k]; }
+    await setJson(key(cabinet, 'jclosed'), m);
+    res.json({ success: true, data: m });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 

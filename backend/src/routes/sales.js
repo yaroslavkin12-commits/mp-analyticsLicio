@@ -395,6 +395,17 @@ router.post('/category', async (req, res) => {
 // GET  /api/sales/builder-templates?cabinet= → { templates: { name: {...} } }
 // POST /api/sales/builder-templates { cabinet, templates } — список целиком.
 const tplKey = c => `builder-tpl:${c}`;
+// GET /skus?cabinet= — артикул → SKU Ozon (для ссылки на карточку товара).
+router.get('/skus', async (req, res) => {
+  try {
+    const rows = await query(`SELECT offer_id, sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL AND sku != 0`, [req.query.cabinet || 'defly']);
+    const map = {};
+    for (const r of rows) if (r.offer_id && !map[r.offer_id]) map[r.offer_id] = String(r.sku);
+    res.set('Cache-Control', 'private, max-age=3600');
+    res.json({ success: true, data: map });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 router.get('/builder-templates', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';

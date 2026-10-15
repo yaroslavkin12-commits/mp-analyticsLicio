@@ -121,3 +121,60 @@ export function allocate(rows, limit, settings = DEFAULT_SETTINGS) {
   }
   return { map: out, usedTasks, usedPcs, left, added };
 }
+
+// ── Журнал заявок ─────────────────────────────────────────────────────────
+// По каждому артикулу — открытые заявки (поданные и не закрытые) и сверка с
+// последним файлом «Пошив» из 1С. В пошиве нет дат и цехов — это просто всё,
+// что сейчас в работе, поэтому сравниваем с пошивом на момент первой открытой
+// заявки (он сохраняется в заявке):
+//   рост пошива ≥ 80% заказанного — «в работе»; рост меньше — «частично»;
+//   роста нет, а файл свежее заявки и прошло ≥ 3 дней — «не взяли в работу?»;
+//   файл пошива старше заявки — «ждём свежий пошив».
+// В расчёт потребности журнал НЕ подмешивается — только подсказка.
+export const J_STATUS = {
+  miss: ['не взяли в работу?', 'dn'],
+  part: ['взяли частично', 'warn'],
+  work: ['в работе', 'up'],
+  wait: ['ждём свежий пошив', ''],
+  fresh: ['подана недавно', ''],
+  unk: ['в пошиве есть, сверить', ''],
+};
+export function buildJournal(orders, closed, data, uploads, now = new Date()) {
+  const sewAt = uploads?.sew?.at ? new Date(uploads.sew.at).getTime() : 0;
+  const stockAt = uploads?.stock?.at ? new Date(uploads.stock.at).getTime() : 0;
+  const by = new Map();
+  for (const ord of orders || []) {
+    const at = new Date(ord.savedAt || ord.date).getTime();
+    if (now - at > 70 * 864e5) continue; // старше 10 недель — не показываем
+    for (const it of ord.items || []) {
+      const [o, qty, tasks, sew0, stock0, fill] = it;
+      const cl = closed?.[o] ? new Date(closed[o]).getTime() : 0;
+      let v = by.get(o);
+      if (!v) { v = { o, lines: [], closedLines: [], closedAt: cl || null }; by.set(o, v); }
+      const line = { id: ord.id, date: ord.date, at, shop: ord.shop, qty: Number(qty) || 0, tasks, sew0: sew0 ?? null, stock0: stock0 ?? null, fill: Number(fill) || 0 };
+      (at <= cl ? v.closedLines : v.lines).push(line);
+    }
+  }
+  const out = [];
+  for (const v of by.values()) {
+    const lines = v.lines.sort((a, b) => a.at - b.at);
+    const all = lines.length ? lines : v.closedLines.sort((a, b) => a.at - b.at);
+    const first = all[0], last = all[all.length - 1];
+    const qty = lines.reduce((s, l) => s + l.qty, 0);
+    const sewNow = Number(data?.sew?.[v.o]) || 0, stockNow = Number(data?.stock?.[v.o]) || 0;
+    const sew0 = first.sew0, stock0 = first.stock0;
+    const inc = sewNow - (sew0 ?? 0);
+    const days = Math.floor((now - first.at) / 864e5);
+    let st = null;
+    if (lines.length) {
+      if (sewAt <= first.at) st = days < 3 ? 'fresh' : 'wait';
+      else if (sew0 === null && sewNow > 0) st = 'unk'; // заявка до журнала: с чем сравнивать — неизвестно
+      else if (inc >= qty * 0.8) st = 'work';
+      else if (inc > 0) st = 'part';
+      else st = days >= 3 ? 'miss' : 'fresh';
+    }
+    out.push({ o: v.o, shop: last.shop, lines, closedLines: v.closedLines, closed: !lines.length, closedAt: v.closedAt, qty, fill: lines.reduce((s, l) => s + l.fill, 0),
+      sew0, stock0, sewNow, stockNow, stockFresh: stockAt > first.at, inc, days, st, first, last });
+  }
+  return out;
+}

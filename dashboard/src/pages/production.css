@@ -72,3 +72,6 @@
 .mpui .pr-t tr.pr-fill-row>td:first-child{box-shadow:inset 3px 0 0 var(--a-warn)}
 .mpui .pr-t tr.pr-fill-row>td{background:color-mix(in srgb,var(--a-warn) 7%,transparent)}
 .mpui .pr-fillb{color:var(--a-warn);font-weight:600}
+.mpui .pr-t tr.pj-miss>td{background:color-mix(in srgb,var(--a-bad) 7%,transparent)}
+.mpui .pr-t tr.pj-miss>td:first-child{box-shadow:inset 3px 0 0 var(--a-bad)}
+.mpui .pj-line{font-size:12.5px;line-height:1.45;white-space:nowrap}
