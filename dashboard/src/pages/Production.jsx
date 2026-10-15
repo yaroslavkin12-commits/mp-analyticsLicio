@@ -408,7 +408,7 @@ export default function Production({ cabinet }) {
                     <td className="pr-l">{edit ? (
                       <select className="a-input pr-sel" value={r.shop || ''} onChange={e => editMaster(r.o, { shop: e.target.value })}>
                         {[...SHOPS, 'выводим', ''].map(s => <option key={s} value={s}>{s || '—'}</option>)}
-                      </select>) : <>{r.shop}<small className="pr-sub2">{r.mat}{edit ? '' : ` · партия ${r.batch}`}</small></>}
+                      </select>) : <>{r.shop}<small className="pr-sub2">{r.mat}{edit ? '' : <> · {Number(r.batch) % taskSizeOf(r, settings) ? <b className="s-down" title={`Партия не кратна заданию: 1 задание ${matOf(r.mat, r.n)} = ${taskSizeOf(r, settings)} шт. Поправьте в режиме «Править справочник»`}>партия {r.batch} ≠ задание {taskSizeOf(r, settings)}</b> : `партия ${r.batch}`}</>}</small></>}
                       {edit && <div className="pr-edrow">
                         <select className="a-input pr-sel" value={r.mat} onChange={e => editMaster(r.o, { mat: e.target.value })}>{MATERIALS.map(m => <option key={m}>{m}</option>)}</select>
                         <label title="Цикл производства, дней">ц<input className="a-input pr-num" type="number" defaultValue={r.cycle} onBlur={e => editMaster(r.o, { cycle: Number(e.target.value) || 21 })} /></label>
