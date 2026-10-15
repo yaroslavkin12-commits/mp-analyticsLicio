@@ -44,6 +44,7 @@ export default function Margin({ cabinet }) {
   const [drrOver, setDrrOver] = useState({});
   const [priceOver, setPriceOver] = useState({});
   const [withAds, setWithAds] = useState(true);
+  const [allArts, setAllArts] = useState(false); // показывать и товары без заказов за 30 дней
   const [ready, setReady] = useState(false);
   useEffect(() => {
     setReady(false);
@@ -88,9 +89,13 @@ export default function Margin({ cabinet }) {
     const catBase = (c, scheme) => { const k = c + '|' + scheme; if (!cache.has(k)) cache.set(k, baseOf(byCat.get(c) || [], scheme)); return cache.get(k); };
     const allBase = { fbo: baseOf(data.a, 'fbo'), fbs: baseOf(data.a, 'fbs') };
     const out = [];
+    const skipped = { noOrd: 0, noPrice: 0 };
+    out.skipped = skipped;
     for (const a of cats.arts) {
-      const x = byArt.get(a.i); if (!x || !x[1]) continue;
-      if (!(x[13] > 0 || x[25] > 0 || x[24] > 0)) continue; // только товары с заказами за 30 дней
+      const x = byArt.get(a.i);
+      if (!x || !x[1]) { skipped.noPrice++; continue; }
+      const hasOrd = x[13] > 0 || x[25] > 0 || x[24] > 0;
+      if (!hasOrd) { skipped.noOrd++; if (!allArts) continue; } // по умолчанию — только товары с заказами за 30 дней
       const scheme = x[13] > 0 && x[14] / x[13] > 0.5 ? 'fbs' : 'fbo';
       const own = baseOf([x], scheme), cb = catBase(a.cat, scheme), ab = allBase[scheme];
       const pick = (k, minOwn) => { for (const b of [own, cb, ab]) if (b && b[k] !== null && b[k] !== undefined && (b !== own || !minOwn || minOwn(b))) return b[k]; return DEFAULTS[k] ?? 0; };
@@ -122,7 +127,7 @@ export default function Margin({ cabinet }) {
       out.push({ a, x, scheme, v, r, be, tp, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drrSrc, curPrice, priceEd: price !== curPrice });
     }
     return out;
-  }, [data, cats.arts, target, drrAll, drrOver, priceOver, withAds, tax, bs.shareOf]);
+  }, [data, cats.arts, target, drrAll, drrOver, priceOver, withAds, tax, bs.shareOf, allArts]);
 
   const q = search.trim().toLowerCase();
   const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a));
@@ -132,7 +137,7 @@ export default function Margin({ cabinet }) {
     margin: r => (r.status === 'nocost' ? null : r.r.margin), roi: r => r.r.roi, be: r => r.be || null, be2: r => (r.be && r.v.spp ? r.be * (1 - r.v.spp / 100) : null), tp: r => r.tp || null,
     gap: r => (r.tp ? r.tp - r.r.P : null), rev: r => r.rev, drr: r => r.v.drr, pay: r => r.r.payout,
   };
-  const shown = ctl.apply(flt ? base.filter(r => r.status === flt) : base, (r, k) => GET[k](r)).slice(0, 500);
+  const shown = ctl.apply(flt ? base.filter(r => r.status === flt) : base, (r, k) => GET[k](r)).slice(0, 2000);
   const withCost = base.filter(r => r.status !== 'nocost');
   const avgMargin = (() => { let p = 0, rv = 0; for (const r of withCost) { p += r.r.profit * r.orders; rv += r.r.P * r.orders; } return rv ? p / rv * 100 : null; })();
   const lossRev = base.filter(r => r.status === 'loss').reduce((s, r) => s + r.rev, 0);
@@ -170,6 +175,16 @@ export default function Margin({ cabinet }) {
             </button>
           ))}
         </div>
+        {(() => {
+          // Сколько товаров выбранной категории не попало в таблицу и почему.
+          let noOrd = 0, noPrice = 0;
+          if (data) { const byArt = new Map(data.a.map(x => [x[0], x])); for (const a of cats.arts) { if (!inPath(a, sel) || !matchQ(a, q) || !grp.test(a)) continue; const x = byArt.get(a.i); if (!x || !x[1]) noPrice++; else if (!(x[13] > 0 || x[25] > 0 || x[24] > 0)) noOrd++; } }
+          return (noOrd > 0 || noPrice > 0) ? (
+            <div className="a-hint" style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span>В таблице {fmtInt(base.length)} товаров{!allArts && noOrd ? ` — только с заказами за 30 дней; ещё ${fmtInt(noOrd)} без заказов скрыты` : ''}{noPrice ? `${!allArts && noOrd ? ',' : ' —'} ${fmtInt(noPrice)} без цены в карточке (не выгружены из Ozon) не показаны` : ''}.</span>
+              {noOrd > 0 && <label className="sw"><input type="checkbox" checked={allArts} onChange={e => setAllArts(e.target.checked)} /><i />показать и без заказов</label>}
+            </div>) : null;
+        })()}
         <div className="a-hint" style={{ marginTop: 8 }}>Цены — текущие из карточек (ваша цена до скидки Ozon). Подобрать цену вручную можно в «Калькуляторе» — найдите товар по артикулу, все поля заполнятся сами.</div>
       </div>
 
