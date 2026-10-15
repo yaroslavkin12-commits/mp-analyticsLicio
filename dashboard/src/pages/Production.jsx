@@ -228,13 +228,14 @@ export default function Production({ cabinet }) {
   const [fMat, setFMat] = useState('');
   const [onlyOrder, setOnlyOrder] = useState(false);
   const [onlyFocus, setOnlyFocus] = useState(false);
+  const [onlyFill, setOnlyFill] = useState(false);
   const [q, setQ] = useState('');
   const [edit, setEdit] = useState(false);
   const ctl = useTableCtl(`prod-${cabinet}`, { k: 'pr', dir: -1 });
   const inOrder = o => { for (const s of SHOPS) { const v = alloc[s]?.map.get(o); if (v) return v; } return null; };
   const list = useMemo(() => rows.filter(r => (!fShop || r.shop === fShop) && (!fDec || r.c.V === fDec) && (!fMat || r.mat === fMat)
-    && (!onlyOrder || inOrder(r.o)) && (!onlyFocus || r.focus) && (!q || r.o.toLowerCase().includes(q.toLowerCase()) || String(r.n || '').toLowerCase().includes(q.toLowerCase()))),
-  [rows, fShop, fDec, fMat, onlyOrder, onlyFocus, q, alloc]); // eslint-disable-line react-hooks/exhaustive-deps
+    && (!onlyOrder || inOrder(r.o)) && (!onlyFocus || r.focus) && (!onlyFill || inOrder(r.o)?.fill) && (!q || r.o.toLowerCase().includes(q.toLowerCase()) || String(r.n || '').toLowerCase().includes(q.toLowerCase()))),
+  [rows, fShop, fDec, fMat, onlyOrder, onlyFocus, onlyFill, q, alloc]); // eslint-disable-line react-hooks/exhaustive-deps
   const GET = {
     o: r => r.o, shop: r => r.shop, mat: r => r.mat, top: r => r.top, year: r => r.c.year, w4: r => r.c.w4, w8: r => r.c.w8, stock: r => r.c.stock, sew: r => r.c.sew,
     p: r => r.c.P, trend: r => r.c.Q, s: r => r.c.S, cov: r => r.c.T, dec: r => ['ORDER', 'PLAN', 'HOLD', 'NO ORDER'].indexOf(r.c.V), w: r => r.c.W, pr: r => r.c.Y,
@@ -365,6 +366,8 @@ export default function Production({ cabinet }) {
           ))}
           <button type="button" className="a-toggle" onClick={() => setOnlyOrder(v => !v)}><span className={`a-sw ${onlyOrder ? 'on' : ''}`} />Только в заказе</button>
           <button type="button" className={`s-chip ${onlyFocus ? 'on' : ''}`} onClick={() => setOnlyFocus(v => !v)} title="Артикулы, отмеченные звёздочкой: тестируем в рекламе или готовим к ней">★ под рекламу <b className="n">{rows.filter(r => r.focus).length}</b></button>
+          {(() => { const n = rows.filter(r => inOrder(r.o)?.fill && (!fShop || r.shop === fShop)).length; return n || onlyFill ? (
+            <button type="button" className={`s-chip ${onlyFill ? 'on' : ''}`} onClick={() => setOnlyFill(v => !v)} title="Артикулы, добавленные сверх потребности, чтобы добрать цех до нужного числа заданий">⊕ добор <b className="n">{n}</b></button>) : null; })()}
           <button type="button" className="a-toggle" onClick={() => setEdit(v => !v)} title="Править цех, материал, цикл, буфер, партию, TOP и продажи за год (для новинок)"><span className={`a-sw ${edit ? 'on' : ''}`} />Править справочник</button>
           <input className="a-input" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} style={{ minWidth: 220 }} />
           <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
@@ -395,7 +398,7 @@ export default function Production({ cabinet }) {
               {vis.map(r => {
                 const c = r.c, io = inOrder(r.o), sg = SIGNAL[c.U] || [c.U, ''];
                 return (
-                  <tr key={r.o} className={io ? 'pr-in-order' : ''}>
+                  <tr key={r.o} className={`${io ? 'pr-in-order' : ''} ${io?.fill ? 'pr-fill-row' : ''}`}>
                     <td><div className="a-art">
                       <button type="button" className={`pr-star ${r.focus ? 'on' : ''}`} onClick={() => editMaster(r.o, { focus: !r.focus })}
                         title={r.focus ? `Под рекламу: прогноз продаж × ${r.focusK || 1.5}${r.focusMin ? `, не меньше ${r.focusMin} в день` : ''}, приоритет +800. Нажмите, чтобы снять` : 'Отметить «под рекламу»: ждём рост продаж — подсорт заранее и выше в очереди'}>★</button>
@@ -436,6 +439,7 @@ export default function Production({ cabinet }) {
                       {SHOPS.includes(r.shop) ? <input className={`a-input pr-num ${over[r.o] !== undefined && over[r.o] !== '' ? 'manual' : ''}`} type="number" min="0" value={over[r.o] ?? ''} placeholder={io ? String(io.qty) : '0'}
                         onChange={e => setOver(v => ({ ...v, [r.o]: e.target.value }))} title="Пусто — по расчёту; впишите своё количество" /> : '—'}
                       {io && <small className="pr-sub2">{Math.round(io.tasks * 10) / 10} зад.</small>}
+                      {io?.fill ? <small className="pr-sub2 pr-fillb" title={`Добрано до числа заданий: потребность ${c.W} шт, добор +${io.fill} шт`}>добор +{io.fill}</small> : null}
                     </td>
                     <td><span className={`pr-sig ${sg[1]}`}>{sg[0]}</span></td>
                   </tr>

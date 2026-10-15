@@ -69,3 +69,6 @@
 .mpui td.pl-bad{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--a-bad) 55%,transparent);border-radius:4px}
 .mpui .s-warn{color:var(--a-warn)}
 .mpui .pr-t td.pl-gl .pr-sel,.mpui .pr-t td.pl-gl .pl-note{display:block;width:100%;box-sizing:border-box}
+.mpui .pr-t tr.pr-fill-row>td:first-child{box-shadow:inset 3px 0 0 var(--a-warn)}
+.mpui .pr-t tr.pr-fill-row>td{background:color-mix(in srgb,var(--a-warn) 7%,transparent)}
+.mpui .pr-fillb{color:var(--a-warn);font-weight:600}
