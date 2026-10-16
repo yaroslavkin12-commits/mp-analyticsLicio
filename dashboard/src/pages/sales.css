@@ -265,3 +265,6 @@
 .mpui .m-pinb:hover{opacity:1}
 .mpui .m-tbl th.m-pinth,.mpui .m-tbl td.m-pinc{width:34px;padding-left:4px;padding-right:8px}
 .mpui .m-pinned{margin-top:14px}
+.mpui .m-tbl .m-pick{border:0;background:none;padding:2px 4px;margin:-2px -4px;border-radius:6px;cursor:pointer;color:inherit;font:inherit;text-align:right;display:inline-block}
+.mpui .m-tbl .m-pick b{font-weight:500}
+.mpui .m-tbl .m-pick:hover{background:var(--a-accent-soft);color:var(--a-accent)}
