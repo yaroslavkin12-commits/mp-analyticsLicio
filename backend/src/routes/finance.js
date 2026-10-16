@@ -73,9 +73,10 @@ router.get('/coefs', async (req, res) => {
     await ensureFinTables();
     const cabinet = req.query.cabinet || 'defly';
     const since = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-    const bFrom = dayjs().subtract(45, 'day').format('YYYY-MM-DD'), bTo = dayjs().subtract(5, 'day').format('YYYY-MM-DD');
+    // Выкуп — за 90 дней, кончая 7 днями назад (как в калькуляторе): по свежим заказам он ещё не известен.
+    const bFrom = dayjs().subtract(90, 'day').format('YYYY-MM-DD'), bTo = dayjs().subtract(7, 'day').format('YYYY-MM-DD');
     const m = await meta(cabinet);
-    const [fin, buy, ord, prices, costs, names] = await Promise.all([
+    const [fin, buy, ord, prices, costs, names, disc] = await Promise.all([
       query(`SELECT sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date >= $2 GROUP BY sku, name`, [cabinet, since]),
       query(`SELECT offer_id, SUM(delivered)::int d, SUM(cancelled)::int c, SUM(in_progress)::int p FROM buyout_daily
               WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id`, [cabinet, bFrom, bTo]),
@@ -83,10 +84,12 @@ router.get('/coefs', async (req, res) => {
       query(`SELECT offer_id, price, seller_price, acquiring, pct_fbo, pct_fbs FROM product_prices WHERE cabinet = $1`, [cabinet]),
       query(`SELECT article, cost_price, cabinet FROM product_costs`),
       query(`SELECT name, SUM(amount) a FROM finance_daily WHERE cabinet = $1 AND date >= $2 GROUP BY name ORDER BY SUM(amount)`, [cabinet, since]),
+      query(`SELECT offer_id, pct, pct_card, seller_price, card_price, checked_at FROM product_discount_latest WHERE cabinet = $1`, [cabinet]).catch(() => []),
     ]);
-    // [saleAmt, saleQty, commission, logistics, acquiring, storage, promo, other, ordered30, delivered, cancelled, pctFbo, acqPerItem, price, cost, pctFbs, ordered30Fbs, ads, commFbs, saleFbs, commFbo, saleFbo]
+    // [saleAmt, saleQty, commission, logistics, acquiring, storage, promo, other, ordered30, delivered, cancelled, pctFbo, acqPerItem, price, cost, pctFbs, ordered30Fbs, ads, commFbs, saleFbs, commFbo, saleFbo,
+    //  directSum, directTrips, returnSum, returnTrips, sppSite] — логистика: прямая на отправку и обратная на возврат (как в калькуляторе), СПП — с сайта
     const C = new Map();
-    const get = ai => { if (!C.has(ai)) C.set(ai, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0, 0, 0]); return C.get(ai); };
+    const get = ai => { if (!C.has(ai)) C.set(ai, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null]); return C.get(ai); };
     const noSku = {};
     for (const r of fin) {
       const b = bucketOf(r.name), a = num(r.a), q = num(r.q);
@@ -99,7 +102,11 @@ router.get('/coefs', async (req, res) => {
       if (b === 'sale') { x[0] += a; x[1] += q; }
       else if (b === 'return') { x[0] += a; x[1] -= Math.abs(q); }
       else if (b === 'commission') x[2] += a;
-      else if (b === 'logistics') x[3] += a;
+      else if (b === 'logistics') {
+        x[3] += a;
+        if (/return/i.test(r.name)) { x[24] += a; x[25] += /^ReturnFlowLogistic$/i.test(r.name) ? q : 0; }
+        else { x[22] += a; x[23] += /^Logistic$/i.test(r.name) ? q : 0; }
+      }
       else if (b === 'acquiring') x[4] += a;
       else if (b === 'storage') x[5] += a;
       else if (b === 'promo') x[6] += a;
@@ -109,6 +116,16 @@ router.get('/coefs', async (req, res) => {
     for (const r of ord) { const x = get(m.art(r.offer_id)); x[8] = num(r.o); x[16] = num(r.f); }
     for (const r of buy) { const x = get(m.art(r.offer_id)); x[9] = num(r.d); x[10] = num(r.c); }
     for (const r of prices) { const x = get(m.art(r.offer_id)); x[11] = num(r.pct_fbo); x[12] = num(r.acquiring); x[13] = num(r.seller_price) || num(r.price); x[15] = num(r.pct_fbs) || null; }
+    // СПП с сайта (Ozon-карта) и свежая цена — как в калькуляторе («Соинвест»).
+    const fresh = Date.now() - 3 * 86400000;
+    for (const r of disc) {
+      if (!m.articles.length) break;
+      const x = get(m.art(r.offer_id));
+      const byCard = num(r.card_price) > 0 && num(r.seller_price) > 0 ? Math.round((1 - num(r.card_price) / num(r.seller_price)) * 1000) / 10 : null;
+      const pc = r.pct_card != null && num(r.pct_card) > 0 ? num(r.pct_card) : byCard !== null && byCard > 0 ? byCard : r.pct != null ? num(r.pct) : null;
+      if (pc !== null) x[26] = pc;
+      if (r.checked_at && new Date(r.checked_at).getTime() > fresh && num(r.seller_price) > 0) x[13] = num(r.seller_price);
+    }
     const fbsRows = await query(`SELECT date::text d, offer_id, ordered, COALESCE(ordered_fbs, 0) f FROM buyout_daily WHERE cabinet = $1 AND date >= $2 AND ordered > 0`,
       [cabinet, dayjs().subtract(92, 'day').format('YYYY-MM-DD')]);
     const fbsDays = fbsRows.map(r => [m.art(r.offer_id), r.d, num(r.ordered), num(r.f)]);

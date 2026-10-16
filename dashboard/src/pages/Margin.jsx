@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getCalcBase, refreshPrices } from '../api';
+import { getCalcBase, refreshPrices, getFinanceCoefs, getFinancePnl } from '../api';
+import { unitCoefs } from './unitModel';
 import { fmtInt, CAT_COLORS } from './AdsStats2';
 import { baseOf, compute, priceFor, DEFAULTS, drrPred } from './Calculator';
 import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, useBuyerShare, OTHER, SEP } from './finShared';
@@ -20,11 +21,11 @@ import './sales.css';
 // Колонки таблицы (выбираются кнопкой «Колонки»). money — можно показать «на 1 шт» или «всего за 30 дней».
 const COL_LIST = [
   ['price', 'Цена реализации'], ['client', 'Цена клиента'], ['set', 'Установить цену'], ['cost', 'Себестоимость', 1], ['drr', 'ДРР'], ['comm', 'Комиссия', 1], ['logi', 'Логистика', 1],
-  ['ads', 'Реклама', 1], ['tax', 'Налог', 1], ['pay', 'На счёт', 1], ['profit', 'Прибыль', 1], ['margin', 'Маржа и ROI'], ['buyout', 'Выкуп %'], ['spp', 'СПП %'],
+  ['ads', 'Реклама', 1], ['tax', 'Налог', 1], ['pay', 'На счёт', 1], ['profit', 'Прибыль', 1], ['fact', 'Прибыль факт (P&L)'], ['margin', 'Маржа и ROI'], ['buyout', 'Выкуп %'], ['spp', 'СПП %'],
   ['be', 'Безубыток (реализации и клиента)'], ['tp', 'Цена для цели (реализации и клиента)'], ['rev', 'Заказы 30 дн'],
 ];
 const MONEY = new Set(COL_LIST.filter(c => c[2]).map(c => c[0]));
-const DEF_COLS = ['price', 'client', 'set', 'cost', 'drr', 'pay', 'profit', 'margin', 'be', 'tp', 'rev'];
+const DEF_COLS = ['price', 'client', 'set', 'cost', 'drr', 'pay', 'profit', 'fact', 'margin', 'be', 'tp', 'rev'];
 
 const FILTERS = [['loss', 'Убыточные', 'b'], ['below', 'Ниже цели', 'w'], ['nocost', 'Нет себестоимости', 'm'], ['ok', 'В норме', 'g']];
 
@@ -125,6 +126,15 @@ export default function Margin({ cabinet }) {
   const ctl = useTableCtl('margin', { k: 'margin', dir: 1 });
 
   useEffect(() => { setData(null); getCalcBase(cabinet).then(r => setData(r.data.data)).catch(e => setError(e.response?.data?.error || e.message)); }, [cabinet]);
+  // Коэффициенты единой модели прибыли (те же, что в «Юнит-экономике» и «Рекламе»).
+  const [coefs, setCoefs] = useState(null);
+  useEffect(() => { setCoefs(null); getFinanceCoefs(cabinet).then(r => setCoefs(r.data.data)).catch(() => setCoefs(false)); }, [cabinet]);
+  // Факт за 30 дней по начислениям Ozon (как в P&L) — для сравнения с прогнозом.
+  const [pnl, setPnl] = useState(null);
+  useEffect(() => {
+    setPnl(null);
+    getFinancePnl(cabinet, { dateFrom: dayjs().subtract(29, 'day').format('YYYY-MM-DD'), dateTo: dayjs().format('YYYY-MM-DD') }).then(r => setPnl(r.data.data)).catch(() => setPnl(false));
+  }, [cabinet]);
   // Ручное обновление цен: Google-скрипт выгружает свежие цены и комиссии из Ozon
   // в таблицу, сервис их забирает и пересчитывает страницу.
   const [refr, setRefr] = useState({ busy: false, msg: '' });
@@ -142,6 +152,32 @@ export default function Margin({ cabinet }) {
   };
   const cats = useCats(data?.articles, data?.order);
   const bs = useBuyerShare(cabinet, cats.arts);
+  // Прибыль факт по артикулу (как строка артикула в P&L, без начислений без артикула):
+  // выручка + все удержания Ozon (реклама — по начислениям, за ещё не проведённые дни — из кабинета)
+  // − себестоимость выкупленного − налог (от доли цены, которую платит покупатель, по «Начислениям»).
+  const fact = useMemo(() => {
+    if (!pnl) return null;
+    const iAds = pnl.buckets.indexOf('ads');
+    let lastFin = -1;
+    for (const r of pnl.rows) if (r[2] === iAds && r[3]) lastFin = Math.max(lastFin, r[1]);
+    const m = new Map();
+    const get = ai => { const o = pnl.articles[ai]?.o; if (!o) return null; let v = m.get(o); if (!v) { v = { sum: 0, rev: 0, qty: 0, ads: 0, ai }; m.set(o, v); } return v; };
+    for (const [ai, d, bi, a, q] of pnl.rows) {
+      const v = get(ai); if (!v) continue;
+      const k = pnl.buckets[bi];
+      v.sum += a;
+      if (k === 'ads') v.ads -= a;
+      if (k === 'sale') { v.rev += a; v.qty += Math.abs(q); } else if (k === 'return') { v.rev += a; v.qty -= Math.abs(q); }
+    }
+    for (const [ai, d, val] of pnl.ads) if (d > lastFin) { const v = get(ai); if (v) { v.sum -= val; v.ads += val; } }
+    return m;
+  }, [pnl]);
+  const K = useMemo(() => {
+    if (!coefs) return null;
+    const arts = cats.arts.map(a => ({ o: a.o, parts: a.parts }));
+    const ks = unitCoefs(coefs, arts, bs.shareOf);
+    return new Map(arts.map((a, i) => [a.o, ks[i]]));
+  }, [coefs, cats.arts, bs.shareOf]);
 
   const pinSet = useMemo(() => new Set(pinned), [pinned]);
   // Входные данные расчёта по каждому товару: свои → категория → кабинет.
@@ -166,7 +202,13 @@ export default function Margin({ cabinet }) {
       const own = baseOf([x], scheme), cb = catBase(a.cat, scheme), ab = allBase[scheme];
       const pick = (k, minOwn) => { for (const b of [own, cb, ab]) if (b && b[k] !== null && b[k] !== undefined && (b !== own || !minOwn || minOwn(b))) return b[k]; return DEFAULTS[k] ?? 0; };
       const commission = scheme === 'fbs' ? (own.commFact ?? cb?.commFact ?? own.commCard ?? pick('commCard')) : (own.commCard ?? pick('commCard'));
-      const v = {
+      const k = K?.get(a.o);
+      const v = k ? {
+        // Единая модель (как в «Юнит-экономике»): выкуп, комиссия в доле FBO/FBS, логистика на
+        // отправку и возврат, эквайринг и прочее, налог от цены клиента.
+        spp: k.spp, cost: x[12] || 0, buyout: k.buyout * 100, defect: 0, commission: k.comm * 100,
+        acquiring: k.acq * 100, direct: k.direct ?? k.logi, ret: k.direct !== null && k.direct !== undefined ? k.ret : 0, other: k.other * 100, drr: 0, oper: 0, tax,
+      } : {
         // Скидка покупателя — текущая с сайта (Соинвест, с Ozon-картой); нет — по отчёту «Начисления».
         spp: x[11] !== null && x[11] !== undefined ? x[11] : bs.shareOf ? (1 - bs.shareOf(a.o, a.parts)) * 100 : 0, cost: x[12] || 0, buyout: pick('buyout'), defect: 0, commission: commission ?? DEFAULTS.commission,
         acquiring: pick('acquiring'), direct: pick('direct'), ret: pick('ret'), other: pick('other'), drr: 0, oper: 0, tax,
@@ -195,10 +237,18 @@ export default function Margin({ cabinet }) {
       const status = !x[12] ? 'nocost' : r.profit < 0 ? 'loss' : r.margin < target ? 'below' : 'ok';
       const tpc = tp ? tp * sppK : null;
       const units = (x[25] || 0) * (v.buyout || 0) / 100; // ожидаемо продано за 30 дней (заказы × выкуп)
-      out.push({ a, x, scheme, v, r, rb: r, be, tp, tpc, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drr7, drrSrc, curPrice, curClient, sppK, units, po: null, priceEd: false });
+      const f = fact?.get(a.o);
+      let pf = null;
+      if (f) {
+        const sh = bs.shareOf ? (bs.shareOf(a.o, a.parts) ?? 1) : 1;
+        const costP = pnl.cost?.[f.ai] || x[12] || 0;
+        const taxF = f.rev > 0 ? f.rev * sh * tax / 100 : 0;
+        pf = { profit: f.sum - costP * f.qty - taxF, rev: f.rev, qty: f.qty, ads: f.ads };
+      }
+      out.push({ a, x, scheme, v, r, rb: r, pf, be, tp, tpc, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drr7, drrSrc, curPrice, curClient, sppK, units, po: null, priceEd: false });
     }
     return out;
-  }, [data, cats.arts, target, drrAll, drrOver, withAds, tax, bs.shareOf, allArts, pinSet]);
+  }, [data, cats.arts, target, drrAll, drrOver, withAds, tax, bs.shareOf, allArts, pinSet, K, fact]);
   // Вписанные новые цены: пересчитываем только эти строки (rb — при текущей цене, для сортировки,
   // чтобы строка не «убегала», пока вписываешь).
   const rows = useMemo(() => baseRows.map(b => {
@@ -219,6 +269,7 @@ export default function Margin({ cabinet }) {
     margin: r => (r.status === 'nocost' ? null : r.rb.margin), roi: r => r.rb.roi, be: r => r.be || null, tp: r => r.tp || null,
     gap: r => (r.tp ? r.tp - r.rb.P : null), rev: r => r.rev, drr: r => r.v.drr, pay: r => r.rb.payout,
     client: r => r.curClient, comm: r => r.rb.commission, logi: r => r.rb.logistics, ads: r => r.rb.ads, tax: r => r.rb.tax, buyout: r => r.v.buyout, spp: r => r.v.spp,
+    fact: r => (r.pf ? (per === 'total' ? r.pf.profit : r.pf.qty > 0 ? r.pf.profit / r.pf.qty : null) : null),
     set: r => (r.priceEd ? r.r.P : null),
   };
   const getK = (r, k) => { const v = GET[k] ? GET[k](r) : null; return per === 'total' && MONEY.has(k) && v !== null ? v * r.units : v; };
@@ -261,6 +312,7 @@ export default function Margin({ cabinet }) {
     tax: [`Налог${tot ? ' за 30 дн' : ''}`, 'Налог от оплаты покупателя'],
     pay: [`На счёт${tot ? ' за 30 дн' : ' / шт'}`, 'Поступление на счёт: цена минус комиссия, эквайринг, логистика, хранение и реклама'],
     profit: [`Прибыль${tot ? ' за 30 дн' : ' / шт'}`, tot ? 'Прибыль за 30 дней: прибыль со штуки × ожидаемо продано (заказы × выкуп)' : 'Прибыль с одной проданной штуки после всех расходов, рекламы и налога'],
+    fact: [`Прибыль факт${tot ? ' за 30 дн' : ' / шт'}`, `Факт по начислениям Ozon за последние 30 дней — как строка артикула в P&L (без общих начислений без артикула): ${tot ? 'всего' : 'на одну выкупленную штуку'}. Отличается от прогноза: выкупы и списания приходят с задержкой, возвраты, разовые удержания, другая цена в прошлом`],
     margin: ['Маржа', 'Прибыль / выручка; ниже — ROI (прибыль / себестоимость)'],
     buyout: ['Выкуп', 'Доля выкупа, по которой считается логистика'],
     spp: ['СПП', 'Скидка Ozon для покупателя'],
@@ -294,6 +346,10 @@ export default function Margin({ cabinet }) {
     pay: row => (<td className="n r" key="pay">{money(row, row.r.payout)}</td>),
     profit: row => (<td className="n r" key="profit" title={`На 1 шт: комиссия ${fmtInt(row.r.commission)}, логистика ${fmtInt(row.r.logistics)} (×${row.r.trips.toFixed(2)}), эквайринг ${fmtInt(row.r.acquiring)}, прочее ${fmtInt(row.r.other)}, реклама ${fmtInt(row.r.ads)}, налог ${fmtInt(row.r.tax)}${tot ? ` · продано ≈ ${fmtInt(row.units)} шт` : ''}`}>
       <b style={{ color: row.r.profit < 0 ? 'var(--a-bad)' : undefined }}>{money(row, row.r.profit)}</b>{tot ? <small className="m-sub">≈ {fmtInt(row.units)} шт</small> : null}</td>),
+    fact: row => { const f = row.pf; const v = !f ? null : tot ? f.profit : f.qty > 0 ? f.profit / f.qty : null; return (
+      <td className="n r" key="fact" title={f ? `Выручка ${fmtInt(f.rev)} ₽, выкуплено ${fmtInt(f.qty)} шт, реклама ${fmtInt(f.ads)} ₽ — за 30 дней по начислениям` : pnl === null ? 'Загрузка…' : 'Нет начислений за 30 дней'}>
+        {v === null ? <span className="muted">{pnl === null ? '…' : '—'}</span> : <span style={{ color: v < 0 ? 'var(--a-bad)' : undefined }}>{fmtInt(v)}</span>}
+        {f && f.qty > 0 && !tot ? <small className="m-sub">{fmtInt(f.qty)} шт</small> : null}</td>); },
     margin: row => (<td className="r" key="margin"><span className={`pill ${row.status === 'nocost' ? 'm' : row.r.profit < 0 ? 'b' : row.r.margin < target ? 'w' : 'g'}`}>{pct1(row.r.margin)}</span><small className="m-sub">ROI {pct1(row.r.roi)}</small></td>),
     buyout: row => (<td className="n r" key="buyout">{pct1(row.v.buyout)}</td>),
     spp: row => (<td className="n r" key="spp">{row.v.spp ? pct1(row.v.spp) : '—'}</td>),
@@ -335,7 +391,7 @@ export default function Margin({ cabinet }) {
   );
 
   if (error) return <div className="mpui"><div className="a-empty" style={{ padding: 40 }}>Не удалось загрузить: {error}</div></div>;
-  if (!data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
+  if (!data || coefs === null) return <div className="mpui"><div className="a-empty" style={{ textAlign: "center", padding: 60 }}>Загрузка…</div></div>;
 
   return (
     <div className="mpui sa-page">
@@ -377,7 +433,12 @@ export default function Margin({ cabinet }) {
               {noOrd > 0 && <label className="sw"><input type="checkbox" checked={allArts} onChange={e => setAllArts(e.target.checked)} /><i />показать и без заказов</label>}
             </div>) : null;
         })()}
-        <div className="a-hint" style={{ marginTop: 8 }}>Цены — текущие из карточек (ваша цена до скидки Ozon). Подобрать цену вручную можно в «Калькуляторе» — найдите товар по артикулу, все поля заполнятся сами.</div>
+        <div className="a-hint" style={{ marginTop: 8 }}>
+          <b>Как считается.</b> Прогноз на одну проданную штуку при текущей цене — по единой модели, той же, что в «Юнит-экономике», «Рекламе» и калькуляторе:
+          цена реализации − комиссия (FBO из карточки / FBS по факту, в доле отгрузок) − логистика (прямая на отправку + обратная на возврат, с учётом выкупа за 90 дней)
+          − эквайринг и прочее (% от продаж за 30 дней) − реклама (ДРР прогнозный) − себестоимость − налог (от цены клиента).
+          «Всего за 30 дн» = на 1 шт × заказы × выкуп — сходится с прогнозом «Юнит-экономики» за 30 дней. «Прибыль факт» — по начислениям Ozon, как в P&L.
+        </div>
       </div>
 
       <div className="a-card">

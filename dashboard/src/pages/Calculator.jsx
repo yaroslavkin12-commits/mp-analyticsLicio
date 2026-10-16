@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { getCalcBase } from '../api';
+import { getCalcBase, getFinanceCoefs } from '../api';
+import { unitCoefs } from './unitModel';
 import { fmtInt, naturalCompare, shortModel, CAT_COLORS } from './AdsStats2';
 import { pct1 } from './finShared';
 import { useBuyerShare } from './buyerShare';
@@ -182,6 +183,14 @@ export default function Calculator({ cabinet }) {
   const rowsByArt = useMemo(() => new Map((data?.a || []).map(x => [x[0], x])), [data]);
   const bsArts = useMemo(() => arts.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) })), [arts]);
   const bs = useBuyerShare(cabinet, bsArts);
+  // Единая модель прибыли (как в «Юнит-экономике», «Рекламе», «Цены и маржа») — для выбранного товара.
+  const [coefs, setCoefs] = useState(null);
+  useEffect(() => { setCoefs(null); getFinanceCoefs(cabinet).then(r => setCoefs(r.data.data)).catch(() => setCoefs(false)); }, [cabinet]);
+  const K = useMemo(() => {
+    if (!coefs) return null;
+    const ks = unitCoefs(coefs, bsArts, bs.shareOf);
+    return new Map(bsArts.map((a, i) => [a.o, ks[i]]));
+  }, [coefs, bsArts, bs.shareOf]);
   const rank = useMemo(() => new Map((data?.order || []).map((x, i) => [x, i])), [data]);
   const leafCats = useMemo(() => {
     const m = new Map();
@@ -232,6 +241,20 @@ export default function Calculator({ cabinet }) {
       // средний по категории — лишь для нового товара.
       drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
     };
+    // Выбранный товар — коэффициенты единой модели: так расчёт совпадает с «Цены и маржа» и «Юнит-экономикой».
+    const k = own ? K?.get(arts[own[0]]?.o) : null;
+    if (k) {
+      const SRC = { own: 'товара', cat: 'категории', all: 'кабинета', def: 'по умолчанию' };
+      const lbl = (src, what) => `${what} ${SRC[src] || ''}`.trim();
+      out.buyout = [Math.round(k.buyout * 1000) / 10, lbl(k.src.buyout, 'выкуп за 90 дн (без последней недели),')];
+      if (ship === 'fact') out.commission = [Math.round((scheme === 'fbs' ? k.commFbs : k.commFbo) * 1000) / 10, scheme === 'fbs' ? 'факт FBS (единая модель)' : 'из карточки (единая модель)'];
+      out.acquiring = [Math.round(k.acq * 1000) / 10, lbl(k.src.acq, 'факт за 30 дн,')];
+      out.other = [Math.round(k.other * 1000) / 10, 'факт за 30 дн + общие расходы кабинета'];
+      if (k.direct !== null && k.direct !== undefined) {
+        out.direct = [Math.round(k.direct * 10) / 10, lbl(k.src.logi, 'факт: списания / отправки,')];
+        out.ret = [Math.round((k.ret ?? k.direct) * 10) / 10, lbl(k.src.logi, 'факт: списания / возвраты,')];
+      }
+    }
     // Реклама: у выбранного товара — только его собственный ДРР (не рекламировался — 0);
     // средний по категории — лишь для нового товара. Прогнозный: реклама / (заказы × выкуп).
     if (own) {
@@ -254,7 +277,7 @@ export default function Calculator({ cabinet }) {
     }
     if (own && (own[12] === null)) out.cost = [null, 'нет себестоимости — заполните во вкладке «Себестоимость»'];
     return { out, bCat, bOwn, bAll };
-  }, [data, cat, art, scheme, volume, arts, rowsByArt, ship, bs.shareOf]);
+  }, [data, cat, art, scheme, volume, arts, rowsByArt, ship, bs.shareOf, K]);
 
   const auto = k => base?.out[k]?.[0];
   const val = k => (vals[k] !== undefined ? vals[k] : (auto(k) !== null && auto(k) !== undefined ? String(r1(auto(k)) ?? '') : ''));
