@@ -642,7 +642,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
 // ── Журнал изменений ──────────────────────────────────────────────────────
 // Подсветка: пополнение остатка и включение РК / оплаты за заказ — зелёным,
 // выключение — красным.
-const EV_TONE = { restock: 'ev-good', camp_on: 'ev-good', cpo_on: 'ev-good', camp_off: 'ev-bad', cpo_off: 'ev-bad', price_up: 'ev-price', price_down: 'ev-price', price: 'ev-price' };
+const EV_TONE = { restock: 'ev-good', camp_on: 'ev-good', cpo_on: 'ev-good', camp_off: 'ev-bad', cpo_off: 'ev-bad', stock_in: 'ev-good', stock_out: 'ev-bad', stock: 'ev-bad', price_up: 'ev-price', price_down: 'ev-price', price: 'ev-price' };
 function Journal({ events, offerId, onAdd, onDelete }) {
   const [text, setText] = useState('');
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -670,7 +670,7 @@ function Journal({ events, offerId, onAdd, onDelete }) {
         <input className="a-input" value={text} onChange={e => setText(e.target.value)} placeholder="Что сделали: снизил ставку, сменил фото…" />
         <button type="submit" className="a-btn" disabled={saving || !text.trim()}>Добавить</button>
       </form>
-      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ), включение/выключение РК и оплаты за заказ, пополнения остатка появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия. «Цена» — изменения цены клиента: из «Журнала цен» и по цене на сайте (сдвиг от 1,5%, который держится); колебания репрайсера и скидки Ozon (когда меняется только цена реализации) не показываются.</div>
+      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ), включение/выключение РК и оплаты за заказ, пополнения остатка появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия. Сюда же попадают смена бюджета РК, «остаток закончился» и «снова в наличии». «Цена» — изменения цены клиента: из «Журнала цен» и по цене на сайте (сдвиг от 1,5%, который держится); колебания репрайсера и скидки Ozon (когда меняется только цена реализации) не показываются.</div>
     </div>
   );
 }
@@ -741,8 +741,13 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
     const list = events.filter(e => isAggregate ? (!e.offerId || offerSet.has(e.offerId)) : e.offerId === offerId);
     if (!isAggregate) return list;
     // В общей аналитике изменения цены по артикулам сворачиваем в одну строку на день.
-    const byDay = new Map(), rest = [];
+    const byDay = new Map(), stockDay = new Map(), rest = [];
     for (const e of list) {
+      if (e.kind === 'stock_out' || e.kind === 'stock_in') {
+        const v = stockDay.get(e.date) || { out: 0, inn: 0 };
+        if (e.kind === 'stock_out') v.out++; else v.inn++;
+        stockDay.set(e.date, v); continue;
+      }
       if (!e.price) { rest.push(e); continue; }
       const v = byDay.get(e.date) || { up: 0, down: 0 };
       if (e.kind === 'price_up') v.up++; else v.down++;
@@ -752,6 +757,10 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
       const n = v.up + v.down;
       rest.push({ id: `pa:${d}`, date: d, kind: 'price', auto: true, price: true,
         text: `Цена клиента изменена у ${n} арт.${v.up ? ` · подняли ${v.up}` : ''}${v.down ? ` · снизили ${v.down}` : ''}` });
+    }
+    for (const [d, v] of stockDay) {
+      rest.push({ id: `sa:${d}`, date: d, kind: v.out ? 'stock' : 'stock_in', auto: true,
+        text: [v.out ? `Остаток закончился у ${v.out} арт.` : '', v.inn ? `снова в наличии у ${v.inn} арт.` : ''].filter(Boolean).join(' · ') });
     }
     return rest.sort((x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : 0));
   }, [events, isAggregate, offerId, articles]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -92,7 +92,7 @@ const QUERIES_HEADERS = ['cabinet', 'date', 'sku', 'query', 'position', 'searche
 const MONTHLY_HEADERS = ['cabinet', 'month', 'sku', 'revenue', 'orders'];
 // Остатки FBO по складам и кластерам (для вкладки «Остатки» и поставок).
 const STOCKS_WH_HEADERS = ['cabinet', 'sku', 'offer_id', 'cluster', 'warehouse', 'available', 'transit', 'reserved', 'ads', 'idc', 'checked_at'];
-const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy'];
+const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy', 'daily_budget', 'weekly_budget', 'budget'];
 // Товары МУЛЬТИТОВАРНЫХ кампаний ("Оплата за заказ: выбранные товары" и
 // подобные, где одна РК продвигает сразу пачку SKU, а не один артикул) —
 // см. backend/postgres/init.sql (ad_campaign_skus) и sheetSync.js. checked_at
@@ -312,7 +312,9 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campai
   campaigns.forEach(function (c) {
     campaignsOut.push([cab.id, String(c.id), String(c.title || '').slice(0, 500), c.state || '', c.advObjectType || '',
       c.PaymentType || c.paymentType || '', c.productAutopilotStrategy || '',
-      Array.isArray(c.placement) ? c.placement.join(',') : (c.placement || ''), c.expenseStrategy || '']);
+      Array.isArray(c.placement) ? c.placement.join(',') : (c.placement || ''), c.expenseStrategy || '',
+      // Бюджеты (в API — в миллионных долях рубля; сервис переводит в рубли) — для журнала изменений.
+      c.dailyBudget || '', c.weeklyBudget || '', c.budget || '']);
   });
 
   const expData = fetchJson_('https://api-performance.ozon.ru/api/client/statistics/expense/json?dateFrom=' + from + '&dateTo=' + to,

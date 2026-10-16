@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { initArtLinks } from './lib/artLinks';
+import { initSearchClear } from './lib/searchClear';
 import { whenIdle } from './api';
 import Sidebar, { navLabel } from './components/Sidebar';
 import { startStickyHeads } from './lib/stickyHeads';
@@ -147,6 +148,7 @@ export default function App() {
   }, [cabinet, gen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { initArtLinks(cabinet); }, [cabinet]);
+  useEffect(() => { initSearchClear(); }, []);
   useEffect(() => { document.title = cabinet === 'defly' ? 'Defly — аналитика Ozon' : 'Licio — WB + Ozon'; }, [cabinet]);
 
   // Переключатель WB/Ozon нужен только старым разделам Licio.

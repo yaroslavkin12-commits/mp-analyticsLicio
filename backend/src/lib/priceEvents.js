@@ -131,4 +131,26 @@ async function priceEvents(cabinet, from, to) {
   return out;
 }
 
-module.exports = { recordPrices, priceEvents, ensurePriceDaily };
+// Остаток: закончился (был > 0, стал 0) и снова появился (был 0) — по дневным снимкам остатков.
+async function stockEvents(cabinet, from, to) {
+  const since = dayjs(from).subtract(3, 'day').format('YYYY-MM-DD');
+  const rows = await query(`SELECT offer_id, d, SUM(v)::int AS v FROM (
+        SELECT offer_id, snapshot_date::text AS d, fbo_present + fbs_present AS v, collected_at,
+               MAX(collected_at) OVER (PARTITION BY offer_id, snapshot_date) AS mx
+          FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date BETWEEN $2 AND $3) t
+      WHERE collected_at = mx GROUP BY offer_id, d ORDER BY offer_id, d`, [cabinet, since, to]).catch(() => []);
+  const out = [];
+  let prevO = null, prevV = null;
+  for (const r of rows) {
+    if (r.offer_id !== prevO) { prevO = r.offer_id; prevV = r.v; continue; }
+    const v = Number(r.v) || 0;
+    if (r.d >= from) {
+      if (prevV > 0 && v === 0) out.push({ offerId: r.offer_id, date: r.d, kind: 'stock_out', text: `Остаток закончился (было ${prevV} шт)` });
+      else if (prevV === 0 && v > 0) out.push({ offerId: r.offer_id, date: r.d, kind: 'stock_in', text: `Остаток снова в наличии: 0 → ${v} шт` });
+    }
+    prevV = v;
+  }
+  return out;
+}
+
+module.exports = { recordPrices, priceEvents, ensurePriceDaily, stockEvents };

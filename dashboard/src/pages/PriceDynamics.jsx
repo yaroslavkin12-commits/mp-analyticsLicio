@@ -30,6 +30,7 @@ export default function PriceDynamics({ cabinet, catOf, snaps }) {
   const [err, setErr] = useState('');
   const [sel, setSel] = useState(''); // путь категории
   const [art, setArt] = useState(null); // артикул
+  const [q, setQ] = useState(''); // поиск артикула — по всем категориям
   useEffect(() => {
     setData(null); setErr('');
     getPriceDynamics(cabinet, days).then(r => setData(r.data.data)).catch(e => setErr(e.response?.data?.error || e.message));
@@ -121,6 +122,13 @@ export default function PriceDynamics({ cabinet, catOf, snaps }) {
   // Строки таблицы: подкатегории или артикулы.
   const rows = useMemo(() => {
     if (!dense || lastIdx < 0) return [];
+    const qq = q.trim().toLowerCase();
+    if (qq) {
+      const found = [...dense.keys()].filter(o => o.toLowerCase().includes(qq)).slice(0, 300);
+      return found.map(o => ({ key: o, label: o, list: [o], isArt: true, n: 1,
+        c7: change([o], 'c', 7), c30: change([o], 'c', 30), cAll: change([o], 'c', 'all'),
+        s7: change([o], 's', 7), s30: change([o], 's', 30), sAll: change([o], 's', 'all'), mv: moved([o]) }));
+    }
     const depth = sel ? sel.split(SEP).length : 0;
     const groups = new Map(), leafArts = [];
     for (const o of offers) {
@@ -139,7 +147,7 @@ export default function PriceDynamics({ cabinet, catOf, snaps }) {
     const arts = (groups.size ? leafArts : offers).map(o => mk(o, o, [o], true));
     arts.sort((a, b) => Math.abs(b.c30 ?? 0) - Math.abs(a.c30 ?? 0));
     return groups.size ? [...out, ...arts] : arts;
-  }, [dense, offers, sel, catOf, lastIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dense, offers, sel, catOf, lastIdx, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const [full, setFull] = useState(false);
   useEffect(() => { setFull(false); }, [sel]);
 
@@ -162,6 +170,7 @@ export default function PriceDynamics({ cabinet, catOf, snaps }) {
             {crumbs.map((c, i) => <React.Fragment key={i}><span className="muted">›</span><button type="button" className={`s-chip ${i === crumbs.length - 1 && !art ? 'on' : ''}`} onClick={() => { setSel(crumbs.slice(0, i + 1).join(SEP)); setArt(null); }}>{c}</button></React.Fragment>)}
             {art && <><span className="muted">›</span><span className="s-chip on">{art}</span></>}
           </span>
+          <input className="a-input" placeholder="Артикул" value={q} onChange={e => { setQ(e.target.value); setArt(null); }} style={{ minWidth: 180 }} title="Найти артикул по всем категориям" />
           <span className="a-seg" style={{ marginLeft: 'auto' }}>{DAYS.map(([d, t]) => <button key={d} type="button" className={days === d ? 'on' : ''} onClick={() => setDays(d)}>{t}</button>)}</span>
         </div>
         <div className="a-hint" style={{ margin: '0 0 8px' }}>
@@ -209,7 +218,7 @@ export default function PriceDynamics({ cabinet, catOf, snaps }) {
               </thead>
               <tbody>
                 {vis.map(r => (
-                  <tr key={r.key} className="pl-click" onClick={() => (r.isArt ? setArt(r.key) : setSel(r.key))}>
+                  <tr key={r.key} className="pl-click" onClick={() => (r.isArt ? (setArt(r.key), q && (setQ(''), setSel(catOf.get(r.key) || ''))) : setSel(r.key))}>
                     <td>{r.isArt ? <div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{r.key}</div><div className="model">{(catOf.get(r.key) || '').split(SEP).pop()}</div></div></div> : <b>{r.label} ›</b>}</td>
                     <td className="n r">{r.isArt ? '' : fmtInt(r.n)}</td>
                     <td className="n r"><span className={cls(r.c7)}>{pctS(r.c7)}</span></td>

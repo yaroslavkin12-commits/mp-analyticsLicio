@@ -68,6 +68,10 @@ router.get('/events', async (req, res) => {
       oldValue: r.old_value, newValue: r.new_value, auto: r.auto, createdAt: r.created_at,
     }));
     for (const e of pe) list.push({ id: `p:${e.offerId}:${e.date}:${e.src}`, offerId: e.offerId, date: e.date, kind: e.kind, text: e.text, auto: true, price: true });
+    // Остаток закончился / снова появился (пополнение уже есть отдельной записью — не дублируем).
+    const se = await require('../lib/priceEvents').stockEvents(cabinet, from, to).catch(e => { console.warn('[stockEvents]', e.message); return []; });
+    const restocked = new Set(rows.filter(r => r.kind === 'restock').map(r => `${r.offer_id}|${r.date}`));
+    for (const e of se) if (!(e.kind === 'stock_in' && restocked.has(`${e.offerId}|${e.date}`))) list.push({ id: `s:${e.offerId}:${e.date}`, offerId: e.offerId, date: e.date, kind: e.kind, text: e.text, auto: true });
     list.sort((x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : 0));
     res.json({ success: true, data: list });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
