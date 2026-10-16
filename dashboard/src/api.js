@@ -171,3 +171,4 @@ export const deletePriceLog = (cabinet, platform, id) => api.post('/pricelog/del
 export const markPriceLog = (cabinet, platform, snapId, offers, goal, note) => api.post('/pricelog/marks', { cabinet, platform, snapId, offers, goal, note });
 export const getSkus = cabinet => api.get('/sales/skus', { params: { cabinet }, timeout: 30000 });
 export const closeProductionJournal = (cabinet, offers, close) => api.post('/production/journal', { cabinet, offers, close });
+export const getPriceDynamics = (cabinet, days) => api.get('/pricelog/dynamics', { params: { cabinet, days }, timeout: 60000 });

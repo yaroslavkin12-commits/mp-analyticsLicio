@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getPriceLog, getPriceSnap, getPriceHistory, uploadPriceLog, deletePriceLog, markPriceLog, getSalesData, getCalcBase } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
+import PriceDynamics from './PriceDynamics';
 import { fmtInt } from './AdsStats2';
 import './ads2.css';
 import './sales.css';
@@ -157,6 +158,8 @@ export default function PriceLog({ cabinet }) {
   const [site, setSite] = useState(null);
   const [upDate, setUpDate] = useState(() => dayjs().format('YYYY-MM-DD'));
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState('log'); // log — журнал, dyn — динамика цен
+  const [catOf, setCatOf] = useState(new Map());
 
   const load = useCallback(() => getPriceLog(cabinet, platform).then(r => { setLog(r.data.data); return r.data.data; }).catch(e => setErr(e.response?.data?.error || e.message)), [cabinet]);
   useEffect(() => { setSnapCache({}); load().then(d => { if (d?.snaps?.length) setSel(s => s || d.snaps[d.snaps.length - 1].id); }); }, [load]);
@@ -189,6 +192,7 @@ export default function PriceLog({ cabinet }) {
       const d = r.data.data, m = new Map();
       for (const x of d.a || []) { const o = d.articles[x[0]]?.o; if (o) m.set(o, { card: x[34] || null, site: x[35] || null, at: x[36] || '' }); }
       setSite(m);
+      setCatOf(new Map((d.articles || []).map(a => [a.o, a.cat || ''])));
     }).catch(() => {});
   }, [cabinet]);
 
@@ -397,9 +401,11 @@ export default function PriceLog({ cabinet }) {
         <div className="a-top">
           <h1>Журнал цен</h1>
           <span className="a-seg"><button type="button" className="on">Ozon · Дефлай</button><button type="button" disabled title="Добавим позже">WB — позже</button></span>
-          <span className="a-hint" style={{ margin: 0 }}>цены для клиента из репрайсера, раз в неделю</span>
+          <span className="a-seg">{[['log', 'Журнал'], ['dyn', 'Динамика цен']].map(([k, t]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{t}</button>)}</span>
+          <span className="a-hint" style={{ margin: 0 }}>{tab === 'log' ? 'цены для клиента из репрайсера, раз в неделю' : 'как меняются цены по категориям и артикулам'}</span>
         </div>
       </div>
+      {tab === 'dyn' ? <PriceDynamics cabinet={cabinet} catOf={catOf} snaps={snaps} /> : (<>
       {msg && <div className={`c-msg ${msg.bad ? 'bad' : ''}`} style={{ margin: '10px 0' }}>{msg.text}</div>}
 
       <div className="a-card pr-card">
@@ -610,6 +616,7 @@ export default function PriceLog({ cabinet }) {
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }

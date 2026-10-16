@@ -75,3 +75,4 @@
 .mpui .pr-t tr.pj-miss>td{background:color-mix(in srgb,var(--a-bad) 7%,transparent)}
 .mpui .pr-t tr.pj-miss>td:first-child{box-shadow:inset 3px 0 0 var(--a-bad)}
 .mpui .pj-line{font-size:12.5px;line-height:1.45;white-space:nowrap}
+.mpui .pl-crumbs{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}

@@ -74,6 +74,29 @@ router.get('/history', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// GET /dynamics?cabinet=&days=90 — цены по дням (price_daily): по артикулу только дни, когда цена
+// изменилась: { from, to, items: { артикул: [[день от from, цена реализации, цена клиента], ...] } }.
+router.get('/dynamics', async (req, res) => {
+  try {
+    const c = req.query.cabinet || 'defly';
+    const days = Math.min(400, Math.max(7, Number(req.query.days) || 90));
+    const dayjs = require('dayjs');
+    const to = dayjs().add(3, 'hour').format('YYYY-MM-DD'), from = dayjs(to).subtract(days - 1, 'day').format('YYYY-MM-DD');
+    await require('../lib/priceEvents').ensurePriceDaily();
+    const rows = await query(`SELECT offer_id, date::text AS d, seller, card FROM price_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 ORDER BY offer_id, date`, [c, from, to]);
+    const items = {}, last = {};
+    const f0 = dayjs(from);
+    for (const r of rows) {
+      const s = r.seller !== null ? Math.round(Number(r.seller)) : null, cc = r.card !== null ? Math.round(Number(r.card)) : null;
+      const l = last[r.offer_id];
+      if (l && l[0] === s && l[1] === cc) continue;
+      last[r.offer_id] = [s, cc];
+      (items[r.offer_id] || (items[r.offer_id] = [])).push([dayjs(r.d).diff(f0, 'day'), s, cc]);
+    }
+    res.json({ success: true, data: { from, to, days, items } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // POST /upload { cabinet, platform, date, file, items, old?, zero?, site? } — снимок на дату (та же дата заменяется).
 router.post('/upload', async (req, res) => {
   try {
