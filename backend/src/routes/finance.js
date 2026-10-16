@@ -211,27 +211,40 @@ router.get('/buyout', async (req, res) => {
 // начисления, реклама и заказы. Средние по категориям считает страница.
 // a: [ai, price, pctFbo, pctFbs, volL, fboDirect, fboDeliv, fboReturn, fbsDirect, fbsDeliv, fbsReturn,
 //     spp, cost, ordered30, ordFbs30, delivered, cancelled, saleAmt, saleQty, comm, logi, acq, storOther, ads30, rev30, qty30,
-//     commFbo, saleFbo, commFbs, saleFbs, directSum, directTrips, returnSum, returnTrips, cardPrice, sitePrice, sppCheckedAt]
+//     commFbo, saleFbo, commFbs, saleFbs, directSum, directTrips, returnSum, returnTrips, cardPrice, sitePrice, sppCheckedAt,
+//     adCab30, adCab7, rev7, qty7]
+// Выкуп (delivered/cancelled) — за 90 дней, кончая 7 днями назад: по свежим заказам он ещё не известен.
+// ДРР прогнозный (считает страница) = расход из рекламного кабинета (оплата за заказ — на дату заказа) /
+// (сумма заказов × % выкупа). adCab7/rev7 — то же за 7 дней, для подсказки.
 router.get('/calc-base', async (req, res) => {
   try {
     await ensureFinTables();
     const cabinet = req.query.cabinet || 'defly';
     const since = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-    const bFrom = dayjs().subtract(45, 'day').format('YYYY-MM-DD'), bTo = dayjs().subtract(5, 'day').format('YYYY-MM-DD');
+    const bFrom = dayjs().subtract(90, 'day').format('YYYY-MM-DD'), bTo = dayjs().subtract(7, 'day').format('YYYY-MM-DD');
+    const since7 = dayjs().subtract(7, 'day').format('YYYY-MM-DD');
     const m = await meta(cabinet);
-    const [prices, disc, costs, ord, buy, fin, adSku, adCpo, an] = await Promise.all([
+    const today = dayjs().format('YYYY-MM-DD');
+    const [prices, disc, costs, ord, buy, fin, adSku, adCpo, an, campaigns, campaignSkuRows, adRows, skuStatRows, cpoRows] = await Promise.all([
       query(`SELECT * FROM product_prices WHERE cabinet = $1`, [cabinet]),
       query(`SELECT offer_id, pct, pct_card, seller_price, card_price, site_price, checked_at FROM product_discount_latest WHERE cabinet = $1`, [cabinet]).catch(() => []),
       query(`SELECT article, cost_price, cabinet FROM product_costs`),
       query(`SELECT offer_id, SUM(ordered)::int o, SUM(COALESCE(ordered_fbs, 0))::int f FROM buyout_daily WHERE cabinet = $1 AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
       query(`SELECT offer_id, SUM(delivered)::int d, SUM(cancelled)::int c FROM buyout_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id`, [cabinet, bFrom, bTo]),
       query(`SELECT sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date >= $2 AND sku <> '' GROUP BY sku, name`, [cabinet, since]),
-      query(`SELECT sku, SUM(expense) e FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY sku`, [cabinet, since]).catch(() => []),
-      query(`SELECT COALESCE(NULLIF(promoted_sku, 0), sku) sku, SUM(expense) e FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY 1`, [cabinet, since]).catch(() => []),
-      query(`SELECT offer_id, SUM(revenue) r, SUM(orders_item) q FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id`, [cabinet, since]),
+      query(`SELECT sku, SUM(expense) e, SUM(CASE WHEN date >= $3 THEN expense ELSE 0 END) e7 FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY sku`, [cabinet, since, since7]).catch(() => []),
+      query(`SELECT COALESCE(NULLIF(promoted_sku, 0), sku) sku, SUM(expense) e, SUM(CASE WHEN date >= $3 THEN expense ELSE 0 END) e7 FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY 1`, [cabinet, since, since7]).catch(() => []),
+      query(`SELECT offer_id, SUM(revenue) r, SUM(orders_item) q, SUM(CASE WHEN date >= $3 THEN revenue ELSE 0 END) r7, SUM(CASE WHEN date >= $3 THEN orders_item ELSE 0 END) q7 FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id`, [cabinet, since, since7]),
+      // Расход по артикулу — как на вкладке «Реклама» (allocateAds): оплата за заказ — на дату заказа.
+      query(`SELECT campaign_id, matched_offer_id, payment_type, adv_object_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []),
+      query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, [cabinet]).catch(() => []),
+      query(`SELECT date::text AS date, campaign_id, spend, clicks, orders, orders_money FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, since, today]).catch(() => []),
+      query(`SELECT date::text AS date, campaign_id, sku, clicks, orders, sales, expense FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, since, today]).catch(() => []),
+      query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense, COALESCE(to_jsonb(t)->>'kind', '') AS kind
+               FROM ad_cpo_orders t WHERE cabinet = $1 AND platform = 'ozon' AND (date BETWEEN $2 AND $3 OR order_date BETWEEN $2 AND $3)`, [cabinet, since, today]).catch(() => []),
     ]);
     const A = new Map();
-    const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null]); return A.get(ai); };
+    const get = o => { const ai = m.art(o); if (!A.has(ai)) A.set(ai, [ai, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, null, 0, 0, 0, 0]); return A.get(ai); };
     const known = new Set(m.articles.map(a => a.o));
     const priceAt = new Map();
     for (const r of prices) {
@@ -275,10 +288,23 @@ router.get('/calc-base', async (req, res) => {
       else if (b === 'ads') x[23] -= a; else x[22] += a;
     }
     const adBy = new Map();
-    for (const r of [...adSku, ...adCpo]) { const o = m.offerBySku.get(String(r.sku)); if (o) adBy.set(o, (adBy.get(o) || 0) + num(r.e)); }
+    for (const r of [...adSku, ...adCpo]) {
+      const o = m.offerBySku.get(String(r.sku)); if (!o) continue;
+      adBy.set(o, (adBy.get(o) || 0) + num(r.e));
+    }
+    {
+      const { allocateAds } = require('./sales');
+      const al = allocateAds({ from: since, to: today, campaigns, campaignSkuRows, offerBySku: m.offerBySku, adRows, skuStatRows, cpoRows });
+      for (const [key, v] of al.byOfferDate) {
+        const i = key.lastIndexOf('|'), o = key.slice(0, i), d = key.slice(i + 1);
+        if (!known.has(o) || d < since) continue;
+        const x = get(o), e = (v.cpc || 0) + (v.cpo || 0);
+        x[37] += e; if (d >= since7) x[38] += e;
+      }
+    }
     // Реклама: из кабинета (если в начислениях её нет).
     for (const [o, v] of adBy) { const x = get(o); if (!x[23]) x[23] = v; }
-    for (const r of an) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[24] = num(r.r); x[25] = num(r.q); }
+    for (const r of an) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[24] = num(r.r); x[25] = num(r.q); x[39] = num(r.r7); x[40] = num(r.q7); }
     res.json({ success: true, data: {
       articles: m.articles, order: ORDER[cabinet] || [], since,
       a: [...A.values()].map(x => x.map((v, i) => (i && typeof v === 'number' ? r2(v) : v))),

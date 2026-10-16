@@ -32,10 +32,11 @@ const SHIP = [['fact', 'как сейчас (факт за 30 дней)', 0], ['
 // Суммы по набору артикулов → коэффициенты «базы».
 export function baseOf(rows, scheme) {
   if (!rows.length) return null;
-  let sale = 0, saleQty = 0, comm = 0, logi = 0, acq = 0, so = 0, ord = 0, del = 0, can = 0, ads = 0, rev = 0, q30 = 0, sppW = 0, sppV = 0;
+  let sale = 0, saleQty = 0, comm = 0, logi = 0, acq = 0, so = 0, ord = 0, del = 0, can = 0, ads = 0, rev = 0, q30 = 0, sppW = 0, sppV = 0, ads7 = 0, rev7 = 0;
   for (const x of rows) {
     sale += x[17]; saleQty += x[18]; comm += x[19]; logi += x[20]; acq += x[21]; so += x[22]; ord += x[13]; del += x[15]; can += x[16];
-    ads += x[23]; rev += x[24]; q30 += x[25];
+    // Реклама — из рекламного кабинета (оплата за заказ — на дату заказа); у старых ответов — из начислений.
+    ads += x[37] !== undefined ? x[37] : x[23]; rev += x[24]; q30 += x[25]; ads7 += x[38] || 0; rev7 += x[39] || 0;
     if (x[11] !== null) { const w = x[24] || 1; sppW += w; sppV += x[11] * w; }
   }
   const fbs = scheme === 'fbs';
@@ -68,7 +69,11 @@ export function baseOf(rows, scheme) {
     logiFact: ord >= 5 && logi < 0 ? -logi / ord : null, // ₽ на заказанную штуку (факт)
     acquiring: sale > 0 && saleQty >= 3 ? Math.max(0, -acq / sale * 100) : null,
     other: sale > 0 && saleQty >= 3 ? Math.max(0, -so / sale * 100) : null,
-    drr: rev > 0 ? Math.max(0, ads / rev * 100) : null,
+    // ДРР прогнозный = реклама / (заказы × % выкупа): сколько реклама стоит с каждой будущей продажи.
+    // drrOrd — от суммы заказов (без выкупа); страница делит его на выкуп, выбранный для товара.
+    drrOrd: rev > 0 ? Math.max(0, ads / rev * 100) : null,
+    drrOrd7: rev7 > 0 ? Math.max(0, ads7 / rev7 * 100) : null,
+    drr: rev > 0 ? Math.min(100, Math.max(0, ads / rev * 100) / (bo || 0.8)) : null,
     volume: median(rows.map(x => x[4])),
     cost: median(rows.map(x => x[12])),
     fbsShare: ord > 0 ? rows.reduce((s, x) => s + x[14], 0) / ord * 100 : null,
@@ -92,6 +97,8 @@ const FIELDS = [
   ['oper', 'Операционные расходы на 1 шт', '₽'],
   ['tax', 'Ставка налога', '%'],
 ];
+// ДРР прогнозный для товара: от суммы заказов, делённый на выкуп (в %), не больше 100.
+export const drrPred = (b, buyoutPct, key = 'drrOrd') => (b && b[key] !== null && b[key] !== undefined && buyoutPct > 0 ? Math.min(100, b[key] / (buyoutPct / 100)) : null);
 export const DEFAULTS = { spp: 20, buyout: 80, defect: 0, commission: 20, acquiring: 1.5, direct: 80, ret: 60, other: 1, drr: 5, oper: 0, tax: 6, cost: 0 };
 
 export function compute(v, price, taxMode) {
@@ -223,8 +230,17 @@ export default function Calculator({ cabinet }) {
       other: pick('other', SF),
       // Реклама: у выбранного товара — только его собственный ДРР (не рекламировался — 0);
       // средний по категории — лишь для нового товара.
-      drr: own ? (bOwn && bOwn.drr !== null && bOwn.drr !== undefined ? [bOwn.drr, bOwn.drr > 0 ? 'факт товара за 30 дн' : 'товар не рекламировался'] : [0, 'нет заказов за 30 дн — реклама 0']) : pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
+      drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
     };
+    // Реклама: у выбранного товара — только его собственный ДРР (не рекламировался — 0);
+    // средний по категории — лишь для нового товара. Прогнозный: реклама / (заказы × выкуп).
+    if (own) {
+      const bo = out.buyout[0];
+      const d = drrPred(bOwn, bo), d7 = drrPred(bOwn, bo, 'drrOrd7');
+      const r1s = v => String(Math.round(v * 10) / 10).replace('.', ',');
+      out.drr = d === null ? [0, 'нет заказов за 30 дн — реклама 0']
+        : [Math.round(d * 10) / 10, d > 0 ? `прогноз за 30 дн: реклама / (заказы × выкуп ${r1s(bo)}%)${d7 !== null ? ` · за 7 дн ${r1s(d7)}%` : ''}` : 'товар не рекламировался'];
+    }
     // Скидка для покупателя (СПП): прежде всего — текущая, с сайта (расширение
     // «Соинвест»: цена с Ozon-картой к цене в кабинете). Отчёт «Начисления»
     // (баллы за скидки) — только запасной вариант: он за прошлый месяц и при

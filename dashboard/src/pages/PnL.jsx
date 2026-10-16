@@ -28,7 +28,7 @@ const ROWS = [
   { key: 'qty', label: 'Выкуплено, шт', fmt: 'int', good: 'up', sub: true },
   { block: 'Расходы Ozon (по факту списания)', tone: 'spend' },
   ...COST_KEYS.map(k => ({ key: k, label: LABEL[k], fmt: 'money0', good: 'neutral', sub: true, signed: true })),
-  { key: 'ads', label: 'Реклама (оплата за клик и за заказ)', fmt: 'money0', good: 'neutral', sub: true, signed: true, hint: 'Ozon удерживает рекламу из перечисления, поэтому она здесь. Сумма — по начислениям Ozon; за последние дни, которые Ozon ещё не провёл в начислениях (обычно 1–2 дня), — расход из рекламного кабинета' },
+  { key: 'ads', label: 'Реклама (оплата за клик и за заказ)', fmt: 'money0', good: 'neutral', sub: true, signed: true, hint: 'Ozon удерживает рекламу из перечисления, поэтому она здесь. Сумма — по начислениям Ozon, по дню списания: оплата за заказ списывается в день выкупа заказа (во вкладке «Реклама» она стоит в дне заказа, поэтому по дням суммы не совпадают). За последние дни, которые Ozon ещё не провёл в начислениях (обычно 1–2 дня), — расход из рекламного кабинета' },
   { key: 'ozon', label: 'Итого расходы Ozon', fmt: 'money0', good: 'neutral', signed: true, strong: true },
   { key: 'payout', label: 'К перечислению от Ozon', fmt: 'int', good: 'up', hint: 'Выручка минус все удержания Ozon, включая рекламу' },
   { block: 'Свои расходы', tone: 'traffic' },
@@ -38,7 +38,7 @@ const ROWS = [
   { block: 'Результат', tone: 'conv' },
   { key: 'profit', label: 'Прибыль, ₽', fmt: 'int', good: 'up', strong: true, signed: true },
   { key: 'margin', label: 'Маржа, %', fmt: 'pct', good: 'up', hint: 'Прибыль / выручка' },
-  { key: 'drr', label: 'Доля рекламы, %', fmt: 'pct', good: 'down', hint: 'Реклама / выручка' },
+  { key: 'drr', label: 'ДРР факт, %', fmt: 'pct', good: 'down', hint: 'ДРР фактический: списания на рекламу (по начислениям Ozon) / выручка по выкупам (выкупы − возвраты). В «Цены и маржа» и калькуляторе — ДРР прогнозный: реклама / (заказы × % выкупа)' },
 ];
 const METRICS = [
   { key: 'revenue', label: 'Выручка, ₽', fmt: 'int' },

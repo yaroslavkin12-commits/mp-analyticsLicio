@@ -117,7 +117,10 @@ export const drrClass = v => v === null || v === undefined || !Number.isFinite(v
 
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
 const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'clicks', 'adViews', 'adOrders', 'adRevenue',
-  'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCpoUndated'];
+  'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCpoUndated', 'expRev', 'profitF'];
+// Коэффициенты юнит-экономики по артикулам (ставит страница «Реклама»): для ДРР
+// с учётом выкупа и прогнозируемой прибыли по дням.
+const UNIT_CTX = { k: null, tax: 6 };
 const zoneRaw = d => ({ spendSearch: d.spendSearch || 0, clicksSearch: d.clicksSearch || 0, spendRec: d.spendRec || 0, clicksRec: d.clicksRec || 0, spendCpoUndated: d.spendCpoUndated || 0 });
 
 // Значения дня с учётом режима: "all" — общая аналитика товара, "ads" —
@@ -147,6 +150,8 @@ export function derive(r, mode) {
     out.crToOrder = r.cart > 0 ? r.orders / r.cart * 100 : null;
   }
   out.drr = r.revenue > 0 ? r.spend / r.revenue * 100 : null;
+  // ДРР с учётом выкупа: расход / ожидаемая выручка (заказы × % выкупа артикула).
+  out.drrB = r.expRev > 0 ? r.spend / r.expRev * 100 : null;
   // Средняя цена клика: общая и отдельно по зонам (в поиске ставка выше,
   // в "поиск + рекомендации" ниже). Расход за заказ в цену клика не входит.
   out.avgCpc = r.clicks > 0 ? (r.spendCpc || r.spend) / r.clicks : null;
@@ -178,6 +183,17 @@ function buildModel(articles, dates, mode) {
       if (s !== null && s !== undefined) { stock += s; stockKnown = true; }
       const p = a.byDate[d]?.position;
       if (articles.length === 1 && p !== null && p !== undefined) { posSum += p; posN++; }
+    }
+    // Прогноз по заказам дня: ожидаемая выручка (с выкупом) и прибыль после рекламы.
+    if (UNIT_CTX.k) {
+      let er = 0, pf = 0, any = false;
+      for (const a of articles) {
+        const k = UNIT_CTX.k.get(a.offerId); if (!k) continue;
+        const dr = dayRaw(a.byDate[d], mode);
+        const u = unitProfit(k, { ordRub: dr.revenue, ordQty: dr.orders, ads: dr.spend }, UNIT_CTX.tax);
+        er += u.expRev; pf += u.profit; any = true;
+      }
+      if (any) { raw.expRev = er; raw.profitF = pf; }
     }
     byDate[d] = { ...derive(raw, mode), stock: stockKnown ? stock : null, position: posN ? posSum / posN : null };
     if (articles.length === 1) {
@@ -521,8 +537,11 @@ const DAY_ROWS = [
   { key: 'avgCpcRec', label: 'поиск + рекомендации', fmt: 'money2', good: 'down', sub: true, ratio: ['spendRec', 'clicksRec'] },
   { key: 'spend', label: 'Расход общий, ₽', fmt: 'money0', good: 'up', editable: true },
   { key: 'spendCpc', label: 'оплата за клик', fmt: 'money0', good: 'up', sub: true },
-  { key: 'spendCpo', label: 'оплата за заказ', fmt: 'money0', good: 'up', sub: true },
-  { key: 'drr', label: 'ДРР', fmt: 'pct', good: 'down' },
+  { key: 'spendCpo', label: 'оплата за заказ', fmt: 'money0', good: 'up', sub: true, hint: 'Оплата за заказ стоит в дне заказа — так видно эффективность дня. Ozon списывает её позже, в день выкупа: в P&L и финансах эти суммы в других днях' },
+  { key: 'drr', label: 'ДРР', fmt: 'pct', good: 'down', hint: 'Расход / сумма заказов (без учёта выкупа)' },
+  { key: 'drrB', label: 'ДРР с учётом выкупа', fmt: 'pct', good: 'down', hint: 'Расход / (сумма заказов × % выкупа артикула) — сколько реклама будет стоить с каждой продажи. Так же считается ДРР в «Цены и маржа» и калькуляторе' },
+  { block: 'Прогноз', tone: 'rev' },
+  { key: 'profitF', label: 'Прогнозируемая прибыль после рекламы, ₽', fmt: 'money0', good: 'up', hint: 'С заказов дня: ожидаемая выручка (с % выкупа) минус комиссия, логистика, эквайринг, хранение, себестоимость, налог и реклама — как в «Юнит-экономике»' },
 ];
 
 function rowTotal(row, byDate, dates, totals) {
@@ -587,12 +606,12 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
             const label = mode === 'ads' && row.adsLabel ? row.adsLabel : row.label;
             return (
               <tr key={row.key} className={row.sub ? 'sub' : ''}>
-                <td className="lbl">{row.sub ? '— ' : ''}{label}</td>
+                <td className="lbl" title={row.hint || undefined} style={row.hint ? { textDecoration: 'underline dotted var(--a-line2)', textUnderlineOffset: 3 } : undefined}>{row.sub ? '— ' : ''}{label}</td>
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {
                   const d = dates[i];
                   const bg = heatColor(v, min, max, row.good);
-                  if (row.key === 'drr' && (v === null || v === undefined)) {
+                  if ((row.key === 'drr' || row.key === 'drrB') && (v === null || v === undefined)) {
                     const spent = model.byDate[d]?.spend > 0;
                     return <td key={d} style={{ color: 'var(--a-ink3)' }} title={spent ? 'Был расход, заказов не было' : ''}>{spent ? '×' : '—'}</td>;
                   }
@@ -713,7 +732,7 @@ function AssociatedTable({ associated, dates }) {
 function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAddNote, onDeleteNote, groups, currentGroupId, onAssignGroup, tip, showAssoc, associated, activeGroupId }) {
   const [editMode, setEditMode] = useState(false);
   const [showCampaigns, setShowCampaigns] = useState(false);
-  const model = useMemo(() => buildModel(articles, dates, mode), [articles, dates, mode]);
+  const model = useMemo(() => buildModel(articles, dates, mode), [articles, dates, mode, UNIT_CTX.k]); // eslint-disable-line react-hooks/exhaustive-deps
   const a = articles[0];
   const offerId = isAggregate ? null : a?.offerId;
   const campaigns = useMemo(() => articles.flatMap(x => x.campaigns), [articles]);
@@ -743,7 +762,7 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
           {showAssoc && <><span>+ по склейке</span><b className="n">{fmtInt(assocOrders)} шт · {fmtInt(assocRevenue)} ₽</b></>}
           {showAssoc && <><span>Итого со склейкой</span><b className="n">{fmtInt(t.orders + assocOrders)} шт · {fmtInt(t.revenue + assocRevenue)} ₽</b></>}
           <span>Расход за клик</span><b className="n">{fmtInt(t.spendCpc)} ₽</b>
-          <span>Расход за заказ</span><b className="n">{t.spendCpo ? `${fmtInt(t.spendCpo)} ₽` : '—'}</b>
+          <span title="Оплата за заказ — в дне заказа; Ozon списывает её в день выкупа">Расход за заказ (по дню заказа)</span><b className="n">{t.spendCpo ? `${fmtInt(t.spendCpo)} ₽` : '—'}</b>
           <span>Ср. цена клика: поиск / поиск+рек.</span>
           <b className="n">{fmtMoney2(t.avgCpcSearch)} / {fmtMoney2(t.avgCpcRec)}</b>
           <span>Рекламный ДРР</span><b className="n">{fmtPct(adDrr)}</b>
@@ -810,8 +829,8 @@ function Matrix({ rows, dates, mode }) {
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length, rows.length]);
   const cfg = MATRIX_METRICS.find(m => m.key === metric);
-  const models = useMemo(() => rows.map(a => ({ a, m: buildModel([a], dates, mode) })), [rows, dates, mode]);
-  const all = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode]);
+  const models = useMemo(() => rows.map(a => ({ a, m: buildModel([a], dates, mode) })), [rows, dates, mode, UNIT_CTX.k]); // eslint-disable-line react-hooks/exhaustive-deps
+  const all = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, UNIT_CTX.k]); // eslint-disable-line react-hooks/exhaustive-deps
   const vals = [];
   for (const { m } of models) for (const d of dates) { const v = m.byDate[d]?.[metric]; if (v !== null && v !== undefined && Number.isFinite(v)) vals.push(v); }
   const min = vals.length ? Math.min(...vals) : 0, max = vals.length ? Math.max(...vals) : 0;
@@ -936,6 +955,7 @@ export default function AdsStats2({ cabinet }) {
     return unitProfit(k, { ordRub: (mode === 'ads' ? t.adRevenue : t.revenue) || 0, ordQty: (mode === 'ads' ? t.adOrders : t.orders) || 0, ads: t.spend || 0 }, taxPct);
   }
   const taxPct = (() => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cabinet}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } })();
+  UNIT_CTX.k = unitK; UNIT_CTX.tax = taxPct;
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
   const [status, setStatus] = useState(null);
@@ -1073,7 +1093,7 @@ export default function AdsStats2({ cabinet }) {
     return { rows: list, hiddenByFilter: before - list.length };
   }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK]);
 
-  const total = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode]);
+  const total = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, unitK]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── действия ──
   async function handleCollect() {
@@ -1198,8 +1218,8 @@ export default function AdsStats2({ cabinet }) {
   });
   const COLS = [
     { k: 'id', t: 'Артикул' }, { k: null, t: 'Заказы по дням' }, { k: 'revenue', t: 'Заказано, ₽' }, { k: 'orders', t: 'Заказы, шт' },
-    { k: 'stock', t: 'Остаток, шт', h: 'Текущий остаток FBO + FBS' }, { k: 'spend', t: 'Расход, ₽', h: 'Оплата за клик + оплата за заказ (по дню заказа)' },
-    { k: 'drr', t: 'ДРР', h: 'Доля рекламных расходов: расход / сумма заказов', u: '%' },
+    { k: 'stock', t: 'Остаток, шт', h: 'Текущий остаток FBO + FBS' }, { k: 'spend', t: 'Расход, ₽', h: 'Оплата за клик + оплата за заказ. Оплата за заказ — в дне заказа (Ozon списывает её позже, в день выкупа; в P&L она в дне списания)' },
+    { k: 'drr', t: 'ДРР', h: 'Расход / сумма заказов; ниже — с учётом выкупа: расход / (заказы × % выкупа артикула)', u: '%' },
     { k: 'profit', t: 'Прогнозируемая прибыль', h: 'Ожидаемая прибыль с заказов периода после выкупа, комиссии, логистики, рекламы, себестоимости и налога (коэффициенты — из «Юнит-экономики»)' },
     { k: 'margin', t: 'Маржа', h: 'Прогнозируемая прибыль / ожидаемая выручка', u: '%' },
     { k: null, t: 'ОЗЗ', h: 'Оплата за заказ: статус на товаре и ставка' }, { k: null, t: 'РК', h: 'Рекламные кампании товара' },
@@ -1276,7 +1296,9 @@ export default function AdsStats2({ cabinet }) {
               {m.totals.spendCpoUndated > 0 && <span className="a-undated" title={`${fmtInt(m.totals.spendCpoUndated)} ₽ расхода за заказ без найденной даты заказа — стоит на дне списания`}>!</span>}
             </span>
           </td>
-          <td><span className={`pill ${drrClass(m.totals.drr)}`}>{m.totals.drr === null ? (m.totals.spend > 0 ? '×' : '—') : fmtPct(m.totals.drr)}</span></td>
+          {(() => { const pr = profitOf(a); const db = pr && pr.expRev > 0 ? (m.totals.spend || 0) / pr.expRev * 100 : null; return (
+            <td title="Сверху — расход / сумма заказов; ниже — с учётом выкупа: расход / (заказы × % выкупа)"><span className={`pill ${drrClass(m.totals.drr)}`}>{m.totals.drr === null ? (m.totals.spend > 0 ? '×' : '—') : fmtPct(m.totals.drr)}</span>
+              {db !== null && m.totals.spend > 0 ? <span className="a-spendsub">с выкупом {fmtPct(db)}</span> : null}</td>); })()}
           {(() => { const pr = profitOf(a); return (
             <>
               <td className="n" title={pr ? `Ожидаемая выручка ${fmtInt(pr.expRev)} ₽ (выкуп), комиссия ${fmtInt(pr.comm)}, логистика ${fmtInt(pr.logi)}, эквайринг ${fmtInt(pr.acq)}, прочее ${fmtInt(pr.other)}, себестоимость ${fmtInt(pr.cost)}, налог ${fmtInt(pr.tax)}, реклама ${fmtInt(pr.ads)}` : 'Нет данных юнит-экономики'}>
@@ -1356,17 +1378,18 @@ export default function AdsStats2({ cabinet }) {
           <span className="val n">{fmtInt(T.spend)}</span>
           <div className="split">
             <span>За клик <b className="n">{fmtInt(T.spendCpc)}</b></span>
-            <span>За заказ <b className="n">{T.spendCpo ? fmtInt(T.spendCpo) : '—'}</b></span>
+            <span title="Оплата за заказ — в дне заказа. Ozon списывает её позже, в день выкупа: в P&L и финансах эти суммы в других днях">За заказ (по дню заказа) <b className="n">{T.spendCpo ? fmtInt(T.spendCpo) : '—'}</b></span>
           </div>
           <span className="sub"><Delta value={P && changePct(T.spend, P.spend)} goodWhen="neutral" /> к прошлому периоду</span>
         </div>
         <div className="a-kpi">
           <span className="lbl">{mode === 'ads' ? 'ДРР рекламный' : 'ДРР'}</span>
           <span className="val n">{fmtPct(T.drr)}</span>
-          <span className="sub"><Delta value={P && T.drr !== null && P.drr !== null ? T.drr - P.drr : null} unit="pp" goodWhen="down" /> к прошлому периоду</span>
+          <span className="sub"><Delta value={P && T.drr !== null && P.drr !== null ? T.drr - P.drr : null} unit="pp" goodWhen="down" /> к прошлому периоду{T.drrB !== null && T.drrB !== undefined ? <span title="Расход / (сумма заказов × % выкупа) — так считается ДРР в «Цены и маржа» и калькуляторе"> · с выкупом <b className="n">{fmtPct(T.drrB)}</b></span> : null}</span>
           <AreaSpark values={drrSeries} color="var(--a-spend)" />
         </div>
       </div>
+      <div className="a-hint" style={{ margin: '6px 2px 0' }}>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</div>
 
       <div className="a-bar">
         <div className="a-tabs">
@@ -1485,7 +1508,7 @@ export default function AdsStats2({ cabinet }) {
                   <td className="n">{fmtInt(T.orders)}{showAssoc && assocLine(assocForRows, 'orders', T.orders)}</td>
                   <td className="n">{fmtInt(total.stockNow)}</td>
                   <td className="n">{fmtInt(T.spend)}<span className="a-spendsub">клик {fmtInt(T.spendCpc)} · заказ {T.spendCpo ? fmtInt(T.spendCpo) : '—'}</span></td>
-                  <td><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span></td>
+                  <td><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span>{T.drrB !== null && T.drrB !== undefined ? <span className="a-spendsub">с выкупом {fmtPct(T.drrB)}</span> : null}</td>
                   {(() => { let p = 0, e = 0, any = false; for (const r of rows) { const x = profitOf(r); if (x) { p += x.profit; e += x.expRev; any = true; } } return (
                     <><td className="n"><b style={{ color: p < 0 ? 'var(--a-bad)' : undefined }}>{any ? fmtInt(p) : '—'}</b></td>
                     <td>{any && e > 0 ? <span className={`pill ${p < 0 ? 'b' : p / e * 100 < 10 ? 'w' : 'g'}`}>{fmtPct(p / e * 100)}</span> : '—'}</td></>

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
 import { getCalcBase, refreshPrices } from '../api';
 import { fmtInt, CAT_COLORS } from './AdsStats2';
-import { baseOf, compute, priceFor, DEFAULTS } from './Calculator';
+import { baseOf, compute, priceFor, DEFAULTS, drrPred } from './Calculator';
 import { useCats, useGroups, FinHeader, Kpi, inPath, matchQ, pct1, useTax, useBuyerShare, OTHER, SEP } from './finShared';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import './ads2.css';
@@ -155,7 +155,8 @@ export default function Margin({ cabinet }) {
       };
       // ДРР — свой фактический за 30 дней (0, если товар не рекламировался). Средний по
       // категории сюда не подставляем: у товара без рекламы реклама и правда 0.
-      const factDrr = Math.min(100, own && own.drr !== null && own.drr !== undefined ? own.drr : 0);
+      const factDrr = drrPred(own, v.buyout) ?? 0;
+      const drr7 = drrPred(own, v.buyout, 'drrOrd7');
       const ov = drrOver[a.o];
       v.drr = !withAds ? 0 : ov !== undefined && ov !== '' && Number.isFinite(Number(ov)) ? Number(ov) : drrAll !== '' && Number.isFinite(Number(drrAll)) ? Number(drrAll) : factDrr;
       const drrSrc = !withAds ? 'off' : ov !== undefined && ov !== '' ? 'own' : drrAll !== '' ? 'all' : 'fact';
@@ -180,7 +181,7 @@ export default function Margin({ cabinet }) {
       // Для сортировки — показатели при текущей цене, чтобы строка не «убегала», пока вписываешь новую.
       const rb = price !== curPrice ? compute(v, curPrice, 'usn_income') : r;
       const units = (x[25] || 0) * (v.buyout || 0) / 100; // ожидаемо продано за 30 дней (заказы × выкуп)
-      out.push({ a, x, scheme, v, r, rb, be, tp, tpc, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drrSrc, curPrice, curClient, sppK, units, po, priceEd: !!(po && Number(po.v) > 0) });
+      out.push({ a, x, scheme, v, r, rb, be, tp, tpc, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drr7, drrSrc, curPrice, curClient, sppK, units, po, priceEd: !!(po && Number(po.v) > 0) });
     }
     return out;
   }, [data, cats.arts, target, drrAll, drrOver, priceOver, withAds, tax, bs.shareOf, allArts, pinSet]);
@@ -229,7 +230,7 @@ export default function Margin({ cabinet }) {
     price: ['Цена реализации', 'Цена в кабинете (до скидки Ozon). Если вписана новая цена — ниже стрелкой, и все колонки считаются по ней'],
     client: ['Цена клиента', 'Цена для покупателя с Ozon-картой (с сайта; нет — цена реализации со скидкой Ozon). Ниже — СПП'],
     cost: [`Себест.${tot ? ' за 30 дн' : ''}`, 'Себестоимость штуки' + (tot ? ' × ожидаемо продано за 30 дней' : '')],
-    drr: ['ДРР', 'Реклама в % от цены. По умолчанию свой фактический за 30 дней; впишите свой — пересчитаются прибыль, маржа и цены'],
+    drr: ['ДРР', 'ДРР прогнозный за 30 дней: расход на рекламу (из рекламного кабинета, оплата за заказ — на дату заказа) / (сумма заказов × % выкупа) — сколько реклама стоит с каждой проданной штуки. Наведите на значение — там же ДРР за 7 дней. Впишите свой — пересчитаются прибыль, маржа и цены'],
     comm: [`Комиссия${tot ? ' за 30 дн' : ''}`, 'Комиссия Ozon, ₽; ниже — %'],
     logi: [`Логистика${tot ? ' за 30 дн' : ''}`, 'Логистика с учётом невыкупов (отправка и возврат)'],
     ads: [`Реклама${tot ? ' за 30 дн' : ''}`, 'Реклама по ДРР'],
@@ -252,8 +253,8 @@ export default function Margin({ cabinet }) {
     client: row => (<td className="n r" key="client">{fmtInt(row.curClient)}{row.priceEd ? <small className="m-sub m-new">→ {fmtInt(row.r.P * row.sppK)}</small> : row.v.spp ? <small className="m-sub">СПП {pct1(row.v.spp)}</small> : null}</td>),
     cost: row => (<td className="n r" key="cost">{row.v.cost ? money(row, row.v.cost) : <span className="pill m">нет</span>}</td>),
     drr: row => (<td className="r" key="drr">{row.drrSrc === 'off' ? <span className="muted">—</span> : <>
-      <EditNum value={drrOver[row.a.o] ?? ''} base={row.drrSrc === 'all' ? Number(drrAll) : row.factDrr} onChange={val => setOver(row.a.o, val)} fmt={x => String(Math.round(x * 10) / 10).replace('.', ',')} width={52} step="0.5" title={`Фактический ДРР за 30 дней: ${pct1(row.factDrr)}`} />
-      {row.drrSrc !== 'fact' && <button type="button" className="m-was" title="Вернуть фактический ДРР" onClick={() => setOver(row.a.o, '')}>↺ {pct1(row.factDrr)}</button>}</>}</td>),
+      <EditNum value={drrOver[row.a.o] ?? ''} base={row.drrSrc === 'all' ? Number(drrAll) : row.factDrr} onChange={val => setOver(row.a.o, val)} fmt={x => String(Math.round(x * 10) / 10).replace('.', ',')} width={52} step="0.5" title={`Прогнозный ДРР за 30 дней: реклама / (заказы × выкуп ${pct1(row.v.buyout)}) = ${pct1(row.factDrr)}${row.drr7 !== null && row.drr7 !== undefined ? ` · за 7 дней ${pct1(row.drr7)}` : ''}`} />
+      {row.drrSrc !== 'fact' && <button type="button" className="m-was" title="Вернуть ДРР за 30 дней" onClick={() => setOver(row.a.o, '')}>↺ {pct1(row.factDrr)}</button>}</>}</td>),
     comm: row => (<td className="n r" key="comm">{money(row, row.r.commission)}<small className="m-sub">{pct1(row.v.commission)}</small></td>),
     logi: row => (<td className="n r" key="logi">{money(row, row.r.logistics)}</td>),
     ads: row => (<td className="n r" key="ads">{money(row, row.r.ads)}</td>),
