@@ -642,7 +642,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
 // ── Журнал изменений ──────────────────────────────────────────────────────
 // Подсветка: пополнение остатка и включение РК / оплаты за заказ — зелёным,
 // выключение — красным.
-const EV_TONE = { restock: 'ev-good', camp_on: 'ev-good', cpo_on: 'ev-good', camp_off: 'ev-bad', cpo_off: 'ev-bad' };
+const EV_TONE = { restock: 'ev-good', camp_on: 'ev-good', cpo_on: 'ev-good', camp_off: 'ev-bad', cpo_off: 'ev-bad', price_up: 'ev-price', price_down: 'ev-price', price: 'ev-price' };
 function Journal({ events, offerId, onAdd, onDelete }) {
   const [text, setText] = useState('');
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -660,7 +660,7 @@ function Journal({ events, offerId, onAdd, onDelete }) {
         {events.map(e => (
           <div key={e.id} className={`a-ev ${EV_TONE[e.kind] || ''}`}>
             <span className="dt">{e.date.slice(8)}.{e.date.slice(5, 7)}</span>
-            <span>{e.auto && <span className="auto">авто</span>}{e.text}</span>
+            <span>{e.auto && <span className="auto">{e.price ? 'цена' : 'авто'}</span>}{e.kind === 'price_up' ? '↑ ' : e.kind === 'price_down' ? '↓ ' : ''}{e.text}</span>
             {!e.auto && <button type="button" className="a-rm" title="Удалить заметку" onClick={() => onDelete(e.id)}>×</button>}
           </div>
         ))}
@@ -670,7 +670,7 @@ function Journal({ events, offerId, onAdd, onDelete }) {
         <input className="a-input" value={text} onChange={e => setText(e.target.value)} placeholder="Что сделали: снизил ставку, сменил фото…" />
         <button type="submit" className="a-btn" disabled={saving || !text.trim()}>Добавить</button>
       </form>
-      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ), включение/выключение РК и оплаты за заказ, пополнения остатка появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия.</div>
+      <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ), включение/выключение РК и оплаты за заказ, пополнения остатка появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия. «Цена» — изменения цены клиента: из «Журнала цен» и по цене на сайте (сдвиг от 1,5%, который держится); колебания репрайсера и скидки Ozon (когда меняется только цена реализации) не показываются.</div>
     </div>
   );
 }
@@ -737,7 +737,24 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
   const offerId = isAggregate ? null : a?.offerId;
   const campaigns = useMemo(() => articles.flatMap(x => x.campaigns), [articles]);
   const offerSet = new Set(articles.map(x => x.offerId));
-  const myEvents = events.filter(e => isAggregate ? (!e.offerId || offerSet.has(e.offerId)) : e.offerId === offerId);
+  const myEvents = useMemo(() => {
+    const list = events.filter(e => isAggregate ? (!e.offerId || offerSet.has(e.offerId)) : e.offerId === offerId);
+    if (!isAggregate) return list;
+    // В общей аналитике изменения цены по артикулам сворачиваем в одну строку на день.
+    const byDay = new Map(), rest = [];
+    for (const e of list) {
+      if (!e.price) { rest.push(e); continue; }
+      const v = byDay.get(e.date) || { up: 0, down: 0 };
+      if (e.kind === 'price_up') v.up++; else v.down++;
+      byDay.set(e.date, v);
+    }
+    for (const [d, v] of byDay) {
+      const n = v.up + v.down;
+      rest.push({ id: `pa:${d}`, date: d, kind: 'price', auto: true, price: true,
+        text: `Цена клиента изменена у ${n} арт.${v.up ? ` · подняли ${v.up}` : ''}${v.down ? ` · снизили ${v.down}` : ''}` });
+    }
+    return rest.sort((x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : 0));
+  }, [events, isAggregate, offerId, articles]); // eslint-disable-line react-hooks/exhaustive-deps
   const t = model.totals;
   const sumT = k => articles.reduce((s, x) => s + (x.totals[k] || 0), 0);
   const adDrr = sumT('adRevenue') > 0 ? sumT('spend') / sumT('adRevenue') * 100 : null;

@@ -113,6 +113,7 @@ router.post('/ingest', async (req, res) => {
       await query(`INSERT INTO product_discount_history (cabinet, platform, offer_id, product_id, price, old_price, marketing_price, marketing_seller_price,
                    marketing_oa_price, ozon_discount_pct, source, collected_at) VALUES ${vals.join(',')}`, params);
     }
+    await require('../lib/priceEvents').recordPrices(cabinet, latest.map(r => ({ offer: r[1], seller: r[5], card: r[7] })));
     if (changed.length) await notifyDiscountChange(cabinet, changed).catch(e => console.warn('[Discounts] telegram:', e.message));
     console.log(`[Discounts:${cabinet}] из браузера: ${items.length} цен, сопоставлено ${matched}, изменений ${hist.length}`);
     res.json({ success: true, data: { received: items.length, matched, historyRows: hist.length, alerts: changed.length } });

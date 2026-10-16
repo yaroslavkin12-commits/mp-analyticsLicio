@@ -123,6 +123,12 @@ async function collectDiscounts(cabinet) {
     }
   }
 
+  // Цены по дням — для журнала изменений цены клиента в «Рекламе».
+  await require('../../lib/priceEvents').recordPrices(cabinet, items.map(it => {
+    const inner = it.product_id ? internalByItem.get(String(it.product_id)) : null;
+    const pp = it.price || {};
+    return { offer: it.offer_id, seller: Number(pp.marketing_seller_price ?? pp.price) || null, card: inner ? Number(inner.marketing_oa_price) || null : null };
+  }));
   const saved = await bulkInsert('product_discount_history',
     ['cabinet', 'platform', 'offer_id', 'product_id', 'price', 'old_price', 'marketing_price', 'marketing_seller_price', 'marketing_oa_price', 'ozon_discount_pct', 'source', 'collected_at'],
     toInsert);

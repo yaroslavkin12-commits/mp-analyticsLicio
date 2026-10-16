@@ -236,6 +236,8 @@
 .mpui .a-ev.ev-good{background:var(--a-good-soft);border-radius:6px;padding-left:6px;padding-right:6px}
 .mpui .a-ev.ev-bad{background:var(--a-bad-soft);border-radius:6px;padding-left:6px;padding-right:6px}
 .mpui .a-ev.ev-good .dt{color:var(--a-good)}
+.mpui .a-ev.ev-price{background:var(--a-accent-soft);border-radius:6px;padding-left:6px;padding-right:6px}
+.mpui .a-ev.ev-price .dt{color:var(--a-accent)}
 .mpui .a-ev.ev-bad .dt{color:var(--a-bad)}
 /* Таблицы по дням: при наведении на любую ячейку строки подсвечиваем только
    закреплённую левую часть (артикул/показатель, итог, остаток) — серым

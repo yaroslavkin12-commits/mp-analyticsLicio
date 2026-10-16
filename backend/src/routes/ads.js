@@ -61,10 +61,15 @@ router.get('/events', async (req, res) => {
     const camps = await query(`SELECT campaign_id, title, placement, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
     const campById = new Map(camps.map(c => [String(c.campaign_id), c]));
     const enrich = t => String(t || '').replace(/\(РК (\d+)\)/g, (m, id) => `(${campLabel(campById.get(id), id)})`);
-    res.json({ success: true, data: rows.map(r => ({
+    // Изменения цены клиента (журнал цен + цена на сайте) — считаются на лету, в базу не пишутся.
+    const pe = await require('../lib/priceEvents').priceEvents(cabinet, from, to).catch(e => { console.warn('[priceEvents]', e.message); return []; });
+    const list = rows.map(r => ({
       id: String(r.id), offerId: r.offer_id, date: r.date, kind: r.kind, text: enrich(r.text),
       oldValue: r.old_value, newValue: r.new_value, auto: r.auto, createdAt: r.created_at,
-    })) });
+    }));
+    for (const e of pe) list.push({ id: `p:${e.offerId}:${e.date}:${e.src}`, offerId: e.offerId, date: e.date, kind: e.kind, text: e.text, auto: true, price: true });
+    list.sort((x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : 0));
+    res.json({ success: true, data: list });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
