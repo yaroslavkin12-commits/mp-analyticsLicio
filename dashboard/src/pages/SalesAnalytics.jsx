@@ -588,7 +588,7 @@ export default function SalesAnalytics({ cabinet }) {
       if (d > lastFin) x.oz -= v;
     }
     for (const x of m.values()) saleAll += x.sRub;
-    return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, saleDay, nd };
+    return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, saleDay, nd, dates: pnl.dates };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
   const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -606,6 +606,7 @@ export default function SalesAnalytics({ cabinet }) {
     const ks = unitCoefs(c, coefArts, bs.shareOf);
     return new Map(coefArts.map((a, i) => [a.o, ks[i]]));
   }, [fin, coefArts, bs.shareOf]);
+  const partsOf = useMemo(() => new Map(coefArts.map(a => [a.o, a.parts])), [coefArts]);
   // Для конструктора таблицы: доля цены, с которой платится налог.
   const builderShare = useCallback(o => unitK?.get(o)?.share ?? 1, [unitK]);
 
@@ -653,7 +654,13 @@ export default function SalesAnalytics({ cabinet }) {
     for (const a of node.arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
       if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; selAd += x.ad; }
-      if (x) { sRub += x.sRub; sQty += x.sQty; oz += x.oz; taxBase += x.sRub * (k?.share ?? 1); if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++; }
+      if (x) {
+        sRub += x.sRub; sQty += x.sQty; oz += x.oz;
+        // Налоговая база — как в «P&L»: по дням, доля оплаты покупателем из отчёта «Начисления» того периода.
+        if (bs.shareAt) { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxBase += x.sDay[d] * (bs.shareAt(a.o, parts, finPer.dates[d]) ?? 1); }
+        else taxBase += x.sRub;
+        if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++;
+      }
       // Прогноз — по дням, как в «Юнит-экономике»: комиссия по доле FBS
       // именно этого дня, реклама — и в дни без заказов.
       if (k && prevMode) {
@@ -686,8 +693,8 @@ export default function SalesAnalytics({ cabinet }) {
       payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - taxBase * tax / 100 : null, noCost,
     };
   };
-  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay]); // eslint-disable-line react-hooks/exhaustive-deps
-  const finKP = useMemo(() => (finPerPrev ? finCalc(finPerPrev, true) : null), [node, finPerPrev, unitK, tax]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay, bs.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finKP = useMemo(() => (finPerPrev ? finCalc(finPerPrev, true) : null), [node, finPerPrev, unitK, tax, bs.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
   // Δ к прошлому периоду (в %), только когда есть обе величины.
   const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
 
@@ -1092,20 +1099,23 @@ export default function SalesAnalytics({ cabinet }) {
           <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : '…'}</span>
           <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> налог {tax}%</span>
         </div>
-        <div className="a-kpi" title="По выкупам периода: поступления на счёт минус себестоимость выкупленных товаров и налог">
+        <div className="a-kpi" title="По выкупам периода, как в «P&L»: поступления на счёт минус себестоимость выкупленных товаров и налог (налог — от суммы, оплаченной покупателем, по отчётам «Начисления»)">
           <span className="lbl">Фактическая прибыль (с выкупов), ₽</span>
           <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : '…'}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
         </div>
-        <div className="a-kpi">
-          <span className="lbl">Артикулы с заказами</span>
-          <span className="val n">{fmtInt(ag.active)} <small className="s-of">из {fmtInt(ag.count)}</small></span>
-          <span className="sub"><Delta value={ag.pActive ? dP(ag.active, ag.pActive) : null} /> {ag.count ? fmtPct(ag.active / ag.count * 100) : '—'} ассортимента продавалось</span>
+        <div className="a-kpi" title="Фактическая прибыль / выручка с выкупов периода — как «Маржа» в P&L">
+          <span className="lbl">Маржа факт, %</span>
+          {(() => { const mg = finK?.has && finK.sRub > 0 ? finK.profit / finK.sRub * 100 : null, mp = finKP?.has && finKP.sRub > 0 ? finKP.profit / finKP.sRub * 100 : null; return (<>
+            <span className="val n" style={{ color: mg !== null && mg < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? (mg === null ? '—' : fmtPct(mg)) : '…'}</span>
+            <span className="sub"><Delta value={mg !== null && mp !== null ? mg - mp : null} unit="pp" /> к прошлому периоду</span>
+          </>); })()}
         </div>
         <div className="a-kpi">
           <span className="lbl">Остаток сейчас, шт</span>
           <span className="val n">{fmtInt(ag.stockNow)}</span>
           <span className="sub">{sDays === null ? 'нет продаж за 7 дней' : `хватит ≈ на ${Math.round(sDays)} дн`}</span>
+          <span className="sub" title="Артикулы, по которым были заказы за период">с заказами {fmtInt(ag.active)} из {fmtInt(ag.count)} арт. · {ag.count ? fmtPct(ag.active / ag.count * 100) : '—'} <Delta value={ag.pActive ? dP(ag.active, ag.pActive) : null} /></span>
           <AreaSpark values={series('stock')} color="var(--a-ink3)" />
         </div>
       </div>
