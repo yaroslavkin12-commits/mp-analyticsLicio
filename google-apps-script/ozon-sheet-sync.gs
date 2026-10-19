@@ -259,7 +259,7 @@ function collectAnalyticsWindow_(cab, from, to, out, deadline, info) {
   const headers = sellerHeaders_(cab);
   if (!headers) return 0;
   let free = noPremium_(cab);
-  let offset = 0, n = 0;
+  let offset = 0, n = 0, retried429 = false;
   if (info) info.complete = false;
   for (let guard = 0; guard < 60; guard++) {
     if (deadline && Date.now() > deadline) { Logger.log('Аналитика ' + cab.id + ': не успел все страницы — остальное в следующий раз'); return n; }
@@ -271,8 +271,10 @@ function collectAnalyticsWindow_(cab, from, to, out, deadline, info) {
         payload: JSON.stringify({ date_from: from, date_to: to, metrics: metrics, dimension: ['sku', 'day'], limit: 1000, offset: offset }),
       }, 'Аналитика ' + from + '..' + to);
     } catch (e) {
-      // Лимит «раз в минуту» — подождём и повторим страницу один раз.
-      if (free && /429/.test(e.message)) { Utilities.sleep(61000); guard++; continue; }
+      // Лимит «раз в минуту» — подождём и повторим страницу один раз; если Ozon
+      // снова отказал — значит, лимит на сегодня/час выбран: не крутимся вхолостую.
+      if (free && /429/.test(e.message) && !retried429) { retried429 = true; Utilities.sleep(61000); continue; }
+      if (/429/.test(e.message) && info) { info.rateLimited = true; Logger.log('Аналитика ' + cab.id + ': Ozon ограничил запросы (429) — попробую позже'); return n; }
       throw e;
     }
     const rows = (data.result && data.result.data) || [];
@@ -305,36 +307,38 @@ function collectAnalyticsWindow_(cab, from, to, out, deadline, info) {
 function syncAnalyticsHistory() {
   ScriptApp.getProjectTriggers().forEach(function (t) { if (/^(T_)?syncAnalyticsHistory$/.test(t.getHandlerFunction())) ScriptApp.deleteTrigger(t); });
   const props = PropertiesService.getScriptProperties();
+  const DAYS = Math.min(90, Math.max(8, Number(props.getProperty('HIST_DAYS')) || 60)); // свойство HIST_DAYS, по умолчанию 60 дней
   const prog = JSON.parse(props.getProperty('AN_HIST') || '{}'); // кабинет -> сколько дней назад уже собрано
   const started = Date.now(), deadline = started + 4 * 60000;
   const rows = [];
-  let left = false;
+  let left = false, limited = false;
   getCabinets_().forEach(function (cab) {
     if (left || !sellerHeaders_(cab)) return;
     const free = noPremium_(cab), step = free ? 4 : 15; // без Premium: ~4 дня = одна страница (1 запрос в минуту)
     let done = prog[cab.id] || 0;
-    while (done < 90) {
+    while (done < DAYS) {
       if (Date.now() > deadline - (free ? 65000 : 20000)) { left = true; break; }
-      const from = mskDate_(Math.min(90, done + step) - 1), to = mskDate_(done);
+      const from = mskDate_(Math.min(DAYS, done + step) - 1), to = mskDate_(done);
       const info = {};
       try { Logger.log('История ' + cab.id + ' ' + from + '..' + to + ': строк ' + collectAnalyticsWindow_(cab, from, to, rows, deadline, info)); }
       catch (e) { Logger.log('История ' + cab.id + ': ' + e.message); left = true; break; }
+      if (info.rateLimited) { left = true; limited = true; break; }
       if (!info.complete) { left = true; break; } // кусок не докачан — повторим его в следующий раз
-      done = Math.min(90, done + step);
+      done = Math.min(DAYS, done + step);
       prog[cab.id] = done;
-      if (free && done < 90 && Date.now() + 61000 < deadline) Utilities.sleep(61000);
+      if (free && done < DAYS && Date.now() + 61000 < deadline) Utilities.sleep(61000);
     }
   });
-  // В отдельную вкладку: Analytics обрезается до 45 дней при каждом обновлении,
-  // и старые дни пропадали раньше, чем сервер успевал их забрать.
+  // В отдельную вкладку: Analytics обрезается до 45 дней при каждом обновлении.
   if (rows.length) mergeIntoSheet_(SHEET_NAMES.analyticsHist, ANALYTICS_HEADERS, rows, [0, 1, 2]);
   if (left) {
     props.setProperty('AN_HIST', JSON.stringify(prog));
-    ScriptApp.newTrigger('T_syncAnalyticsHistory').timeBased().after(60 * 1000).create();
-    Logger.log('syncAnalyticsHistory: записал ' + rows.length + ' строк, собрано дней: ' + JSON.stringify(prog) + ' — продолжу через минуту');
+    // Ozon ограничил запросы — пауза 3 часа, а не перезапуск через минуту.
+    ScriptApp.newTrigger('T_syncAnalyticsHistory').timeBased().after((limited ? 180 : 1) * 60 * 1000).create();
+    Logger.log('syncAnalyticsHistory: записал ' + rows.length + ' строк, собрано дней: ' + JSON.stringify(prog) + ' из ' + DAYS + (limited ? ' — Ozon ограничил запросы, продолжу через 3 часа' : ' — продолжу через минуту'));
   } else {
     props.deleteProperty('AN_HIST');
-    Logger.log('syncAnalyticsHistory: готово, строк ' + rows.length);
+    Logger.log('syncAnalyticsHistory: готово (' + DAYS + ' дн), строк ' + rows.length);
   }
 }
 
