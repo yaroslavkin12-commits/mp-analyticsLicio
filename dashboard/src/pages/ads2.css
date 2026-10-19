@@ -262,3 +262,12 @@
 .mpui .a-transit:hover{border-color:var(--a-line,#ccc)}
 .mpui .a-transit.empty{color:var(--a-ink3)}
 .mpui .a-transit-in{width:70px;text-align:right;padding:3px 6px}
+.mpui .a-trc{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.mpui .a-trd{position:relative;font-size:11px;color:var(--a-ink2);cursor:pointer;padding:0 6px;border-radius:5px;border:1px dashed transparent;white-space:nowrap}
+.mpui .a-trd:hover{border-color:var(--a-line)}
+.mpui .a-trd.empty{color:var(--a-ink3);opacity:.7}
+.mpui .a-trd.late{color:var(--a-warn)}
+.mpui .a-trd input[type=date]{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;border:0;padding:0}
+.mpui .a-trd input[type=date]::-webkit-calendar-picker-indicator{position:absolute;inset:0;width:100%;height:100%;cursor:pointer}
+.mpui .a-trx{position:relative;z-index:2;margin-left:4px;color:var(--a-ink3);cursor:pointer}
+.mpui .a-trx:hover{color:var(--a-bad)}
