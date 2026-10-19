@@ -124,7 +124,7 @@ function deflyTablePath(name, offerId) {
 }
 
 function autoPath(cabinet, name, offerId) {
-  if (cabinet === 'defly') return deflyTablePath(name, offerId);
+  if (require('../config/cabinets').familyOf(cabinet) === 'defly') return deflyTablePath(name, offerId);
   if (cabinet === 'licio') return licioPath(name);
   return genericPath(name);
 }
@@ -153,3 +153,14 @@ function carBrand(name) {
 }
 
 module.exports = { autoPath, carBrand, ORDER };
+
+// Ручные категории: свои у кабинета, а у магазинов семейства Defly (те же
+// товары) — ещё и категории Defly; свои важнее.
+const OV_SQL = `SELECT DISTINCT ON (offer_id) offer_id, path FROM product_category_override
+  WHERE cabinet = ANY($1::text[]) ORDER BY offer_id, (cabinet = $2) DESC`;
+function overrideArgs(cabinet) {
+  const fam = require('../config/cabinets').familyOf(cabinet);
+  return [fam !== cabinet ? [cabinet, fam] : [cabinet], cabinet];
+}
+module.exports.OV_SQL = OV_SQL;
+module.exports.overrideArgs = overrideArgs;

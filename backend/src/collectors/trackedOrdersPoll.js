@@ -128,7 +128,7 @@ async function pollOrdersFromSheet(cabinet) {
   const tracked = await trackedOf(cabinet);
   if (!tracked.length) return 0;
   const { fetchSheetRows } = require('./ads/sheetSync');
-  const rows = await fetchSheetRows('Orders');
+  const rows = await fetchSheetRows('Orders', cabinet);
   if (!rows) return 0;
   const cutoff = Date.now() - NOTIFY_MAX_AGE_HOURS * 3600 * 1000;
   let seen = SEEN.get(cabinet);

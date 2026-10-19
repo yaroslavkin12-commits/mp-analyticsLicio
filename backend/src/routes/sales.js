@@ -1,3 +1,5 @@
+const { OV_SQL, overrideArgs } = require('../lib/categories');
+const { familyOf } = require('../config/cabinets');
 const express = require('express');
 const router = express.Router();
 const dayjs = require('dayjs');
@@ -142,7 +144,7 @@ router.get('/data', async (req, res) => {
 
     const [catalogRows, overrideRows, anRows, stockRows, stockBaseRows, stockNowRows, campaigns, campaignSkuRows, adRows, skuStatRows, cpoRows, prevAnRows] = await Promise.all([
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, P),
-      query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, P),
+      query(OV_SQL, overrideArgs(cabinet)),
       query(`SELECT date::text AS date, sku, offer_id, hits_view, hits_view_pdp, hits_tocart, orders_item, revenue, position_category
                FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]),
       query(`SELECT snapshot_date::text AS date, offer_id, SUM(fbo_present + fbs_present) AS v
@@ -183,7 +185,7 @@ router.get('/data', async (req, res) => {
       if (idx.has(offerId)) return idx.get(offerId);
       const i = articles.length;
       const auto = autoPath(cabinet, name, offerId).join(' / ');
-      articles.push({ o: offerId, n: name || '', sku: sku != null ? String(sku) : null, cat: override.get(offerId) || auto, auto, manual: override.has(offerId), brand: cabinet === 'defly' ? carBrand(name) : null, st: null });
+      articles.push({ o: offerId, n: name || '', sku: sku != null ? String(sku) : null, cat: override.get(offerId) || auto, auto, manual: override.has(offerId), brand: familyOf(cabinet) === 'defly' ? carBrand(name) : null, st: null });
       idx.set(offerId, i);
       return i;
     }
@@ -318,7 +320,7 @@ router.get('/geo', async (req, res) => {
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
     const [catalogRows, overrideRows, curRows, dayRows, prevRows, range] = await Promise.all([
       query(`SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]),
+      query(OV_SQL, overrideArgs(cabinet)),
       query(`SELECT offer_id, region, city, SUM(qty)::int q, SUM(revenue) r, SUM(cancelled)::int c FROM sales_geo_daily
               WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region, city`, [cabinet, from, to]),
       query(`SELECT date::text AS date, region, city, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
@@ -336,7 +338,7 @@ router.get('/geo', async (req, res) => {
       if (ai.has(o)) return ai.get(o);
       const n = names.get(o) || '';
       ai.set(o, articles.length);
-      articles.push({ o, n, cat: override.get(o) || autoPath(cabinet, n, o).join(' / '), brand: cabinet === 'defly' ? carBrand(n) : null });
+      articles.push({ o, n, cat: override.get(o) || autoPath(cabinet, n, o).join(' / '), brand: familyOf(cabinet) === 'defly' ? carBrand(n) : null });
       return articles.length - 1;
     };
     // «Место» — город покупателя, если Ozon его передал (FBO), иначе кластер
@@ -464,7 +466,7 @@ router.get('/costs', async (req, res) => {
     const since = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
     const [catalogRows, overrideRows, costRows, salesRows] = await Promise.all([
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]),
+      query(OV_SQL, overrideArgs(cabinet)),
       query(`SELECT article, platform, product_name, cost_price, updated_at, cabinet FROM product_costs`),
       query(`SELECT offer_id, sku, SUM(orders_item) o, SUM(revenue) r FROM product_analytics_daily
               WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id, sku`, [cabinet, since]),

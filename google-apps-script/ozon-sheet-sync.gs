@@ -1424,24 +1424,70 @@ function syncDaily() {
 }
 
 // Выполнить один раз вручную — поставит оба триггера по расписанию.
+
+// ── Учёт времени работы скрипта ──────────────────────────────────────────
+// Google ограничивает суммарное время работы триггеров за сутки (обычный
+// аккаунт — 90 мин, рабочий Google Workspace — 6 ч, на пользователя, все его
+// скрипты вместе). Триггеры вызывают обёртки T_*, которые засекают время и
+// пишут итог по дням во вкладку «Runtime»: дата, всего минут, по функциям.
+function timed_(name, fn) {
+  const t0 = Date.now();
+  try { return fn(); } finally {
+    try {
+      const sec = Math.round((Date.now() - t0) / 1000);
+      const lock = LockService.getScriptLock(); lock.waitLock(20000);
+      try {
+        const props = PropertiesService.getScriptProperties();
+        const all = JSON.parse(props.getProperty('RUNTIME') || '{}');
+        const d = mskDate_(0);
+        all[d] = all[d] || {}; all[d][name] = (all[d][name] || 0) + sec;
+        const days = Object.keys(all).sort();
+        while (days.length > 14) delete all[days.shift()];
+        props.setProperty('RUNTIME', JSON.stringify(all));
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        const sh = ss.getSheetByName('Runtime') || ss.insertSheet('Runtime');
+        const rows = Object.keys(all).sort().reverse().map(function (k) {
+          const m = all[k], tot = Object.keys(m).reduce(function (a, f) { return a + m[f]; }, 0);
+          const det = Object.keys(m).sort(function (a, b) { return m[b] - m[a]; }).map(function (f) { return f + ' ' + Math.round(m[f] / 60) + ' мин'; }).join(', ');
+          return [k, Math.round(tot / 60), det];
+        });
+        sh.clearContents();
+        sh.getRange(1, 1, rows.length + 1, 3).setValues([['date', 'total_min', 'by_function']].concat(rows));
+      } finally { lock.releaseLock(); }
+    } catch (e) { Logger.log('Runtime: ' + e); }
+  }
+}
+function T_syncOrders() { return timed_('syncOrders', syncOrders); }
+function T_syncRecent() { return timed_('syncRecent', syncRecent); }
+function T_syncCpoOrders() { return timed_('syncCpoOrders', syncCpoOrders); }
+function T_syncDaily() { return timed_('syncDaily', syncDaily); }
+function T_syncSkuHistory() { return timed_('syncSkuHistory', syncSkuHistory); }
+function T_syncGeo() { return timed_('syncGeo', syncGeo); }
+function T_syncFinance() { return timed_('syncFinance', syncFinance); }
+function T_syncStocksWh() { return timed_('syncStocksWh', syncStocksWh); }
+function T_compactQueries() { return timed_('compactQueries', compactQueries); }
+function T_syncQueries() { return timed_('syncQueries', syncQueries); }
+function T_syncMonthly() { return timed_('syncMonthly', syncMonthly); }
+
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh', 'syncQueries', 'syncMonthly', 'compactQueries', 'syncQueriesFull'].indexOf(fn) !== -1) ScriptApp.deleteTrigger(t);
+    const base = fn.replace(/^T_/, '');
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh', 'syncQueries', 'syncMonthly', 'compactQueries', 'syncQueriesFull'].indexOf(base) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
-  ScriptApp.newTrigger('syncOrders').timeBased().everyMinutes(10).create();
-  ScriptApp.newTrigger('syncRecent').timeBased().everyMinutes(30).create();
-  ScriptApp.newTrigger('syncCpoOrders').timeBased().everyHours(3).create();
-  ScriptApp.newTrigger('syncDaily').timeBased().atHour(4).everyDays(1).create();
-  ScriptApp.newTrigger('syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
-  ScriptApp.newTrigger('syncGeo').timeBased().everyHours(3).create();
-  ScriptApp.newTrigger('syncFinance').timeBased().everyHours(6).create();
-  ScriptApp.newTrigger('syncStocksWh').timeBased().everyHours(2).create();
-  ScriptApp.newTrigger('compactQueries').timeBased().atHour(5).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('syncQueries').timeBased().atHour(6).everyDays(1).create();
-  ScriptApp.newTrigger('syncMonthly').timeBased().atHour(7).everyDays(1).create();
+  ScriptApp.newTrigger('T_syncOrders').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('T_syncRecent').timeBased().everyMinutes(30).create();
+  ScriptApp.newTrigger('T_syncCpoOrders').timeBased().everyHours(3).create();
+  ScriptApp.newTrigger('T_syncDaily').timeBased().atHour(4).everyDays(1).create();
+  ScriptApp.newTrigger('T_syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
+  ScriptApp.newTrigger('T_syncGeo').timeBased().everyHours(3).create();
+  ScriptApp.newTrigger('T_syncFinance').timeBased().everyHours(6).create();
+  ScriptApp.newTrigger('T_syncStocksWh').timeBased().everyHours(2).create();
+  ScriptApp.newTrigger('T_compactQueries').timeBased().atHour(5).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('T_syncQueries').timeBased().atHour(6).everyDays(1).create();
+  ScriptApp.newTrigger('T_syncMonthly').timeBased().atHour(7).everyDays(1).create();
   Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, syncFinance каждые 6 часов.');
 }
 

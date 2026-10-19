@@ -1,3 +1,5 @@
+const { OV_SQL, overrideArgs } = require('../lib/categories');
+const { familyOf } = require('../config/cabinets');
 const express = require('express');
 const router = express.Router();
 const dayjs = require('dayjs');
@@ -49,7 +51,7 @@ const r2 = v => Math.round(v * 100) / 100;
 async function meta(cabinet) {
   const [catalog, overrides] = await Promise.all([
     query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-    query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]).catch(() => []),
+    query(OV_SQL, overrideArgs(cabinet)).catch(() => []),
   ]);
   const ov = new Map(overrides.map(r => [r.offer_id, r.path]));
   const articles = [], idx = new Map();
@@ -57,7 +59,7 @@ async function meta(cabinet) {
     if (idx.has(o)) return idx.get(o);
     const n = name || '';
     idx.set(o, articles.length);
-    articles.push({ o, n, cat: ov.get(o) || autoPath(cabinet, n, o).join(' / '), brand: cabinet === 'defly' ? carBrand(n) : null });
+    articles.push({ o, n, cat: ov.get(o) || autoPath(cabinet, n, o).join(' / '), brand: familyOf(cabinet) === 'defly' ? carBrand(n) : null });
     return articles.length - 1;
   };
   for (const r of catalog) art(r.offer_id, r.product_name);

@@ -25,7 +25,7 @@ router.get('/health', async (req, res) => {
     const { fetchSheetRows } = require('../collectors/ads/sheetSync');
     let sheetRows = null, sheetError = null, newest = null;
     try {
-      const rows = await fetchSheetRows('Orders');
+      const rows = await fetchSheetRows('Orders', cabinet);
       if (rows) {
         const mine = rows.filter(r => r.cabinet === cabinet);
         sheetRows = mine.length;

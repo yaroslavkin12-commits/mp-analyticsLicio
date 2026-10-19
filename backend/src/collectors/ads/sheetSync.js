@@ -17,12 +17,15 @@ const rowDiff = require('../../lib/rowDiff');
 // скрипт в таблице. Как только сеть разблокируется, всё само вернётся на
 // прямой сбор, никаких ручных переключений не нужно.
 
-function sheetId() {
-  return process.env.ADS_SHEET_ID || null;
+// Таблица кабинета: ADS_SHEET_ID_<КАБИНЕТ> (отдельная таблица/скрипт, например
+// для малых магазинов), иначе общая ADS_SHEET_ID (Defly и Licio).
+function sheetId(cabinet) {
+  const own = cabinet ? process.env[`ADS_SHEET_ID_${String(cabinet).toUpperCase()}`] : null;
+  return own || process.env.ADS_SHEET_ID || null;
 }
 
-function csvUrl(sheetName) {
-  return `https://docs.google.com/spreadsheets/d/${sheetId()}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+function csvUrl(sheetName, cabinet) {
+  return `https://docs.google.com/spreadsheets/d/${sheetId(cabinet)}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
 }
 
 // Простой CSV-парсер (с поддержкой кавычек/экранирования) — без внешней
@@ -76,20 +79,21 @@ const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices', 'StocksWh', 'Que
 // Короткий кэш вкладок (60 с): вкладка содержит оба кабинета, и при сборе
 // Licio сразу после Defly её не нужно скачивать и разбирать второй раз.
 const SHEET_CACHE = new Map();
-async function fetchSheetRows(sheetName) {
-  const hit = SHEET_CACHE.get(sheetName);
+async function fetchSheetRows(sheetName, cabinet) {
+  const id = sheetId(cabinet);
+  if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
+  const ck = `${id}|${sheetName}`;
+  const hit = SHEET_CACHE.get(ck);
   if (hit && Date.now() - hit.at < 60000) return hit.p;
-  const p = fetchSheetRowsRaw(sheetName);
-  SHEET_CACHE.set(sheetName, { at: Date.now(), p });
-  p.catch(() => SHEET_CACHE.delete(sheetName));
+  const p = fetchSheetRowsRaw(sheetName, cabinet);
+  SHEET_CACHE.set(ck, { at: Date.now(), p });
+  p.catch(() => SHEET_CACHE.delete(ck));
   // Через минуту отпускаем память.
-  setTimeout(() => { const h = SHEET_CACHE.get(sheetName); if (h && h.p === p) SHEET_CACHE.delete(sheetName); }, 61000).unref?.();
+  setTimeout(() => { const h = SHEET_CACHE.get(ck); if (h && h.p === p) SHEET_CACHE.delete(ck); }, 61000).unref?.();
   return p;
 }
-async function fetchSheetRowsRaw(sheetName) {
-  const id = sheetId();
-  if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
-  const resp = await axios.get(csvUrl(sheetName), { timeout: HEAVY_TABS.includes(sheetName) ? 90000 : 20000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });
+async function fetchSheetRowsRaw(sheetName, cabinet) {
+  const resp = await axios.get(csvUrl(sheetName, cabinet), { timeout: HEAVY_TABS.includes(sheetName) ? 90000 : 20000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });
   const rows = parseCsv(String(resp.data));
   if (!rows.length) return [];
   const headers = rows[0];
@@ -112,7 +116,7 @@ function num(v) {
 }
 
 async function syncCatalogFromSheet(cabinet) {
-  const rows = await fetchSheetRows('Catalog');
+  const rows = await fetchSheetRows('Catalog', cabinet);
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.offer_id);
   const out = filtered.map(r => [cabinet, 'ozon', r.offer_id, r.sku || null, r.product_name ? String(r.product_name).slice(0, 500) : null, new Date()]);
@@ -124,7 +128,7 @@ async function syncCatalogFromSheet(cabinet) {
 }
 
 async function syncAnalyticsFromSheet(cabinet) {
-  const rows = await fetchSheetRows('Analytics');
+  const rows = await fetchSheetRows('Analytics', cabinet);
   if (rows === null) return { rows: 0 };
   const mine = rows.filter(r => r.cabinet === cabinet);
   const same = rowDiff.sameAsLast(`analytics:${cabinet}`, mine);
@@ -148,7 +152,7 @@ async function syncAnalyticsFromSheet(cabinet) {
 }
 
 async function syncStocksFromSheet(cabinet) {
-  const rows = await fetchSheetRows('Stocks');
+  const rows = await fetchSheetRows('Stocks', cabinet);
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.offer_id);
   if (!filtered.length) return { rows: 0 };
@@ -172,7 +176,7 @@ async function syncStocksFromSheet(cabinet) {
 }
 
 async function syncCampaignsFromSheet(cabinet) {
-  const rows = await fetchSheetRows('Campaigns');
+  const rows = await fetchSheetRows('Campaigns', cabinet);
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.campaign_id);
   const same = rowDiff.sameAsLast(`campaigns:${cabinet}`, filtered);
@@ -251,7 +255,7 @@ async function logCampaignSwitches(cabinet, rows, prevCamps) {
 }
 
 async function syncStatsFromSheet(cabinet) {
-  const rows = await fetchSheetRows('Stats');
+  const rows = await fetchSheetRows('Stats', cabinet);
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.campaign_id && r.date);
   const out = filtered.map(r => [cabinet, 'ozon', r.date, r.campaign_id, num(r.views), num(r.clicks), num(r.ctr), num(r.avg_bid),
@@ -273,7 +277,7 @@ async function syncStatsFromSheet(cabinet) {
 // повторно (хотя сам backend сейчас это не перезапрашивает, т.к. список
 // товаров кампаний в фоллбек-режиме собирает только Apps Script).
 async function syncCampaignSkusFromSheet(cabinet) {
-  const rows = await fetchSheetRows('CampaignSkus');
+  const rows = await fetchSheetRows('CampaignSkus', cabinet);
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.campaign_id && r.sku !== '' && r.sku !== undefined);
   const out = filtered.map(r => [cabinet, 'ozon', r.campaign_id, num(r.sku), new Date()]);
@@ -286,7 +290,7 @@ async function syncCampaignSkusFromSheet(cabinet) {
 
 // ── Точные рекламные данные по товарам (см. google-apps-script) ──────────
 async function syncSkuStatsFromSheet(cabinet) {
-  const rows = await fetchSheetRows('SkuStats');
+  const rows = await fetchSheetRows('SkuStats', cabinet);
   if (rows === null) return { rows: 0 };
   const out = rows.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}-\d{2}$/.test(r.date))
     .map(r => [cabinet, 'ozon', r.date, r.campaign_id || '', num(r.sku), num(r.views), num(r.clicks), num(r.to_cart),
@@ -299,7 +303,7 @@ async function syncSkuStatsFromSheet(cabinet) {
 
 let cpoColsReady = false;
 async function syncCpoOrdersFromSheet(cabinet) {
-  const rows = await fetchSheetRows('CpoOrders');
+  const rows = await fetchSheetRows('CpoOrders', cabinet);
   if (rows === null) return { rows: 0 };
   // Колонки дня заказа могло ещё не быть (таблица создана раньше).
   if (!cpoColsReady) {
@@ -370,7 +374,7 @@ async function addAutoEvent(cabinet, offerId, kind, text, oldValue, newValue) {
 const fmtRub = v => `${Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
 
 async function syncCpoProductsFromSheet(cabinet) {
-  const rows = await fetchSheetRows('CpoProducts');
+  const rows = await fetchSheetRows('CpoProducts', cabinet);
   if (rows === null) return { rows: 0 };
   const list = rows.filter(r => r.cabinet === cabinet && r.sku);
   if (!list.length) return { rows: 0 };
@@ -407,7 +411,7 @@ async function syncCpoProductsFromSheet(cabinet) {
 const bidToRub = v => { const n = num(v); return n > 10000 ? n / 1e6 : n; };
 
 async function syncCpcBidsFromSheet(cabinet) {
-  const rows = await fetchSheetRows('CpcBids');
+  const rows = await fetchSheetRows('CpcBids', cabinet);
   if (rows === null) return { rows: 0 };
   const list = rows.filter(r => r.cabinet === cabinet && r.sku && r.campaign_id);
   if (!list.length) return { rows: 0 };
@@ -445,7 +449,7 @@ async function syncGeoFromSheet(cabinet) {
       cancelled INT DEFAULT 0, updated_at TIMESTAMP DEFAULT NOW(), PRIMARY KEY (cabinet, date, offer_id, region, city))`);
     geoTableReady = true;
   }
-  const rows = await fetchSheetRows('GeoOrders');
+  const rows = await fetchSheetRows('GeoOrders', cabinet);
   if (rows === null) return { rows: 0 };
   // Регион Ozon в списках отправлений почти всегда пустой — тогда берём
   // кластер доставки. Таблица хранит полные данные за свои 45 дней, поэтому
@@ -523,15 +527,15 @@ async function replaceRange(table, cabinet, rows, columns, conflict, skip = []) 
 // тянем не всю, а только дни, где число строк в таблице изменилось с
 // прошлого импорта. Сначала — сводка «дата → строк» (запрос gviz group by),
 // потом строки только этих дней.
-async function gvizRows(sheetName, tq) {
-  const url = `https://docs.google.com/spreadsheets/d/${sheetId()}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(sheetName)}&tq=${encodeURIComponent(tq)}`;
+async function gvizRows(sheetName, tq, cabinet) {
+  const url = `https://docs.google.com/spreadsheets/d/${sheetId(cabinet)}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(sheetName)}&tq=${encodeURIComponent(tq)}`;
   const resp = await axios.get(url, { timeout: 90000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });
   return parseCsv(String(resp.data));
 }
 async function syncQueriesIncremental(cabinet) {
-  if (!sheetId()) return 0;
+  if (!sheetId(cabinet)) return 0;
   let counts;
-  try { counts = await gvizRows('Queries', `select B, count(C) where A = '${cabinet}' group by B`); } catch (e) { return 0; }
+  try { counts = await gvizRows('Queries', `select B, count(C) where A = '${cabinet}' group by B`, cabinet); } catch (e) { return 0; }
   const sheetCnt = {};
   for (const r of counts.slice(1)) if (/^\d{4}-\d{2}-\d{2}$/.test(String(r[0]).trim())) sheetCnt[String(r[0]).trim()] = Number(r[1]) || 0;
   const key = `queries_imported:${cabinet}`;
@@ -544,7 +548,7 @@ async function syncQueriesIncremental(cabinet) {
   if (!changed.length) return 0;
   let n = 0;
   for (const d of changed) {
-    let rows = await gvizRows('Queries', `select * where A = '${cabinet}' and B = '${d}'`);
+    let rows = await gvizRows('Queries', `select * where A = '${cabinet}' and B = '${d}'`, cabinet);
     if (!rows.length) continue;
     const h = rows[0];
     if (!['query', 'position', 'searches'].every(c => h.includes(c))) return n;
@@ -572,7 +576,7 @@ async function syncQueriesIncremental(cabinet) {
 async function importPrices(cabinet) {
   await ensureFinTables();
   let total = 0;
-  const pr = await fetchSheetRows('Prices');
+  const pr = await fetchSheetRows('Prices', cabinet);
   if (pr) {
     const out = pr.filter(r => r.cabinet === cabinet && r.offer_id).map(r => [cabinet, r.offer_id, r.product_id ? num(r.product_id) || null : null,
       num(r.price), num(r.seller_price), num(r.acquiring), num(r.pct_fbo), num(r.pct_fbs), num(r.fbo_deliv), num(r.fbo_direct_max), num(r.fbo_return),
@@ -593,14 +597,14 @@ async function syncFinanceFromSheet(cabinet) {
   // Поисковые запросы по дням.
   total += await syncQueriesIncremental(cabinet);
   // Продажи по месяцам (сезонность).
-  const mon = await fetchSheetRows('AnalyticsMonthly');
+  const mon = await fetchSheetRows('AnalyticsMonthly', cabinet);
   if (mon) {
     const out = mon.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}/.test(String(r.month)))
       .map(r => [cabinet, String(r.month).slice(0, 7), num(r.sku), num(r.revenue), Math.round(num(r.orders))]);
     if (out.length) total += await bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku'], undefined, { diff: `monthly:${cabinet}` });
   }
   // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
-  const wh = await fetchSheetRows('StocksWh');
+  const wh = await fetchSheetRows('StocksWh', cabinet);
   if (wh) {
     const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
     const map = new Map();
@@ -623,7 +627,7 @@ async function syncFinanceFromSheet(cabinet) {
         ['cabinet', 'date', 'offer_id', 'warehouse']);
     }
   }
-  const buy = await fetchSheetRows('Buyout');
+  const buy = await fetchSheetRows('Buyout', cabinet);
   if (buy) {
     // Повторы (день, артикул) — неполные копии на границе окна; берём первую строку.
     const seenB = new Set();
@@ -632,7 +636,7 @@ async function syncFinanceFromSheet(cabinet) {
     total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
   }
   total += await importPrices(cabinet);
-  const fin = await fetchSheetRows('Finance');
+  const fin = await fetchSheetRows('Finance', cabinet);
   if (fin) {
     const map = new Map();
     for (const r of fin) {
@@ -680,7 +684,7 @@ async function cleanupSheetJunk() {
 module.exports = {
   addAutoEvent,
   importPrices,
-  dropSheetCache: name => SHEET_CACHE.delete(name),
+  dropSheetCache: name => { for (const k of [...SHEET_CACHE.keys()]) if (k.endsWith('|' + name)) SHEET_CACHE.delete(k); },
   syncGeoFromSheet,
   syncFinanceFromSheet,
   ensureFinTables,

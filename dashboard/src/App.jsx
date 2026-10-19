@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { initArtLinks } from './lib/artLinks';
 import { initSearchClear } from './lib/searchClear';
 import { whenIdle } from './api';
+import { isDeflyLike, shopOf, SHARED_PAGES } from './lib/cabinets';
 import Sidebar, { navLabel } from './components/Sidebar';
 import { startStickyHeads } from './lib/stickyHeads';
 startStickyHeads();
@@ -56,10 +57,12 @@ const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl:
 // "Калькулятор" — чистый клиентский инструмент, не завязан на кабинет.
 // "Уведомления" — отслеживание артикулов + Telegram-алерты о новых заказах,
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
-const PAGES_BY_CABINET = {
+const PAGES_BY_CABINET_RAW = {
   licio: ['dashboard', 'ads', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
   defly: ['sales', 'plan', 'ads', 'search', 'inventory', 'production', 'pricelog', 'geo', 'check', 'abc', 'season', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
 };
+// Магазины семейства Defly видят те же разделы.
+const PAGES_BY_CABINET = new Proxy(PAGES_BY_CABINET_RAW, { get: (t, k) => t[k] || (isDeflyLike(k) ? t.defly : undefined) });
 
 const THEME_KEY = 'mp-theme';
 // Телефон: узкий экран. Все мобильные правки — только при этом условии (и в CSS
@@ -149,7 +152,7 @@ export default function App() {
 
   useEffect(() => { initArtLinks(cabinet); }, [cabinet]);
   useEffect(() => { initSearchClear(); }, []);
-  useEffect(() => { document.title = cabinet === 'defly' ? 'Defly — аналитика Ozon' : 'Licio — WB + Ozon'; }, [cabinet]);
+  useEffect(() => { document.title = isDeflyLike(cabinet) ? `${shopOf(cabinet)?.label || cabinet} — аналитика Ozon` : 'Licio — WB + Ozon'; }, [cabinet]);
 
   // Переключатель WB/Ozon нужен только старым разделам Licio.
   const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'inventory', 'production', 'pricelog', 'check', 'abc', 'recon', 'margin', 'plan', 'search', 'season', 'calculator', 'notifications'].includes(page);
@@ -192,7 +195,7 @@ export default function App() {
                 visibility: on ? 'visible' : 'hidden', zIndex: on ? 1 : 0, pointerEvents: on ? 'auto' : 'none',
               }}>
                 <PageBoundary>
-                  <P platform={platform} cabinet={cabinet} active={on}/>
+                  <P platform={platform} cabinet={SHARED_PAGES[id] && isDeflyLike(cabinet) ? SHARED_PAGES[id] : cabinet} active={on}/>
                 </PageBoundary>
               </div>
             );

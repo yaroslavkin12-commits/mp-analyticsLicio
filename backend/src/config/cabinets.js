@@ -33,10 +33,37 @@ const CABINETS = {
   },
 };
 
+// Магазины Ozon, которые собирает отдельная Google-таблица (свой скрипт Apps
+// Script, ключи — только в его свойствах). Кабинет включается, когда на Render
+// задана переменная ADS_SHEET_ID_<ID> (например ADS_SHEET_ID_NABAUTO).
+// family: 'defly' — те же товары (дефлекторы): категории и марки авто по
+// правилам Defly, ручные категории Defly действуют и здесь.
+const SHEET_SHOPS = [
+  ['nabauto', 'NABauto'],
+  ['alex', 'Alex'],
+  ['fullgas', 'Fullgas'],
+  ['accent', 'Accent Line'],
+];
+for (const [id, label] of SHEET_SHOPS) CABINETS[id] = { label, platform: 'ozon', family: 'defly', sheetOnly: true };
+CABINETS.defly.platform = 'ozon'; CABINETS.defly.family = 'defly';
+
+const sheetEnv = id => process.env[`ADS_SHEET_ID_${id.toUpperCase()}`] || null;
+// Кабинет подключён: для магазинов из отдельной таблицы — задан её ID.
+function isConnected(id) {
+  const c = CABINETS[id];
+  if (!c) return false;
+  if (c.sheetOnly) return !!sheetEnv(id);
+  return true;
+}
+const familyOf = id => (CABINETS[id] && CABINETS[id].family) || id;
+
 function listCabinets() {
   return Object.entries(CABINETS).map(([id, c]) => ({
     id,
     label: c.label,
+    platform: c.platform || null,
+    family: c.family || null,
+    connected: isConnected(id),
     ozonSellerConfigured: !!(c.ozonClientId && c.ozonApiKey),
     ozonPerfConfigured: !!(c.ozonPerfClientId && c.ozonPerfSecret),
     ozonSessionConfigured: !!(c.ozonSellerCookie && c.ozonCompanyId),
@@ -49,4 +76,4 @@ function getCabinet(id) {
   return cfg;
 }
 
-module.exports = { CABINETS, listCabinets, getCabinet };
+module.exports = { CABINETS, listCabinets, getCabinet, isConnected, familyOf };

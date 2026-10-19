@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
@@ -285,7 +286,7 @@ function SharesCard({ node, kids, colorNode, brandRank, dates, buckets, gran, ti
   const [dim, setDim] = useState('cat');
   const [metric, setMetric] = useState('revenue');
   const [showTrend, setShowTrend] = useState(true);
-  const dims = SHARE_DIMS.filter(([k]) => cabinet === 'defly' || (k !== 'origin' && k !== 'brand'));
+  const dims = SHARE_DIMS.filter(([k]) => isDeflyLike(cabinet) || (k !== 'origin' && k !== 'brand'));
   const d = dim === 'cat' && !kids.length ? 'top' : dim;
   const val = a => metric === 'revenue' ? a.tRevenue : a.tOrders;
   const pval = a => a.prev ? (metric === 'revenue' ? a.prev.revenue : a.prev.orders) : 0;
@@ -889,7 +890,7 @@ export default function SalesAnalytics({ cabinet }) {
     return { list: out, A: sum('A'), B: sum('B'), C: sum('C'), zero: artStats.length - list.length, tot };
   })();
   const brandTable = (() => {
-    if (cabinet !== 'defly') return null;
+    if (!isDeflyLike(cabinet)) return null;
     const tops = fullTree.root.kids.map(k => k.name);
     const m = new Map();
     for (const a of node.arts) {

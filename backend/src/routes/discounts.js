@@ -1,3 +1,4 @@
+const { OV_SQL, overrideArgs } = require('../lib/categories');
 const express = require('express');
 const router = express.Router();
 const dayjs = require('dayjs');
@@ -130,7 +131,7 @@ router.get('/overview', async (req, res) => {
     const [latest, catalog, overrides, sales, h1, h7] = await Promise.all([
       query(`SELECT * FROM product_discount_latest WHERE cabinet = $1`, [cabinet]),
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]).catch(() => []),
+      query(OV_SQL, overrideArgs(cabinet)).catch(() => []),
       query(`SELECT offer_id, sku, SUM(orders_item) o, SUM(revenue) r FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id, sku`, [cabinet, since30]),
       query(`SELECT DISTINCT ON (offer_id) offer_id, ozon_discount_pct pct,
                 CASE WHEN marketing_seller_price > 0 THEN (marketing_seller_price - marketing_oa_price) / marketing_seller_price * 100 END AS pc

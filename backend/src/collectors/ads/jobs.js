@@ -1,5 +1,5 @@
 const { query } = require('../../db');
-const { CABINETS } = require('../../config/cabinets');
+const { CABINETS, isConnected } = require('../../config/cabinets');
 const { mskDate } = require('./ozonHttp');
 const { collectCatalog } = require('./ozonCatalog');
 const { collectAdStats } = require('./ozonPerf');
@@ -87,13 +87,13 @@ async function withSheetFallback(cabinet, label, primary, fallback) {
   if (DIRECT_DISABLED) {
     // В Ozon не ходим никогда. Нет ADS_SHEET_ID — честная ошибка, а не
     // 4 минуты таймаутов в недоступный Ozon.
-    if (!sheetId()) throw new Error('На этом сервере не задан ADS_SHEET_ID (ссылка на Google-таблицу) — данные Ozon взять неоткуда');
+    if (!sheetId(cabinet)) throw new Error('На этом сервере не задан ADS_SHEET_ID (ссылка на Google-таблицу) — данные Ozon взять неоткуда');
     return await withTimeout(fallback(), 30000, `${label}(таблица)`);
   }
   try {
     return await primary();
   } catch (e) {
-    if (!sheetId()) throw e; // фоллбек не настроен — ведём себя как раньше
+    if (!sheetId(cabinet)) throw e; // фоллбек не настроен — ведём себя как раньше
     console.warn(`[Jobs:${cabinet}] ${label}: Ozon недоступен (${e.message}), беру данные из Google-таблицы`);
     return await withTimeout(fallback(), 30000, `${label}(таблица)`);
   }
@@ -142,7 +142,7 @@ const JOBS = [
 // каждые 5 минут обновляет Google-скрипт, функция syncOrders).
 const ORDERS_JOB = { id: 'tracked_orders', every: 4 * MIN, run: c => pollOrdersFromSheet(c) };
 function ordersCabinets() {
-  return Object.keys(CABINETS);
+  return Object.keys(CABINETS).filter(isConnected);
 }
 const ordersBusy = new Set();
 async function tickOrders(cabinet) {
@@ -161,7 +161,7 @@ function adsCabinets() {
     // Данные идут через Google-таблицу (скрипт собирает оба кабинета), поэтому
     // ключи Ozon на Render не обязательны. Licio подключён к рекламе с 11.10.2026.
     // Licio временно отключён: с ним сервер (512 МБ) падал по памяти (11.10.2026).
-    .filter(([id, cfg]) => id !== 'licio' && (cfg.ozonClientId || cfg.ozonPerfClientId))
+    .filter(([id, cfg]) => id !== 'licio' && (cfg.sheetOnly ? isConnected(id) : (cfg.ozonClientId || cfg.ozonPerfClientId)))
     .map(([id]) => id);
 }
 
@@ -398,7 +398,7 @@ async function tick() {
     (async () => { for (const c of adsCabinets()) await tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message)); })(),
     ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
     // Дайджест Соинвеста работает по данным из расширения — для всех кабинетов.
-    ...Object.keys(CABINETS).map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
+    ...Object.keys(CABINETS).filter(isConnected).map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
     ...adsCabinets().filter(c => c !== 'licio').map(c => tickMorning(c).catch(e => console.error(`[Morning:${c}]`, e.message))),
     ...ordersCabinets().map(c => tickOrders(c).catch(e => console.error(`[Orders:${c}]`, e.message))),
   ]);

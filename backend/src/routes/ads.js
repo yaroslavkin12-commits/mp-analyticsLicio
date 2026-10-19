@@ -1,3 +1,4 @@
+const { OV_SQL, overrideArgs } = require('../lib/categories');
 const express = require('express');
 const router = express.Router();
 const { campLabel } = require('../lib/adZone');
@@ -1089,7 +1090,7 @@ router.get('/stats', async (req, res) => {
     // Для блока «Расход по категориям»: категория артикула (как во вкладке
     // «Аналитика продаж», с ручными переносами) и «оплата за заказ» по ДНЮ
     // СПИСАНИЯ — в таблице выше она отнесена ко дню заказа.
-    const overrides = await query(`SELECT offer_id, path FROM product_category_override WHERE cabinet = $1`, [cabinet]).catch(() => []);
+    const overrides = await query(OV_SQL, overrideArgs(cabinet)).catch(() => []);
     const ovMap = new Map(overrides.map(r => [r.offer_id, r.path]));
     for (const a of articlesOut) {
       if (a.offerId) a.cat = ovMap.get(a.offerId) || autoPath(cabinet, a.productName || nameByOfferId.get(a.offerId), a.offerId).join(' / ');

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesGeo, latestOnly } from '../api';
@@ -439,7 +440,7 @@ export default function Geography({ cabinet }) {
           <div className="a-card" style={{ padding: 14 }}>
             <div className="a-bar" style={{ marginBottom: 10 }}>
               <b style={{ fontSize: 14 }}>Что где покупают · топ-20 кластеров</b>
-              <span className="a-seg">{[['cat', kidNames.length ? 'Подкатегории' : 'Категория'], ['origin', 'Страна марки'], ['brand', 'Марки авто']].filter(([k]) => cabinet === 'defly' || k === 'cat').map(([k, l]) => (
+              <span className="a-seg">{[['cat', kidNames.length ? 'Подкатегории' : 'Категория'], ['origin', 'Страна марки'], ['brand', 'Марки авто']].filter(([k]) => isDeflyLike(cabinet) || k === 'cat').map(([k, l]) => (
                 <button key={k} type="button" className={mDim === k ? 'on' : ''} onClick={() => setMDim(k)}>{l}</button>
               ))}</span>
               <span className="a-hint">в клетке — доля в продажах региона; цвет — выше (зелёный) или ниже (красный) среднего по стране</span>

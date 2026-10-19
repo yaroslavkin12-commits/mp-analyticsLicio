@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { SHOPS, shopOf, isDeflyLike } from '../lib/cabinets';
+import { getAdsCabinets } from '../api';
 
 const NAV_BY_CABINET = {
   licio: [['dashboard','📊','Дашборд'],['ads','📣','Реклама'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
@@ -11,8 +13,8 @@ const NAV_BY_CABINET = {
     ['__h','Инструменты'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Себестоимость'],
   ],
 };
-const CABINETS = [['licio','Licio'],['defly','Defly']];
-export const navLabel = (cabinet, page) => ((NAV_BY_CABINET[cabinet] || NAV_BY_CABINET.licio).find(([id]) => id === page) || [])[2] || '';
+const navOf = c => NAV_BY_CABINET[c] || (isDeflyLike(c) ? NAV_BY_CABINET.defly : NAV_BY_CABINET.licio);
+export const navLabel = (cabinet, page) => (navOf(cabinet).find(([id]) => id === page) || [])[2] || '';
 
 export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCabinet, mobile }) {
   const [open, setOpen] = useState(false);
@@ -28,8 +30,25 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
-  const cabinetLabel = CABINETS.find(([id]) => id === cabinet)?.[1] || cabinet;
-  const nav = NAV_BY_CABINET[cabinet] || NAV_BY_CABINET.licio;
+  const shop = shopOf(cabinet);
+  const cabinetLabel = shop?.label || cabinet;
+  const nav = navOf(cabinet);
+  // Какие магазины уже подключены (есть своя Google-таблица на сервере).
+  const [conn, setConn] = useState(null);
+  useEffect(() => { if (open && !conn) getAdsCabinets().then(r => setConn(Object.fromEntries((r.data.data || []).map(c => [c.id, c.connected !== false])))).catch(() => setConn({})); }, [open, conn]);
+  const dot = (c, size = 8) => <span style={{ width:size, height:size, borderRadius:'50%', background:c, flexShrink:0, display:'inline-block' }} />;
+  const head = t => <div style={{ fontSize:10.5, fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)', padding:'9px 12px 3px' }}>{t}</div>;
+  const item = (sh, disabled, note) => (
+    <button key={sh.id} disabled={disabled} onClick={() => { setCabinet(sh.id); setOpen(false); }} title={disabled ? note : undefined} style={{
+      display:'flex', alignItems:'center', gap:8, width:'100%', textAlign:'left', padding:'7px 12px', border:'none',
+      background: cabinet===sh.id ? 'var(--surface2)' : 'transparent', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? .5 : 1,
+      color: cabinet===sh.id ? 'var(--text)' : 'var(--text2)', fontWeight: cabinet===sh.id ? 600 : 400, fontSize:13,
+    }}>
+      {dot(sh.color)}<span style={{ flex:1, whiteSpace:'nowrap' }}>{sh.label}</span>
+      {note && <small style={{ fontSize:10.5, color:'var(--text3)', whiteSpace:'nowrap' }}>{note}</small>}
+      {cabinet===sh.id && <span>✓</span>}
+    </button>
+  );
 
   return (
     <div style={{ width: mobile ? '100%' : mini ? 58 : 210, height: mobile ? '100%' : undefined, transition:'width .15s', background:'var(--surface)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
@@ -38,7 +57,15 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
           display:'flex', alignItems:'center', gap:10, width:'100%', background:'transparent', border:'none',
           padding:0, cursor:'pointer', textAlign:'left', color:'var(--text)',
         }}>
-          {cabinet === 'defly' ? (
+          {isDeflyLike(cabinet) && cabinet !== 'defly' ? (
+            <>
+              {dot(shop?.color || 'var(--text3)', mini ? 12 : 10)}
+              {!mini && <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:15, fontWeight:700, display:'flex', alignItems:'center', gap:5 }}>{cabinetLabel}<span style={{ fontSize:10, color:'var(--text3)' }}>▾</span></div>
+                <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>Ozon</div>
+              </div>}
+            </>
+          ) : cabinet === 'defly' ? (
             <>
               <img src="/defly-logo.png" alt="Defly" style={{ height: mini ? 24 : 32, width: mini ? 42 : 'auto', objectFit: mini ? 'cover' : undefined, objectPosition:'left center', maxWidth:110, borderRadius:5, flexShrink:0, display:'block' }} />
               {!mini && <span style={{ fontSize:10, color:'var(--text3)', marginLeft:'auto' }}>▾</span>}
@@ -63,20 +90,19 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
 
         {open && (
           <div style={{
-            position:'absolute', top:'100%', left: mini ? 8 : 16, right: mini ? 'auto' : 16, minWidth: mini ? 140 : undefined, marginTop:6, zIndex:20,
+            position:'absolute', top:'100%', left: mini ? 8 : 16, right: mini ? 'auto' : 16, minWidth: 190, marginTop:6, zIndex:20,
             background:'var(--surface)', border:'1px solid var(--border)', borderRadius:10,
             boxShadow:'0 8px 24px rgba(0,0,0,.25)', overflow:'hidden',
           }}>
-            {CABINETS.map(([id, label]) => (
-              <button key={id} onClick={() => { setCabinet(id); setOpen(false); }} style={{
-                display:'block', width:'100%', textAlign:'left', padding:'9px 12px', border:'none',
-                background: cabinet===id ? 'var(--surface2)' : 'transparent',
-                color: cabinet===id ? 'var(--text)' : 'var(--text2)',
-                fontWeight: cabinet===id ? 600 : 400, fontSize:13,
-              }}>
-                {label}{cabinet===id ? ' ✓' : ''}
-              </button>
-            ))}
+            {head('Ozon')}
+            {SHOPS.filter(x => x.platform === 'ozon').map(x => {
+              const off = x.id !== 'defly' && conn && conn[x.id] === false;
+              return item(x, off, off ? 'не подключён' : null);
+            })}
+            {head('WB')}
+            <div style={{ padding:'5px 12px 8px', fontSize:12, color:'var(--text3)' }}>скоро</div>
+            <div style={{ height:1, background:'var(--border)' }} />
+            {item(shopOf('licio'), false, 'WB + Ozon')}
           </div>
         )}
       </div>

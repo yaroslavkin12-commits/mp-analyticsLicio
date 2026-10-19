@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { isDeflyLike } from '../lib/cabinets';
 import { fmtInt, fmtPct } from './AdsStats2';
 import { StackChart, bucketsOf } from './SalesAnalytics';
 
@@ -88,7 +89,7 @@ export default function AdSpendCats({ data, cabinet, tip }) {
       const it = items.get(o || '__none__') || itemOf(o || '__none__', o, extra?.name, extra?.cat);
       it.cpo[i] += v;
     }
-    const isDefly = cabinet === 'defly';
+    const isDefly = isDeflyLike(cabinet);
     const rows = new Map();
     const rowOf = (id, name, parent) => {
       if (!rows.has(id)) rows.set(id, { id, name, parent, cpc: new Array(N).fill(0), cpo: new Array(N).fill(0), items: [] });
