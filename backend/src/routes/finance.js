@@ -350,26 +350,53 @@ router.post('/refresh-prices', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// Хранится по периодам: { periods: [{ from, to, total, byOffer, at }] }. Новый
+// отчёт заменяет только периоды, которые он целиком покрывает (например,
+// октябрь до 26-го заменяет октябрь до 19-го), остальные не трогаются.
+// Старый формат (один период без списка) читается как список из одного.
+const bsKey = c => `buyer_share:${c}`;
+async function bsLoad(cabinet) {
+  const r = await query(`SELECT value FROM app_settings WHERE key = $1`, [bsKey(cabinet)]);
+  if (!r[0]) return { periods: [] };
+  let v; try { v = JSON.parse(r[0].value); } catch (e) { return { periods: [] }; }
+  if (Array.isArray(v?.periods)) return v;
+  return { periods: v && v.total ? [{ from: v.from, to: v.to, total: v.total, byOffer: v.byOffer || {}, at: v.at }] : [] };
+}
+async function bsSave(cabinet, v) {
+  v.periods.sort((a, b) => (a.from < b.from ? -1 : 1));
+  await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [bsKey(cabinet), JSON.stringify(v)]);
+}
 router.get('/buyer-share', async (req, res) => {
-  try {
-    const cabinet = req.query.cabinet || 'defly';
-    const r = await query(`SELECT value FROM app_settings WHERE key = $1`, [`buyer_share:${cabinet}`]);
-    res.json({ success: true, data: r[0] ? JSON.parse(r[0].value) : null });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  try { res.json({ success: true, data: await bsLoad(req.query.cabinet || 'defly') }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 router.post('/buyer-share', async (req, res) => {
   try {
-    const { cabinet = 'defly', from, to, total, byOffer } = req.body || {};
+    const { cabinet = 'defly', from, to, total, byOffer, file } = req.body || {};
     if (!(total > 0 && total <= 1)) return res.status(400).json({ success: false, error: 'bad total' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(from)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(to)) || from > to) return res.status(400).json({ success: false, error: 'Нужен период from..to' });
     const clean = {};
     for (const [o, v] of Object.entries(byOffer || {})) {
       const sh = Number(v?.[0]), w = Number(v?.[1]);
       if (sh > 0 && sh <= 1 && w > 0) clean[String(o).slice(0, 128)] = [Math.round(sh * 1e4) / 1e4, Math.round(w)];
     }
-    const val = { from, to, total: Math.round(total * 1e4) / 1e4, byOffer: clean, at: new Date().toISOString() };
-    await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-      [`buyer_share:${cabinet}`, JSON.stringify(val)]);
-    res.json({ success: true, data: val });
+    const cur = await bsLoad(cabinet);
+    const replaced = cur.periods.filter(p => p.from >= from && p.to <= to);
+    cur.periods = cur.periods.filter(p => !(p.from >= from && p.to <= to));
+    cur.periods.push({ from, to, total: Math.round(total * 1e4) / 1e4, byOffer: clean, at: new Date().toISOString(), file: file ? String(file).slice(0, 200) : undefined });
+    await bsSave(cabinet, cur);
+    res.json({ success: true, data: { ...cur, replaced: replaced.map(p => [p.from, p.to]) } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+// POST /buyer-share/delete { cabinet, from, to } — убрать загруженный период.
+router.post('/buyer-share/delete', async (req, res) => {
+  try {
+    const { cabinet = 'defly', from, to } = req.body || {};
+    const cur = await bsLoad(cabinet);
+    cur.periods = cur.periods.filter(p => !(p.from === from && p.to === to));
+    await bsSave(cabinet, cur);
+    res.json({ success: true, data: cur });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 

@@ -126,13 +126,14 @@ export default function PnL({ cabinet }) {
       const x = per[a.i]; if (!x) continue;
       const cp = data.cost[a.i];
       // База налога — то, что заплатил покупатель (доля цены после скидки Ozon).
-      const sh = bs.shareOf ? (bs.shareOf(a.o, a.parts) ?? 1) : 1;
+      // Доля — по отчёту «Начисления» того периода, куда попадает день.
+      const shD = bs.shareAt ? data.dates.map(d => bs.shareAt(a.o, a.parts, d) ?? 1) : null;
       const iSale = B.indexOf('sale'), iRet = B.indexOf('return');
       let sold = 0;
       for (let i = 0; i < n; i++) {
         for (let j = 0; j < B.length; j++) v[B[j]][i] += x.b[j][i];
         v.qty[i] += x.qty[i]; v.adsRaw[i] += x.ads[i]; sold += x.qty[i];
-        v.taxBase[i] += (x.b[iSale][i] + x.b[iRet][i]) * sh;
+        v.taxBase[i] += (x.b[iSale][i] + x.b[iRet][i]) * (shD ? shD[i] : 1);
         if (cp) v.costRaw[i] += cp * x.qty[i];
       }
       if (!cp && sold > 0) noCost++;
@@ -169,7 +170,7 @@ export default function PnL({ cabinet }) {
     T.drr = T.revenue > 0 ? -T.ads / T.revenue * 100 : null;
     T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;
     return { vals: out, totals: T, noCost };
-  }, [per, n, data, tax, lastFin, bs.shareOf, netDayAll, adsAll]);
+  }, [per, n, data, tax, lastFin, bs.shareAt, netDayAll, adsAll]);
 
   const shareOf = useCallback(items => {
     if (!filtered && items === list.arts) return 1;

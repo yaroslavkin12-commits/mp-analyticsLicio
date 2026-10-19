@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import dayjs from 'dayjs';
-import { getFinancePnl, saveBuyerShare } from '../api';
+import { getFinancePnl, saveBuyerShare, deleteBuyerShare } from '../api';
+import { useBuyerShare } from './buyerShare';
 import { fmtInt } from './AdsStats2';
 import { Kpi, Empty, pct1 } from './finShared';
 import './ads2.css';
@@ -71,6 +72,50 @@ const Diff = ({ a, b }) => {
   return <span className={`pill ${ok(a, b) ? 'g' : Math.abs(d) <= Math.max(1000, Math.abs(a) * 0.05) ? 'w' : 'b'}`}>{d > 0 ? '+' : ''}{fmtInt(d)}</span>;
 };
 
+// Загруженные периоды отчёта «Начисления» — из них считается налоговая база
+// (доля цены, которую заплатил покупатель). Каждый период действует на свои дни.
+function TaxPeriods({ cabinet }) {
+  const { periods } = useBuyerShare(cabinet, null);
+  const [busy, setBusy] = useState(false);
+  const today = dayjs().format('YYYY-MM-DD');
+  const last = periods.reduce((m, p) => (p.to > m ? p.to : m), '');
+  const del = async p => {
+    if (busy) return;
+    setBusy(true);
+    try { await deleteBuyerShare(cabinet, p.from, p.to); window.dispatchEvent(new Event('mp-buyer-share')); } finally { setBusy(false); }
+  };
+  return (
+    <div className="a-card" style={{ marginBottom: 12 }}>
+      <div className="a-bar" style={{ gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+        <b style={{ fontSize: 14 }}>Налоговая база: загруженные периоды</b>
+        <span className="a-hint" style={{ margin: 0 }}>налог считается от суммы, которую заплатил покупатель (без «Баллов за скидки» Ozon) — доля берётся из отчёта «Начисления» за тот период, куда попадает день</span>
+      </div>
+      {!periods.length ? (
+        <div className="a-hint" style={{ margin: 0, color: 'var(--a-warn)' }}>Отчётов нет — налог считается от всей выручки (завышен). Загрузите «Начисления» за прошлый месяц.</div>
+      ) : (
+        <>
+          <table className="a-t" style={{ maxWidth: 760 }}>
+            <thead><tr><th style={{ textAlign: 'left' }}>Период</th><th>Платит покупатель</th><th>Артикулов</th><th style={{ textAlign: 'left' }}>Загружен</th><th /></tr></thead>
+            <tbody>{periods.map(p => (
+              <tr key={p.from + p.to}>
+                <td style={{ textAlign: 'left' }}><b>{dayjs(p.from).format('DD.MM.YYYY')} – {dayjs(p.to).format('DD.MM.YYYY')}</b>{p.file ? <small className="muted" style={{ display: 'block' }}>{p.file}</small> : null}</td>
+                <td className="n r">{pct1(p.total * 100)}</td>
+                <td className="n r">{fmtInt(Object.keys(p.byOffer || {}).length)}</td>
+                <td style={{ textAlign: 'left' }}>{p.at ? dayjs(p.at).format('DD.MM.YYYY HH:mm') : '—'}</td>
+                <td className="r"><button type="button" className="a-btn ghost" disabled={busy} onClick={() => del(p)} title="Убрать этот период">×</button></td>
+              </tr>
+            ))}</tbody>
+          </table>
+          <div className="a-hint" style={{ marginTop: 6 }}>
+            {last < today ? `Дни после ${dayjs(last).format('DD.MM')} и до первого периода считаются по ближайшему загруженному периоду. ` : ''}
+            Уже загруженные периоды не меняются: новый отчёт заменяет только те, что целиком лежат внутри него (например, октябрь до 26-го заменит октябрь до 19-го). Загружать текущий месяц раз в неделю — можно: свежие дни будут считаться по своей, а не по прошлой доле.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Recon({ cabinet }) {
   const [shareMsg, setShareMsg] = useState('');
   const [rep, setRep] = useState(null);
@@ -118,9 +163,10 @@ export default function Recon({ cabinet }) {
         if (all > 0 && paid > 0) {
           const byOffer = {};
           for (const [o, x] of Object.entries(per)) if (o && x[1] > 0 && x[0] > 0) byOffer[o] = [x[0] / x[1], x[2]];
-          await saveBuyerShare(cabinet, { from, to, total: paid / all, byOffer });
+          const sv = await saveBuyerShare(cabinet, { from, to, total: paid / all, byOffer, file: file.name });
           window.dispatchEvent(new Event('mp-buyer-share'));
-          setShareMsg(`Налог теперь считается от цены, которую платит покупатель: в среднем ${(paid / all * 100).toFixed(1).replace('.', ',')}% от вашей цены (по ${Object.keys(byOffer).length} арт. из этого отчёта).`);
+          const rep0 = (sv.data.data.replaced || []).filter(([a, b]) => !(a === from && b === to));
+          setShareMsg(`Период ${dayjs(from).format('DD.MM')}–${dayjs(to).format('DD.MM.YYYY')} сохранён: покупатель платит в среднем ${(paid / all * 100).toFixed(1).replace('.', ',')}% от вашей цены (${Object.keys(byOffer).length} арт.)${rep0.length ? `; заменил ранее загруженные ${rep0.map(([a, b]) => dayjs(a).format('DD.MM') + '–' + dayjs(b).format('DD.MM')).join(', ')}` : ''}.`);
         }
       } catch (e) { setShareMsg('Не удалось сохранить долю оплаты покупателем: ' + (e.response?.data?.error || e.message)); }
       setBusy('Загружаю данные сервиса за тот же период…');
@@ -165,6 +211,7 @@ export default function Recon({ cabinet }) {
       </div></div>
 
       {error && <div className="c-msg bad">{error}</div>}
+      <TaxPeriods cabinet={cabinet} />
       {!rep && (
         <Empty>
           <b>Как сверить:</b> в кабинете Ozon откройте <i>Финансы → Начисления</i>, выберите период (до месяца), нажмите «Скачать» и загрузите файл сюда.

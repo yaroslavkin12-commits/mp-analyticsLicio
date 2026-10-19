@@ -126,6 +126,7 @@ export const getDiscountHistory = (cabinet, days) => api.get('/discounts/history
 // Юнит-экономика, P&L, % выкупа
 export const getBuyerShare = cabinet => api.get('/finance/buyer-share', { params: { cabinet } });
 export const saveBuyerShare = (cabinet, body) => api.post('/finance/buyer-share', { cabinet, ...body });
+export const deleteBuyerShare = (cabinet, from, to) => api.post('/finance/buyer-share/delete', { cabinet, from, to });
 export const getFinanceCoefs = cabinet => api.get('/finance/coefs', { params: { cabinet }, timeout: 90000 });
 export const getFinancePnl = (cabinet, p) => api.get('/finance/pnl', { params: { cabinet, ...p }, timeout: 90000 });
 export const getBuyoutData = (cabinet, p) => api.get('/finance/buyout', { params: { cabinet, ...p }, timeout: 90000 });

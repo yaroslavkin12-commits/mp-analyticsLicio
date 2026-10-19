@@ -1646,7 +1646,8 @@ function setupTriggers() {
   // сутки): заказы раз в 30 мин, свежие данные раз в час.
   const light = PropertiesService.getScriptProperties().getProperty('LIGHT') === '1';
   ScriptApp.newTrigger('T_syncOrders').timeBased().everyMinutes(light ? 30 : 10).create();
-  ScriptApp.newTrigger('T_syncRecent').timeBased().everyMinutes(light ? 60 : 30).create();
+  if (light) ScriptApp.newTrigger('T_syncRecent').timeBased().everyHours(1).create();
+  else ScriptApp.newTrigger('T_syncRecent').timeBased().everyMinutes(30).create();
   ScriptApp.newTrigger('T_syncCpoOrders').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('T_syncDaily').timeBased().atHour(4).everyDays(1).create();
   ScriptApp.newTrigger('T_syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
