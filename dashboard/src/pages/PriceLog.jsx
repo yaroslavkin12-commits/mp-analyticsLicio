@@ -4,6 +4,7 @@ import { getPriceLog, getPriceSnap, getPriceHistory, uploadPriceLog, deletePrice
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import PriceDynamics from './PriceDynamics';
 import { fmtInt } from './AdsStats2';
+import { shopOf } from '../lib/cabinets';
 import './ads2.css';
 import './sales.css';
 import './production.css';
@@ -75,8 +76,41 @@ function buildRules(changed) {
 // Файл репрайсера. Новый формат (лист «Озон»): «Артикул продавца | Название |
 // Цена клиента на удержание | Новые цены» — было и стало в одном файле, пустая
 // новая цена = без изменений. Старый формат: колонка «Дефлай» (только «стало»).
+// Общий файл на все магазины: «Артикул | Defly | Alex | NABauto | Fullgas
+// [| Accent]» — по колонке новых цен на магазин (пусто или 0 = без изменений).
+// Колонки ищем по названиям; если заголовков нет — по порядку.
+const SHOP_COLS = [['defly', /дефлай|defly/i], ['alex', /алекс|alex/i], ['nabauto', /наб|nab/i], ['fullgas', /фулгаз|fullgas|full gas/i], ['accent', /акцент|accent/i]];
+const SHOP_ORDER = ['defly', 'alex', 'nabauto', 'fullgas', 'accent'];
+function parseMulti(aoa, num) {
+  for (let r = 0; r < Math.min(aoa.length, 6); r++) {
+    const row = aoa[r].map(c => String(c));
+    const cols = {};
+    for (const [id, re] of SHOP_COLS) { const i = row.findIndex((c, k) => k > 0 && re.test(c)); if (i > 0) cols[id] = i; }
+    if (Object.keys(cols).length >= 2) return collectMulti(aoa, r + 1, cols, num);
+  }
+  // Без заголовков: артикул и 4+ числовые колонки подряд.
+  const sample = aoa.slice(0, 30).filter(x => String(x[0] ?? '').trim());
+  const numCols = c => sample.filter(x => num(x[c]) > 0).length >= sample.length * 0.5;
+  if (sample.length && [1, 2, 3, 4].every(numCols)) {
+    const cols = {}; SHOP_ORDER.forEach((id, k) => { if (k < 4 || numCols(k + 1)) cols[id] = k + 1; });
+    return collectMulti(aoa, 0, cols, num);
+  }
+  return null;
+}
+function collectMulti(aoa, start, cols, num) {
+  const byCab = {};
+  for (const id of Object.keys(cols)) byCab[id] = {};
+  for (let r = start; r < aoa.length; r++) {
+    const o = String(aoa[r][0] ?? '').trim(); if (!o || /^артикул/i.test(o)) continue;
+    for (const [id, c] of Object.entries(cols)) { const n = num(aoa[r][c]); if (Number.isFinite(n) && n > 0) byCab[id][o] = n; }
+  }
+  return { fmt: 'multi', byCab, items: Object.assign({}, ...Object.values(byCab)) };
+}
+
 function parsePrices(aoa) {
   const num = v => (typeof v === 'number' ? v : v === '' || v === null || v === undefined ? NaN : Number(String(v).replace(/\s/g, '').replace(',', '.')));
+  const multi = parseMulti(aoa, num);
+  if (multi) return multi;
   for (let r = 0; r < Math.min(aoa.length, 6); r++) {
     const row = aoa[r].map(c => String(c).toLowerCase());
     const iNew = row.findIndex(c => /нов/.test(c) && /цен/.test(c));
@@ -85,13 +119,16 @@ function parsePrices(aoa) {
     if (iNew >= 0 && iOld >= 0) {
       // Пустая новая цена и 0 (формула на пустую ячейку в рабочем файле) — цена не меняется.
       // Артикул может встретиться дважды: строка с новой ценой важнее строки без неё.
-      const items = {}, old = {}, set = new Set();
+      const items = {}, old = {}, set = new Set(), onlyNew = {};
       for (let i = r + 1; i < aoa.length; i++) {
         const o = String(aoa[i][iArt] ?? '').trim(); if (!o) continue;
         const a = num(aoa[i][iOld]), b = num(aoa[i][iNew]);
+        if (b > 0) onlyNew[o] = b;
         if (!(a > 0)) continue;
         if (b > 0) { old[o] = a; items[o] = b; set.add(o); } else if (!set.has(o)) { old[o] = a; items[o] = a; }
       }
+      // Колонка «на удержании» пустая или нули — текущие цены возьмёт сервис (цена на сайте).
+      if (!Object.keys(old).length) return { items: onlyNew, fmt: 'one', autoOld: true };
       return { items, old, zero: [], fmt: 'two' };
     }
   }
@@ -342,10 +379,12 @@ export default function PriceLog({ cabinet }) {
       }
       const bad = parsed.filter(x => !x.n || !x.date);
       const ok = parsed.filter(x => x.n && x.date && !x.wbFile);
-      const lines = ok.map(x => `• ${dayjs(x.date).format('DD.MM.YYYY')} — ${x.n} арт.${x.p.fmt === 'two' ? `, изменено ${Object.keys(x.p.items).filter(o => Math.abs(x.p.items[o] - x.p.old[o]) >= 0.5).length + x.p.zero.length}` : ' (только новые цены)'}${snaps.some(s => s.date === x.date) ? ' — заменит снимок' : ''}`);
+      const lines = ok.map(x => `• ${dayjs(x.date).format('DD.MM.YYYY')} — ${x.p.fmt === 'multi'
+        ? Object.entries(x.p.byCab).filter(([, m]) => Object.keys(m).length).map(([id, m]) => `${shopOf(id)?.label || id}: ${Object.keys(m).length} арт.`).join(', ') + ' (текущие цены — с сайта)'
+        : `${x.n} арт.${x.p.fmt === 'two' ? `, изменено ${Object.keys(x.p.items).filter(o => Math.abs(x.p.items[o] - x.p.old[o]) >= 0.5).length + x.p.zero.length}` : x.p.autoOld ? ' (текущие цены — с сайта)' : ' (только новые цены)'}`}${snaps.some(s => s.date === x.date) ? ' — заменит снимок' : ''}`);
       const skipped = [...bad.map(x => `${x.f.name}: ${!x.n ? 'не нашёл цены' : 'нет даты в имени файла'}`), ...parsed.filter(x => x.wbFile).map(x => `${x.f.name}: файл WB, пока ведём только Ozon`)];
       if (!ok.length) { setMsg({ bad: true, text: 'Нечего загружать. ' + skipped.join('; ') }); return; }
-      if (!window.confirm(`Загрузить цены Ozon «Дефлай»:\n${lines.join('\n')}${skipped.length ? `\n\nПропущу:\n${skipped.join('\n')}` : ''}`)) return;
+      if (!window.confirm(`Загрузить новые цены Ozon:\n${lines.join('\n')}${skipped.length ? `\n\nПропущу:\n${skipped.join('\n')}` : ''}`)) return;
       setBusy(true);
       let last = null;
       for (const x of ok.sort((a, b) => (a.date < b.date ? -1 : 1))) {
@@ -353,9 +392,19 @@ export default function PriceLog({ cabinet }) {
         const fresh = Math.abs(dayjs().diff(dayjs(x.date), 'day')) <= 2;
         const st = {};
         if (fresh && site) for (const o of Object.keys(x.p.items)) { const c = site.get(o)?.card; if (c) st[o] = c; }
-        const body = { items: x.p.items, ...(x.p.fmt === 'two' ? { old: x.p.old, zero: x.p.zero } : {}), ...(fresh ? { site: st } : {}) };
-        const r = await uploadPriceLog(cabinet, platform, x.date, body, x.f.name);
-        last = r.data.data.snaps;
+        if (x.p.fmt === 'multi') {
+          // Общий файл: каждому магазину — своя колонка; «было» сервис берёт из цен на сайте.
+          for (const [id, items] of Object.entries(x.p.byCab)) {
+            if (!Object.keys(items).length) continue;
+            const r = await uploadPriceLog(id, platform, x.date, { items, autoOld: true }, x.f.name);
+            if (id === cabinet) last = r.data.data.snaps;
+          }
+          if (!last) last = (await getPriceLog(cabinet, platform)).data.data.snaps;
+        } else {
+          const body = { items: x.p.items, ...(x.p.fmt === 'two' ? { old: x.p.old, zero: x.p.zero } : {}), ...(x.p.autoOld ? { autoOld: true } : {}), ...(fresh ? { site: st } : {}) };
+          const r = await uploadPriceLog(cabinet, platform, x.date, body, x.f.name);
+          last = r.data.data.snaps;
+        }
         setSnapCache(c => { const n = { ...c }; delete n[x.date]; return n; });
       }
       setLog(l => ({ ...l, snaps: last }));
@@ -426,7 +475,7 @@ export default function PriceLog({ cabinet }) {
           </span>
         </div>
         <div className="a-hint" style={{ marginTop: 6 }}>
-          Выгрузка репрайсера, лист «Озон»: «Артикул продавца · Название · Цена клиента на удержание · Новые цены» — было и стало в одном файле, пустая новая цена = без изменений.
+          Общий файл на все магазины: «Артикул · Defly · Alex · NABauto · Fullgas» — по колонке новых цен на магазин, пусто или 0 = без изменений; загружается сразу во все магазины, текущие цены («было») сервис берёт с сайта (плагин Соинвест). Подходит и выгрузка репрайсера «Артикул продавца · Название · Цена клиента на удержание · Новые цены».
           Прошлые недели можно догрузить: выберите сразу несколько файлов — дата возьмётся из имени («… 14.10.xlsx»).
         </div>
       </div>

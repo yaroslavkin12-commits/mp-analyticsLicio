@@ -1498,6 +1498,9 @@ function dueEvery_(key, hours) {
 function syncRecent() {
   const cabinets = getCabinets_();
   if (!cabinets.length) { Logger.log('Нет настроенных кабинетов — проверьте Свойства скрипта.'); return; }
+  // ID компании Ozon (= Client-Id Seller API, не секрет) — сервису, чтобы плагин
+  // «Соинвест» собирал цены на сайте и по этому магазину.
+  try { writeRows_('Cabinets', ['cabinet', 'client_id'], cabinets.filter(function (c) { return c.sellerClientId; }).map(function (c) { return [c.id, c.sellerClientId]; })); } catch (e) { Logger.log('Cabinets: ' + e.message); }
   // Цены и комиссии — каждые 30 минут (несколько быстрых запросов): кнопка
   // «Обновить цены» в сервисе забирает их из таблицы, как «Обновить» в рекламе.
   try { syncPrices(); } catch (e) { Logger.log('Цены и комиссии: ' + e.message); }

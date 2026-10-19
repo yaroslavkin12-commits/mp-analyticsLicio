@@ -34,6 +34,23 @@ const COMPANY_IDS = {
     if (c.sheetOnly && v && isConnected(id)) COMPANY_IDS[id] = String(v).trim();
   }
 }
+// Без переменной — ID компании берём из вкладки «Cabinets» таблицы магазина:
+// её пишет Google-скрипт (Client-Id Seller API = ID компании Ozon).
+let sheetIdsAt = 0;
+async function companyIds() {
+  if (Date.now() - sheetIdsAt > 30 * 60e3) {
+    sheetIdsAt = Date.now();
+    const { CABINETS, isConnected } = require('../config/cabinets');
+    const { fetchSheetRows } = require('../collectors/ads/sheetSync');
+    for (const [id, c] of Object.entries(CABINETS)) {
+      if (!c.sheetOnly || !isConnected(id) || COMPANY_IDS[id]) continue;
+      const rows = await fetchSheetRows('Cabinets', id).catch(() => null);
+      const r = (rows || []).find(x => x.cabinet === id && /^\d+$/.test(String(x.client_id || '').trim()));
+      if (r) COMPANY_IDS[id] = String(r.client_id).trim();
+    }
+  }
+  return COMPANY_IDS;
+}
 let latestReady = null;
 function ensureLatest() {
   if (!latestReady) {
@@ -59,6 +76,7 @@ async function productMap(cabinet) {
 router.get('/targets', async (req, res) => {
   try {
     const out = [];
+    await companyIds();
     for (const cabinet of Object.keys(COMPANY_IDS)) {
       const items = await productMap(cabinet).catch(() => []);
       out.push({ cabinet, companyId: COMPANY_IDS[cabinet], productIds: items.map(r => String(r.product_id)) });
@@ -72,6 +90,7 @@ router.post('/ingest', async (req, res) => {
   try {
     await ensureLatest();
     const { cabinet, items } = req.body || {};
+    await companyIds();
     if (!COMPANY_IDS[cabinet] || !Array.isArray(items)) return res.status(400).json({ success: false, error: 'Нужны cabinet и items' });
     const map = await productMap(cabinet);
     const offerByProduct = new Map(map.map(r => [String(r.product_id), r.offer_id]));

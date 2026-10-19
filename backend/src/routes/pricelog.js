@@ -100,7 +100,7 @@ router.get('/dynamics', async (req, res) => {
 // POST /upload { cabinet, platform, date, file, items, old?, zero?, site? } — снимок на дату (та же дата заменяется).
 router.post('/upload', async (req, res) => {
   try {
-    const { cabinet, platform, date, file, items, old, zero, site } = req.body || {};
+    const { cabinet, platform, date, file, items, old, zero, site, autoOld } = req.body || {};
     if (!cabinet || !date || !items || typeof items !== 'object') return res.status(400).json({ success: false, error: 'Нужны cabinet, date и items' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ success: false, error: 'Дата в формате ГГГГ-ММ-ДД' });
     const cleanMap = m => {
@@ -112,6 +112,29 @@ router.post('/upload', async (req, res) => {
     if (old && typeof old === 'object') snap.old = cleanMap(old);
     if (Array.isArray(zero) && zero.length) snap.zero = zero.map(x => String(x).slice(0, 128)).filter(x => snap.items[x]);
     if (site && typeof site === 'object') snap.site = cleanMap(site);
+    // «Было» не передали (общий файл на все магазины) — берём цену клиента на
+    // сайте (плагин Соинвест): последнюю запись до дня снимка, иначе в этот день.
+    if (autoOld && !snap.old) {
+      await require('../lib/priceEvents').ensurePriceDaily().catch(() => {});
+      const rows = await query(`SELECT DISTINCT ON (offer_id) offer_id, card, date::text AS d FROM price_daily
+          WHERE cabinet = $1 AND card IS NOT NULL AND date <= $2 AND date >= $2::date - 14
+          ORDER BY offer_id, (date < $2) DESC, date DESC`, [cabinet, date]).catch(() => []);
+      const cur = new Map(rows.map(r => [r.offer_id, Number(r.card)]));
+      const o2 = {}, missing = [];
+      for (const [o, b] of Object.entries(snap.items)) { const a = cur.get(o); if (a > 0) o2[o] = Math.round(a * 100) / 100; else missing.push(o); }
+      if (Object.keys(o2).length) {
+        // Без текущей цены — считаем «без изменений», чтобы не выдумывать сдвиг.
+        for (const o of missing) o2[o] = snap.items[o];
+        snap.old = o2;
+        snap.noOld = missing;
+      }
+      // Цена на сайте в момент загрузки — для свежих снимков.
+      if (!snap.site && Math.abs(Date.now() - Date.parse(date)) < 3 * 86400e3) {
+        const lt = await query(`SELECT DISTINCT ON (offer_id) offer_id, card FROM price_daily WHERE cabinet = $1 AND card IS NOT NULL ORDER BY offer_id, date DESC`, [cabinet]).catch(() => []);
+        const st = {}; for (const r of lt) if (snap.items[r.offer_id]) st[r.offer_id] = Number(r.card);
+        if (Object.keys(st).length) snap.site = cleanMap(st);
+      }
+    }
     await setJson(k(cabinet, platform, `snap:${date}`), snap);
     let idx = (await index(cabinet, platform)).filter(s => s.id !== date);
     idx.push(metaOf(snap));

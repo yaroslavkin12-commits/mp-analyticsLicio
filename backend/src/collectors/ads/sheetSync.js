@@ -56,6 +56,7 @@ function parseCsv(text) {
 const REQUIRED_COLUMNS = {
   // CpoOrders: order_date не обязателен (старая версия скрипта его не пишет).
   Catalog: ['offer_id', 'sku'],
+  Cabinets: ['cabinet', 'client_id'],
   Analytics: ['date', 'sku', 'hits_view'],
   AnalyticsHistory: ['date', 'sku', 'hits_view'],
   Stocks: ['offer_id', 'fbo_present'],
