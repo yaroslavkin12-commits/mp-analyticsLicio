@@ -31,6 +31,7 @@ app.use((req, res, next) => {
   if (req.method !== 'GET') {
     // Любое сохранение может поменять отчёты (себестоимость, категории, группы…).
     // Расширение СПП присылает цены часто — от него сбрасываем только калькулятор.
+    if (/^\/api\/(ads|promo)\/transit/.test(req.path)) return next(); // ручной «В пути» — отчёты не пересчитываем
     if (req.path.startsWith('/api/discounts')) { for (const k of reportCache.keys()) if (k.startsWith('/api/finance/calc-base')) reportCache.delete(k); }
     else dataVersion.bump();
     if (req.path.startsWith('/api/tracked-articles')) require('./collectors/trackedOrdersPoll').dropTrackedCache();

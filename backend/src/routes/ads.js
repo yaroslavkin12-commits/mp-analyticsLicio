@@ -203,6 +203,30 @@ router.post('/manual-stock', async (req, res) => {
   }
 });
 
+// GET/POST /api/ads/transit — «В пути», шт: ручной ввод по артикулу (пока нет выгрузки поставок).
+// app_settings ads_transit:<cabinet> = { артикул: шт }. POST { cabinet, offerId, qty } (qty пусто/0 — убрать).
+router.get('/transit', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    const rows = await query('SELECT value FROM app_settings WHERE key=$1', [`ads_transit:${cabinet}`]);
+    res.json({ success: true, data: rows[0] ? JSON.parse(rows[0].value) : {} });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+router.post('/transit', async (req, res) => {
+  try {
+    const { cabinet, offerId, qty } = req.body || {};
+    if (!cabinet || !offerId) return res.status(400).json({ success: false, error: 'cabinet и offerId обязательны' });
+    const key = `ads_transit:${cabinet}`;
+    const rows = await query('SELECT value FROM app_settings WHERE key=$1', [key]);
+    const m = rows[0] ? JSON.parse(rows[0].value) : {};
+    const n = Math.round(Number(qty));
+    if (Number.isFinite(n) && n > 0) m[String(offerId).slice(0, 128)] = n; else delete m[offerId];
+    await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [key, JSON.stringify(m)]);
+    res.json({ success: true, data: m });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET/POST /api/ads/order?cabinet=defly — ручной порядок артикулов в общем
 // списке (drag-n-drop на фронте). Хранится как JSON-массив offerId в общей
 // таблице app_settings под ключом ads_order:<cabinet>, чтобы не заводить

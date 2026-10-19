@@ -253,3 +253,12 @@
 .mpui table.a-dt > thead th.lbl,.mpui table.a-dt > thead th.tot,.mpui table.a-dt > thead th.stk{z-index:6}
 .mpui thead.sh-on th{box-shadow:inset 0 -1px 0 var(--a-line),0 6px 8px -6px rgba(0,0,0,.35)}
 .mpui .a-t th.l{text-align:left}
+
+/* огонёк «реклама работает» и ручной ввод «В пути» */
+.mpui .a-live{width:8px;height:8px;border-radius:50%;flex:0 0 8px;box-shadow:0 0 0 2px var(--a-panel)}
+.mpui .a-live.on{background:var(--a-good);box-shadow:0 0 0 2px var(--a-panel),0 0 6px var(--a-good)}
+.mpui .a-live.off{background:var(--a-bad)}
+.mpui .a-transit{cursor:text;display:inline-block;text-align:right;min-width:34px;padding:2px 6px;border-radius:6px;border:1px dashed transparent}
+.mpui .a-transit:hover{border-color:var(--a-line,#ccc)}
+.mpui .a-transit.empty{color:var(--a-ink3)}
+.mpui .a-transit-in{width:70px;text-align:right;padding:3px 6px}

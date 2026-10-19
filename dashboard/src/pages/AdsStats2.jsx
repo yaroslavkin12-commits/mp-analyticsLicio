@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import {
-  getAdsStats, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder,
+  getAdsStats, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder, getAdsTransit, saveAdsTransit,
   getAdsGroups, addAdsGroup, removeAdsGroup, renameAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
   reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs, latestOnly,
 } from '../api';
@@ -103,6 +103,14 @@ export function groupColorMap(groups) {
   const out = {};
   for (const g of groups) out[g.id] = CAT_COLORS[slot[g.id]] || 'var(--a-ink3)';
   return out;
+}
+// «В пути»: ручной ввод прямо в ячейке (Enter / уход с поля — сохранить, Esc — отмена).
+function TransitInput({ value, onSave }) {
+  const [ed, setEd] = useState(null);
+  if (ed === null) return <span className={`a-transit ${value ? '' : 'empty'}`} title="Нажмите, чтобы ввести" onClick={() => setEd(value ? String(value) : '')}>{value ? fmtInt(value) : '+'}</span>;
+  const done = () => { const n = Math.max(0, Math.round(Number(String(ed).replace(/\s/g, '').replace(',', '.')) || 0)); setEd(null); if (n !== (value || 0)) onSave(n); };
+  return <input className="a-input a-transit-in" autoFocus inputMode="numeric" value={ed} onChange={e => setEd(e.target.value.replace(/[^\d\s]/g, ''))}
+    onBlur={done} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setEd(null); }} />;
 }
 const isCpoCampaign = c => String(c.paymentType || '').toUpperCase() === 'CPO';
 function cpoText(cpo) {
@@ -988,6 +996,7 @@ export default function AdsStats2({ cabinet }) {
   const [mode, setMode] = useState('all');
   const [groupsData, setGroupsData] = useState({ groups: [], members: {} });
   const [manualOrder, setManualOrder] = useState([]);
+  const [transit, setTransit] = useState({}); // «В пути», шт — ручной ввод
   const [catalog, setCatalog] = useState([]);
   const [clusters, setClusters] = useState([]);
   const [events, setEvents] = useState([]);
@@ -1026,6 +1035,7 @@ export default function AdsStats2({ cabinet }) {
   useEffect(() => {
     getAdsGroups(cabinet).then(r => setGroupsData(r.data.data || { groups: [], members: {} })).catch(() => {});
     getAdsOrder(cabinet).then(r => setManualOrder(r.data.data || [])).catch(() => {});
+    getAdsTransit(cabinet).then(r => setTransit(r.data.data || {})).catch(() => setTransit({}));
     getAdsCatalog(cabinet).then(r => setCatalog(r.data.data || [])).catch(() => {});
     getSiblingClusters(cabinet).then(r => setClusters(r.data.data || [])).catch(() => {});
   }, [cabinet]);
@@ -1084,6 +1094,7 @@ export default function AdsStats2({ cabinet }) {
         case 'revenue': return mode === 'ads' ? t.adRevenue : t.revenue;
         case 'orders': return mode === 'ads' ? t.adOrders : t.orders;
         case 'stock': return a.stock ? a.stock.fboPresent + a.stock.fbsPresent : -1;
+        case 'transit': return transit[a.offerId] || 0;
         case 'spend': return t.spend;
         case 'drr': { const r = mode === 'ads' ? t.adRevenue : t.revenue; return r > 0 ? t.spend / r * 100 : (t.spend > 0 ? 1e9 : -1); }
         case 'profit': { const p = profitOf(a); return p ? p.profit : -1e12; }
@@ -1096,7 +1107,7 @@ export default function AdsStats2({ cabinet }) {
     const fk = Object.keys(fctl.filters);
     if (fk.length) list = list.filter(a => fk.every(k => {
       const t = a.totals, rev = mode === 'ads' ? t.adRevenue : t.revenue;
-      const v = k === 'drr' ? (rev > 0 ? t.spend / rev * 100 : null) : k === 'stock' ? (a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null)
+      const v = k === 'drr' ? (rev > 0 ? t.spend / rev * 100 : null) : k === 'stock' ? (a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null) : k === 'transit' ? (transit[a.offerId] || 0)
         : k === 'profit' ? (profitOf(a)?.profit ?? null) : k === 'margin' ? (profitOf(a)?.margin ?? null) : valK(a, k);
       const { min, max } = fctl.filters[k];
       if (v === null || v === undefined) return false;
@@ -1117,7 +1128,7 @@ export default function AdsStats2({ cabinet }) {
       });
     }
     return { rows: list, hiddenByFilter: before - list.length };
-  }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK]);
+  }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK, transit]);
 
   const total = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, unitK]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1135,6 +1146,10 @@ export default function AdsStats2({ cabinet }) {
       }
       load();
     } finally { setCollecting(false); }
+  }
+  function saveTransit(offerId, v) {
+    setTransit(p => { const n = { ...p }; if (v > 0) n[offerId] = v; else delete n[offerId]; return n; });
+    saveAdsTransit(cabinet, offerId, v).catch(console.error);
   }
   function toggleOpen(key) {
     setOpen(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -1244,11 +1259,11 @@ export default function AdsStats2({ cabinet }) {
   });
   const COLS = [
     { k: 'id', t: 'Артикул' }, { k: null, t: 'Заказы по дням' }, { k: 'revenue', t: 'Заказано, ₽' }, { k: 'orders', t: 'Заказы, шт' },
-    { k: 'stock', t: 'Остаток, шт', h: 'Текущий остаток FBO + FBS' }, { k: 'spend', t: 'Расход, ₽', h: 'Оплата за клик + оплата за заказ. Оплата за заказ — в дне заказа (Ozon списывает её позже, в день выкупа; в P&L она в дне списания)' },
+    { k: 'stock', t: 'Остаток, шт', h: 'Текущий остаток FBO + FBS' }, { k: 'transit', t: 'В пути, шт', h: 'Ручной ввод: сколько едет на склад. Нажмите на ячейку, введите число, Enter' }, { k: 'spend', t: 'Расход, ₽', h: 'Оплата за клик + оплата за заказ. Оплата за заказ — в дне заказа (Ozon списывает её позже, в день выкупа; в P&L она в дне списания)' },
     { k: 'drr', t: 'ДРР', h: 'Расход / сумма заказов; ниже — с учётом выкупа: расход / (заказы × % выкупа артикула)', u: '%' },
     { k: 'profit', t: 'Прогнозируемая прибыль', h: 'Ожидаемая прибыль с заказов периода после выкупа, комиссии, логистики, рекламы, себестоимости и налога (коэффициенты — из «Юнит-экономики»)' },
     { k: 'margin', t: 'Маржа', h: 'Прогнозируемая прибыль / ожидаемая выручка', u: '%' },
-    { k: null, t: 'ОЗЗ', h: 'Оплата за заказ: статус на товаре и ставка' }, { k: null, t: 'РК', h: 'Рекламные кампании товара' },
+    { k: null, t: 'ОЗК', h: 'Оплата за клик: вкл — есть запущенная РК с оплатой за клик' }, { k: null, t: 'ОЗЗ', h: 'Оплата за заказ: статус на товаре и ставка' }, { k: null, t: 'РК', h: 'Рекламные кампании товара' },
   ];
   const ctlAds = {
     sort: sort.key && sort.key !== 'manual' ? { k: sort.key, dir: sort.dir } : null,
@@ -1287,6 +1302,10 @@ export default function AdsStats2({ cabinet }) {
     const st = a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null;
     const daysCls = st === null ? '' : (st < 5 || (a.stockDays !== null && a.stockDays < 7)) ? 'b' : (a.stockDays !== null && a.stockDays < 14) ? 'w' : '';
     const hasCpo = a.campaigns.some(isCpoCampaign);
+    const cpcAll = a.campaigns.filter(c => !isCpoCampaign(c));
+    const cpcOn = cpcAll.filter(c => c.state === 'CAMPAIGN_STATE_RUNNING');
+    const cpoOn = a.cpo ? !!a.cpo.enabled : a.campaigns.some(c => isCpoCampaign(c) && c.state === 'CAMPAIGN_STATE_RUNNING');
+    const adsOn = cpcOn.length > 0 || cpoOn;
     const split = a.campaigns.some(c => c.splitAcross > 1 && c.totalSpend > 0);
     return (
       <React.Fragment key={key}>
@@ -1299,6 +1318,7 @@ export default function AdsStats2({ cabinet }) {
           onDragEnd={dragEnabled ? () => { setDragKey(null); setOverKey(null); } : undefined}>
           <td>
             <div className="a-art">
+              <span className={`a-live ${adsOn ? 'on' : 'off'}`} title={adsOn ? `Реклама работает: ${[cpcOn.length ? 'оплата за клик' : '', cpoOn ? 'оплата за заказ' : ''].filter(Boolean).join(' + ')}` : 'Реклама выключена: нет запущенных РК с оплатой за клик и выключена оплата за заказ'} />
               {dragEnabled && <span className="a-handle" title="Перетащите, чтобы поменять порядок">⠿</span>}
               <span className="a-chev">▶</span>
               <div style={{ minWidth: 0 }}>
@@ -1316,6 +1336,7 @@ export default function AdsStats2({ cabinet }) {
               <span className={`d ${daysCls}`}>{st === null ? 'нет данных' : st === 0 ? 'нет в наличии' : a.stockDays === null ? 'нет продаж' : `≈ ${Math.round(a.stockDays)} дн`}</span>
             </div>
           </td>
+          <td className="n" onClick={e => e.stopPropagation()}><TransitInput value={transit[key]} onSave={v => saveTransit(key, v)} /></td>
           <td className="n">
             {fmtInt(m.totals.spend)}{split && <span className="a-approx" title="Часть расхода — мультитоварная РК, поделена поровну между её артикулами">≈</span>}
             <span className="a-spendsub">клик {fmtInt(m.totals.spendCpc)} · заказ {m.totals.spendCpo ? fmtInt(m.totals.spendCpo) : '—'}
@@ -1334,6 +1355,11 @@ export default function AdsStats2({ cabinet }) {
               <td>{pr && pr.margin !== null ? <span className={`pill ${pr.margin < 0 ? 'b' : pr.margin < 10 ? 'w' : 'g'}`}>{fmtPct(pr.margin)}</span> : '—'}</td>
             </>
           ); })()}
+          <td>{cpcAll.length
+            ? (cpcOn.length
+              ? <span className="tag on" title={`Запущено РК с оплатой за клик: ${cpcOn.length} из ${cpcAll.length}`}>вкл</span>
+              : <span className="tag off" title={`РК с оплатой за клик не запущены (${cpcAll.length})`}>выкл</span>)
+            : <span className="tag off" title="Нет РК с оплатой за клик">—</span>}</td>
           <td>{a.cpo
             ? (a.cpo.enabled
               ? <span className="tag on" title={cpoText(a.cpo)}>вкл{a.cpo.bidPct !== null ? ` · ${String(a.cpo.bidPct).replace('.', ',')}%` : ''}</span>
@@ -1533,13 +1559,14 @@ export default function AdsStats2({ cabinet }) {
                   <td className="n">{fmtInt(T.revenue)}{showAssoc && assocLine(assocForRows, 'revenue', T.revenue)}</td>
                   <td className="n">{fmtInt(T.orders)}{showAssoc && assocLine(assocForRows, 'orders', T.orders)}</td>
                   <td className="n">{fmtInt(total.stockNow)}</td>
+                  <td className="n">{(() => { const t = rows.reduce((x, r) => x + (transit[r.offerId] || 0), 0); return t ? fmtInt(t) : '—'; })()}</td>
                   <td className="n">{fmtInt(T.spend)}<span className="a-spendsub">клик {fmtInt(T.spendCpc)} · заказ {T.spendCpo ? fmtInt(T.spendCpo) : '—'}</span></td>
                   <td><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span>{T.drrB !== null && T.drrB !== undefined ? <span className="a-spendsub">с выкупом {fmtPct(T.drrB)}</span> : null}</td>
                   {(() => { let p = 0, e = 0, any = false; for (const r of rows) { const x = profitOf(r); if (x) { p += x.profit; e += x.expRev; any = true; } } return (
                     <><td className="n"><b style={{ color: p < 0 ? 'var(--a-bad)' : undefined }}>{any ? fmtInt(p) : '—'}</b></td>
                     <td>{any && e > 0 ? <span className={`pill ${p < 0 ? 'b' : p / e * 100 < 10 ? 'w' : 'g'}`}>{fmtPct(p / e * 100)}</span> : '—'}</td></>
                   ); })()}
-                  <td /><td />
+                  <td /><td /><td />
                 </tr>
                 {open.has(aggKey) && (
                   <tr className="a-detail"><td colSpan={COLS.length}>

@@ -70,6 +70,8 @@ export const saveManualStock = (cabinet, offerId, metric, value) =>
   api.post('/promo/manual-stock', { cabinet, offerId, metric, value });
 export const getAdsOrder  = cabinet => api.get('/promo/order', { params: { cabinet } });
 export const saveAdsOrder = (cabinet, order) => api.post('/promo/order', { cabinet, order });
+export const getAdsTransit = cabinet => api.get('/promo/transit', { params: { cabinet } });
+export const saveAdsTransit = (cabinet, offerId, qty) => api.post('/promo/transit', { cabinet, offerId, qty });
 export const getAdsGroups    = cabinet => api.get('/promo/groups', { params: { cabinet } });
 export const addAdsGroup     = (cabinet, name) => api.post('/promo/groups', { cabinet, name });
 export const removeAdsGroup  = (cabinet, id) => api.delete(`/ads/groups/${id}`, { params: { cabinet } });
