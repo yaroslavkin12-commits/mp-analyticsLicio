@@ -254,13 +254,14 @@ function noPremium_(cab, set) {
   if (set) props.setProperty(k, '1');
   return props.getProperty(k) === '1';
 }
-function collectAnalyticsWindow_(cab, from, to, out, deadline) {
+function collectAnalyticsWindow_(cab, from, to, out, deadline, info) {
   const headers = sellerHeaders_(cab);
   if (!headers) return 0;
   let free = noPremium_(cab);
   let offset = 0, n = 0;
+  if (info) info.complete = false;
   for (let guard = 0; guard < 60; guard++) {
-    if (deadline && Date.now() > deadline) { Logger.log('Аналитика ' + cab.id + ': не успел все страницы — остальное в следующий раз'); break; }
+    if (deadline && Date.now() > deadline) { Logger.log('Аналитика ' + cab.id + ': не успел все страницы — остальное в следующий раз'); return n; }
     const metrics = free ? ANALYTICS_FREE_METRICS_ : ANALYTICS_METRICS_;
     let data;
     try {
@@ -289,8 +290,9 @@ function collectAnalyticsWindow_(cab, from, to, out, deadline) {
       else out.push([cab.id, date, sku, m[0], m[1], m[2], m[3], m[4], m[5], m[6] || '']);
       n++;
     });
-    if (rows.length < 1000) break;
+    if (rows.length < 1000) { if (info) info.complete = true; break; }
     offset += 1000;
+    if (free && deadline && Date.now() + 61000 > deadline) { Logger.log('Аналитика ' + cab.id + ': не успел все страницы — остальное в следующий раз'); return n; }
     Utilities.sleep(free ? 61000 : 350);
   }
   return n;
@@ -303,20 +305,23 @@ function syncAnalyticsHistory() {
   ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncAnalyticsHistory') ScriptApp.deleteTrigger(t); });
   const props = PropertiesService.getScriptProperties();
   const prog = JSON.parse(props.getProperty('AN_HIST') || '{}'); // кабинет -> сколько дней назад уже собрано
-  const deadline = Date.now() + 4.5 * 60000;
+  const started = Date.now(), deadline = started + 4 * 60000;
   const rows = [];
   let left = false;
   getCabinets_().forEach(function (cab) {
-    if (!sellerHeaders_(cab)) return;
+    if (left || !sellerHeaders_(cab)) return;
+    const free = noPremium_(cab), step = free ? 4 : 15; // без Premium: ~4 дня = одна страница (1 запрос в минуту)
     let done = prog[cab.id] || 0;
     while (done < 90) {
-      if (Date.now() > deadline - 70000) { left = true; break; }
-      const from = mskDate_(Math.min(90, done + 15) - 1), to = mskDate_(done);
-      try { Logger.log('История ' + cab.id + ' ' + from + '..' + to + ': строк ' + collectAnalyticsWindow_(cab, from, to, rows, deadline)); }
+      if (Date.now() > deadline - (free ? 65000 : 20000)) { left = true; break; }
+      const from = mskDate_(Math.min(90, done + step) - 1), to = mskDate_(done);
+      const info = {};
+      try { Logger.log('История ' + cab.id + ' ' + from + '..' + to + ': строк ' + collectAnalyticsWindow_(cab, from, to, rows, deadline, info)); }
       catch (e) { Logger.log('История ' + cab.id + ': ' + e.message); left = true; break; }
-      done = Math.min(90, done + 15);
+      if (!info.complete) { left = true; break; } // кусок не докачан — повторим его в следующий раз
+      done = Math.min(90, done + step);
       prog[cab.id] = done;
-      if (noPremium_(cab)) Utilities.sleep(61000);
+      if (free && done < 90 && Date.now() + 61000 < deadline) Utilities.sleep(61000);
     }
   });
   // Без обрезки по сроку хранения: сервер заберёт строки в ближайшие полчаса.
@@ -324,7 +329,7 @@ function syncAnalyticsHistory() {
   if (left) {
     props.setProperty('AN_HIST', JSON.stringify(prog));
     ScriptApp.newTrigger('syncAnalyticsHistory').timeBased().after(60 * 1000).create();
-    Logger.log('syncAnalyticsHistory: продолжу через минуту');
+    Logger.log('syncAnalyticsHistory: записал ' + rows.length + ' строк, собрано дней: ' + JSON.stringify(prog) + ' — продолжу через минуту');
   } else {
     props.deleteProperty('AN_HIST');
     Logger.log('syncAnalyticsHistory: готово, строк ' + rows.length);
@@ -1498,7 +1503,7 @@ function syncRecent() {
   const skuStats = [], cpoProducts = [], cpcBids = [];
   const from = mskDate_(ANALYTICS_WINDOW_DAYS_RECENT - 1), to = mskDate_(0);
   cabinets.forEach(function (cab) {
-    try { collectAnalyticsWindow_(cab, from, to, analytics); } catch (e) { Logger.log('Аналитика ' + cab.id + ': ' + e.message); }
+    try { collectAnalyticsWindow_(cab, from, to, analytics, Date.now() + 90000); } catch (e) { Logger.log('Аналитика ' + cab.id + ': ' + e.message); }
     try { collectStocks_(cab, stocks); } catch (e) { Logger.log('Остатки ' + cab.id + ': ' + e.message); }
     let withSpend = null;
     try { withSpend = collectCampaignsAndStats_(cab, from, to, campaigns, stats, campaignSkus); } catch (e) { Logger.log('Кампании/расход ' + cab.id + ': ' + e.message); }
@@ -1536,7 +1541,8 @@ function syncDaily() {
   const fromA = mskDate_(ANALYTICS_WINDOW_DAYS_FULL - 1), toA = mskDate_(0);
   const fromS = mskDate_(STATS_WINDOW_DAYS_FULL - 1), toS = mskDate_(0);
   cabinets.forEach(function (cab) {
-    try { collectAnalyticsWindow_(cab, fromA, toA, analytics); } catch (e) { Logger.log('Аналитика(полная) ' + cab.id + ': ' + e.message); }
+    // Без Premium — 1 запрос в минуту: берём 8 дней (≈ 2 страницы), старше докачивает syncAnalyticsHistory.
+    try { collectAnalyticsWindow_(cab, noPremium_(cab) ? mskDate_(7) : fromA, toA, analytics, Date.now() + 150000); } catch (e) { Logger.log('Аналитика(полная) ' + cab.id + ': ' + e.message); }
     let withSpend = null;
     try { withSpend = collectCampaignsAndStats_(cab, fromS, toS, campaigns, stats); } catch (e) { Logger.log('Кампании(полные) ' + cab.id + ': ' + e.message); }
   });
@@ -1634,8 +1640,11 @@ function setupTriggers() {
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.
-  ScriptApp.newTrigger('T_syncOrders').timeBased().everyMinutes(10).create();
-  ScriptApp.newTrigger('T_syncRecent').timeBased().everyMinutes(30).create();
+  // Свойство LIGHT=1 (таблица малых магазинов на обычном Gmail, лимит 90 мин в
+  // сутки): заказы раз в 30 мин, свежие данные раз в час.
+  const light = PropertiesService.getScriptProperties().getProperty('LIGHT') === '1';
+  ScriptApp.newTrigger('T_syncOrders').timeBased().everyMinutes(light ? 30 : 10).create();
+  ScriptApp.newTrigger('T_syncRecent').timeBased().everyMinutes(light ? 60 : 30).create();
   ScriptApp.newTrigger('T_syncCpoOrders').timeBased().everyHours(3).create();
   ScriptApp.newTrigger('T_syncDaily').timeBased().atHour(4).everyDays(1).create();
   ScriptApp.newTrigger('T_syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
