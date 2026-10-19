@@ -57,6 +57,7 @@ const REQUIRED_COLUMNS = {
   // CpoOrders: order_date не обязателен (старая версия скрипта его не пишет).
   Catalog: ['offer_id', 'sku'],
   Analytics: ['date', 'sku', 'hits_view'],
+  AnalyticsHistory: ['date', 'sku', 'hits_view'],
   Stocks: ['offer_id', 'fbo_present'],
   Campaigns: ['campaign_id', 'title'],
   Stats: ['campaign_id', 'spend'],
@@ -131,8 +132,18 @@ async function syncCatalogFromSheet(cabinet) {
 }
 
 async function syncAnalyticsFromSheet(cabinet) {
-  const rows = await fetchSheetRows('Analytics', cabinet);
-  if (rows === null) return { rows: 0 };
+  const cur = await fetchSheetRows('Analytics', cabinet);
+  if (cur === null) return { rows: 0 };
+  // История (вкладка AnalyticsHistory, её пишет syncAnalyticsHistory и не обрезает
+  // по сроку хранения) + свежая вкладка; при совпадении дня и SKU — свежая.
+  const hist = await fetchSheetRows('AnalyticsHistory', cabinet).catch(() => null);
+  let rows = cur;
+  if (hist && hist.length) {
+    const m = new Map();
+    for (const r of hist) m.set(r.cabinet + '|' + r.date + '|' + r.sku, r);
+    for (const r of cur) m.set(r.cabinet + '|' + r.date + '|' + r.sku, r);
+    rows = [...m.values()];
+  }
   const mine = rows.filter(r => r.cabinet === cabinet);
   if (!mine.length) throw new Error(`в Google-таблице нет аналитики «${cabinet}» (вкладка Analytics) — запустите syncDaily в скрипте`);
   const same = rowDiff.sameAsLast(`analytics:${cabinet}`, mine);

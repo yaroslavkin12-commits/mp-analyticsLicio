@@ -47,6 +47,7 @@
 const SHEET_NAMES = {
   catalog: 'Catalog',
   analytics: 'Analytics',
+  analyticsHist: 'AnalyticsHistory',
   stocks: 'Stocks',
   campaigns: 'Campaigns',
   stats: 'Stats',
@@ -324,8 +325,9 @@ function syncAnalyticsHistory() {
       if (free && done < 90 && Date.now() + 61000 < deadline) Utilities.sleep(61000);
     }
   });
-  // Без обрезки по сроку хранения: сервер заберёт строки в ближайшие полчаса.
-  if (rows.length) mergeIntoSheet_(SHEET_NAMES.analytics, ANALYTICS_HEADERS, rows, [0, 1, 2]);
+  // В отдельную вкладку: Analytics обрезается до 45 дней при каждом обновлении,
+  // и старые дни пропадали раньше, чем сервер успевал их забрать.
+  if (rows.length) mergeIntoSheet_(SHEET_NAMES.analyticsHist, ANALYTICS_HEADERS, rows, [0, 1, 2]);
   if (left) {
     props.setProperty('AN_HIST', JSON.stringify(prog));
     ScriptApp.newTrigger('syncAnalyticsHistory').timeBased().after(60 * 1000).create();
