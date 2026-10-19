@@ -574,7 +574,9 @@ export default function SalesAnalytics({ cabinet }) {
       if (k === 'sale' || k === 'return') { x.sRub += a; x.sDay[d] += a; saleDay[d] += a; x.sQty += k === 'sale' ? Math.abs(q) : -Math.abs(q); } else if (OZ.includes(k)) x.oz += a;
     }
     // Реклама без артикула — отдельно: делится по расходу рекламного кабинета.
-    for (const [d, b, a] of pnl.noSku || []) if (pnl.buckets[b] === 'ads') noSkuAds += a; else if (OZ.includes(pnl.buckets[b])) { noSkuOz += a; noSkuDay[d] += a; }
+    // Продажи/возвраты без артикула (корректировки отчёта о реализации и т. п.) — в выручку, как в «P&L».
+    const noSkuSaleDay = new Float64Array(nd);
+    for (const [d, b, a] of pnl.noSku || []) if (pnl.buckets[b] === 'ads') noSkuAds += a; else if (OZ.includes(pnl.buckets[b])) { noSkuOz += a; noSkuDay[d] += a; } else if (pnl.buckets[b] === 'sale' || pnl.buckets[b] === 'return') noSkuSaleDay[d] += a;
     // Последний день, когда Ozon уже провёл рекламу в начислениях; за более
     // свежие дни реклама в начислениях ещё не появилась — вычитаем расход кабинета.
     const ai = pnl.buckets.indexOf('ads');
@@ -590,7 +592,7 @@ export default function SalesAnalytics({ cabinet }) {
     // Реклама кабинета без артикула за дни, которых ещё нет в начислениях, — как в «P&L».
     (pnl.adNoSku || []).forEach((v, d) => { if (d > lastFin && v) noSkuDay[d] -= v; });
     for (const x of m.values()) saleAll += x.sRub;
-    return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, saleDay, nd, dates: pnl.dates };
+    return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
   const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -654,14 +656,7 @@ export default function SalesAnalytics({ cabinet }) {
     let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
     const selDay = finPer ? new Float64Array(finPer.nd) : null;
     const taxDay = finPer ? new Float64Array(finPer.nd) : null; // налог — по дням, как в «P&L» (день с отрицательной базой — 0)
-    // Весь кабинет без фильтров — плюс артикулы, которые есть в начислениях, но
-    // уже не в каталоге (архив): в «P&L» они тоже входят.
-    let arts = node.arts;
-    if (finPer && !sel && !brand && !search.trim()) {
-      const seen = new Set(node.arts.map(a => a.o));
-      arts = node.arts.concat([...finPer.m.keys()].filter(o => !seen.has(o)).map(o => ({ o, extra: true })));
-    }
-    for (const a of arts) {
+    for (const a of node.arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
       if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; selAd += x.ad; }
       if (x) {
@@ -693,6 +688,7 @@ export default function SalesAnalytics({ cabinet }) {
       for (let d = 0; d < finPer.nd; d++) {
         const sh = finPer.saleDay[d] > 0 ? selDay[d] / finPer.saleDay[d] : shareAll;
         oz += finPer.noSkuDay[d] * sh;
+        sRub += finPer.noSkuSaleDay[d] * sh;
       }
       oz += finPer.noSkuAds * (finPer.adsAll > 0 ? selAd / finPer.adsAll : shareAll);
     }
