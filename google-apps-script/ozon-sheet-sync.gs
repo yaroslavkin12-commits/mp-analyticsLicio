@@ -243,26 +243,137 @@ function collectCatalog_(cab, out) {
 
 // ---------- Аналитика товаров ----------
 const ANALYTICS_METRICS_ = ['hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'ordered_units', 'revenue', 'position_category'];
-function collectAnalyticsWindow_(cab, from, to, out) {
+// Без подписки Premium Ozon (с 23.07.2026) отдаёт по товарам и дням только
+// заказанные штуки и выручку (ordered_units, revenue) — остальные метрики
+// молча выкидывает из ответа, и числа «съезжают» по колонкам. Такой кабинет
+// отмечаем (свойство NOPREM_<ID>) и дальше спрашиваем только эти две
+// метрики; лимит без Premium — 1 запрос в минуту, поэтому между страницами ждём.
+const ANALYTICS_FREE_METRICS_ = ['ordered_units', 'revenue'];
+function noPremium_(cab, set) {
+  const props = PropertiesService.getScriptProperties(), k = 'NOPREM_' + cab.id.toUpperCase();
+  if (set) props.setProperty(k, '1');
+  return props.getProperty(k) === '1';
+}
+function collectAnalyticsWindow_(cab, from, to, out, deadline) {
   const headers = sellerHeaders_(cab);
-  if (!headers) return;
-  let offset = 0;
+  if (!headers) return 0;
+  let free = noPremium_(cab);
+  let offset = 0, n = 0;
   for (let guard = 0; guard < 60; guard++) {
-    const data = fetchJson_('https://api-seller.ozon.ru/v1/analytics/data', {
-      method: 'post', contentType: 'application/json', headers: headers,
-      payload: JSON.stringify({ date_from: from, date_to: to, metrics: ANALYTICS_METRICS_, dimension: ['sku', 'day'], limit: 1000, offset: offset }),
-    }, 'Аналитика ' + from + '..' + to);
+    if (deadline && Date.now() > deadline) { Logger.log('Аналитика ' + cab.id + ': не успел все страницы — остальное в следующий раз'); break; }
+    const metrics = free ? ANALYTICS_FREE_METRICS_ : ANALYTICS_METRICS_;
+    let data;
+    try {
+      data = fetchJson_('https://api-seller.ozon.ru/v1/analytics/data', {
+        method: 'post', contentType: 'application/json', headers: headers,
+        payload: JSON.stringify({ date_from: from, date_to: to, metrics: metrics, dimension: ['sku', 'day'], limit: 1000, offset: offset }),
+      }, 'Аналитика ' + from + '..' + to);
+    } catch (e) {
+      // Лимит «раз в минуту» — подождём и повторим страницу один раз.
+      if (free && /429/.test(e.message)) { Utilities.sleep(61000); guard++; continue; }
+      throw e;
+    }
     const rows = (data.result && data.result.data) || [];
+    // Ответ без премиум-метрик (их Ozon выкинул) — переключаемся на бесплатные.
+    if (!free && rows.length && (rows[0].metrics || []).length < metrics.length) {
+      noPremium_(cab, true); free = true;
+      Logger.log('Аналитика ' + cab.id + ': без Premium — беру только заказы и выручку');
+      continue;
+    }
     rows.forEach(function (r) {
       const dims = r.dimensions || [];
       const sku = dims[0] && dims[0].id, date = dims[1] && dims[1].id;
       if (!sku || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) return;
       const m = (r.metrics || []).map(function (v) { return Number(v) || 0; });
-      out.push([cab.id, date, sku, m[0], m[1], m[2], m[3], m[4], m[5], m[6] || '']);
+      if (free) out.push([cab.id, date, sku, '', '', '', '', m[0], m[1], '']);
+      else out.push([cab.id, date, sku, m[0], m[1], m[2], m[3], m[4], m[5], m[6] || '']);
+      n++;
     });
     if (rows.length < 1000) break;
     offset += 1000;
-    Utilities.sleep(350);
+    Utilities.sleep(free ? 61000 : 350);
+  }
+  return n;
+}
+
+// История заказов по товарам и дням за 90 дней — для нового магазина (на
+// сервере история копится сама, во вкладке её держим 45 дней). Запускать
+// вручную; если не успеет за раз — продолжит сам через минуту.
+function syncAnalyticsHistory() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncAnalyticsHistory') ScriptApp.deleteTrigger(t); });
+  const props = PropertiesService.getScriptProperties();
+  const prog = JSON.parse(props.getProperty('AN_HIST') || '{}'); // кабинет -> сколько дней назад уже собрано
+  const deadline = Date.now() + 4.5 * 60000;
+  const rows = [];
+  let left = false;
+  getCabinets_().forEach(function (cab) {
+    if (!sellerHeaders_(cab)) return;
+    let done = prog[cab.id] || 0;
+    while (done < 90) {
+      if (Date.now() > deadline - 70000) { left = true; break; }
+      const from = mskDate_(Math.min(90, done + 15) - 1), to = mskDate_(done);
+      try { Logger.log('История ' + cab.id + ' ' + from + '..' + to + ': строк ' + collectAnalyticsWindow_(cab, from, to, rows, deadline)); }
+      catch (e) { Logger.log('История ' + cab.id + ': ' + e.message); left = true; break; }
+      done = Math.min(90, done + 15);
+      prog[cab.id] = done;
+      if (noPremium_(cab)) Utilities.sleep(61000);
+    }
+  });
+  // Без обрезки по сроку хранения: сервер заберёт строки в ближайшие полчаса.
+  if (rows.length) mergeIntoSheet_(SHEET_NAMES.analytics, ANALYTICS_HEADERS, rows, [0, 1, 2]);
+  if (left) {
+    props.setProperty('AN_HIST', JSON.stringify(prog));
+    ScriptApp.newTrigger('syncAnalyticsHistory').timeBased().after(60 * 1000).create();
+    Logger.log('syncAnalyticsHistory: продолжу через минуту');
+  } else {
+    props.deleteProperty('AN_HIST');
+    Logger.log('syncAnalyticsHistory: готово, строк ' + rows.length);
+  }
+}
+
+// Список отправлений FBO. /v2/posting/fbo/list для новых ключей Ozon отключил
+// («obsolete method») — тогда /v3/posting/fbo/list (листание по cursor).
+// onPosting(p) вызывается для каждого отправления.
+function eachFboPosting_(cab, since, to, withObj, onPosting) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return;
+  const props = PropertiesService.getScriptProperties(), k = 'FBO_V3_' + cab.id.toUpperCase();
+  if (props.getProperty(k) !== '1') {
+    try {
+      let offset = 0;
+      for (let guard = 0; guard < 60; guard++) {
+        const data = fetchJson_('https://api-seller.ozon.ru/v2/posting/fbo/list', {
+          method: 'post', contentType: 'application/json', headers: headers,
+          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: withObj }),
+        }, 'Отправления FBO');
+        let postings = data.result && data.result.postings;
+        if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
+        postings = postings || [];
+        postings.forEach(onPosting);
+        if (postings.length < 1000) return;
+        offset += 1000;
+        Utilities.sleep(300);
+      }
+      return;
+    } catch (e) {
+      if (!/obsolete/i.test(e.message)) throw e;
+      props.setProperty(k, '1');
+      Logger.log('FBO ' + cab.id + ': старый метод отключён — перехожу на v3');
+    }
+  }
+  let cursor = '';
+  for (let guard = 0; guard < 200; guard++) {
+    const body = { dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, with: withObj };
+    if (cursor) body.cursor = cursor;
+    const data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbo/list', {
+      method: 'post', contentType: 'application/json', headers: headers, payload: JSON.stringify(body),
+    }, 'Отправления FBO v3');
+    const res = data.result || data;
+    const postings = res.postings || [];
+    postings.forEach(onPosting);
+    cursor = res.cursor || '';
+    if (!res.has_next || !cursor || !postings.length) return;
+    Utilities.sleep(300);
   }
 }
 
@@ -396,6 +507,16 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campai
 function collectPostings_(cab, url, scheme, since, out) {
   const headers = sellerHeaders_(cab);
   if (!headers) return;
+  if (scheme === 'fbo') {
+    eachFboPosting_(cab, since, new Date().toISOString(), { analytics_data: true }, function (p) {
+      (p.products || []).forEach(function (prod) {
+        out.push([cab.id, p.posting_number, prod.sku || '', prod.offer_id || '', String(prod.name || '').slice(0, 200),
+          prod.price || '', prod.quantity || 1, p.status || '', (p.analytics_data && p.analytics_data.warehouse_name) || '',
+          p.in_process_at || p.created_at || '', scheme]);
+      });
+    });
+    return;
+  }
   let offset = 0;
   for (let guard = 0; guard < 30; guard++) {
     const data = fetchJson_(url, {
@@ -425,6 +546,7 @@ function syncOrders() {
   const rows = [];
   cabinets.forEach(function (cab) {
     try { collectPostings_(cab, 'https://api-seller.ozon.ru/v2/posting/fbo/list', 'fbo', since, rows); } catch (e) { Logger.log('Заказы FBO ' + cab.id + ': ' + e.message); }
+    Utilities.sleep(1000); // лимит запросов в секунду
     try { collectPostings_(cab, 'https://api-seller.ozon.ru/v3/posting/fbs/list', 'fbs', since, rows); } catch (e) { Logger.log('Заказы FBS ' + cab.id + ': ' + e.message); }
   });
   const map = readSheetAsMap_(SHEET_NAMES.orders, [0, 1, 2]);
@@ -697,46 +819,48 @@ function collectGeo_(cab, days, agg, buy) {
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const to = new Date().toISOString();
   let n = 0;
-  [['https://api-seller.ozon.ru/v2/posting/fbo/list', 'FBO'], ['https://api-seller.ozon.ru/v3/posting/fbs/list', 'FBS']].forEach(function (src) {
-    let offset = 0;
-    for (let guard = 0; guard < 60; guard++) {
-      let data;
-      try {
-        data = fetchJson_(src[0], {
-          method: 'post', contentType: 'application/json', headers: headers,
-          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: false, financial_data: true } }),
-        }, 'География ' + src[1]);
-      } catch (e) { Logger.log(e.message); break; }
-      let postings = data.result && data.result.postings;
-      if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
-      postings = postings || [];
-      postings.forEach(function (p) {
-        const iso = p.in_process_at || p.created_at;
-        if (!iso) return;
-        const d = Utilities.formatDate(new Date(iso), 'GMT+3', 'yyyy-MM-dd');
-        const cluster = String((p.financial_data && p.financial_data.cluster_to) || '').trim() || 'Кластер не указан';
-        const st = String(p.status || '');
-        const cancelled = /cancel/i.test(st);
-        const delivered = st === 'delivered';
-        (p.products || []).forEach(function (prod) {
-          const q = Number(prod.quantity) || 1;
-          const key = [cab.id, d, prod.offer_id || '', cluster].join('|');
-          const r = agg[key] || (agg[key] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), cluster, 0, 0, 0]);
-          if (cancelled) r[7] += q;
-          else { r[5] += q; r[6] += q * (parseRuNumber_(prod.price) || 0); }
-          const bk = [cab.id, d, prod.offer_id || ''].join('|');
-          const b = buy[bk] || (buy[bk] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), 0, 0, 0, 0, 0]);
-          b[4] += q;
-          if (src[1] === 'FBS') b[8] += q;
-          if (delivered) b[5] += q; else if (cancelled) b[6] += q; else b[7] += q;
-          n++;
-        });
-      });
-      if (postings.length < 1000) break;
-      offset += 1000;
-      Utilities.sleep(300);
-    }
-  });
+  function add(p, scheme) {
+    const iso = p.in_process_at || p.created_at;
+    if (!iso) return;
+    const d = Utilities.formatDate(new Date(iso), 'GMT+3', 'yyyy-MM-dd');
+    const cluster = String((p.financial_data && p.financial_data.cluster_to) || '').trim() || 'Кластер не указан';
+    const st = String(p.status || '');
+    const cancelled = /cancel/i.test(st);
+    const delivered = st === 'delivered';
+    (p.products || []).forEach(function (prod) {
+      const q = Number(prod.quantity) || 1;
+      const key = [cab.id, d, prod.offer_id || '', cluster].join('|');
+      const r = agg[key] || (agg[key] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), cluster, 0, 0, 0]);
+      if (cancelled) r[7] += q;
+      else { r[5] += q; r[6] += q * (parseRuNumber_(prod.price) || 0); }
+      const bk = [cab.id, d, prod.offer_id || ''].join('|');
+      const b = buy[bk] || (buy[bk] = [cab.id, d, prod.offer_id || '', String(prod.sku || ''), 0, 0, 0, 0, 0]);
+      b[4] += q;
+      if (scheme === 'FBS') b[8] += q;
+      if (delivered) b[5] += q; else if (cancelled) b[6] += q; else b[7] += q;
+      n++;
+    });
+  }
+  try { eachFboPosting_(cab, since, to, { analytics_data: false, financial_data: true }, function (p) { add(p, 'FBO'); }); }
+  catch (e) { Logger.log('География FBO ' + cab.id + ': ' + e.message); }
+  Utilities.sleep(1000); // лимит запросов в секунду
+  let offset = 0;
+  for (let guard = 0; guard < 60; guard++) {
+    let data;
+    try {
+      data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbs/list', {
+        method: 'post', contentType: 'application/json', headers: headers,
+        payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: false, financial_data: true } }),
+      }, 'География FBS');
+    } catch (e) { Logger.log(e.message); break; }
+    let postings = data.result && data.result.postings;
+    if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
+    postings = postings || [];
+    postings.forEach(function (p) { add(p, 'FBS'); });
+    if (postings.length < 1000) break;
+    offset += 1000;
+    Utilities.sleep(300);
+  }
   return n;
 }
 
