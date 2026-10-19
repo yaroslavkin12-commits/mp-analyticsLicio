@@ -610,7 +610,11 @@ export default function SalesAnalytics({ cabinet }) {
     const ks = unitCoefs(c, coefArts, bs.shareOf);
     return new Map(coefArts.map((a, i) => [a.o, ks[i]]));
   }, [fin, coefArts, bs.shareOf]);
-  const partsOf = useMemo(() => new Map(coefArts.map(a => [a.o, a.parts])), [coefArts]);
+  // Для факта — те же артикулы и категории, что в «P&L» (из начислений периода): от них
+  // зависят средние доли по категориям для артикулов с малым числом продаж.
+  const finArts = useMemo(() => (fin?.pnl ? fin.pnl.articles.map(a => ({ o: a.o, parts: String(a.cat || 'Без категории').split(SEP) })) : []), [fin?.pnl]);
+  const bsF = useBuyerShare(cabinet, finArts);
+  const partsOf = useMemo(() => new Map(finArts.map(a => [a.o, a.parts])), [finArts]);
   // Для конструктора таблицы: доля цены, с которой платится налог.
   const builderShare = useCallback(o => unitK?.get(o)?.share ?? 1, [unitK]);
 
@@ -662,7 +666,7 @@ export default function SalesAnalytics({ cabinet }) {
       if (x) {
         sRub += x.sRub; sQty += x.sQty; oz += x.oz;
         // Налоговая база — как в «P&L»: по дням, доля оплаты покупателем из отчёта «Начисления» того периода.
-        { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxDay[d] += x.sDay[d] * (bs.shareAt ? (bs.shareAt(a.o, parts, finPer.dates[d]) ?? 1) : 1); }
+        { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxDay[d] += x.sDay[d] * (bsF.shareAt ? (bsF.shareAt(a.o, parts, finPer.dates[d]) ?? 1) : 1); }
         if (k?.cost) cost += k.cost * x.sQty; else if (x.sQty > 0) noCost++;
       }
       // Прогноз — по дням, как в «Юнит-экономике»: комиссия по доле FBS
@@ -699,8 +703,8 @@ export default function SalesAnalytics({ cabinet }) {
       payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - taxBase * tax / 100 : null, noCost,
     };
   };
-  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay, bs.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
-  const finKP = useMemo(() => (finPerPrev ? finCalc(finPerPrev, true) : null), [node, finPerPrev, unitK, tax, bs.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay, bsF.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finKP = useMemo(() => (finPerPrev ? finCalc(finPerPrev, true) : null), [node, finPerPrev, unitK, tax, bsF.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
   // Δ к прошлому периоду (в %), только когда есть обе величины.
   const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
 
