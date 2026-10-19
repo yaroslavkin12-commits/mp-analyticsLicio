@@ -15,6 +15,27 @@ router.get('/cabinets', (req, res) => {
   res.json({ success: true, data: listCabinets() });
 });
 
+// POST /api/ads/reset-ads { cabinet } — удалить рекламные данные магазина из
+// отдельной таблицы (например, если подключили не тот рекламный ключ); со
+// следующим сбором всё загрузится из таблицы заново. Только для таких магазинов.
+router.post('/reset-ads', async (req, res) => {
+  try {
+    const { CABINETS } = require('../config/cabinets');
+    const cabinet = String(req.body?.cabinet || '');
+    if (!CABINETS[cabinet]?.sheetOnly) return res.status(400).json({ success: false, error: 'Только для магазинов из отдельной таблицы' });
+    const out = {};
+    for (const t of ['ad_campaigns', 'ad_stats_daily', 'ad_campaign_skus', 'ad_sku_stats_daily', 'ad_cpo_orders', 'ad_cpo_products', 'ad_cpc_bids']) {
+      const r = await query(`DELETE FROM ${t} WHERE cabinet = $1 RETURNING 1`, [cabinet]).catch(e => ({ err: e.message }));
+      out[t] = Array.isArray(r) ? r.length : r.err;
+    }
+    await query(`DELETE FROM ad_events WHERE cabinet = $1 AND auto = true`, [cabinet]).catch(() => {});
+    require('../lib/rowDiff').dropCabinet(cabinet);
+    await query(`DELETE FROM ad_job_status WHERE cabinet = $1 AND job IN ('perf', 'perf_full', 'clicks', 'clicks_full')`, [cabinet]).catch(() => {});
+    require('../collectors/ads/jobs').forgetStatus?.(cabinet);
+    res.json({ success: true, data: out });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // POST /api/ads/collect?cabinet=defly&days=30 — ручное обновление с кнопки.
 // Ставит в очередь планировщика (collectors/ads/jobs.js) немедленный сбор
 // расхода, кликов, аналитики и остатков за нужный период. Весь сбор теперь

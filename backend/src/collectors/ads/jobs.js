@@ -285,6 +285,7 @@ async function tickMorning(cabinet) {
 // проверка «пора ли» каждые 5 минут не должна будить базу — иначе она не
 // засыпает никогда и платный тариф Neon считает часы круглые сутки.
 const STATUS = new Map(); // cabinet -> Map(job -> row)
+function forgetStatus(cabinet) { STATUS.delete(cabinet); }
 async function getStatus(cabinet) {
   if (STATUS.has(cabinet)) return STATUS.get(cabinet);
   try {
@@ -449,4 +450,4 @@ function startAdsJobs() {
   console.log(`⏰ Соинвест/СПП (${discountCabinets().join(', ') || 'нет'}): проверка каждые 5 мин`);
 }
 
-module.exports = { startAdsJobs, requestRefresh, currentJob, getStatus, JOBS, adsCabinets, discountCabinets };
+module.exports = { forgetStatus, startAdsJobs, requestRefresh, currentJob, getStatus, JOBS, adsCabinets, discountCabinets };

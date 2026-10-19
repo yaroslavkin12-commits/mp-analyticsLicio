@@ -180,7 +180,7 @@ function perfHeaders_(cab) {
 // Повтор при временных сбоях (429/5xx), как в ozonHttp.js на Render, но
 // короче — Apps Script даёт всего 6 минут на весь прогон.
 function fetchJson_(url, options, label) {
-  const attempts = 3;
+  const attempts = 5;
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     try {
@@ -196,7 +196,8 @@ function fetchJson_(url, options, label) {
     } catch (e) {
       lastErr = e;
       if (e.permanent || i === attempts - 1) break;
-      Utilities.sleep(1200 * (i + 1));
+      // 429 (слишком часто) — ждём дольше: 3, 6, 12, 24 с.
+      Utilities.sleep(/429/.test(String(e.message)) ? 3000 * Math.pow(2, i) : 1200 * (i + 1));
     }
   }
   throw new Error(label + ': ' + (lastErr && lastErr.message));
@@ -1468,6 +1469,38 @@ function T_syncStocksWh() { return timed_('syncStocksWh', syncStocksWh); }
 function T_compactQueries() { return timed_('compactQueries', compactQueries); }
 function T_syncQueries() { return timed_('syncQueries', syncQueries); }
 function T_syncMonthly() { return timed_('syncMonthly', syncMonthly); }
+
+// ── Проверка, какие методы Ozon доступны магазину (без Premium и т.п.) ──
+// Запустите probeOzonApi вручную и пришлите «Журнал выполнения».
+function probeOzonApi() {
+  getCabinets_().forEach(function (cab) {
+    const h = sellerHeaders_(cab);
+    if (!h) { Logger.log(cab.id + ': нет ключей Seller API'); return; }
+    const from = mskDate_(7), to = mskDate_(1);
+    function tryCall(name, url, body) {
+      try {
+        const resp = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', headers: h, payload: JSON.stringify(body), muteHttpExceptions: true });
+        const txt = resp.getContentText();
+        Logger.log(cab.id + ' · ' + name + ': HTTP ' + resp.getResponseCode() + ' · ' + txt.slice(0, 350));
+        return resp.getResponseCode() === 200 ? JSON.parse(txt) : null;
+      } catch (e) { Logger.log(cab.id + ' · ' + name + ': ' + e.message); return null; }
+    }
+    const sum = function (d) { const rows = (d && d.result && d.result.data) || []; let u = 0, r = 0; rows.forEach(function (x) { u += Number(x.metrics[0]) || 0; r += Number(x.metrics[1]) || 0; }); return 'строк ' + rows.length + ', шт ' + u + ', ₽ ' + Math.round(r); };
+    let d = tryCall('analytics sku×day (units, revenue)', 'https://api-seller.ozon.ru/v1/analytics/data', { date_from: from, date_to: to, metrics: ['ordered_units', 'revenue'], dimension: ['sku', 'day'], limit: 1000, offset: 0 });
+    Logger.log('   → ' + sum(d));
+    Utilities.sleep(61000);
+    d = tryCall('analytics day (units, revenue)', 'https://api-seller.ozon.ru/v1/analytics/data', { date_from: from, date_to: to, metrics: ['ordered_units', 'revenue'], dimension: ['day'], limit: 1000, offset: 0 });
+    Logger.log('   → ' + sum(d));
+    Utilities.sleep(61000);
+    d = tryCall('analytics sku (units, revenue)', 'https://api-seller.ozon.ru/v1/analytics/data', { date_from: from, date_to: to, metrics: ['ordered_units', 'revenue'], dimension: ['sku'], limit: 1000, offset: 0 });
+    Logger.log('   → ' + sum(d));
+    const since = new Date(Date.now() - 3 * 86400000).toISOString(), now = new Date().toISOString();
+    tryCall('FBO v2 list', 'https://api-seller.ozon.ru/v2/posting/fbo/list', { dir: 'ASC', filter: { since: since, to: now, status: '' }, limit: 5, offset: 0, with: { financial_data: true } });
+    tryCall('FBO v3 list', 'https://api-seller.ozon.ru/v3/posting/fbo/list', { dir: 'ASC', filter: { since: since, to: now, status: '' }, limit: 5, offset: 0, with: { financial_data: true } });
+    tryCall('FBS v3 list', 'https://api-seller.ozon.ru/v3/posting/fbs/list', { dir: 'ASC', filter: { since: since, to: now, status: '' }, limit: 5, offset: 0, with: { financial_data: true } });
+    tryCall('Отчёт по отправлениям (создать)', 'https://api-seller.ozon.ru/v1/report/postings/create', { filter: { processed_at_from: since, processed_at_to: now, delivery_schema: ['fbo'] }, language: 'DEFAULT' });
+  });
+}
 
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
