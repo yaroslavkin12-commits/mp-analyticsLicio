@@ -587,6 +587,8 @@ export default function SalesAnalytics({ cabinet }) {
       x.ad += v; adsAll += v;
       if (d > lastFin) x.oz -= v;
     }
+    // Реклама кабинета без артикула за дни, которых ещё нет в начислениях, — как в «P&L».
+    (pnl.adNoSku || []).forEach((v, d) => { if (d > lastFin && v) noSkuDay[d] -= v; });
     for (const x of m.values()) saleAll += x.sRub;
     return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, saleDay, nd, dates: pnl.dates };
   };
@@ -651,15 +653,15 @@ export default function SalesAnalytics({ cabinet }) {
     if (!finPer && !unitK) return null;
     let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
     const selDay = finPer ? new Float64Array(finPer.nd) : null;
+    const taxDay = finPer ? new Float64Array(finPer.nd) : null; // налог — по дням, как в «P&L» (день с отрицательной базой — 0)
     for (const a of node.arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
       if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; selAd += x.ad; }
       if (x) {
         sRub += x.sRub; sQty += x.sQty; oz += x.oz;
         // Налоговая база — как в «P&L»: по дням, доля оплаты покупателем из отчёта «Начисления» того периода.
-        if (bs.shareAt) { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxBase += x.sDay[d] * (bs.shareAt(a.o, parts, finPer.dates[d]) ?? 1); }
-        else taxBase += x.sRub;
-        if (k?.cost) cost += k.cost * Math.max(0, x.sQty); else if (x.sQty > 0) noCost++;
+        { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxDay[d] += x.sDay[d] * (bs.shareAt ? (bs.shareAt(a.o, parts, finPer.dates[d]) ?? 1) : 1); }
+        if (k?.cost) cost += k.cost * x.sQty; else if (x.sQty > 0) noCost++;
       }
       // Прогноз — по дням, как в «Юнит-экономике»: комиссия по доле FBS
       // именно этого дня, реклама — и в дни без заказов.
@@ -687,6 +689,7 @@ export default function SalesAnalytics({ cabinet }) {
       }
       oz += finPer.noSkuAds * (finPer.adsAll > 0 ? selAd / finPer.adsAll : shareAll);
     }
+    if (taxDay) for (let d = 0; d < taxDay.length; d++) if (taxDay[d] > 0) taxBase += taxDay[d];
     const pay = sRub + oz;
     return {
       has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: sQty > 0 ? pay / sQty : null,
