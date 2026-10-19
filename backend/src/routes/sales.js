@@ -478,12 +478,12 @@ router.get('/costs', async (req, res) => {
       const seen = new Set();
       const legacy = await query(`SELECT offer_id, product_name FROM ozon_catalog`).catch(() => []);
       for (const r of legacy) { if (!seen.has(r.offer_id)) { seen.add(r.offer_id); catalogRows.push({ offer_id: r.offer_id, sku: null, product_name: r.product_name }); } }
-      for (const r of costRows) { if ((!r.cabinet || r.cabinet === cabinet) && !seen.has(r.article)) { seen.add(r.article); catalogRows.push({ offer_id: r.article, sku: null, product_name: r.product_name || '' }); } }
+      for (const r of costRows) { if ((!r.cabinet || familyOf(r.cabinet) === familyOf(cabinet)) && !seen.has(r.article)) { seen.add(r.article); catalogRows.push({ offer_id: r.article, sku: null, product_name: r.product_name || '' }); } }
     }
     // Одна себестоимость на артикул: берём самую свежую из записей WB/Ozon.
     const cost = new Map();
     for (const r of costRows) {
-      if (r.cabinet && r.cabinet !== cabinet) continue;
+      if (r.cabinet && familyOf(r.cabinet) !== familyOf(cabinet)) continue;
       const cur = cost.get(r.article);
       if (!cur || new Date(r.updated_at) > new Date(cur.updated_at)) cost.set(r.article, r);
     }
@@ -515,7 +515,8 @@ router.get('/costs', async (req, res) => {
 router.post('/costs', async (req, res) => {
   try {
     await ensureSchema();
-    const { cabinet, items } = req.body || {};
+    const { cabinet: cab0, items } = req.body || {};
+    const cabinet = cab0 ? familyOf(cab0) : cab0; // себестоимость общая для магазинов семейства (хранится под Defly)
     if (!cabinet || !Array.isArray(items) || !items.length) return res.status(400).json({ success: false, error: 'Нужны cabinet и items' });
     const set = [], del = [];
     for (const it of items) {

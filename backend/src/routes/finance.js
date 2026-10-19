@@ -132,7 +132,7 @@ router.get('/coefs', async (req, res) => {
       [cabinet, dayjs().subtract(92, 'day').format('YYYY-MM-DD')]);
     const fbsDays = fbsRows.map(r => [m.art(r.offer_id), r.d, num(r.ordered), num(r.f)]);
     const known = new Set(m.articles.map(a => a.o));
-    for (const r of costs) if ((!r.cabinet || r.cabinet === cabinet) && known.has(r.article)) get(m.art(r.article))[14] = num(r.cost_price);
+    for (const r of costs) if ((!r.cabinet || familyOf(r.cabinet) === familyOf(cabinet)) && known.has(r.article)) get(m.art(r.article))[14] = num(r.cost_price);
     const coefs = [...C.entries()].map(([ai, v]) => [ai, ...v.map(x => (x === null ? null : r2(x)))]);
     const totalSale = coefs.reduce((s, c) => s + (c[1] > 0 ? c[1] : 0), 0);
     res.json({ success: true, data: {
@@ -192,7 +192,7 @@ router.get('/pnl', async (req, res) => {
     }
     const adRowsOut = [...ads.entries()].map(([k, v]) => { const [ai, d] = k.split('|').map(Number); return [ai, d, r2(v)]; });
     const cost = new Map();
-    for (const r of costs) if (!r.cabinet || r.cabinet === cabinet) cost.set(r.article, num(r.cost_price));
+    for (const r of costs) if (!r.cabinet || familyOf(r.cabinet) === familyOf(cabinet)) cost.set(r.article, num(r.cost_price));
     res.json({ success: true, data: {
       dates, articles: m.articles, buckets: BUCKET_KEYS, rows, noSku, ads: adRowsOut, adNoSku: adNoSku.map(r2),
       cost: m.articles.map(a => (cost.has(a.o) ? cost.get(a.o) : null)), available: range[0] || null, order: ORDER[cabinet] || [],
@@ -288,7 +288,7 @@ router.get('/calc-base', async (req, res) => {
       const at = r.checked_at ? new Date(r.checked_at).getTime() : 0;
       if (at > fresh && at > (priceAt.get(r.offer_id) || 0) && num(r.seller_price) > 0) x[1] = num(r.seller_price);
     }
-    for (const r of costs) if ((!r.cabinet || r.cabinet === cabinet) && known.has(r.article) && num(r.cost_price) > 0) get(r.article)[12] = num(r.cost_price);
+    for (const r of costs) if ((!r.cabinet || familyOf(r.cabinet) === familyOf(cabinet)) && known.has(r.article) && num(r.cost_price) > 0) get(r.article)[12] = num(r.cost_price);
     for (const r of ord) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[13] = num(r.o); x[14] = num(r.f); }
     for (const r of buy) if (known.has(r.offer_id)) { const x = get(r.offer_id); x[15] = num(r.d); x[16] = num(r.c); }
     for (const r of fin) {

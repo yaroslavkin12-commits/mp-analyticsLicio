@@ -32,4 +32,12 @@ function sameAsLast(id, rows) {
   return { same: !!prev && prev.h === h && Date.now() - prev.at < TTL, save: () => SAME.set(id, { h, at: prev && prev.h === h ? prev.at : Date.now() }) };
 }
 
-module.exports = { hashRow, state, remember, forget, drop, sameAsLast };
+// Сбросить всю память по кабинету (например, когда у нового магазина появился
+// каталог и строки, записанные без артикула, нужно перечитать).
+function dropCabinet(cabinet) {
+  const suf = ':' + cabinet;
+  for (const k of [...MEM.keys()]) if (k.endsWith(suf)) MEM.delete(k);
+  for (const k of [...SAME.keys()]) if (k.endsWith(suf)) SAME.delete(k);
+}
+
+module.exports = { hashRow, state, remember, forget, drop, sameAsLast, dropCabinet };

@@ -16,6 +16,14 @@ const NAV_BY_CABINET = {
 const navOf = c => NAV_BY_CABINET[c] || (isDeflyLike(c) ? NAV_BY_CABINET.defly : NAV_BY_CABINET.licio);
 export const navLabel = (cabinet, page) => (navOf(cabinet).find(([id]) => id === page) || [])[2] || '';
 
+// Значок магазина: логотип /logos/<id>.png (квадратный), пока его нет — цветной круг с буквой.
+function ShopMark({ shop, size = 28 }) {
+  const [bad, setBad] = useState(false);
+  if (!shop) return null;
+  if (!bad) return <img src={`/logos/${shop.id}.png`} alt="" onError={() => setBad(true)} style={{ width:size, height:size, borderRadius:7, objectFit:'cover', flexShrink:0, display:'block' }} />;
+  return <span style={{ width:size, height:size, borderRadius:7, background:shop.color, color:'#fff', fontWeight:700, fontSize:Math.round(size * .55), display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>{shop.label[0]}</span>;
+}
+
 export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCabinet, mobile }) {
   const [open, setOpen] = useState(false);
   // Свёрнутое меню — только значки (помнится в браузере).
@@ -36,7 +44,6 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
   // Какие магазины уже подключены (есть своя Google-таблица на сервере).
   const [conn, setConn] = useState(null);
   useEffect(() => { if (open && !conn) getAdsCabinets().then(r => setConn(Object.fromEntries((r.data.data || []).map(c => [c.id, c.connected !== false])))).catch(() => setConn({})); }, [open, conn]);
-  const dot = (c, size = 8) => <span style={{ width:size, height:size, borderRadius:'50%', background:c, flexShrink:0, display:'inline-block' }} />;
   const head = t => <div style={{ fontSize:10.5, fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)', padding:'9px 12px 3px' }}>{t}</div>;
   const item = (sh, disabled, note) => (
     <button key={sh.id} disabled={disabled} onClick={() => { setCabinet(sh.id); setOpen(false); }} title={disabled ? note : undefined} style={{
@@ -44,7 +51,7 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
       background: cabinet===sh.id ? 'var(--surface2)' : 'transparent', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? .5 : 1,
       color: cabinet===sh.id ? 'var(--text)' : 'var(--text2)', fontWeight: cabinet===sh.id ? 600 : 400, fontSize:13,
     }}>
-      {dot(sh.color)}<span style={{ flex:1, whiteSpace:'nowrap' }}>{sh.label}</span>
+      <ShopMark shop={sh} size={18} /><span style={{ flex:1, whiteSpace:'nowrap' }}>{sh.label}</span>
       {note && <small style={{ fontSize:10.5, color:'var(--text3)', whiteSpace:'nowrap' }}>{note}</small>}
       {cabinet===sh.id && <span>✓</span>}
     </button>
@@ -57,18 +64,13 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
           display:'flex', alignItems:'center', gap:10, width:'100%', background:'transparent', border:'none',
           padding:0, cursor:'pointer', textAlign:'left', color:'var(--text)',
         }}>
-          {isDeflyLike(cabinet) && cabinet !== 'defly' ? (
+          {isDeflyLike(cabinet) ? (
             <>
-              {dot(shop?.color || 'var(--text3)', mini ? 12 : 10)}
+              <ShopMark key={cabinet} shop={shop} size={mini ? 30 : 28} />
               {!mini && <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ fontSize:15, fontWeight:700, display:'flex', alignItems:'center', gap:5 }}>{cabinetLabel}<span style={{ fontSize:10, color:'var(--text3)' }}>▾</span></div>
                 <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>Ozon</div>
               </div>}
-            </>
-          ) : cabinet === 'defly' ? (
-            <>
-              <img src="/defly-logo.png" alt="Defly" style={{ height: mini ? 24 : 32, width: mini ? 42 : 'auto', objectFit: mini ? 'cover' : undefined, objectPosition:'left center', maxWidth:110, borderRadius:5, flexShrink:0, display:'block' }} />
-              {!mini && <span style={{ fontSize:10, color:'var(--text3)', marginLeft:'auto' }}>▾</span>}
             </>
           ) : (
             <>

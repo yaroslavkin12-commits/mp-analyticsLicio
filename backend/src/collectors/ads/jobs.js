@@ -107,10 +107,34 @@ function perfFromSheet(c) {
     .then(([a, b, s, d]) => ({ rows: (a.rows || 0) + (b.rows || 0) + (s.rows || 0) + (d.rows || 0), warning: d.warning || null }));
 }
 
+// Каталог. Если у кабинета его ещё не было (новый магазин): всё, что успели
+// записать без артикула (аналитика по SKU), привязываем к артикулам, а
+// остальные задачи кабинета запускаем заново сразу, не дожидаясь их интервала.
+const HAS_CAT = new Set();
+async function hasCatalog(c) {
+  if (HAS_CAT.has(c)) return true;
+  const n = await query(`SELECT 1 FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' LIMIT 1`, [c]).then(r => r.length).catch(() => 1);
+  if (n) HAS_CAT.add(c);
+  return !!n;
+}
+async function catalogThenRefresh(c) {
+  const before = await query(`SELECT COUNT(*)::int AS n FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [c]).then(r => r[0]?.n || 0).catch(() => 1);
+  const res = await withSheetFallback(c, 'catalog', () => collectCatalog(c), () => syncCatalogFromSheet(c));
+  await query(`UPDATE product_analytics_daily p SET offer_id = k.offer_id FROM ad_product_catalog k
+     WHERE p.cabinet = $1 AND p.platform = 'ozon' AND p.offer_id IS NULL AND k.cabinet = p.cabinet AND k.platform = 'ozon' AND k.sku::text = p.sku::text`, [c])
+    .catch(e => console.warn(`[Jobs:${c}] привязка аналитики к артикулам:`, e.message));
+  if (!before && (res?.rows || 0) > 0) {
+    require('../../lib/rowDiff').dropCabinet(c);
+    const st = await getStatus(c);
+    for (const j of JOBS) if (j.id !== 'catalog') st.delete(j.id);
+    console.log(`[Jobs:${c}] появился каталог — перечитываю все данные кабинета`);
+  }
+  return res;
+}
+
 // Порядок важен: каталог нужен раньше всех (SKU -> артикул).
 const JOBS = [
-  { id: 'catalog', every: 6 * HOUR, run: c => withSheetFallback(c, 'catalog',
-      () => collectCatalog(c), () => syncCatalogFromSheet(c)) },
+  { id: 'catalog', every: 6 * HOUR, run: c => catalogThenRefresh(c) },
   { id: 'perf', every: 30 * MIN, run: c => withSheetFallback(c, 'perf',
       () => collectAdStats(c, { dateFrom: mskDate(13), dateTo: mskDate(0) }),
       () => perfFromSheet(c)) },
@@ -381,7 +405,9 @@ async function tickCabinet(cabinet) {
     const night = h >= 1 && h < 7;
     for (const job of JOBS) {
       const j = night && job.every < HOUR ? { ...job, every: HOUR } : job;
-      if (!isDue(j, st.get(job.id), now)) continue;
+      // Каталога у кабинета нет (новый магазин) — пробуем каждые 10 мин, а не раз в 6 ч.
+      const noCat = job.id === 'catalog' && !(await hasCatalog(cabinet));
+      if (!isDue(noCat ? { ...j, every: RETRY_AFTER_FAIL } : j, st.get(job.id), now)) continue;
       busy.set(cabinet, job.id);
       await runJobGuarded(cabinet, job);
     }

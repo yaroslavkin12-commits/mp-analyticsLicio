@@ -58,7 +58,7 @@ async function buildMorningDigest(cabinet) {
       [cabinet, f7, Y, msk.subtract(14, 'day').format('YYYY-MM-DD')]),
     query(`SELECT date::text d, sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, sku, name`, [cabinet, f30, Y]).catch(() => []),
     query(`SELECT SUM(delivered)::int d, SUM(cancelled)::int c FROM buyout_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, b45, b5]).catch(() => []),
-    query(`SELECT article, cost_price FROM product_costs WHERE cabinet = $1 OR cabinet IS NULL`, [cabinet]).catch(() => []),
+    query(`SELECT article, cost_price FROM product_costs WHERE cabinet = $1 OR cabinet IS NULL`, [require('./config/cabinets').familyOf(cabinet)]).catch(() => []),
     query(`SELECT DISTINCT ON (offer_id) offer_id, fbo_present - fbo_reserved + fbs_present - fbs_reserved s FROM ad_product_stocks
             WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date >= $2 ORDER BY offer_id, snapshot_date DESC, collected_at DESC`, [cabinet, msk.subtract(4, 'day').format('YYYY-MM-DD')]).catch(() => []),
     query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []),

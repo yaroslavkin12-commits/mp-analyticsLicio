@@ -1,5 +1,5 @@
 const DEFAULT_SERVER = 'https://mp-analyticslicio-1.onrender.com';
-const NAMES = { licio: 'Licio', defly: 'Defly' };
+const NAMES = { licio: 'Licio', defly: 'Defly', nabauto: 'NABauto', alex: 'Alex', fullgas: 'Fullgas', accent: 'Accent Line' };
 const fmt = iso => iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 
 async function render() {

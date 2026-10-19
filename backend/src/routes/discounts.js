@@ -24,6 +24,16 @@ const COMPANY_IDS = {
   licio: process.env.LICIO_OZON_COMPANY_ID || process.env.OZON_COMPANY_ID || '2863427',
   defly: process.env.DEFLY_OZON_COMPANY_ID || '48694',
 };
+// Магазины из отдельной таблицы: ID компании Ozon (виден в адресе/настройках
+// seller.ozon.ru) — переменная Render <ID>_OZON_COMPANY_ID, например NABAUTO_OZON_COMPANY_ID.
+// Расширение спрашивает цены у всех компаний, доступных вашему входу в seller.ozon.ru.
+{
+  const { CABINETS, isConnected } = require('../config/cabinets');
+  for (const [id, c] of Object.entries(CABINETS)) {
+    const v = process.env[`${id.toUpperCase()}_OZON_COMPANY_ID`];
+    if (c.sheetOnly && v && isConnected(id)) COMPANY_IDS[id] = String(v).trim();
+  }
+}
 let latestReady = null;
 function ensureLatest() {
   if (!latestReady) {

@@ -119,6 +119,9 @@ async function syncCatalogFromSheet(cabinet) {
   const rows = await fetchSheetRows('Catalog', cabinet);
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.offer_id);
+  // Пусто — не «успех»: иначе следующая попытка только через 6 ч (новый магазин,
+  // скрипт ещё не собрал каталог). С ошибкой повтор через 10 мин.
+  if (!filtered.length) throw new Error(`в Google-таблице нет каталога «${cabinet}» (вкладка Catalog) — запустите syncDaily в скрипте`);
   const out = filtered.map(r => [cabinet, 'ozon', r.offer_id, r.sku || null, r.product_name ? String(r.product_name).slice(0, 500) : null, new Date()]);
   const saved = await bulkUpsert('ad_product_catalog',
     ['cabinet', 'platform', 'offer_id', 'sku', 'product_name', 'updated_at'],
@@ -131,6 +134,7 @@ async function syncAnalyticsFromSheet(cabinet) {
   const rows = await fetchSheetRows('Analytics', cabinet);
   if (rows === null) return { rows: 0 };
   const mine = rows.filter(r => r.cabinet === cabinet);
+  if (!mine.length) throw new Error(`в Google-таблице нет аналитики «${cabinet}» (вкладка Analytics) — запустите syncDaily в скрипте`);
   const same = rowDiff.sameAsLast(`analytics:${cabinet}`, mine);
   if (same.same) return { rows: 0 };
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
@@ -155,7 +159,7 @@ async function syncStocksFromSheet(cabinet) {
   const rows = await fetchSheetRows('Stocks', cabinet);
   if (rows === null) return { rows: 0 };
   const filtered = rows.filter(r => r.cabinet === cabinet && r.offer_id);
-  if (!filtered.length) return { rows: 0 };
+  if (!filtered.length) throw new Error(`в Google-таблице нет остатков «${cabinet}» (вкладка Stocks) — их собирает syncRecent`);
   const today = new Date().toISOString().slice(0, 10);
   const out = filtered.map(r => [cabinet, 'ozon', today, r.product_id || null, r.offer_id,
     num(r.fbo_present), num(r.fbo_reserved), num(r.fbs_present), num(r.fbs_reserved)]);
