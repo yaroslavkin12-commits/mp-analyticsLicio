@@ -303,7 +303,7 @@ function collectAnalyticsWindow_(cab, from, to, out, deadline, info) {
 // сервере история копится сама, во вкладке её держим 45 дней). Запускать
 // вручную; если не успеет за раз — продолжит сам через минуту.
 function syncAnalyticsHistory() {
-  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncAnalyticsHistory') ScriptApp.deleteTrigger(t); });
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (/^(T_)?syncAnalyticsHistory$/.test(t.getHandlerFunction())) ScriptApp.deleteTrigger(t); });
   const props = PropertiesService.getScriptProperties();
   const prog = JSON.parse(props.getProperty('AN_HIST') || '{}'); // кабинет -> сколько дней назад уже собрано
   const started = Date.now(), deadline = started + 4 * 60000;
@@ -330,7 +330,7 @@ function syncAnalyticsHistory() {
   if (rows.length) mergeIntoSheet_(SHEET_NAMES.analyticsHist, ANALYTICS_HEADERS, rows, [0, 1, 2]);
   if (left) {
     props.setProperty('AN_HIST', JSON.stringify(prog));
-    ScriptApp.newTrigger('syncAnalyticsHistory').timeBased().after(60 * 1000).create();
+    ScriptApp.newTrigger('T_syncAnalyticsHistory').timeBased().after(60 * 1000).create();
     Logger.log('syncAnalyticsHistory: записал ' + rows.length + ' строк, собрано дней: ' + JSON.stringify(prog) + ' — продолжу через минуту');
   } else {
     props.deleteProperty('AN_HIST');
@@ -1603,6 +1603,7 @@ function T_syncFinance() { return timed_('syncFinance', syncFinance); }
 function T_syncStocksWh() { return timed_('syncStocksWh', syncStocksWh); }
 function T_compactQueries() { return timed_('compactQueries', compactQueries); }
 function T_syncQueries() { return timed_('syncQueries', syncQueries); }
+function T_syncAnalyticsHistory() { return timed_('syncAnalyticsHistory', syncAnalyticsHistory); }
 function T_syncMonthly() { return timed_('syncMonthly', syncMonthly); }
 
 // ── Проверка, какие методы Ozon доступны магазину (без Premium и т.п.) ──
@@ -1648,17 +1649,19 @@ function setupTriggers() {
   // Свойство LIGHT=1 (таблица малых магазинов на обычном Gmail, лимит 90 мин в
   // сутки): заказы раз в 30 мин, свежие данные раз в час.
   const light = PropertiesService.getScriptProperties().getProperty('LIGHT') === '1';
-  ScriptApp.newTrigger('T_syncOrders').timeBased().everyMinutes(light ? 30 : 10).create();
+  // LIGHT: всё реже — чтобы уложиться в 90 мин в сутки обычного Gmail.
+  if (light) ScriptApp.newTrigger('T_syncOrders').timeBased().everyHours(1).create();
+  else ScriptApp.newTrigger('T_syncOrders').timeBased().everyMinutes(10).create();
   if (light) ScriptApp.newTrigger('T_syncRecent').timeBased().everyHours(1).create();
   else ScriptApp.newTrigger('T_syncRecent').timeBased().everyMinutes(30).create();
-  ScriptApp.newTrigger('T_syncCpoOrders').timeBased().everyHours(3).create();
+  ScriptApp.newTrigger('T_syncCpoOrders').timeBased().everyHours(light ? 6 : 3).create();
   ScriptApp.newTrigger('T_syncDaily').timeBased().atHour(4).everyDays(1).create();
   ScriptApp.newTrigger('T_syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
-  ScriptApp.newTrigger('T_syncGeo').timeBased().everyHours(3).create();
-  ScriptApp.newTrigger('T_syncFinance').timeBased().everyHours(6).create();
-  ScriptApp.newTrigger('T_syncStocksWh').timeBased().everyHours(2).create();
-  ScriptApp.newTrigger('T_compactQueries').timeBased().atHour(5).nearMinute(30).everyDays(1).create();
-  ScriptApp.newTrigger('T_syncQueries').timeBased().atHour(6).everyDays(1).create();
+  ScriptApp.newTrigger('T_syncGeo').timeBased().everyHours(light ? 6 : 3).create();
+  ScriptApp.newTrigger('T_syncFinance').timeBased().everyHours(light ? 12 : 6).create();
+  ScriptApp.newTrigger('T_syncStocksWh').timeBased().everyHours(light ? 6 : 2).create();
+  if (!light) ScriptApp.newTrigger('T_compactQueries').timeBased().atHour(5).nearMinute(30).everyDays(1).create();
+  if (!light) ScriptApp.newTrigger('T_syncQueries').timeBased().atHour(6).everyDays(1).create(); // поисковые запросы — только с Premium
   ScriptApp.newTrigger('T_syncMonthly').timeBased().atHour(7).everyDays(1).create();
   Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, syncFinance каждые 6 часов.');
 }
