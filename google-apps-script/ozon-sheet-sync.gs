@@ -198,7 +198,7 @@ function fetchJson_(url, options, label) {
       lastErr = e;
       if (e.permanent || i === attempts - 1) break;
       // 429 (слишком часто) — ждём дольше: 3, 6, 12, 24 с.
-      Utilities.sleep(/429/.test(String(e.message)) ? 3000 * Math.pow(2, i) : 1200 * (i + 1));
+      Utilities.sleep(/429/.test(String(e.message)) ? 5000 * Math.pow(2, i) : 1200 * (i + 1)); // 429: 5, 10, 20, 40 с
     }
   }
   throw new Error(label + ': ' + (lastErr && lastErr.message));
@@ -374,7 +374,7 @@ function eachFboPosting_(cab, since, to, withObj, onPosting) {
   }
   let cursor = '';
   for (let guard = 0; guard < 200; guard++) {
-    const body = { dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, with: withObj };
+    const body = { dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 100, with: withObj }; // v3: не больше 100
     if (cursor) body.cursor = cursor;
     const data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbo/list', {
       method: 'post', contentType: 'application/json', headers: headers, payload: JSON.stringify(body),
