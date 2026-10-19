@@ -654,7 +654,14 @@ export default function SalesAnalytics({ cabinet }) {
     let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
     const selDay = finPer ? new Float64Array(finPer.nd) : null;
     const taxDay = finPer ? new Float64Array(finPer.nd) : null; // налог — по дням, как в «P&L» (день с отрицательной базой — 0)
-    for (const a of node.arts) {
+    // Весь кабинет без фильтров — плюс артикулы, которые есть в начислениях, но
+    // уже не в каталоге (архив): в «P&L» они тоже входят.
+    let arts = node.arts;
+    if (finPer && !sel && !brand && !search.trim()) {
+      const seen = new Set(node.arts.map(a => a.o));
+      arts = node.arts.concat([...finPer.m.keys()].filter(o => !seen.has(o)).map(o => ({ o, extra: true })));
+    }
+    for (const a of arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
       if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; selAd += x.ad; }
       if (x) {
