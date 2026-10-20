@@ -49,9 +49,16 @@ const METRICS = [
   { g: 'Финансы (начисления Ozon)', k: 'cost', t: 'Себестоимость выкупов', kind: 'rub', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'profit', t: 'Чистая прибыль', kind: 'rub', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'profitUnit', t: 'Прибыль на 1 выкуп', kind: 'rub', fin: true },
-  { g: 'Финансы (начисления Ozon)', k: 'margin', t: 'Маржинальность', kind: 'pct', fin: true },
+  { g: 'Финансы (начисления Ozon)', k: 'margin', t: 'Маржинальность факт', kind: 'pct', fin: true },
   { g: 'Финансы (начисления Ozon)', k: 'roi', t: 'ROI', kind: 'pct', fin: true },
+  { g: 'Прогноз (с заказов)', k: 'profitF', t: 'Прибыль прогнозируемая', kind: 'rub' },
+  { g: 'Прогноз (с заказов)', k: 'marginF', t: 'Маржинальность прогнозируемая', kind: 'pct' },
 ];
+// Суммируемые метрики — для них есть «в среднем за день / неделю / месяц / год».
+const ADDITIVE = new Set(['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'buyQty', 'buyRub', 'payout', 'cost', 'profit', 'profitF']);
+const AVG = [['', 'всего за период'], ['d', 'в среднем за день'], ['w', 'в среднем за неделю'], ['m', 'в среднем за месяц'], ['y', 'в среднем за год']];
+const AVG_DAYS = { d: 1, w: 7, m: 30.4, y: 365 };
+const AVG_T = { d: 'в день', w: 'в неделю', m: 'в месяц', y: 'в год' };
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
 const GROUPS = [...new Set(METRICS.map(m => m.g))];
 
@@ -75,7 +82,7 @@ const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } cat
 const perTxt = (days, unit) => (unit === 'w' && days % 7 === 0 ? `${days / 7} нед` : `${days} дн`);
 const colTitle = c => {
   const m = MET[c.m]; if (!m) return '?';
-  let t = m.t;
+  let t = c.avg && ADDITIVE.has(c.m) ? `Ср. ${m.t.replace(/^./, x => x.toLowerCase())} ${AVG_T[c.avg]}` : m.t;
   if (!m.noDays) t += ` · ${perTxt(c.days, c.unit)}`;
   if (c.off && !m.now) t += ` · ${perTxt(c.off, c.unit)} назад`;
   else if (m.noDays) t += ' · сейчас';
@@ -107,16 +114,18 @@ function derive(k, S, D) {
     case 'profitUnit': return div(S.profit, S.buyQty);
     case 'margin': { const r = div(S.profit, S.buyRub); return r === null ? null : r * 100; }
     case 'roi': { const r = div(S.profit, S.cost); return r === null ? null : r * 100; }
+    case 'profitF': return S.fAny ? S.fProfit : null;
+    case 'marginF': { const r = div(S.fProfit, S.fRev); return S.fAny && r !== null ? r * 100 : null; }
     default: return S[k] ?? null;
   }
 }
 const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'posSum', 'posCnt', 'stock', 'sewing', 'buyQty', 'buyRub', 'payout', 'cost', 'profit',
-  'priceSum', 'priceCnt', 'clientSum', 'clientCnt', 'priceSum2', 'clientSum2', 'priceCnt2'];
+  'priceSum', 'priceCnt', 'clientSum', 'clientCnt', 'priceSum2', 'clientSum2', 'priceCnt2', 'fProfit', 'fRev', 'fAny'];
 
 let idSeq = Date.now();
 const newId = () => 'c' + (idSeq++).toString(36);
 
-export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, onOpenArticle, page, setPage }) {
+export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, shareAt, forecast, onOpenArticle, page, setPage }) {
   const storeKey = `mp-builder:${cabinet}`;
   const [cfg, setCfg] = useState(() => { const s = load(storeKey); return s?.cols?.length ? { rows: s.rows || 'art', cols: s.cols } : DEFAULT; });
   const [templates, setTemplates] = useState(() => load(storeKey + ':tpl') || {});
@@ -219,6 +228,11 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       S.orders += a.orders[d]; S.revenue += a.revenue[d]; S.views += a.views[d]; S.pdp += a.pdpViews[d]; S.cart += a.cart[d];
       S.spend += a.spendCpc[d] + a.spendCpo[d]; S.adOrders += a.adOrders[d];
       if (a.pos[d] !== null) { S.posSum += a.pos[d]; S.posCnt++; }
+      // Прогноз с заказов дня — как «Прогнозируемая прибыль» страницы (юнит-экономика артикула).
+      if (forecast && (a.orders[d] > 0 || a.spendCpc[d] + a.spendCpo[d] > 0)) {
+        const r = forecast(a.o, data.dates[d], a.revenue[d], a.orders[d], a.spendCpc[d] + a.spendCpo[d]);
+        if (r) { S.fProfit += r.profit; S.fRev += r.expRev; S.fAny = 1; }
+      }
     }
     S.stock = a.stockArr[hi] ?? 0;
     S.sewing = isSeat(a) ? (sewLc.get(String(a.o).toLowerCase()) || 0) : 0;
@@ -241,10 +255,14 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       const pay = s + oz + other + nsA * (adW > 0 ? ad / adW : shareW) - adLate;
       const cost = (x.cost || 0) * Math.max(0, q);
       S.buyQty = q; S.buyRub = s; S.payout = pay; S.cost = cost;
-      S.profit = pay - cost - s * (shareOf ? shareOf(a.o) : 1) * (tax || 0) / 100;
+      // Налог — как в «P&L»: от оплаты покупателя по отчётам «Начисления» того дня.
+      let base = 0;
+      if (shareAt) { for (let d = l; d <= hi; d++) if (x.s[d]) base += x.s[d] * (shareAt(a.o, data.dates[d]) ?? 1); }
+      else base = s * (shareOf ? shareOf(a.o) : 1);
+      S.profit = pay - cost - base * (tax || 0) / 100;
     }
     return S;
-  }, [finArt, shareOf, tax, sewLc, prices]);
+  }, [finArt, shareOf, shareAt, forecast, data, tax, sewLc, prices]);
 
   const inPath = a => !catPath || a.cat === catPath || a.cat.startsWith(catPath + SEP);
   const inScope = useMemo(() => arts.filter(a => (!scope || scope.has(a.o)) && inPath(a)), [arts, scope, catPath]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -280,8 +298,11 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         for (const a of list) { const S = sumsOf(a, lo2, hi2, D); for (const k of BASE_KEYS) T[k] += S[k]; }
         return derive(c.m, T, D);
       };
-      const v = add(lo, hi);
-      const p = c.cmp && !m.noDays ? (plo >= 0 ? add(plo, phi) : null) : undefined;
+      // «В среднем за …» — сумма окна / дней окна × дней в выбранной единице.
+      const k = c.avg && ADDITIVE.has(c.m) ? AVG_DAYS[c.avg] / D : 1;
+      const sc = x => (x === null || x === undefined ? x : x * k);
+      const v = sc(add(lo, hi));
+      const p = c.cmp && !m.noDays ? (plo >= 0 ? sc(add(plo, phi)) : null) : undefined;
       return { v, p };
     });
     const rows = [...groups.entries()].map(([key, list]) => {
@@ -657,6 +678,13 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
               <span className="tb-u">{ed.unit === 'w' ? 'нед' : 'дн'} {MET[ed.m]?.noDays ? 'назад' : ''}</span>
             </span>
           </label>}
+          {ADDITIVE.has(ed.m) && (
+            <label title="Например, «Заказы, шт» за 12 недель «в среднем за год» = заказы за 12 недель / 84 дня × 365">Показать
+              <select className="a-input" value={ed.avg || ''} onChange={e => setCol(ed.id, { avg: e.target.value })}>
+                {AVG.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+              </select>
+            </label>
+          )}
           {ed.m === 'sewing' && <span className="a-hint" style={{ margin: 0, maxWidth: 360 }}>Только чехлы на сиденья. Количество загружается файлом — строка «Отшивается» под столбцами.</span>}
           {!MET[ed.m]?.noDays && (
             <label className="tb-chk"><input type="checkbox" checked={!!ed.cmp} onChange={e => setCol(ed.id, { cmp: e.target.checked })} />изменение к предыдущим {perTxt(ed.days, ed.unit)}</label>

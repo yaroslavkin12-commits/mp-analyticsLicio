@@ -617,6 +617,12 @@ export default function SalesAnalytics({ cabinet }) {
   const partsOf = useMemo(() => new Map(finArts.map(a => [a.o, a.parts])), [finArts]);
   // Для конструктора таблицы: доля цены, с которой платится налог.
   const builderShare = useCallback(o => unitK?.get(o)?.share ?? 1, [unitK]);
+  // Конструктор: налог факта — по отчётам «Начисления» дня (как P&L), прогноз — как на странице.
+  const builderShareAt = useCallback((o, date) => (bsF.shareAt ? bsF.shareAt(o, partsOf.get(o), date) : null), [bsF.shareAt, partsOf]);
+  const builderForecast = useCallback((o, date, ordRub, ordQty, ads) => {
+    const k = unitK?.get(o); if (!k) return null;
+    return unitProfit(k, { ordRub, ordQty, ads, fbs: fbsDay.get(o + '|' + date) }, tax);
+  }, [unitK, fbsDay, tax]);
 
   const dates = data?.dates || [];
   const N = dates.length;
@@ -1348,7 +1354,7 @@ export default function SalesAnalytics({ cabinet }) {
         )}
       </div>
 
-      <TableBuilder cabinet={cabinet} anchor={dateTo} prepare={prepare} tax={tax} shareOf={builderShare}
+      <TableBuilder cabinet={cabinet} anchor={dateTo} prepare={prepare} tax={tax} shareOf={builderShare} shareAt={builderShareAt} forecast={builderForecast}
         page={{ dateFrom, dateTo, today, sel, brand, search }}
         setPage={p => { setDateFrom(p.dateFrom); setDateTo(p.dateTo); setSel(p.sel); setBrand(p.brand); setSearch(p.search); }}
         scope={sel || brand || search.trim() ? cached(`bscope|${sel}`, () => new Set(node.arts.map(a => a.o))) : null}
