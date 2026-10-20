@@ -39,6 +39,7 @@ export function fmtBy(v, fmt) {
     case 'money0': return v ? fmtInt(v) : '—';
     case 'money2': return fmtMoney2(v);
     case 'pct': return fmtPct(v);
+    case 'pct0': return v ? fmtPct(v) : '—';
     case 'pos': return v.toFixed(1).replace('.', ',');
     default: return String(v);
   }

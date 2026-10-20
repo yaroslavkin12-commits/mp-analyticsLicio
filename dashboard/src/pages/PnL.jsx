@@ -64,6 +64,10 @@ export default function PnL({ cabinet }) {
   // «На 1 выкуп»: все суммы таблицы делятся на число выкупленных штук (за день / за период).
   const [perUnit, setPerUnitRaw] = useState(() => { try { return localStorage.getItem('mp-pnl-perunit') === '1'; } catch (e) { return false; } });
   const setPerUnit = v => { setPerUnitRaw(v); try { localStorage.setItem('mp-pnl-perunit', v ? '1' : '0'); } catch (e) { /* ignore */ } };
+  // «В % от выручки»: выручка по выкупам = 100%, каждая статья — её доля (по дням и за период).
+  const [pctMode, setPctRaw] = useState(() => { try { return localStorage.getItem('mp-pnl-pct') === '1'; } catch (e) { return false; } });
+  const setPct = v => { setPctRaw(v); if (v) setPerUnit(false); try { localStorage.setItem('mp-pnl-pct', v ? '1' : '0'); } catch (e) { /* ignore */ } };
+  const setUnit = v => { setPerUnit(v); if (v) setPctRaw(false); };
   const grp = useGroups(cabinet);
 
   const load = useCallback(() => {
@@ -191,8 +195,13 @@ export default function PnL({ cabinet }) {
   const { vals, totals: T, noCost } = main;
   const KEEP = new Set(['qty', 'margin', 'drr']);
   const perQ = (v, q) => (v === null || v === undefined || !(q > 0) ? null : v / q);
-  const shownVals = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? vals[r.key] : Array.from(vals[r.key] || [], (x, i) => perQ(x, vals.qty[i]))])) : vals;
-  const shownT = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perQ(T[r.key], T.qty)])) : T;
+  const perR = (v, r) => (v === null || v === undefined || !(r > 0) ? null : v / r * 100);
+  const shownVals = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? vals[r.key] : Array.from(vals[r.key] || [], (x, i) => perQ(x, vals.qty[i]))]))
+    : pctMode ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? vals[r.key] : Array.from(vals[r.key] || [], (x, i) => perR(x, vals.revenue[i]))])) : vals;
+  const shownT = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perQ(T[r.key], T.qty)]))
+    : pctMode ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perR(T[r.key], T.revenue)])) : T;
+  // В процентах: подписи без «₽», расходы подсвечиваются — меньше доля (ближе к нулю) лучше.
+  const shownRows = pctMode ? ROWS.map(r => (!r.key || KEEP.has(r.key) ? r : { ...r, fmt: r.fmt === 'money0' ? 'pct0' : 'pct', label: r.label.replace(/, ₽$/, ', %'), good: r.signed ? 'up' : r.good })) : ROWS;
   const byDate = {};
   dates.forEach((d, i) => { byDate[d] = {}; for (const m of METRICS) byDate[d][m.key] = vals[m.key][i]; });
   const strip = [
@@ -257,13 +266,16 @@ export default function PnL({ cabinet }) {
 
           <div className="a-card">
             <div className="a-bar" style={{ padding: '12px 14px 8px' }}>
-              <b style={{ fontSize: 14 }}>P&L по дням{perUnit ? ' · на 1 выкуп, ₽' : ''}</b>
+              <b style={{ fontSize: 14 }}>P&L по дням{perUnit ? ' · на 1 выкуп, ₽' : pctMode ? ' · в % от выручки' : ''}</b>
               <label className="sw" title="Показать каждую статью в среднем на одну выкупленную штуку: сумма за день (период) / выкуплено штук за день (период)">
-                <input type="checkbox" checked={perUnit} onChange={e => setPerUnit(e.target.checked)} /><i />на 1 выкуп
+                <input type="checkbox" checked={perUnit} onChange={e => setUnit(e.target.checked)} /><i />на 1 выкуп
+              </label>
+              <label className="sw" title="Выручка по выкупам (выкупы − возвраты) = 100%; каждая статья — её доля от выручки за день и за период. Цвет: зелёнее — расход меньше обычного">
+                <input type="checkbox" checked={pctMode} onChange={e => setPct(e.target.checked)} /><i />в % от выручки
               </label>
               <span className="a-hint">по дате начисления в Ozon; данные есть с {data.available?.mn ? dayjs(data.available.mn).format('DD.MM.YYYY') : '—'}</span>
             </div>
-            <RowsTable dates={dates} rows={ROWS} vals={shownVals} totals={shownT} />
+            <RowsTable dates={dates} rows={shownRows} vals={shownVals} totals={shownT} />
           </div>
 
           <CatTable cats={cats} sel={sel} setSel={setSel} list={list} cols={cols} aggOf={aggOf} sortKey="revenue" />
