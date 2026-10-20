@@ -268,3 +268,14 @@
 .mpui .m-tbl .m-pick{border:0;background:none;padding:2px 4px;margin:-2px -4px;border-radius:6px;cursor:pointer;color:inherit;font:inherit;text-align:right;display:inline-block}
 .mpui .m-tbl .m-pick b{font-weight:500}
 .mpui .m-tbl .m-pick:hover{background:var(--a-accent-soft);color:var(--a-accent)}
+
+/* Конструктор: отметка «в наборе» и набор для выгрузки */
+.mpui .tb-mark{flex:0 0 20px;width:20px;height:20px;margin-right:8px;border-radius:6px;border:1.5px solid var(--a-line2);background:transparent;color:var(--a-ink3);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;transition:all .12s}
+.mpui .tb-mark:hover{border-color:var(--accent-oz,#3b82f6);color:var(--accent-oz,#3b82f6)}
+.mpui .tb-mark.on{background:var(--accent-oz,#3b82f6);border-color:var(--accent-oz,#3b82f6);color:#fff}
+.mpui .tb-set{margin-top:16px;padding-top:14px;border-top:1px solid var(--a-line)}
+.mpui .tb-price{width:90px;text-align:right;padding:4px 6px}
+.mpui .tb-price.ed{border-color:var(--accent-oz,#3b82f6);font-weight:600}
+.mpui .tb-was{display:block;font-size:10.5px;color:var(--a-ink3);font-weight:400}
+.mpui .tb-set .tb-x{background:none;border:0;color:var(--a-ink3);cursor:pointer;font-size:15px}
+.mpui .tb-set .tb-x:hover{color:var(--a-bad)}

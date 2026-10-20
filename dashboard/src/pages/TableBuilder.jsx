@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { compute } from './Calculator';
 import dayjs from 'dayjs';
 import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
@@ -125,7 +126,7 @@ const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrde
 let idSeq = Date.now();
 const newId = () => 'c' + (idSeq++).toString(36);
 
-export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, shareAt, forecast, onOpenArticle, page, setPage }) {
+export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, shareOf, shareAt, forecast, coefOf, onOpenArticle, page, setPage }) {
   const storeKey = `mp-builder:${cabinet}`;
   const [cfg, setCfg] = useState(() => { const s = load(storeKey); return s?.cols?.length ? { rows: s.rows || 'art', cols: s.cols } : DEFAULT; });
   const [templates, setTemplates] = useState(() => load(storeKey + ':tpl') || {});
@@ -137,6 +138,11 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const [catPath, setCatPath] = useState(() => load(storeKey + ':cat') || '');
   useEffect(() => { save(storeKey + ':cat', catPath); }, [storeKey, catPath]);
   const [drag, setDrag] = useState(null); // id перетаскиваемого столбца
+  // Набор для выгрузки: артикулы, отмеченные в таблице, — внизу, с новой ценой.
+  const [setList, setSetList] = useState(() => load(storeKey + ':set') || []);
+  useEffect(() => { save(storeKey + ':set', setList); }, [storeKey, setList]);
+  const inSet = useMemo(() => new Set(setList), [setList]);
+  const toggleSet = o => setSetList(l => (l.includes(o) ? l.filter(x => x !== o) : [...l, o]));
   const [over, setOver] = useState(null);
   // Отшивается: артикул → шт (загружается файлом, хранится на сервере).
   const [sew, setSew] = useState({ items: {}, updatedAt: null });
@@ -172,7 +178,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
 
   // Цены — текущие (как в «Ценах и марже» и калькуляторе): цена в кабинете и
   // цена для покупателя (с Ozon-картой с сайта, иначе цена × (1 − СПП)).
-  const needPrice = cfg.cols.some(c => MET[c.m]?.price);
+  const needPrice = cfg.cols.some(c => MET[c.m]?.price) || setList.length > 0;
   const [prices, setPrices] = useState(null);
   useEffect(() => {
     if (!needPrice) return undefined;
@@ -310,8 +316,11 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       const name = a ? a.o : (cfg.rows === 'cat' || cfg.rows === 'sub') && catPath && key.startsWith(catPath + SEP) ? key.slice(catPath.length + SEP.length) : key === catPath && cfg.rows === 'cat' ? `${key.split(SEP).pop()} (без подкатегории)` : key;
       return { key, a, list, name, cat: a ? a.cat : '', sub: a ? a.short : `${list.length} арт.`, vals: calc(list) };
     });
-    return { rows, total: { key: '__t', name: 'Итого', sub: `${inScope.length} арт.`, vals: calc(inScope) }, colsSpec };
-  }, [L, cfg, inScope, sumsOf, finArt, data, depth, catPath]);
+    // Набор — по всем артикулам, независимо от фильтров таблицы.
+    const byO = new Map(arts.map(a => [a.o, a]));
+    const setRows = setList.map(o => byO.get(o)).filter(Boolean).map(a => ({ key: a.o, a, vals: calc([a]) }));
+    return { rows, total: { key: '__t', name: 'Итого', sub: `${inScope.length} арт.`, vals: calc(inScope) }, colsSpec, setRows };
+  }, [L, cfg, inScope, sumsOf, finArt, data, depth, catPath, arts, setList]);
 
   const ctl = useTableCtl(`builder-${cabinet}`);
   // «Пустые» строки — все значения нулевые или пустые (обычно артикулы без движения).
@@ -729,7 +738,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
                 {!shown.length && <tr><td colSpan={cfg.cols.length + 2} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
                 {shown.slice(0, full ? LIMIT : 10).map(r => (
                   <tr key={r.key} className="row" onClick={() => openRow(r)} title={r.a ? 'Открыть артикул в дереве выше' : cfg.rows !== 'brand' ? 'Показать, что внутри' : ''}>
-                    <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{r.name}{!r.a && cfg.rows !== 'brand' ? ' ›' : ''}</div><div className="model" title={r.a?.n || ''}>{r.sub}</div></div></div></td>
+                    <td><div className="a-art">{r.a && <SetMark on={inSet.has(r.a.o)} onClick={e => { e.stopPropagation(); toggleSet(r.a.o); }} />}<div style={{ minWidth: 0 }}><div className="id">{r.name}{!r.a && cfg.rows !== 'brand' ? ' ›' : ''}</div><div className="model" title={r.a?.n || ''}>{r.sub}</div></div></div></td>
                     {cfg.rows === 'art' && <td className="muted tb-cat" title={r.cat}>{(catPath && r.cat.startsWith(catPath + SEP) ? r.cat.slice(catPath.length + SEP.length) : r.cat.split(SEP).slice(-2).join(SEP)) || '—'}</td>}
                     {r.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
                   </tr>
@@ -740,6 +749,161 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
             {full && shown.length > LIMIT && <div className="a-hint">Показаны первые {LIMIT} из {shown.length} — уточните фильтр или скачайте CSV.</div>}
           </div>
         )}
+      <PriceSet storeKey={storeKey} rows={table.setRows || []} cols={cfg.cols} cell={cell} prices={prices} coefOf={coefOf} tax={tax} data={data}
+        onRemove={toggleSet} onClear={() => setSetList([])} setCount={setList.length} />
+    </div>
+  );
+}
+
+// Значок «в наборе»: контур с плюсом; в наборе — залит цветом с галочкой.
+function SetMark({ on, onClick }) {
+  return (
+    <button type="button" className={`tb-mark ${on ? 'on' : ''}`} onClick={onClick}
+      title={on ? 'В наборе для выгрузки (внизу) — нажмите, чтобы убрать' : 'Добавить в набор для выгрузки (внизу)'}>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">{on
+        ? <path d="M4 8.2l2.6 2.6L12 5.4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        : <path d="M8 4v8M4 8h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />}</svg>
+    </button>
+  );
+}
+
+function PriceInput({ value, placeholder, onCommit }) {
+  const [v, setV] = useState(value ?? '');
+  const focus = useRef(false);
+  useEffect(() => { if (!focus.current) setV(value ?? ''); }, [value]);
+  return (
+    <input className={`a-input tb-price ${value ? 'ed' : ''}`} inputMode="decimal" value={v} placeholder={placeholder}
+      onFocus={() => { focus.current = true; }} onBlur={() => { focus.current = false; onCommit(v); }}
+      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      onChange={e => setV(e.target.value.replace(',', '.').replace(/[^\d.]/g, ''))} />
+  );
+}
+
+// Набор для выгрузки: артикул, метрики верхней таблицы, текущая и новая цена и
+// прогноз при новой цене — как в калькуляторе (юнит-экономика артикула, ДРР — свой
+// за последние 30 дней: реклама / (заказы × % выкупа)). Скачивается в Excel с выбором столбцов.
+function PriceSet({ storeKey, rows, cols, cell, prices, coefOf, tax, data, onRemove, onClear, setCount }) {
+  const [mode, setMode] = useState(() => load(storeKey + ':setmode') || 'client');
+  useEffect(() => { save(storeKey + ':setmode', mode); }, [storeKey, mode]);
+  const [np, setNp] = useState(() => load(storeKey + ':setprices') || {}); // артикул -> { v, m }
+  useEffect(() => { save(storeKey + ':setprices', np); }, [storeKey, np]);
+  const [pick, setPick] = useState(false);
+  const [exp, setExp] = useState(() => load(storeKey + ':setexp') || { art: true, newPrice: true });
+  useEffect(() => { save(storeKey + ':setexp', exp); }, [storeKey, exp]);
+  const pickRef = useRef(null);
+  useEffect(() => {
+    if (!pick) return undefined;
+    const on = e => { if (pickRef.current && !pickRef.current.contains(e.target)) setPick(false); };
+    document.addEventListener('mousedown', on);
+    return () => document.removeEventListener('mousedown', on);
+  }, [pick]);
+
+  const L = data?.dates.length || 0;
+  const model = useMemo(() => rows.map(r => {
+    const a = r.a, k = coefOf ? coefOf(a.o) : null, pr = prices?.get(a.o);
+    const cur = pr?.price || k?.price || null;
+    // Доля цены клиента от цены реализации: по ценам на сайте, иначе по модели артикула.
+    const sppK = pr?.client && pr?.price ? pr.client / pr.price : k ? 1 - (k.spp || 0) / 100 : 1;
+    const curClient = pr?.client || (cur ? cur * sppK : null);
+    // ДРР — свой за последние 30 дней данных: реклама / (заказы × выкуп).
+    let sp = 0, rv = 0;
+    for (let d = Math.max(0, L - 30); d < L; d++) { sp += a.spendCpc[d] + a.spendCpo[d]; rv += a.revenue[d]; }
+    const v = k ? {
+      spp: (1 - sppK) * 100, cost: k.cost || 0, buyout: k.buyout * 100, defect: 0, commission: k.comm * 100, acquiring: k.acq * 100,
+      direct: k.direct ?? k.logi, ret: k.direct !== null && k.direct !== undefined ? k.ret : 0, other: k.other * 100, oper: 0, tax: tax || 0,
+      drr: rv > 0 && k.buyout > 0 ? sp / (rv * k.buyout) * 100 : 0,
+    } : null;
+    const o = np[a.o];
+    const newReal = o && o.v > 0 ? (o.m === 'client' ? o.v / (sppK || 1) : o.v) : null;
+    const at = newReal || cur;
+    const res = v && at ? compute(v, at, 'usn_income') : null;
+    return { ...r, k, v, cur, curClient, sppK, newReal, res, o };
+  }), [rows, coefOf, prices, tax, np, L]);
+
+  const shownNew = x => (!x.o ? '' : x.o.m === mode ? x.o.v : Math.round(mode === 'client' ? x.o.v * x.sppK : x.o.v / (x.sppK || 1)));
+  const setPrice = (o, val) => setNp(m => { const n = { ...m }; if (!(Number(val) > 0)) delete n[o]; else n[o] = { v: Number(val), m: mode }; return n; });
+  const newOut = x => (x.newReal ? Math.round(mode === 'client' ? x.newReal * x.sppK : x.newReal) : Math.round(mode === 'client' ? x.curClient : x.cur) || null);
+
+  const EXP = [
+    ['art', 'Артикул', x => x.a.o], ['model', 'Название', x => x.a.n || ''], ['cat', 'Категория', x => x.a.cat],
+    ['cur', 'Цена реализации сейчас', x => x.cur && Math.round(x.cur)], ['curClient', 'Цена клиента сейчас', x => x.curClient && Math.round(x.curClient)],
+    ['newPrice', `Новая цена (${mode === 'client' ? 'клиента' : 'реализации'})`, newOut],
+    ['profit', 'Прибыль на 1 шт при новой цене (прогноз)', x => x.res && Math.round(x.res.profit)],
+    ['margin', 'Маржинальность при новой цене (прогноз), %', x => x.res && Math.round(x.res.margin * 10) / 10],
+    ...cols.map((c, i) => [c.id, colTitle(c), x => { const y = x.vals[i]?.v; return y === null || y === undefined || !Number.isFinite(y) ? '' : Math.round(y * 10) / 10; }]),
+  ];
+  async function download() {
+    const XLSX = await import('xlsx');
+    const use = EXP.filter(([k]) => exp[k]);
+    const aoa = [use.map(([, t]) => t), ...model.map(x => use.map(([, , f]) => f(x) ?? ''))];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Набор');
+    XLSX.writeFile(wb, `Набор ${dayjs().format('DD.MM.YYYY')}.xlsx`);
+  }
+
+  return (
+    <div className="tb-set">
+      <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <b style={{ fontSize: 14 }}>Набор для выгрузки</b>
+        <span className="a-hint" style={{ margin: 0 }}>{setCount ? `${setCount} арт. · новых цен ${model.filter(x => x.newReal).length}` : 'нажмите ＋ у артикула в таблице выше — он появится здесь (в таблице останется отмеченным)'}</span>
+        {setCount > 0 && (
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="tb-lbl" style={{ width: 'auto' }}>новая цена —</span>
+            <span className="a-seg">
+              <button type="button" className={mode === 'client' ? 'on' : ''} onClick={() => setMode('client')}>цена клиента</button>
+              <button type="button" className={mode === 'real' ? 'on' : ''} onClick={() => setMode('real')}>цена реализации</button>
+            </span>
+            <span className="tb-tplwrap" ref={pickRef}>
+              <button type="button" className="a-btn" onClick={() => setPick(o => !o)}>⬇ Excel ▾</button>
+              {pick && (
+                <div className="tb-tplpop" style={{ minWidth: 300 }}>
+                  <div className="muted" style={{ padding: '2px 4px 6px' }}>Какие столбцы выгрузить</div>
+                  {EXP.map(([k, t]) => (
+                    <label key={k} className="tb-chk" style={{ display: 'flex', padding: '3px 4px' }}>
+                      <input type="checkbox" checked={!!exp[k]} onChange={e => setExp(x => ({ ...x, [k]: e.target.checked }))} />{t}
+                    </label>
+                  ))}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                    <button type="button" className="a-btn ghost" onClick={() => setExp({ art: true, newPrice: true })}>артикул + цена</button>
+                    <button type="button" className="a-btn" onClick={() => { download(); setPick(false); }}>Скачать ({model.length})</button>
+                  </div>
+                  <div className="a-hint" style={{ margin: '6px 2px 0' }}>Где новая цена не вписана — в файл уходит текущая.</div>
+                </div>
+              )}
+            </span>
+            <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Очистить набор?')) { onClear(); setNp({}); } }}>очистить</button>
+          </span>
+        )}
+      </div>
+      {setCount > 0 && (
+        <div className="a-scroll">
+          <table className="a-t s-slice tb-t">
+            <thead><tr>
+              <th>Артикул</th>
+              <th className="r">Цена реализации</th><th className="r">Цена клиента</th>
+              <th className="r" title="Впишите новую цену — пересчитается прогноз строки">Новая цена ({mode === 'client' ? 'клиента' : 'реализации'})</th>
+              <th className="r" title="Как в калькуляторе: юнит-экономика артикула при новой цене (без новой — при текущей), ДРР — свой за 30 дней">Прибыль на 1 шт, прогноз</th>
+              <th className="r" title="Прибыль / цена реализации при новой цене — как в калькуляторе">Маржинальность, прогноз</th>
+              {cols.map(c => <th key={c.id} className="r">{colTitle(c)}</th>)}
+              <th />
+            </tr></thead>
+            <tbody>
+              {model.map(x => (
+                <tr key={x.key}>
+                  <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.a.o}</div><div className="model" title={x.a.n || ''}>{x.a.short}</div></div></div></td>
+                  <td className="n r">{x.cur ? fmtInt(x.cur) : '—'}</td>
+                  <td className="n r">{x.curClient ? fmtInt(x.curClient) : '—'}</td>
+                  <td className="r"><PriceInput value={shownNew(x)} placeholder={fmtInt(mode === 'client' ? x.curClient : x.cur)} onCommit={val => setPrice(x.a.o, val)} /></td>
+                  <td className="n r" style={{ color: x.res && x.res.profit < 0 ? 'var(--a-bad)' : undefined }}>{x.res ? `${fmtInt(x.res.profit)} ₽` : '—'}</td>
+                  <td className="n r"><b style={{ color: x.res && x.res.margin < 0 ? 'var(--a-bad)' : undefined }}>{x.res ? fmtPct(x.res.margin) : '—'}</b>{x.newReal && x.cur && x.v ? <small className="tb-was">было {fmtPct(compute(x.v, x.cur, 'usn_income').margin)}</small> : null}</td>
+                  {x.vals.map((y, i) => <td key={cols[i].id} className="n r">{cell(y, i)}</td>)}
+                  <td className="r"><button type="button" className="tb-x" title="Убрать из набора" onClick={() => onRemove(x.a.o)}>×</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
