@@ -280,9 +280,18 @@ export default function Calculator({ cabinet }) {
   }, [data, cat, art, scheme, volume, arts, rowsByArt, ship, bs.shareOf, K]);
 
   const auto = k => base?.out[k]?.[0];
-  const val = k => (vals[k] !== undefined ? vals[k] : (auto(k) !== null && auto(k) !== undefined ? String(r1(auto(k)) ?? '') : ''));
-  const set = (k, v) => setVals(p => ({ ...p, [k]: v }));
-  const reset = k => setVals(p => { const x = { ...p }; delete x[k]; return x; });
+  const valRaw = k => (vals[k] !== undefined ? vals[k] : (auto(k) !== null && auto(k) !== undefined ? String(r1(auto(k)) ?? '') : ''));
+  // Цена клиента (после СПП): если её ввели вручную — цена реализации считается из неё
+  // при текущей СПП (репрайсер держит именно цену клиента).
+  const val = k => {
+    if (k === 'price' && vals.client !== undefined && vals.client !== '') {
+      const c = n0(vals.client), sp = n0(valRaw('spp'));
+      if (c > 0 && sp < 100) return String(Math.round(c / (1 - sp / 100) * 100) / 100);
+    }
+    return valRaw(k);
+  };
+  const set = (k, v) => setVals(p => { const x = { ...p, [k]: v }; if (k === 'price') delete x.client; return x; });
+  const reset = k => setVals(p => { const x = { ...p }; delete x[k]; if (k === 'price') delete x.client; return x; });
   const V = {};
   for (const [k] of FIELDS) V[k] = n0(val(k));
   const priceIn = val('price');
@@ -307,6 +316,14 @@ export default function Calculator({ cabinet }) {
   const delHist = id => { const next = hist.filter(h => h.id !== id); setHist(next); try { localStorage.setItem(HIST_KEY + cabinet, JSON.stringify(next)); } catch (e) { /* ignore */ } };
   const resetAll = () => { setArt(null); setCat(''); setVals({}); setDims({ l: '', w: '', h: '', liters: '' }); setName(''); setBudget(''); };
 
+  const clientField = () => {
+    const P = n0(val('price')), sp = n0(val('spp'));
+    const shown = vals.client !== undefined ? vals.client : (P > 0 ? String(Math.round(P * (1 - sp / 100))) : '');
+    const base0 = n0(valRaw('price')); // цена реализации без учёта введённой цены клиента
+    const autoC = base0 > 0 ? Math.round(base0 * (1 - sp / 100)) : null;
+    return <Num key="client" label="Цена клиента (после СПП) — меняет цену реализации" suffix="₽" value={shown} onChange={v => set('client', v)} auto={autoC}
+      src={vals.client !== undefined && vals.client !== '' ? `цена реализации ${fmtInt(n0(val('price')))} ₽ при СПП ${r1(sp)}%` : 'цена реализации × (1 − СПП)'} onReset={() => reset('client')} />;
+  };
   const field = k => {
     const f = FIELDS.find(x => x[0] === k);
     return <Num key={k} label={f[1]} suffix={f[2]} value={val(k)} onChange={v => set(k, v)} auto={auto(k)} src={base?.out[k]?.[1]} onReset={() => reset(k)} />;
@@ -386,7 +403,7 @@ export default function Calculator({ cabinet }) {
                 <span className="k-lbl">Название расчёта</span>
                 <span className="k-inp"><input value={name} onChange={e => setName(e.target.value)} placeholder="Например: чехлы экокожа, новая модель" /></span>
               </label>
-              <div className="k-two">{field('price')}{field('spp')}{field('cost')}{field('buyout')}{field('defect')}</div>
+              <div className="k-two">{field('price')}{clientField()}{field('spp')}{field('cost')}{field('buyout')}{field('defect')}</div>
               {res && <div className="k-note">Цена клиента ≈ <b>{rub(res.buyerPrice)}</b> · отправок на 1 продажу <b>{res.trips.toFixed(2).replace('.', ',')}</b> (100 / выкуп) · к перечислению от Ozon <b>{rub(res.payout)}</b></div>}
             </div>
 
