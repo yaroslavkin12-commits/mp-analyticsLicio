@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { compute, priceFor } from './Calculator';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans } from '../api';
+import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans, getSeason, getProduction } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, fmtPct } from './AdsStats2';
 
@@ -54,6 +54,10 @@ const METRICS = [
   { g: 'Финансы (начисления Ozon)', k: 'roi', t: 'ROI', kind: 'pct', fin: true },
   { g: 'Прогноз (с заказов)', k: 'profitF', t: 'Прибыль прогнозируемая', kind: 'rub' },
   { g: 'Прогноз (с заказов)', k: 'marginF', t: 'Маржинальность прогнозируемая', kind: 'pct' },
+  // За год — не зависят от периода страницы.
+  { g: 'За год', k: 'y12', t: 'Заказы за 12 мес., шт (Ozon, этот магазин)', kind: 'int', noDays: true, now: true, year: true },
+  { g: 'За год', k: 'y12r', t: 'Заказы за 12 мес., ₽ (Ozon, этот магазин)', kind: 'rub', noDays: true, now: true, year: true },
+  { g: 'За год', k: 'yAll', t: 'Заказы за год, шт — все магазины WB + Ozon (1С)', kind: 'int', noDays: true, now: true, year: true },
 ];
 // Суммируемые метрики — для них есть «в среднем за день / неделю / месяц / год».
 const ADDITIVE = new Set(['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'buyQty', 'buyRub', 'payout', 'cost', 'profit', 'profitF']);
@@ -83,6 +87,7 @@ const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } cat
 const perTxt = (days, unit) => (unit === 'w' && days % 7 === 0 ? `${days / 7} нед` : `${days} дн`);
 const colTitle = c => {
   const m = MET[c.m]; if (!m) return '?';
+  if (m.year) return m.t;
   let t = c.avg && ADDITIVE.has(c.m) ? `Ср. ${m.t.replace(/^./, x => x.toLowerCase())} ${AVG_T[c.avg]}` : m.t;
   if (!m.noDays) t += ` · ${perTxt(c.days, c.unit)}`;
   if (c.off && !m.now) t += ` · ${perTxt(c.off, c.unit)} назад`;
@@ -121,7 +126,7 @@ function derive(k, S, D) {
   }
 }
 const BASE_KEYS = ['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'posSum', 'posCnt', 'stock', 'sewing', 'buyQty', 'buyRub', 'payout', 'cost', 'profit',
-  'priceSum', 'priceCnt', 'clientSum', 'clientCnt', 'priceSum2', 'clientSum2', 'priceCnt2', 'fProfit', 'fRev', 'fAny'];
+  'priceSum', 'priceCnt', 'clientSum', 'clientCnt', 'priceSum2', 'clientSum2', 'priceCnt2', 'fProfit', 'fRev', 'fAny', 'y12', 'y12r', 'yAll'];
 
 let idSeq = Date.now();
 const newId = () => 'c' + (idSeq++).toString(36);
@@ -156,6 +161,35 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const [sewMsg, setSewMsg] = useState(null);
   useEffect(() => { getSewing(cabinet).then(r => setSew(r.data.data || { items: {} })).catch(() => {}); }, [cabinet]);
   const sewLc = useMemo(() => { const m = new Map(); for (const [o, q] of Object.entries(sew.items || {})) m.set(o.toLowerCase(), q); return m; }, [sew]);
+  // За год: продажи Ozon по месяцам (этот магазин) и «Продажи за год» из 1С (Производство, все магазины).
+  const needY12 = cfg.cols.some(c => c.m === 'y12' || c.m === 'y12r') || (setCols || []).some(c => c.m === 'y12' || c.m === 'y12r');
+  const needYAll = cfg.cols.some(c => c.m === 'yAll') || (setCols || []).some(c => c.m === 'yAll');
+  const [season, setSeason] = useState(null);
+  const [prodYear, setProdYear] = useState(null);
+  useEffect(() => { setSeason(null); }, [cabinet]);
+  useEffect(() => { if (needY12 && !season) getSeason(cabinet).then(r => setSeason(r.data.data)).catch(() => setSeason(false)); }, [needY12, season, cabinet]);
+  useEffect(() => { if (needYAll && !prodYear) getProduction('defly').then(r => setProdYear(r.data.data)).catch(() => setProdYear(false)); }, [needYAll, prodYear]);
+  const yInfo = useMemo(() => {
+    if (!season) return null;
+    const now = dayjs(), want = [];
+    for (let i = 12; i >= 1; i--) want.push(now.subtract(i, 'month').format('YYYY-MM'));
+    const idx = new Map(season.months.map((m, i) => [m, i]));
+    const use = new Set(want.filter(m => idx.has(m)).map(m => idx.get(m)));
+    const map = new Map();
+    for (const [ai, mi, rv, q] of season.rows) {
+      if (!use.has(mi)) continue;
+      const o = season.articles[ai]?.o; if (!o) continue;
+      const v = map.get(o) || { q: 0, r: 0 }; v.q += q; v.r += rv; map.set(o, v);
+    }
+    return { map, from: want[0], to: want[11], have: use.size };
+  }, [season]);
+  const yAllLc = useMemo(() => {
+    if (!prodYear) return null;
+    const m = new Map();
+    for (const [o, q] of Object.entries(prodYear.uploads?.year?.items || {})) m.set(o.toLowerCase(), q);
+    for (const [o, r] of Object.entries(prodYear.master || {})) if (r && r.yearOv !== undefined && r.yearOv !== null && r.yearOv !== '') m.set(o.toLowerCase(), Number(r.yearOv) || 0);
+    return m;
+  }, [prodYear]);
   const [data, setData] = useState(null);
   const [fin, setFin] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -250,6 +284,9 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     }
     S.stock = a.stockArr[hi] ?? 0;
     S.sewing = isSeat(a) ? (sewLc.get(String(a.o).toLowerCase()) || 0) : 0;
+    const yv = yInfo?.map.get(a.o);
+    S.y12 = yv ? yv.q : 0; S.y12r = yv ? yv.r : 0;
+    S.yAll = yAllLc ? (yAllLc.get(String(a.o).toLowerCase()) || 0) : 0;
     const pr = prices?.get(a.o);
     if (pr) {
       S.priceSum = pr.price; S.priceCnt = 1;
@@ -276,7 +313,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       S.profit = pay - cost - base * (tax || 0) / 100;
     }
     return S;
-  }, [finArt, shareOf, shareAt, forecast, data, tax, sewLc, prices]);
+  }, [finArt, shareOf, shareAt, forecast, data, tax, sewLc, prices, yInfo, yAllLc]);
 
   const inPath = a => !catPath || a.cat === catPath || a.cat.startsWith(catPath + SEP);
   const inScope = useMemo(() => arts.filter(a => (!scope || scope.has(a.o)) && inPath(a)), [arts, scope, catPath]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -771,6 +808,8 @@ function ColsEditor({ cols, setCols, edit, setEdit, dnd, hdrDrag: drag, hdrOver:
               </select>
             </label>
           )}
+          {(ed.m === 'y12' || ed.m === 'y12r') && <span className="a-hint" style={{ margin: 0, maxWidth: 420 }}>{season === false ? 'Не удалось загрузить продажи по месяцам.' : !yInfo ? 'Загрузка…' : `12 полных месяцев: ${dayjs(yInfo.from).format('MM.YYYY')}–${dayjs(yInfo.to).format('MM.YYYY')}${yInfo.have < 12 ? ` · у магазина есть данные только за ${yInfo.have} мес. — сумма за них` : ''}. Из Ozon (по месяцам, обновляется раз в сутки).`}</span>}
+          {ed.m === 'yAll' && <span className="a-hint" style={{ margin: 0, maxWidth: 420 }}>{prodYear === false ? 'Не удалось загрузить данные «Производства».' : !prodYear ? 'Загрузка…' : prodYear.uploads?.year ? `Из «Производства» → «Продажи за год» (1С, все магазины WB + Ozon), загружено ${dayjs(prodYear.uploads.year.at).format('DD.MM.YYYY')}${prodYear.uploads.year.file ? ` · ${prodYear.uploads.year.file}` : ''}. Есть только по артикулам из файла (${Object.keys(prodYear.uploads.year.items || {}).length} арт.). Обновится само после новой загрузки файла.` : 'В «Производстве» ещё не загружены «Продажи за год».'}</span>}
           {ed.m === 'sewing' && <span className="a-hint" style={{ margin: 0, maxWidth: 360 }}>Только чехлы на сиденья. Количество загружается файлом — строка «Отшивается» под столбцами.</span>}
           {!MET[ed.m]?.noDays && (
             <label className="tb-chk"><input type="checkbox" checked={!!ed.cmp} onChange={e => setCol(ed.id, { cmp: e.target.checked })} />изменение к предыдущим {perTxt(ed.days, ed.unit)}</label>
