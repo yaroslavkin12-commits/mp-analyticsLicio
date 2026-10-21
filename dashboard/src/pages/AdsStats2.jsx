@@ -1347,6 +1347,10 @@ export default function AdsStats2({ cabinet }) {
                 <div className="id">{a.offerId}</div>
                 <div className="model" title={a.productName || ''}>{shortModel(a.productName)}</div>
               </div>
+              {isGroup && members[a.offerId] === tab && (
+                <button type="button" className="a-ungroup" title={`Убрать из группы «${activeGroup.name}»`}
+                  onClick={e => { e.stopPropagation(); if (window.confirm(`Убрать ${a.offerId} из группы «${activeGroup.name}»?`)) assignGroup(a.offerId, null); }}>×</button>
+              )}
             </div>
           </td>
           <td><SparkBars values={dates.map(d => m.byDate[d]?.orders || 0)} /></td>

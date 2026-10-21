@@ -271,3 +271,8 @@
 .mpui .a-trd input[type=date]::-webkit-calendar-picker-indicator{position:absolute;inset:0;width:100%;height:100%;cursor:pointer}
 .mpui .a-trx{position:relative;z-index:2;margin-left:4px;color:var(--a-ink3);cursor:pointer}
 .mpui .a-trx:hover{color:var(--a-bad)}
+/* Убрать артикул из группы — крестик в строке, виден при наведении */
+.a-ungroup { margin-left: auto; flex: none; border: 0; background: none; cursor: pointer; color: var(--a-ink3, #9ca3af); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; opacity: 0; transition: opacity .12s; }
+tr:hover .a-ungroup { opacity: 1; }
+.a-ungroup:hover { color: var(--a-bad, #ef4444); background: rgba(239,68,68,.1); }
+@media (hover: none) { .a-ungroup { opacity: .7; } }
