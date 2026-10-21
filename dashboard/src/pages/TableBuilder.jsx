@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, createContext, useContext } from 'react';
 import { compute, priceFor } from './Calculator';
 import dayjs from 'dayjs';
 import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans, getSeason, getProduction } from '../api';
@@ -65,6 +65,8 @@ const AVG = [['', 'всего за период'], ['d', 'в среднем за
 const AVG_DAYS = { d: 1, w: 7, m: 30.4, y: 365 };
 const AVG_T = { d: 'в день', w: 'в неделю', m: 'в месяц', y: 'в год' };
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
+// Подсказки к метрикам «За год» (источник и дата данных) — для редактора столбца.
+const YearHint = createContext({});
 const GROUPS = [...new Set(METRICS.map(m => m.g))];
 
 const ROW_MODES = [['art', 'Артикулы'], ['cat', 'Категории'], ['sub', 'Подкатегории'], ['brand', 'Марки авто']];
@@ -190,6 +192,10 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     for (const [o, r] of Object.entries(prodYear.master || {})) if (r && r.yearOv !== undefined && r.yearOv !== null && r.yearOv !== '') m.set(o.toLowerCase(), Number(r.yearOv) || 0);
     return m;
   }, [prodYear]);
+  const yHint = useMemo(() => ({
+    y12: season === false ? 'Не удалось загрузить продажи по месяцам.' : !yInfo ? 'Загрузка…' : `12 полных месяцев: ${dayjs(yInfo.from).format('MM.YYYY')}–${dayjs(yInfo.to).format('MM.YYYY')}${yInfo.have < 12 ? ` · у магазина есть данные только за ${yInfo.have} мес. — сумма за них` : ''}. Из Ozon (по месяцам, обновляется раз в сутки).`,
+    yAll: prodYear === false ? 'Не удалось загрузить данные «Производства».' : !prodYear ? 'Загрузка…' : prodYear.uploads?.year ? `Из «Производства» → «Продажи за год» (1С, все магазины WB + Ozon), загружено ${dayjs(prodYear.uploads.year.at).format('DD.MM.YYYY')}${prodYear.uploads.year.file ? ` · ${prodYear.uploads.year.file}` : ''}. Есть только по артикулам из файла (${Object.keys(prodYear.uploads.year.items || {}).length} арт.). Обновится само после новой загрузки файла.` : 'В «Производстве» ещё не загружены «Продажи за год».',
+  }), [season, yInfo, prodYear]);
   const [data, setData] = useState(null);
   const [fin, setFin] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -613,6 +619,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   };
 
   return (
+    <YearHint.Provider value={yHint}>
     <div className="a-card tb-card">
       <div className="a-bar" style={{ gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
         <b style={{ fontSize: 14 }}>Конструктор таблицы</b>
@@ -749,12 +756,14 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       <PriceSet cabinet={cabinet} storeKey={storeKey} rows={table.setRows || []} cols={setColsEff} setCols={setSetCols} cell={(x, i) => cell(x, i, setColsEff)} prices={prices} coefOf={coefOf} tax={tax} data={data}
         onRemove={toggleSet} onAdd={addSet} onClear={() => setSetList([])} setCount={setList.length} />
     </div>
+    </YearHint.Provider>
   );
 }
 
 // Столбцы таблицы: плашки (нажать — изменить, перетащить — поменять местами) и редактор столбца.
 // Общий для конструктора и для набора для выгрузки.
 function ColsEditor({ cols, setCols, edit, setEdit, dnd, hdrDrag: drag, hdrOver: over }) {
+  const yHint = useContext(YearHint);
   const ed = cols.find(c => c.id === edit);
   const setCol = (id, patch) => setCols(cs => cs.map(c => (c.id === id ? { ...c, ...patch } : c)));
   const moveCol = (id, dir) => setCols(cs => {
@@ -808,8 +817,7 @@ function ColsEditor({ cols, setCols, edit, setEdit, dnd, hdrDrag: drag, hdrOver:
               </select>
             </label>
           )}
-          {(ed.m === 'y12' || ed.m === 'y12r') && <span className="a-hint" style={{ margin: 0, maxWidth: 420 }}>{season === false ? 'Не удалось загрузить продажи по месяцам.' : !yInfo ? 'Загрузка…' : `12 полных месяцев: ${dayjs(yInfo.from).format('MM.YYYY')}–${dayjs(yInfo.to).format('MM.YYYY')}${yInfo.have < 12 ? ` · у магазина есть данные только за ${yInfo.have} мес. — сумма за них` : ''}. Из Ozon (по месяцам, обновляется раз в сутки).`}</span>}
-          {ed.m === 'yAll' && <span className="a-hint" style={{ margin: 0, maxWidth: 420 }}>{prodYear === false ? 'Не удалось загрузить данные «Производства».' : !prodYear ? 'Загрузка…' : prodYear.uploads?.year ? `Из «Производства» → «Продажи за год» (1С, все магазины WB + Ozon), загружено ${dayjs(prodYear.uploads.year.at).format('DD.MM.YYYY')}${prodYear.uploads.year.file ? ` · ${prodYear.uploads.year.file}` : ''}. Есть только по артикулам из файла (${Object.keys(prodYear.uploads.year.items || {}).length} арт.). Обновится само после новой загрузки файла.` : 'В «Производстве» ещё не загружены «Продажи за год».'}</span>}
+          {(ed.m === 'y12' || ed.m === 'y12r' || ed.m === 'yAll') && yHint[ed.m === 'yAll' ? 'yAll' : 'y12'] && <span className="a-hint" style={{ margin: 0, maxWidth: 420 }}>{yHint[ed.m === 'yAll' ? 'yAll' : 'y12']}</span>}
           {ed.m === 'sewing' && <span className="a-hint" style={{ margin: 0, maxWidth: 360 }}>Только чехлы на сиденья. Количество загружается файлом — строка «Отшивается» под столбцами.</span>}
           {!MET[ed.m]?.noDays && (
             <label className="tb-chk"><input type="checkbox" checked={!!ed.cmp} onChange={e => setCol(ed.id, { cmp: e.target.checked })} />изменение к предыдущим {perTxt(ed.days, ed.unit)}</label>
