@@ -143,6 +143,13 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   useEffect(() => { save(storeKey + ':set', setList); }, [storeKey, setList]);
   const inSet = useMemo(() => new Set(setList), [setList]);
   const toggleSet = o => setSetList(l => (l.includes(o) ? l.filter(x => x !== o) : [...l, o]));
+  const addSet = os => setSetList(l => { const h = new Set(l); return [...l, ...os.filter(o => !h.has(o))]; });
+  const removeSet = os => { const h = new Set(os); setSetList(l => l.filter(o => !h.has(o))); };
+  // Свои столбцы у набора (сначала — копия столбцов таблицы).
+  const [setCols, setSetColsRaw] = useState(() => load(storeKey + ':setcols') || null);
+  const setColsEff = setCols || cfg.cols;
+  const setSetCols = f => setSetColsRaw(cur => f(cur || cfg.cols).map(c => ({ ...c })));
+  useEffect(() => { if (setCols) save(storeKey + ':setcols', setCols); }, [storeKey, setCols]);
   const [over, setOver] = useState(null);
   // Отшивается: артикул → шт (загружается файлом, хранится на сервере).
   const [sew, setSew] = useState({ items: {}, updatedAt: null });
@@ -156,8 +163,9 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   useEffect(() => { save(storeKey, cfg); }, [storeKey, cfg]);
 
   // Сколько дней истории нужно под все столбцы.
-  const span = useMemo(() => Math.min(MAX_SPAN, Math.max(1, ...cfg.cols.map(c => (MET[c.m]?.noDays ? 1 : c.days) * (c.cmp ? 2 : 1) + (c.off || 0)))), [cfg.cols]);
-  const needFin = cfg.cols.some(c => MET[c.m]?.fin);
+  const allCols = useMemo(() => (setList.length ? [...cfg.cols, ...setColsEff] : cfg.cols), [cfg.cols, setColsEff, setList.length]);
+  const span = useMemo(() => Math.min(MAX_SPAN, Math.max(30, ...allCols.map(c => (MET[c.m]?.noDays ? 1 : c.days) * (c.cmp ? 2 : 1) + (c.off || 0)))), [allCols]);
+  const needFin = allCols.some(c => MET[c.m]?.fin);
   const from = dayjs(anchor).subtract(span - 1, 'day').format('YYYY-MM-DD');
 
   useEffect(() => {
@@ -178,7 +186,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
 
   // Цены — текущие (как в «Ценах и марже» и калькуляторе): цена в кабинете и
   // цена для покупателя (с Ozon-картой с сайта, иначе цена × (1 − СПП)).
-  const needPrice = cfg.cols.some(c => MET[c.m]?.price) || setList.length > 0;
+  const needPrice = allCols.some(c => MET[c.m]?.price) || setList.length > 0;
   const [prices, setPrices] = useState(null);
   useEffect(() => {
     if (!needPrice) return undefined;
@@ -292,12 +300,13 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         : cfg.rows === 'sub' ? a.cat : (a.brand || 'Не определена'));
     const groups = new Map();
     for (const a of inScope) { const g = groupOf(a); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(a); }
-    const colsSpec = cfg.cols.map(c => {
+    const specOf = cols => cols.map(c => {
       const m = MET[c.m]; const D = m?.noDays ? 1 : c.days;
       const hi = L - 1 - (c.off || 0), lo = hi - D + 1;
       return { c, m, D, lo, hi, plo: lo - D, phi: lo - 1, partial: lo < 0 || (m?.fin && finArt?.mn && data.dates[Math.max(0, lo)] < finArt.mn) };
     });
-    const calc = list => colsSpec.map(({ c, m, D, lo, hi, plo, phi }) => {
+    const colsSpec = specOf(cfg.cols), setSpec = specOf(setColsEff);
+    const calc = (list, spec = colsSpec) => spec.map(({ c, m, D, lo, hi, plo, phi }) => {
       if (!m) return { v: null };
       const add = (lo2, hi2) => {
         const T = Object.fromEntries(BASE_KEYS.map(k => [k, 0]));
@@ -318,9 +327,9 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     });
     // Набор — по всем артикулам, независимо от фильтров таблицы.
     const byO = new Map(arts.map(a => [a.o, a]));
-    const setRows = setList.map(o => byO.get(o)).filter(Boolean).map(a => ({ key: a.o, a, vals: calc([a]) }));
+    const setRows = setList.map(o => byO.get(o)).filter(Boolean).map(a => ({ key: a.o, a, vals: calc([a], setSpec) }));
     return { rows, total: { key: '__t', name: 'Итого', sub: `${inScope.length} арт.`, vals: calc(inScope) }, colsSpec, setRows };
-  }, [L, cfg, inScope, sumsOf, finArt, data, depth, catPath, arts, setList]);
+  }, [L, cfg, inScope, sumsOf, finArt, data, depth, catPath, arts, setList, setColsEff]);
 
   const ctl = useTableCtl(`builder-${cabinet}`);
   // «Пустые» строки — все значения нулевые или пустые (обычно артикулы без движения).
@@ -548,8 +557,8 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const ed = cfg.cols.find(c => c.id === edit);
   const LIMIT = 300;
 
-  const cell = (x, i) => {
-    const m = MET[cfg.cols[i].m];
+  const cell = (x, i, colsArr = cfg.cols) => {
+    const m = MET[colsArr[i]?.m];
     if (!x || !m) return '—';
     const main = fmtVal(x.v, m.kind);
     if (x.p === undefined) return main;
@@ -639,16 +648,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
           </select>
         )}
       </div>
-      <div className="tb-bar">
-        <span className="tb-lbl">Столбцы</span>
-        {cfg.cols.map(c => (
-          <button key={c.id} type="button" {...dnd(c.id)} title="Нажмите — изменить; перетащите — поменять местами"
-            className={`tb-chip ${edit === c.id ? 'on' : ''} ${drag === c.id ? 'drag' : ''} ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} onClick={() => setEdit(e => (e === c.id ? null : c.id))}>
-            {colTitle(c)}{c.cmp && !MET[c.m]?.noDays ? ' · Δ' : ''}
-          </button>
-        ))}
-        <button type="button" className="tb-chip add" onClick={addCol}>+ столбец</button>
-      </div>
+      <ColsEditor cols={cfg.cols} setCols={f => setCfg(s => ({ ...s, cols: f(s.cols) }))} edit={edit} setEdit={setEdit} hdrDrag={drag} hdrOver={over} dnd={dnd} afterChips={null} />
 
       {hasSewCol && (
         <div className="tb-bar tb-sew">
@@ -662,6 +662,83 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         </div>
       )}
 
+
+      {err && !data ? <div className="a-empty" style={{ padding: 18 }}>Не удалось загрузить: {err}</div>
+        : !data ? <div className="a-empty" style={{ padding: 18 }}>Загрузка…</div> : (
+          <div className="a-scroll" style={{ opacity: loading ? 0.6 : 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="a-hint" style={{ margin: 0 }}>
+                {needFin && !fin ? 'Загружаю финансы…' : needFin && finArt?.mn && table.colsSpec?.some(s => s.partial && s.m?.fin) ? `* начисления Ozon есть с ${dayjs(finArt.mn).format('DD.MM.YYYY')} — период столбца захватывает дни без данных` : ''}
+              </span>
+              <ResetCtl ctl={ctl} />
+            </div>
+            <table className="a-t s-slice tb-t">
+              <thead><tr>
+                <ThCtl ctl={ctl} k="__name" className="" filter={false}>{cfg.rows === 'art' && (() => {
+                  const os = shown.filter(r => r.a).map(r => r.a.o), all = os.length > 0 && os.every(o => inSet.has(o));
+                  return <SetMark on={all} title={all ? `Убрать из набора все ${os.length} арт. по фильтрам` : `Добавить в набор все ${os.length} арт. по фильтрам`}
+                    onClick={e => { e.stopPropagation(); if (all) removeSet(os); else addSet(os); }} />;
+                })()}{ROW_MODES.find(r => r[0] === cfg.rows)[1]}</ThCtl>
+                {cfg.rows === 'art' && <ThCtl ctl={ctl} k="__cat" className="tb-catth" filter={false} hint="Сортировка по категории">Категория</ThCtl>}
+                {cfg.cols.map((c, i) => (
+                  <ThCtl key={c.id} ctl={ctl} k={c.id} unit={MET[c.m]?.kind === 'pct' ? '%' : MET[c.m]?.kind === 'rub' ? '₽' : ''}
+                    className={`r tb-th ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} dnd={dnd(c.id)}>
+                    {colTitle(c)}{table.colsSpec?.[i]?.partial ? '*' : ''}
+                  </ThCtl>
+                ))}
+              </tr></thead>
+              <tbody>
+                {table.total && (
+                  <tr className="tb-total">
+                    <td><b>Итого</b> <span className="muted" style={{ fontSize: 11.5 }}>{table.total.sub}</span></td>
+                    {cfg.rows === 'art' && <td className="muted">{catPath ? catPath.split(SEP).pop() : ''}</td>}
+                    {table.total.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
+                  </tr>
+                )}
+                {!shown.length && <tr><td colSpan={cfg.cols.length + 2} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
+                {shown.slice(0, full ? LIMIT : 10).map(r => (
+                  <tr key={r.key} className="row" onClick={() => openRow(r)} title={r.a ? 'Открыть артикул в дереве выше' : cfg.rows !== 'brand' ? 'Показать, что внутри' : ''}>
+                    <td><div className="a-art">{r.a && <SetMark on={inSet.has(r.a.o)} onClick={e => { e.stopPropagation(); toggleSet(r.a.o); }} />}<div style={{ minWidth: 0 }}><div className="id">{r.name}{!r.a && cfg.rows !== 'brand' ? ' ›' : ''}</div><div className="model" title={r.a?.n || ''}>{r.sub}</div></div></div></td>
+                    {cfg.rows === 'art' && <td className="muted tb-cat" title={r.cat}>{(catPath && r.cat.startsWith(catPath + SEP) ? r.cat.slice(catPath.length + SEP.length) : r.cat.split(SEP).slice(-2).join(SEP)) || '—'}</td>}
+                    {r.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {shown.length > 10 && <button type="button" className="s-fold" onClick={() => setFull(f => !f)}>{full ? 'Свернуть ▲' : `Показать все ${Math.min(shown.length, LIMIT)}${shown.length > LIMIT ? ` из ${shown.length}` : ''} ▼`}</button>}
+            {full && shown.length > LIMIT && <div className="a-hint">Показаны первые {LIMIT} из {shown.length} — уточните фильтр или скачайте CSV.</div>}
+          </div>
+        )}
+      <PriceSet storeKey={storeKey} rows={table.setRows || []} cols={setColsEff} setCols={setSetCols} cell={(x, i) => cell(x, i, setColsEff)} prices={prices} coefOf={coefOf} tax={tax} data={data}
+        onRemove={toggleSet} onClear={() => setSetList([])} setCount={setList.length} />
+    </div>
+  );
+}
+
+// Столбцы таблицы: плашки (нажать — изменить, перетащить — поменять местами) и редактор столбца.
+// Общий для конструктора и для набора для выгрузки.
+function ColsEditor({ cols, setCols, edit, setEdit, dnd, hdrDrag: drag, hdrOver: over }) {
+  const ed = cols.find(c => c.id === edit);
+  const setCol = (id, patch) => setCols(cs => cs.map(c => (c.id === id ? { ...c, ...patch } : c)));
+  const moveCol = (id, dir) => setCols(cs => {
+    const i = cs.findIndex(c => c.id === id), j = i + dir;
+    if (i < 0 || j < 0 || j >= cs.length) return cs;
+    const n = [...cs]; [n[i], n[j]] = [n[j], n[i]]; return n;
+  });
+  const addCol = () => { const id = newId(); setCols(cs => [...cs, { id, m: 'orders', days: 7, unit: 'd', off: 0, cmp: false }]); setEdit(id); };
+  const delCol = id => { setCols(cs => cs.filter(c => c.id !== id)); setEdit(null); };
+  return (
+    <>
+      <div className="tb-bar">
+        <span className="tb-lbl">Столбцы</span>
+        {cols.map(c => (
+          <button key={c.id} type="button" {...dnd(c.id)} title="Нажмите — изменить; перетащите — поменять местами"
+            className={`tb-chip ${edit === c.id ? 'on' : ''} ${drag === c.id ? 'drag' : ''} ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} onClick={() => setEdit(e => (e === c.id ? null : c.id))}>
+            {colTitle(c)}{c.cmp && !MET[c.m]?.noDays ? ' · Δ' : ''}
+          </button>
+        ))}
+        <button type="button" className="tb-chip add" onClick={addCol}>+ столбец</button>
+      </div>
       {ed && (
         <div className="tb-ed">
           <label>Метрика
@@ -706,60 +783,15 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
           </span>
         </div>
       )}
-
-      {err && !data ? <div className="a-empty" style={{ padding: 18 }}>Не удалось загрузить: {err}</div>
-        : !data ? <div className="a-empty" style={{ padding: 18 }}>Загрузка…</div> : (
-          <div className="a-scroll" style={{ opacity: loading ? 0.6 : 1 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span className="a-hint" style={{ margin: 0 }}>
-                {needFin && !fin ? 'Загружаю финансы…' : needFin && finArt?.mn && table.colsSpec?.some(s => s.partial && s.m?.fin) ? `* начисления Ozon есть с ${dayjs(finArt.mn).format('DD.MM.YYYY')} — период столбца захватывает дни без данных` : ''}
-              </span>
-              <ResetCtl ctl={ctl} />
-            </div>
-            <table className="a-t s-slice tb-t">
-              <thead><tr>
-                <ThCtl ctl={ctl} k="__name" className="" filter={false}>{ROW_MODES.find(r => r[0] === cfg.rows)[1]}</ThCtl>
-                {cfg.rows === 'art' && <ThCtl ctl={ctl} k="__cat" className="tb-catth" filter={false} hint="Сортировка по категории">Категория</ThCtl>}
-                {cfg.cols.map((c, i) => (
-                  <ThCtl key={c.id} ctl={ctl} k={c.id} unit={MET[c.m]?.kind === 'pct' ? '%' : MET[c.m]?.kind === 'rub' ? '₽' : ''}
-                    className={`r tb-th ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} dnd={dnd(c.id)}>
-                    {colTitle(c)}{table.colsSpec?.[i]?.partial ? '*' : ''}
-                  </ThCtl>
-                ))}
-              </tr></thead>
-              <tbody>
-                {table.total && (
-                  <tr className="tb-total">
-                    <td><b>Итого</b> <span className="muted" style={{ fontSize: 11.5 }}>{table.total.sub}</span></td>
-                    {cfg.rows === 'art' && <td className="muted">{catPath ? catPath.split(SEP).pop() : ''}</td>}
-                    {table.total.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
-                  </tr>
-                )}
-                {!shown.length && <tr><td colSpan={cfg.cols.length + 2} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}
-                {shown.slice(0, full ? LIMIT : 10).map(r => (
-                  <tr key={r.key} className="row" onClick={() => openRow(r)} title={r.a ? 'Открыть артикул в дереве выше' : cfg.rows !== 'brand' ? 'Показать, что внутри' : ''}>
-                    <td><div className="a-art">{r.a && <SetMark on={inSet.has(r.a.o)} onClick={e => { e.stopPropagation(); toggleSet(r.a.o); }} />}<div style={{ minWidth: 0 }}><div className="id">{r.name}{!r.a && cfg.rows !== 'brand' ? ' ›' : ''}</div><div className="model" title={r.a?.n || ''}>{r.sub}</div></div></div></td>
-                    {cfg.rows === 'art' && <td className="muted tb-cat" title={r.cat}>{(catPath && r.cat.startsWith(catPath + SEP) ? r.cat.slice(catPath.length + SEP.length) : r.cat.split(SEP).slice(-2).join(SEP)) || '—'}</td>}
-                    {r.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {shown.length > 10 && <button type="button" className="s-fold" onClick={() => setFull(f => !f)}>{full ? 'Свернуть ▲' : `Показать все ${Math.min(shown.length, LIMIT)}${shown.length > LIMIT ? ` из ${shown.length}` : ''} ▼`}</button>}
-            {full && shown.length > LIMIT && <div className="a-hint">Показаны первые {LIMIT} из {shown.length} — уточните фильтр или скачайте CSV.</div>}
-          </div>
-        )}
-      <PriceSet storeKey={storeKey} rows={table.setRows || []} cols={cfg.cols} cell={cell} prices={prices} coefOf={coefOf} tax={tax} data={data}
-        onRemove={toggleSet} onClear={() => setSetList([])} setCount={setList.length} />
-    </div>
+    </>
   );
 }
 
 // Значок «в наборе»: контур с плюсом; в наборе — залит цветом с галочкой.
-function SetMark({ on, onClick }) {
+function SetMark({ on, onClick, title }) {
   return (
     <button type="button" className={`tb-mark ${on ? 'on' : ''}`} onClick={onClick}
-      title={on ? 'В наборе для выгрузки (внизу) — нажмите, чтобы убрать' : 'Добавить в набор для выгрузки (внизу)'}>
+      title={title || (on ? 'В наборе для выгрузки (внизу) — нажмите, чтобы убрать' : 'Добавить в набор для выгрузки (внизу)')}>
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">{on
         ? <path d="M4 8.2l2.6 2.6L12 5.4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         : <path d="M8 4v8M4 8h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />}</svg>
@@ -782,7 +814,28 @@ function PriceInput({ value, placeholder, onCommit }) {
 // Набор для выгрузки: артикул, метрики верхней таблицы, текущая и новая цена и
 // прогноз при новой цене — как в калькуляторе (юнит-экономика артикула, ДРР — свой
 // за последние 30 дней: реклама / (заказы × % выкупа)). Скачивается в Excel с выбором столбцов.
-function PriceSet({ storeKey, rows, cols, cell, prices, coefOf, tax, data, onRemove, onClear, setCount }) {
+function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, data, onRemove, onClear, setCount }) {
+  const [edit, setEdit] = useState(null);
+  const [drag, setDrag] = useState(null);
+  const [over, setOver] = useState(null);
+  const dropCol = (src, dst) => setCols(cs => {
+    if (!src || src === dst) return cs;
+    const n = cs.filter(c => c.id !== src), moved = cs.find(c => c.id === src);
+    const si = cs.findIndex(c => c.id === src), di = cs.findIndex(c => c.id === dst);
+    const j = n.findIndex(c => c.id === dst);
+    n.splice(j < 0 ? n.length : j + (di > si ? 1 : 0), 0, moved);
+    return n;
+  });
+  const dnd = id => ({
+    draggable: true,
+    onDragStart: e => { setDrag(id); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', id); } catch (x) { /* ignore */ } },
+    onDragOver: e => { if (drag) { e.preventDefault(); setOver(id); } },
+    onDragLeave: () => setOver(o => (o === id ? null : o)),
+    onDrop: e => { e.preventDefault(); dropCol(drag, id); setDrag(null); setOver(null); },
+    onDragEnd: () => { setDrag(null); setOver(null); },
+  });
+  const ctl = useTableCtl(storeKey.replace('mp-builder:', 'builder-set-'));
+  const [fullS, setFullS] = useState(false);
   const [mode, setMode] = useState(() => load(storeKey + ':setmode') || 'client');
   useEffect(() => { save(storeKey + ':setmode', mode); }, [storeKey, mode]);
   const [np, setNp] = useState(() => load(storeKey + ':setprices') || {}); // артикул -> { v, m }
@@ -803,8 +856,9 @@ function PriceSet({ storeKey, rows, cols, cell, prices, coefOf, tax, data, onRem
     const a = r.a, k = coefOf ? coefOf(a.o) : null, pr = prices?.get(a.o);
     const cur = pr?.price || k?.price || null;
     // Доля цены клиента от цены реализации: по ценам на сайте, иначе по модели артикула.
-    const sppK = pr?.client && pr?.price ? pr.client / pr.price : k ? 1 - (k.spp || 0) / 100 : 1;
-    const curClient = pr?.client || (cur ? cur * sppK : null);
+    // (цена клиента выше цены реализации — устаревшие данные сайта: тогда по модели)
+    const sppK = pr?.client && pr?.price && pr.client <= pr.price ? pr.client / pr.price : k ? 1 - (k.spp || 0) / 100 : 1;
+    const curClient = pr?.client && pr.client <= (cur || Infinity) ? pr.client : (cur ? cur * sppK : null);
     // ДРР — свой за последние 30 дней данных: реклама / (заказы × выкуп).
     let sp = 0, rv = 0;
     for (let d = Math.max(0, L - 30); d < L; d++) { sp += a.spendCpc[d] + a.spendCpo[d]; rv += a.revenue[d]; }
@@ -820,6 +874,15 @@ function PriceSet({ storeKey, rows, cols, cell, prices, coefOf, tax, data, onRem
     return { ...r, k, v, cur, curClient, sppK, newReal, res, o };
   }), [rows, coefOf, prices, tax, np, L]);
 
+  const sorted = useMemo(() => ctl.apply(model, (x, k) => {
+    if (k === '__name') return x.a.o;
+    if (k === '__cur') return x.cur;
+    if (k === '__client') return x.curClient;
+    if (k === '__new') return x.newReal;
+    if (k === '__profit') return x.res ? x.res.profit : null;
+    if (k === '__margin') return x.res ? x.res.margin : null;
+    const i = cols.findIndex(c => c.id === k); return i >= 0 ? x.vals[i]?.v ?? null : null;
+  }), [model, ctl, cols]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownNew = x => (!x.o ? '' : x.o.m === mode ? x.o.v : Math.round(mode === 'client' ? x.o.v * x.sppK : x.o.v / (x.sppK || 1)));
   const setPrice = (o, val) => setNp(m => { const n = { ...m }; if (!(Number(val) > 0)) delete n[o]; else n[o] = { v: Number(val), m: mode }; return n; });
   const newOut = x => (x.newReal ? Math.round(mode === 'client' ? x.newReal * x.sppK : x.newReal) : Math.round(mode === 'client' ? x.curClient : x.cur) || null);
@@ -835,7 +898,7 @@ function PriceSet({ storeKey, rows, cols, cell, prices, coefOf, tax, data, onRem
   async function download() {
     const XLSX = await import('xlsx');
     const use = EXP.filter(([k]) => exp[k]);
-    const aoa = [use.map(([, t]) => t), ...model.map(x => use.map(([, , f]) => f(x) ?? ''))];
+    const aoa = [use.map(([, t]) => t), ...sorted.map(x => use.map(([, , f]) => f(x) ?? ''))];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Набор');
     XLSX.writeFile(wb, `Набор ${dayjs().format('DD.MM.YYYY')}.xlsx`);
@@ -875,20 +938,25 @@ function PriceSet({ storeKey, rows, cols, cell, prices, coefOf, tax, data, onRem
           </span>
         )}
       </div>
+      {setCount > 0 && <ColsEditor cols={cols} setCols={setCols} edit={edit} setEdit={setEdit} dnd={dnd} hdrDrag={drag} hdrOver={over} />}
+      {setCount > 0 && <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctl} /></div>}
       {setCount > 0 && (
         <div className="a-scroll">
           <table className="a-t s-slice tb-t">
             <thead><tr>
-              <th>Артикул</th>
-              <th className="r">Цена реализации</th><th className="r">Цена клиента</th>
-              <th className="r" title="Впишите новую цену — пересчитается прогноз строки">Новая цена ({mode === 'client' ? 'клиента' : 'реализации'})</th>
-              <th className="r" title="Как в калькуляторе: юнит-экономика артикула при новой цене (без новой — при текущей), ДРР — свой за 30 дней">Прибыль на 1 шт, прогноз</th>
-              <th className="r" title="Прибыль / цена реализации при новой цене — как в калькуляторе">Маржинальность, прогноз</th>
-              {cols.map(c => <th key={c.id} className="r">{colTitle(c)}</th>)}
+              <ThCtl ctl={ctl} k="__name" className="" filter={false}>Артикул</ThCtl>
+              <ThCtl ctl={ctl} k="__cur" unit="₽">Цена реализации</ThCtl><ThCtl ctl={ctl} k="__client" unit="₽">Цена клиента</ThCtl>
+              <ThCtl ctl={ctl} k="__new" unit="₽" hint="Впишите новую цену — пересчитается прогноз строки">Новая цена ({mode === 'client' ? 'клиента' : 'реализации'})</ThCtl>
+              <ThCtl ctl={ctl} k="__profit" unit="₽" hint="Как в калькуляторе: юнит-экономика артикула при новой цене (без новой — при текущей), ДРР — свой за 30 дней">Прибыль на 1 шт, прогноз</ThCtl>
+              <ThCtl ctl={ctl} k="__margin" unit="%" hint="Прибыль / цена реализации при новой цене — как в калькуляторе">Маржинальность, прогноз</ThCtl>
+              {cols.map(c => (
+                <ThCtl key={c.id} ctl={ctl} k={c.id} unit={MET[c.m]?.kind === 'pct' ? '%' : MET[c.m]?.kind === 'rub' ? '₽' : ''}
+                  className={`r tb-th ${over === c.id && drag && drag !== c.id ? 'over' : ''}`} dnd={dnd(c.id)}>{colTitle(c)}</ThCtl>
+              ))}
               <th />
             </tr></thead>
             <tbody>
-              {model.map(x => (
+              {(fullS ? sorted : sorted.slice(0, 30)).map(x => (
                 <tr key={x.key}>
                   <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.a.o}</div><div className="model" title={x.a.n || ''}>{x.a.short}</div></div></div></td>
                   <td className="n r">{x.cur ? fmtInt(x.cur) : '—'}</td>
@@ -902,6 +970,7 @@ function PriceSet({ storeKey, rows, cols, cell, prices, coefOf, tax, data, onRem
               ))}
             </tbody>
           </table>
+          {sorted.length > 30 && <button type="button" className="s-fold" onClick={() => setFullS(f => !f)}>{fullS ? 'Свернуть ▲' : `Показать все ${sorted.length} ▼`}</button>}
         </div>
       )}
     </div>
