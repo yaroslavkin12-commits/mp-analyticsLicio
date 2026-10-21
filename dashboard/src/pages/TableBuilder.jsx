@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { compute, priceFor } from './Calculator';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans, getPriceLog, getPriceSnap } from '../api';
+import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, fmtPct } from './AdsStats2';
 
@@ -990,30 +990,6 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
       return getPriceRules(cabinet);
     }).then(r => r && setRuleList(r.data.data || [])).catch(e => setBulkMsg('Не сохранилось: ' + e.message));
   };
-  // Взять изменения из журнала цен (последняя загруженная неделя): артикулы с изменённой ценой
-  // попадают в набор с новой ценой и ценой «было» — когда цены на сайте уже поменялись.
-  const [jBusy, setJBusy] = useState(false);
-  const fromJournal = async () => {
-    setJBusy(true);
-    try {
-      const idx = (await getPriceLog(cabinet)).data.data.snaps || [];
-      const last = idx[idx.length - 1];
-      if (!last) { setBulkMsg('В журнале цен нет загрузок'); return; }
-      const sn = (await getPriceSnap(cabinet, 'ozon', last.id)).data.data;
-      const ch = Object.entries(sn.items).filter(([o, b]) => sn.old?.[o] && Math.abs(b - sn.old[o]) >= 0.5);
-      if (!ch.length) { setBulkMsg(`В журнале за ${dayjs(last.date).format('DD.MM')} нет изменённых цен`); return; }
-      if (!window.confirm(`Журнал цен, загрузка ${dayjs(last.date).format('DD.MM.YYYY')}: изменено ${ch.length} арт.\nДобавить их в набор с новыми ценами и ценой «было»? Уже вписанные в наборе цены у этих артикулов заменятся.`)) return;
-      setMode('client');
-      setNp(m => {
-        const n = { ...m };
-        for (const [o, b] of ch) { const r = sn.rule?.[o]; n[o] = { v: b, m: 'client', w: sn.old[o], ...(r ? { r, ra: false } : {}) }; }
-        return n;
-      });
-      onAdd(ch.map(([o]) => o));
-      setChg('ed');
-      setBulkMsg(`Из журнала за ${dayjs(last.date).format('DD.MM')}: ${ch.length} арт. Отфильтруйте (например, «Маржинальность, прогноз» около 0) → «назначить правило» → «Сохранить правила в журнал».`);
-    } catch (e) { setBulkMsg('Журнал не загрузился: ' + e.message); } finally { setJBusy(false); }
-  };
 
   return (
     <div className="tb-set">
@@ -1022,8 +998,6 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
         <span className="a-hint" style={{ margin: 0 }}>{setCount
           ? <>показано <b>{sortedF.length}</b> из {total} арт. · с новой ценой <b className="tb-edn">{shownEd} / {total}</b>{shownEd !== totalEd ? ` (всего ${totalEd})` : ''}</>
           : 'нажмите ＋ у артикула в таблице выше — он появится здесь (в таблице останется отмеченным)'}</span>
-        {!setCount && bulkMsg && <span className="muted">{bulkMsg}</span>}
-        <button type="button" className="a-btn ghost" disabled={jBusy} title="Если цены уже поменяли: взять изменённые артикулы последней загрузки журнала цен с новой ценой и ценой «было»" onClick={fromJournal}>{jBusy ? 'Загрузка…' : '⤓ Из журнала цен'}</button>
         {setCount > 0 && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="tb-lbl" style={{ width: 'auto' }}>новая цена —</span>
@@ -1049,7 +1023,6 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
                 </div>
               )}
             </span>
-            <button type="button" className="a-btn ghost" disabled={!totalEd} title="Запомнить правила показанных артикулов с новой ценой и проставить их в уже загруженные недели журнала цен" onClick={() => savePlans(sortedF)}>Сохранить правила в журнал</button>
             <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Очистить набор?')) { onClear(); setNp({}); } }}>очистить</button>
           </span>
         )}
