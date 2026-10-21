@@ -375,20 +375,87 @@ function eachFboPosting_(cab, since, to, withObj, onPosting) {
       Logger.log('FBO ' + cab.id + ': старый метод отключён — перехожу на v3');
     }
   }
-  let cursor = '';
-  for (let guard = 0; guard < 200; guard++) {
-    const body = { dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 100, with: withObj }; // v3: не больше 100
+  eachPostingCursor_(headers, 'https://api-seller.ozon.ru/v3/posting/fbo/list', since, to, withObj, onPosting, 'Отправления FBO v3');
+}
+
+// Новые методы списка отправлений (FBO v3, FBS v4): листание по cursor, до 100 за раз.
+// Ответ разбираем «по форме»: отправления — result.postings / postings / result[],
+// курсор — result.cursor / cursor / last_id, признак продолжения — has_next.
+function eachPostingCursor_(headers, url, since, to, withObj, onPosting, label) {
+  let cursor = '', total = 0;
+  for (let guard = 0; guard < 300; guard++) {
+    const body = { filter: { since: since, to: to }, limit: 100, with: withObj || {} };
     if (cursor) body.cursor = cursor;
-    const data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbo/list', {
-      method: 'post', contentType: 'application/json', headers: headers, payload: JSON.stringify(body),
-    }, 'Отправления FBO v3');
-    const res = data.result || data;
-    const postings = res.postings || [];
+    const data = fetchJson_(url, { method: 'post', contentType: 'application/json', headers: headers, payload: JSON.stringify(body) }, label);
+    const res = data.result && !Array.isArray(data.result) ? data.result : data;
+    const postings = (Array.isArray(data.result) ? data.result : res.postings || data.postings) || [];
     postings.forEach(onPosting);
-    cursor = res.cursor || '';
-    if (!res.has_next || !cursor || !postings.length) return;
-    Utilities.sleep(300);
+    total += postings.length;
+    const next = res.cursor || data.cursor || res.last_id || data.last_id || '';
+    const more = res.has_next !== undefined ? res.has_next : data.has_next !== undefined ? data.has_next : postings.length === 100;
+    if (!more || !next || !postings.length || next === cursor) break;
+    cursor = next;
+    Utilities.sleep(250);
   }
+  return total;
+}
+
+// Список отправлений FBS: /v3/posting/fbs/list Ozon отключил (31.08.2026) — тогда /v4 (cursor).
+function eachFbsPosting_(cab, since, to, withObj, onPosting) {
+  const headers = sellerHeaders_(cab);
+  if (!headers) return;
+  const props = PropertiesService.getScriptProperties(), k = 'FBS_V4_' + cab.id.toUpperCase();
+  if (props.getProperty(k) !== '1') {
+    try {
+      let offset = 0;
+      for (let guard = 0; guard < 60; guard++) {
+        const data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbs/list', {
+          method: 'post', contentType: 'application/json', headers: headers,
+          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: withObj }),
+        }, 'Отправления FBS');
+        let postings = data.result && data.result.postings;
+        if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
+        postings = postings || [];
+        postings.forEach(onPosting);
+        if (postings.length < 1000) return;
+        offset += 1000;
+        Utilities.sleep(300);
+      }
+      return;
+    } catch (e) {
+      if (!/obsolete/i.test(e.message)) throw e;
+      props.setProperty(k, '1');
+      Logger.log('FBS ' + cab.id + ': старый метод отключён — перехожу на v4');
+    }
+  }
+  eachPostingCursor_(headers, 'https://api-seller.ozon.ru/v4/posting/fbs/list', since, to, withObj, onPosting, 'Отправления FBS v4');
+}
+
+// Проверка списков отправлений (запустить вручную, прислать журнал): что отдают FBO v3 и FBS v4.
+function probeOrders() {
+  getCabinets_().forEach(function (cab) {
+    const h = sellerHeaders_(cab);
+    if (!h) return;
+    const since = new Date(Date.now() - 6 * 3600000).toISOString(), now = new Date().toISOString();
+    [['FBO v2', 'https://api-seller.ozon.ru/v2/posting/fbo/list', { dir: 'ASC', filter: { since: since, to: now, status: '' }, limit: 5, offset: 0 }],
+     ['FBO v3', 'https://api-seller.ozon.ru/v3/posting/fbo/list', { filter: { since: since, to: now }, limit: 5 }],
+     ['FBS v3', 'https://api-seller.ozon.ru/v3/posting/fbs/list', { dir: 'ASC', filter: { since: since, to: now, status: '' }, limit: 5, offset: 0 }],
+     ['FBS v4', 'https://api-seller.ozon.ru/v4/posting/fbs/list', { filter: { since: since, to: now }, limit: 5 }]].forEach(function (t) {
+      try {
+        const resp = UrlFetchApp.fetch(t[1], { method: 'post', contentType: 'application/json', headers: h, payload: JSON.stringify(t[2]), muteHttpExceptions: true });
+        const txt = resp.getContentText();
+        let shape = '';
+        try {
+          const d = JSON.parse(txt), r = d.result;
+          const ps = (Array.isArray(r) ? r : (r && r.postings) || d.postings) || [];
+          shape = ' | ключи: ' + Object.keys(d).join(',') + (r && !Array.isArray(r) ? ' / result: ' + Object.keys(r).join(',') : '') + ' | отправлений ' + ps.length
+            + (ps[0] ? ' | пример: ' + JSON.stringify({ n: ps[0].posting_number, st: ps[0].status, in: ps[0].in_process_at, cr: ps[0].created_at }) : '');
+        } catch (e) { /* не JSON */ }
+        Logger.log(cab.id + ' · ' + t[0] + ': HTTP ' + resp.getResponseCode() + shape + ' | ' + txt.slice(0, 300));
+      } catch (e) { Logger.log(cab.id + ' · ' + t[0] + ': ' + e.message); }
+      Utilities.sleep(500);
+    });
+  });
 }
 
 // ---------- Остатки ----------
@@ -519,38 +586,15 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campai
 
 // ---------- Заказы для уведомлений ----------
 function collectPostings_(cab, url, scheme, since, out) {
-  const headers = sellerHeaders_(cab);
-  if (!headers) return;
-  if (scheme === 'fbo') {
-    eachFboPosting_(cab, since, new Date().toISOString(), { analytics_data: true }, function (p) {
-      (p.products || []).forEach(function (prod) {
-        out.push([cab.id, p.posting_number, prod.sku || '', prod.offer_id || '', String(prod.name || '').slice(0, 200),
-          prod.price || '', prod.quantity || 1, p.status || '', (p.analytics_data && p.analytics_data.warehouse_name) || '',
-          p.in_process_at || p.created_at || '', scheme]);
-      });
+  const push = function (p) {
+    (p.products || []).forEach(function (prod) {
+      out.push([cab.id, p.posting_number, prod.sku || '', prod.offer_id || '', String(prod.name || '').slice(0, 200),
+        prod.price || '', prod.quantity || 1, p.status || '', (p.analytics_data && p.analytics_data.warehouse_name) || '',
+        p.in_process_at || p.created_at || '', scheme]);
     });
-    return;
-  }
-  let offset = 0;
-  for (let guard = 0; guard < 30; guard++) {
-    const data = fetchJson_(url, {
-      method: 'post', contentType: 'application/json', headers: headers,
-      payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: new Date().toISOString(), status: '' }, limit: 100, offset: offset, with: { analytics_data: true } }),
-    }, 'Заказы ' + scheme);
-    let postings = data.result && data.result.postings;
-    if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
-    postings = postings || [];
-    postings.forEach(function (p) {
-      (p.products || []).forEach(function (prod) {
-        out.push([cab.id, p.posting_number, prod.sku || '', prod.offer_id || '', String(prod.name || '').slice(0, 200),
-          prod.price || '', prod.quantity || 1, p.status || '', (p.analytics_data && p.analytics_data.warehouse_name) || '',
-          p.in_process_at || p.created_at || '', scheme]);
-      });
-    });
-    if (postings.length < 100) break;
-    offset += 100;
-    Utilities.sleep(300);
-  }
+  };
+  if (scheme === 'fbo') eachFboPosting_(cab, since, new Date().toISOString(), { analytics_data: true }, push);
+  else eachFbsPosting_(cab, since, new Date().toISOString(), { analytics_data: true }, push);
 }
 
 // Каждые 5 минут (триггер) — заказы за 2 дня по всем кабинетам.
@@ -768,24 +812,8 @@ function orderDatesMap_(cab) {
   };
   // FBO — через общий помощник (сам переходит на v3, если v2 отключён).
   try { eachFboPosting_(cab, since, to, {}, put); } catch (e) { Logger.log('Даты заказов FBO: ' + e.message); }
-  // FBS — v3 (offset).
-  let offset = 0;
-  for (let guard = 0; guard < 40; guard++) {
-    let data;
-    try {
-      data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbs/list', {
-        method: 'post', contentType: 'application/json', headers: headers,
-        payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset }),
-      }, 'Даты заказов FBS');
-    } catch (e) { Logger.log(e.message); break; }
-    let postings = data.result && data.result.postings;
-    if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
-    postings = postings || [];
-    postings.forEach(put);
-    if (postings.length < 1000) break;
-    offset += 1000;
-    Utilities.sleep(300);
-  }
+  // FBS — v3, а если отключён — v4.
+  try { eachFbsPosting_(cab, since, to, {}, put); } catch (e) { Logger.log('Даты заказов FBS: ' + e.message); }
   return map;
 }
 
@@ -860,23 +888,8 @@ function collectGeo_(cab, days, agg, buy) {
   try { eachFboPosting_(cab, since, to, { analytics_data: false, financial_data: true }, function (p) { add(p, 'FBO'); }); }
   catch (e) { Logger.log('География FBO ' + cab.id + ': ' + e.message); }
   Utilities.sleep(1000); // лимит запросов в секунду
-  let offset = 0;
-  for (let guard = 0; guard < 60; guard++) {
-    let data;
-    try {
-      data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbs/list', {
-        method: 'post', contentType: 'application/json', headers: headers,
-        payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset, with: { analytics_data: false, financial_data: true } }),
-      }, 'География FBS');
-    } catch (e) { Logger.log(e.message); break; }
-    let postings = data.result && data.result.postings;
-    if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
-    postings = postings || [];
-    postings.forEach(function (p) { add(p, 'FBS'); });
-    if (postings.length < 1000) break;
-    offset += 1000;
-    Utilities.sleep(300);
-  }
+  try { eachFbsPosting_(cab, since, to, { analytics_data: false, financial_data: true }, function (p) { add(p, 'FBS'); }); }
+  catch (e) { Logger.log('География FBS ' + cab.id + ': ' + e.message); }
   return n;
 }
 
