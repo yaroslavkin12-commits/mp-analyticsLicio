@@ -217,6 +217,21 @@ function verdict(dir, goal, before, after, days) {
   return { t: `продажи ${f1(ch)}`, cls: ch >= 0 ? 'up' : 'dn' };
 }
 
+// Цель для всей группы: одна — показываем её; разные — по количеству. Выбор ставит всем.
+function GroupGoal({ g, onSet }) {
+  const list = [...g.goals.entries()].sort((a, b) => b[1] - a[1]);
+  const one = list.length === 1 ? list[0][0] : null;
+  return (
+    <span className="pl-ggoal" onClick={e => e.stopPropagation()}>
+      <select className="a-input pr-sel" value={one ?? '*'} onChange={e => { if (e.target.value !== '*') onSet(g.offers, e.target.value === '' ? null : e.target.value); }}>
+        {one === null && <option value="*">разные…</option>}
+        <option value="">— цель —</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
+      </select>
+      {one === null && <small className="pr-sub2">{list.map(([k, n]) => `${k ? GOAL[k] : 'без цели'} ${n}`).join(' · ')}</small>}
+    </span>
+  );
+}
+
 const MIS = 3; // расхождение с ценой на сайте, %, при котором строка подсвечивается
 const lastSeg = c => (c || '').split(SEP).slice(-1)[0] || 'без категории';
 
@@ -357,7 +372,8 @@ export default function PriceLog({ cabinet }) {
     const m = new Map();
     for (const r of rows) {
       if (!r.g) continue;
-      const v = m.get(r.g.key) || { ...r.g, n: 0, sa: 0, sb: 0, before: 0, after: 0, cats: new Map(), details: new Map() };
+      const v = m.get(r.g.key) || { ...r.g, n: 0, sa: 0, sb: 0, before: 0, after: 0, cats: new Map(), details: new Map(), goals: new Map(), offers: [] };
+      v.goals.set(r.goal || '', (v.goals.get(r.goal || '') || 0) + 1); v.offers.push(r.o);
       v.n++; v.sa += r.a || 0; v.sb += r.b || 0; v.before += r.before; v.after += r.after || 0;
       v.cats.set(r.cat1, (v.cats.get(r.cat1) || 0) + 1);
       if (r.g.detail) v.details.set(r.g.detail, (v.details.get(r.g.detail) || 0) + 1);
@@ -557,15 +573,16 @@ export default function PriceLog({ cabinet }) {
                 {view === 'rules' ? (
                   <table className="a-t pr-t pl-agg">
                     <thead><tr>
-                      <th className="l">Правило</th><th className="r">Арт.</th><th className="l">Категории</th><th className="r">Средняя цена было</th><th className="r">стало</th>
+                      <th className="l">Правило</th><th className="r">Арт.</th><th className="l" title="Цель для всех артикулов группы">Цель</th><th className="l">Категории</th><th className="r">Средняя цена было</th><th className="r">стало</th>
                       <th className="r" title="Заказы Ozon за 7 дней до изменения">Заказы 7 дн до</th><th className="r" title="Заказы Ozon после изменения — фактически, за прошедшие дни">после</th><th className="r">изм.</th>
                     </tr></thead>
                     <tbody>
-                      {!ruleRows.length && <tr><td colSpan={8} className="muted" style={{ padding: 12 }}>Цены не менялись</td></tr>}
+                      {!ruleRows.length && <tr><td colSpan={9} className="muted" style={{ padding: 12 }}>Цены не менялись</td></tr>}
                       {ruleRows.map(g => (
                         <tr key={g.key} className={`pl-click ${fGroup === g.key ? 'pr-in-order' : ''}`} onClick={() => pickFilter('changed', fGroup === g.key ? '' : g.key)}>
                           <td><b className={g.kind === 'zero' ? 's-down' : g.kind === 'user' ? (g.sb > g.sa ? 's-up' : 's-down') : g.sort > 0 ? 's-up' : 's-down'}>{g.kind === 'user' ? <span className="pl-user" title="Своё правило">★ </span> : null}{g.label}</b>{g.details.size > 0 && <small className="pr-sub2">{topList(g.details, 4)}</small>}</td>
                           <td className="n r"><b>{g.n}</b></td>
+                          <td><GroupGoal g={g} onSet={(offers, goal) => mark(offers, goal, undefined)} /></td>
                           <td className="pl-cats">{topList(g.cats)}</td>
                           <td className="n r">{rub(g.sa / g.n)}</td>
                           <td className="n r">{g.kind === 'zero' ? '0 ₽' : rub(g.sb / g.n)}</td>
@@ -623,6 +640,7 @@ export default function PriceLog({ cabinet }) {
               {[['changed', 'Изменённые'], ['all', 'Все']].map(([k, t]) => <button key={k} type="button" className={fKind === k ? 'on' : ''} onClick={() => setFKind(k)}>{t}</button>)}
             </span>
             {(fGroup || fCat) && <button type="button" className="s-chip on" onClick={() => { setFGroup(''); setFCat(''); }} title="Снять отбор">{fGroup ? ruleRows.find(g => g.key === fGroup)?.label : fCat} ×</button>}
+            {fGroup && ruleRows.find(g => g.key === fGroup) && <span className="pl-gg-lbl">цель всей группы: <GroupGoal g={ruleRows.find(g => g.key === fGroup)} onSet={(offers, goal) => mark(offers, goal, undefined)} /></span>}
             <select className="a-input" value={fGoal} onChange={e => setFGoal(e.target.value)} style={{ padding: '5px 8px' }}>
               <option value="">Все цели</option><option value="—">Без цели</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
             </select>

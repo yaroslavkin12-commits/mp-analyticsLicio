@@ -297,3 +297,6 @@
 .tb-rchip button:hover { opacity: 1; }
 .pl-rsep { width: 1px; align-self: stretch; background: var(--a-line, #e5e7eb); margin: 0 4px; }
 .pl-user { color: var(--a-accent, #3b82f6); font-weight: 400; }
+.pl-ggoal { display: inline-flex; flex-direction: column; gap: 2px; min-width: 150px; }
+.pl-ggoal .pr-sel { padding: 3px 6px; font-size: 12.5px; }
+.pl-gg-lbl { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--a-muted, #6b7280); }
