@@ -45,7 +45,13 @@ const fmtPct = p => `${p > 0 ? '+' : '−'}${Math.abs(p).toString().replace('.',
 const RSRC = { f: 'из файла', s: 'из набора', m: 'задано в журнале' };
 function buildRules(changedAll) {
   const out0 = new Map();
-  for (const x of changedAll) if (x.rule) out0.set(x.o, { key: `u:${x.rule}`, label: x.rule, sort: 0, kind: 'user', detail: RSRC[x.rsrc] || '' });
+  // Одно правило делится по направлению: «маржа 0%» у тех, кто был в минусе, — цену подняли,
+  // у тех, кто был в плюсе, — снизили; это разные истории, смотрим их отдельно.
+  for (const x of changedAll) {
+    if (!x.rule) continue;
+    const up = x.b > x.a;
+    out0.set(x.o, { key: `u:${x.rule}:${up ? '+' : '-'}`, label: `${x.rule} · ${up ? 'подняли ↑' : 'снизили ↓'}`, sort: up ? 0.5 : -0.5, kind: 'user', detail: RSRC[x.rsrc] || '' });
+  }
   const changed = changedAll.filter(x => !x.rule);
   const pre = changed.map(x => {
     const pct = (x.b / x.a - 1) * 100, p = Math.round(pct * 2) / 2;
