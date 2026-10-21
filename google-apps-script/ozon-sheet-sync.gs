@@ -758,32 +758,34 @@ function orderDatesMap_(cab) {
   if (!headers) return map;
   const since = new Date(Date.now() - 45 * 86400000).toISOString();
   const to = new Date().toISOString();
-  [['https://api-seller.ozon.ru/v2/posting/fbo/list', 'FBO'], ['https://api-seller.ozon.ru/v3/posting/fbs/list', 'FBS']].forEach(function (src) {
-    let offset = 0;
-    for (let guard = 0; guard < 40; guard++) {
-      let data;
-      try {
-        data = fetchJson_(src[0], {
-          method: 'post', contentType: 'application/json', headers: headers,
-          payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset }),
-        }, 'Даты заказов ' + src[1]);
-      } catch (e) { Logger.log(e.message); break; }
-      let postings = data.result && data.result.postings;
-      if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
-      postings = postings || [];
-      postings.forEach(function (p) {
-        const iso = p.in_process_at || p.created_at;
-        if (!iso) return;
-        const d = Utilities.formatDate(new Date(iso), 'GMT+3', 'yyyy-MM-dd');
-        if (p.posting_number) map[String(p.posting_number)] = d;
-        if (p.order_number) map[String(p.order_number)] = d;
-        if (p.order_id) map[String(p.order_id)] = d;
-      });
-      if (postings.length < 1000) break;
-      offset += 1000;
-      Utilities.sleep(300);
-    }
-  });
+  const put = function (p) {
+    const iso = p.in_process_at || p.created_at;
+    if (!iso) return;
+    const d = Utilities.formatDate(new Date(iso), 'GMT+3', 'yyyy-MM-dd');
+    if (p.posting_number) map[String(p.posting_number)] = d;
+    if (p.order_number) map[String(p.order_number)] = d;
+    if (p.order_id) map[String(p.order_id)] = d;
+  };
+  // FBO — через общий помощник (сам переходит на v3, если v2 отключён).
+  try { eachFboPosting_(cab, since, to, {}, put); } catch (e) { Logger.log('Даты заказов FBO: ' + e.message); }
+  // FBS — v3 (offset).
+  let offset = 0;
+  for (let guard = 0; guard < 40; guard++) {
+    let data;
+    try {
+      data = fetchJson_('https://api-seller.ozon.ru/v3/posting/fbs/list', {
+        method: 'post', contentType: 'application/json', headers: headers,
+        payload: JSON.stringify({ dir: 'ASC', filter: { since: since, to: to, status: '' }, limit: 1000, offset: offset }),
+      }, 'Даты заказов FBS');
+    } catch (e) { Logger.log(e.message); break; }
+    let postings = data.result && data.result.postings;
+    if (!Array.isArray(postings) && Array.isArray(data.result)) postings = data.result;
+    postings = postings || [];
+    postings.forEach(put);
+    if (postings.length < 1000) break;
+    offset += 1000;
+    Utilities.sleep(300);
+  }
   return map;
 }
 

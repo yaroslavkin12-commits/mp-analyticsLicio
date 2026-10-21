@@ -29,8 +29,15 @@ const num = v => (v === null || v === undefined ? 0 : Number(v) || 0);
 
 // Корень артикула: без суффикса материала (K — экокожа, KR/ZR — ромб, C…): Hr50-2KR → Hr50-2.
 const rootOf = o => String(o).replace(/(\d)(KR|ZR|K|R|C)$/i, '$1').toLowerCase();
-// Название модели: до первой запятой (дальше — материал), без лишних пробелов.
-const baseOf = n => String(n || '').split(',')[0].replace(/\s+/g, ' ').trim().toLowerCase();
+// Модель из названия: всё, кроме последней части после запятой (обычно материал/цвет):
+// «Чехлы на сиденья Ford Focus 3, 2010-2019, жаккард» → «чехлы на сиденья ford focus 3, 2010-2019».
+// Название без запятых или слишком общее — не сравниваем.
+const baseOf = n => {
+  const p = String(n || '').toLowerCase().replace(/\s+/g, ' ').split(',').map(x => x.trim()).filter(Boolean);
+  if (p.length < 3) return '';
+  const b = p.slice(0, -1).join(', ');
+  return b.length >= 25 ? b : '';
+};
 
 async function ensureCols() {
   for (const c of ['model_id TEXT', 'model_count INT', 'created_ozon DATE', 'archived BOOLEAN']) {
@@ -87,7 +94,7 @@ async function build(cabinet) {
   const rootIdx = new Map(), baseIdx = new Map();
   for (const c of clusters.values()) for (const o of c.members) {
     const r = rootOf(o); if (!rootIdx.has(r)) rootIdx.set(r, new Set()); rootIdx.get(r).add(c.id);
-    const b = baseOf(items.get(o).n); if (b.length >= 8) { if (!baseIdx.has(b)) baseIdx.set(b, new Map()); const m = baseIdx.get(b); m.set(c.id, (m.get(c.id) || 0) + 1); }
+    const b = baseOf(items.get(o).n); if (b) { if (!baseIdx.has(b)) baseIdx.set(b, new Map()); const m = baseIdx.get(b); m.set(c.id, (m.get(c.id) || 0) + 1); }
   }
   const singles = [...items.values()].filter(x => !of.has(x.o));
   const suggest = [];
@@ -96,7 +103,7 @@ async function build(cabinet) {
     const byRoot = [...(rootIdx.get(rootOf(x.o)) || [])].filter(id => !ign(x.o, id));
     if (byRoot.length === 1) { suggest.push({ o: x.o, to: byRoot[0], why: 'root' }); taken.add(x.o); continue; }
     if (!x.isNew) continue;
-    const m = baseIdx.get(baseOf(x.n));
+    const bx = baseOf(x.n), m = bx && baseIdx.get(bx);
     if (!m) continue;
     const cand = [...m.entries()].filter(([id]) => !ign(x.o, id)).sort((a, b) => b[1] - a[1]);
     if (cand.length === 1 || (cand.length > 1 && cand[0][1] > cand[1][1])) { suggest.push({ o: x.o, to: cand[0][0], why: 'name' }); taken.add(x.o); }
@@ -113,7 +120,12 @@ async function build(cabinet) {
 
   const nameOf = c => {
     const cnt = new Map();
-    for (const o of c.members) { const n = String(items.get(o).n || '').split(',')[0].trim(); if (n && n !== 'x') cnt.set(n, (cnt.get(n) || 0) + 1); }
+    for (const o of c.members) {
+      // Название без материала: первые две части до последней запятой («Чехлы на сиденья Ford Focus 3, 2010-2019»).
+      const p = String(items.get(o).n || '').split(',').map(x => x.trim()).filter(Boolean);
+      const n = (p.length > 1 ? p.slice(0, -1) : p).slice(0, 2).join(', ');
+      if (n && n !== 'x') cnt.set(n, (cnt.get(n) || 0) + 1);
+    }
     return [...cnt.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || c.members[0];
   };
   return {
