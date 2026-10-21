@@ -23,19 +23,28 @@ router.get('/health', async (req, res) => {
     const cabinet = req.query.cabinet || 'licio';
     const { query } = require('../db');
     const { fetchSheetRows } = require('../collectors/ads/sheetSync');
-    let sheetRows = null, sheetError = null, newest = null;
+    let sheetRows = null, sheetError = null, newest = null, diag = null;
     try {
       const rows = await fetchSheetRows('Orders', cabinet);
       if (rows) {
         const mine = rows.filter(r => r.cabinet === cabinet);
         sheetRows = mine.length;
         newest = mine.map(r => r.created_at).filter(Boolean).sort().pop() || null;
+        // Разбивка для диагностики: по схеме и по часам последних суток.
+        const byScheme = {}, byHour = {};
+        const day = Date.now() - 86400e3;
+        for (const r of mine) {
+          byScheme[r.scheme || '?'] = (byScheme[r.scheme || '?'] || 0) + 1;
+          const t = Date.parse(r.created_at);
+          if (t > day) { const h = new Date(t + 3 * 3600e3).toISOString().slice(5, 13).replace('T', ' '); byHour[h] = (byHour[h] || 0) + 1; }
+        }
+        diag = { byScheme, byHour };
       }
     } catch (e) { sheetError = e.message; }
     const st = await query(`SELECT last_success_at, last_error_at, last_error, last_rows FROM ad_job_status WHERE cabinet = $1 AND job = 'tracked_orders'`, [cabinet]).catch(() => []);
     res.json({ success: true, data: {
       telegramConfigured: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
-      ordersSheet: { rows: sheetRows, newestOrderAt: newest, error: sheetError },
+      ordersSheet: { rows: sheetRows, newestOrderAt: newest, error: sheetError, diag },
       lastCheck: st[0] || null,
     } });
   } catch (e) {
