@@ -175,3 +175,7 @@ export const markPriceLog = (cabinet, platform, snapId, offers, goal, note) => a
 export const getSkus = cabinet => api.get('/sales/skus', { params: { cabinet }, timeout: 30000 });
 export const closeProductionJournal = (cabinet, offers, close) => api.post('/production/journal', { cabinet, offers, close });
 export const getPriceDynamics = (cabinet, days) => api.get('/pricelog/dynamics', { params: { cabinet, days }, timeout: 60000 });
+export const getPriceRules = (cabinet, platform = 'ozon') => api.get('/pricelog/rules', { params: { cabinet, platform } });
+export const savePriceRules = (cabinet, add, remove, platform = 'ozon') => api.post('/pricelog/rules', { cabinet, platform, add, remove });
+export const savePricePlans = (cabinet, items, platform = 'ozon') => api.post('/pricelog/plans', { cabinet, platform, items });
+export const setSnapRule = (cabinet, platform, snapId, offers, rule) => api.post('/pricelog/snap-rule', { cabinet, platform, snapId, offers, rule });

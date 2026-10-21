@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getPriceLog, getPriceSnap, getPriceHistory, uploadPriceLog, deletePriceLog, markPriceLog, getSalesData, getCalcBase } from '../api';
+import { getPriceLog, getPriceSnap, getPriceHistory, uploadPriceLog, deletePriceLog, markPriceLog, getSalesData, getCalcBase, getPriceRules, setSnapRule } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import PriceDynamics from './PriceDynamics';
 import { fmtInt } from './AdsStats2';
@@ -40,7 +40,13 @@ const fmtPct = p => `${p > 0 ? '+' : '−'}${Math.abs(p).toString().replace('.',
 //   3) «поставили N ₽», если эту же новую цену получили несколько артикулов;
 //   4) одиночные круглые суммы — тоже по сумме; остальное — «точечно ↑/↓».
 // Группы из одного артикула сливаются в «точечно», чтобы сводка читалась.
-function buildRules(changed) {
+// Своё правило (колонка «Правило» в файле, выгрузка из «Набора» или задано в журнале)
+// важнее автоматического: такие артикулы — одной группой, как бы ни отличались цены.
+const RSRC = { f: 'из файла', s: 'из набора', m: 'задано в журнале' };
+function buildRules(changedAll) {
+  const out0 = new Map();
+  for (const x of changedAll) if (x.rule) out0.set(x.o, { key: `u:${x.rule}`, label: x.rule, sort: 0, kind: 'user', detail: RSRC[x.rsrc] || '' });
+  const changed = changedAll.filter(x => !x.rule);
   const pre = changed.map(x => {
     const pct = (x.b / x.a - 1) * 100, p = Math.round(pct * 2) / 2;
     const d = Math.round(x.b - x.a), round = Math.abs(d) >= 100 && Math.abs(x.b - x.a - Math.round(d / 100) * 100) < 1;
@@ -61,7 +67,7 @@ function buildRules(changed) {
     return { ...v, g: null };
   });
   const n = new Map(); for (const v of first) if (v.g) n.set(v.g.key, (n.get(v.g.key) || 0) + 1);
-  const out = new Map();
+  const out = out0;
   for (const v of first) {
     let g = v.g;
     if (!g || n.get(g.key) < 2) {
@@ -131,6 +137,12 @@ function parsePrices(aoa) {
       if (!Object.keys(old).length) return { items: onlyNew, fmt: 'one', autoOld: true };
       return { items, old, zero: [], fmt: 'two' };
     }
+    // Только «Новая цена» (выгрузка из «Набора для выгрузки») — текущие цены возьмёт сервис.
+    if (iNew >= 0 && iOld < 0) {
+      const items = {};
+      for (let i = r + 1; i < aoa.length; i++) { const o = String(aoa[i][iArt] ?? '').trim(), b = num(aoa[i][iNew]); if (o && b > 0) items[o] = b; }
+      if (Object.keys(items).length) return { items, fmt: 'one', autoOld: true };
+    }
   }
   let col = 1, start = 0;
   for (let r = 0; r < Math.min(aoa.length, 6); r++) {
@@ -145,6 +157,24 @@ function parsePrices(aoa) {
   }
   return { items, fmt: 'one' };
 }
+// Колонка «Правило» / «Группа» (необязательная): { артикул: правило }.
+function parseRuleCol(aoa) {
+  for (let r = 0; r < Math.min(aoa.length, 6); r++) {
+    const row = (aoa[r] || []).map(c => String(c).trim());
+    const iR = row.findIndex(c => /^(правило|группа)/i.test(c));
+    if (iR < 0) continue;
+    const iA = Math.max(0, row.findIndex(c => /артикул/i.test(c)));
+    const out = {};
+    for (let i = r + 1; i < aoa.length; i++) {
+      const o = String(aoa[i][iA] ?? '').trim(), v = String(aoa[i][iR] ?? '').replace(/\s+/g, ' ').trim();
+      if (o && v) out[o] = v.slice(0, 60);
+    }
+    return out;
+  }
+  return {};
+}
+const pickKeys = (m, keys) => { const o = {}; for (const k of Object.keys(keys)) if (m[k]) o[k] = m[k]; return o; };
+
 // Дата из имени файла: «… 14.10.xlsx», «14.10.2026», «2026-10-14».
 function dateFromName(name, fallbackYear) {
   let m = name.match(/(20\d\d)-(\d\d)-(\d\d)/);
@@ -274,6 +304,7 @@ export default function PriceLog({ cabinet }) {
         out.push({ o, a, b, d: a && b ? b - a : null, pct: a && b ? (b / a - 1) * 100 : null, kind });
       }
     }
+    for (const x of out) { x.rule = cur.rule?.[x.o] || ''; x.rsrc = cur.ruleSrc?.[x.o] || ''; }
     const rules = buildRules(out.filter(x => x.kind === 'up' || x.kind === 'down'));
     for (const x of out) x.g = rules.get(x.o) || (x.kind === 'zero' ? { key: 'zero', label: 'новая цена 0', sort: -1e9, kind: 'zero' } : null);
     return out;
@@ -347,6 +378,12 @@ export default function PriceLog({ cabinet }) {
   const [fGoal, setFGoal] = useState('');
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState(new Set());
+  const [ruleList, setRuleList] = useState([]);
+  useEffect(() => { getPriceRules(cabinet).then(r => setRuleList(r.data.data || [])).catch(() => {}); }, [cabinet]);
+  const [bulkRule, setBulkRule] = useState('');
+  const applyRule = (offers, rule) => setSnapRule(cabinet, platform, sel, offers, rule)
+    .then(r => { setSnapCache(c => ({ ...c, [sel]: r.data.data })); if (rule) getPriceRules(cabinet).then(x => setRuleList(x.data.data || [])).catch(() => {}); })
+    .catch(e => setMsg({ bad: true, text: e.message }));
   const [hist, setHist] = useState(null); // { o, rows }
   useEffect(() => { setPicked(new Set()); setFGroup(''); setFCat(''); }, [sel]);
   const list = rows.filter(r => (fKind === 'all' || (fKind === 'changed' ? changed(r) || r.kind === 'zero' : fKind === 'mis' ? r.mis : fKind === 'drift' ? !!r.drift : r.kind === fKind))
@@ -372,6 +409,7 @@ export default function PriceLog({ cabinet }) {
         const sh = pickSheet(wb);
         const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, defval: '' });
         const p = parsePrices(aoa);
+        p.rules = parseRuleCol(aoa);
         const n = Object.keys(p.items).length;
         const date = files.length === 1 ? upDate : dateFromName(f.name, year);
         const wbFile = /(^|[^а-я])вб|wb|wildberries/i.test(f.name) || /^(вб|wb)/i.test(sh);
@@ -386,7 +424,7 @@ export default function PriceLog({ cabinet }) {
       if (!ok.length) { setMsg({ bad: true, text: 'Нечего загружать. ' + skipped.join('; ') }); return; }
       if (!window.confirm(`Загрузить новые цены Ozon:\n${lines.join('\n')}${skipped.length ? `\n\nПропущу:\n${skipped.join('\n')}` : ''}`)) return;
       setBusy(true);
-      let last = null;
+      let last = null, ruled = 0;
       for (const x of ok.sort((a, b) => (a.date < b.date ? -1 : 1))) {
         // Цена на сайте в момент загрузки — только для свежих файлов (для прошлых недель её уже не узнать).
         const fresh = Math.abs(dayjs().diff(dayjs(x.date), 'day')) <= 2;
@@ -396,20 +434,23 @@ export default function PriceLog({ cabinet }) {
           // Общий файл: каждому магазину — своя колонка; «было» сервис берёт из цен на сайте.
           for (const [id, items] of Object.entries(x.p.byCab)) {
             if (!Object.keys(items).length) continue;
-            const r = await uploadPriceLog(id, platform, x.date, { items, autoOld: true }, x.f.name);
+            const r = await uploadPriceLog(id, platform, x.date, { items, autoOld: true, rules: pickKeys(x.p.rules, items) }, x.f.name);
+            ruled += r.data.data.ruled || 0;
             if (id === cabinet) last = r.data.data.snaps;
           }
           if (!last) last = (await getPriceLog(cabinet, platform)).data.data.snaps;
         } else {
-          const body = { items: x.p.items, ...(x.p.fmt === 'two' ? { old: x.p.old, zero: x.p.zero } : {}), ...(x.p.autoOld ? { autoOld: true } : {}), ...(fresh ? { site: st } : {}) };
+          const body = { items: x.p.items, rules: pickKeys(x.p.rules, x.p.items), ...(x.p.fmt === 'two' ? { old: x.p.old, zero: x.p.zero } : {}), ...(x.p.autoOld ? { autoOld: true } : {}), ...(fresh ? { site: st } : {}) };
           const r = await uploadPriceLog(cabinet, platform, x.date, body, x.f.name);
+          ruled += r.data.data.ruled || 0;
           last = r.data.data.snaps;
         }
         setSnapCache(c => { const n = { ...c }; delete n[x.date]; return n; });
       }
       setLog(l => ({ ...l, snaps: last }));
       setSel(ok.length === 1 ? ok[0].date : last.at(-1).id);
-      setMsg({ text: `Загружено снимков: ${ok.length}.${skipped.length ? ' Пропущено: ' + skipped.join('; ') : ''}` });
+      getPriceRules(cabinet).then(r => setRuleList(r.data.data || [])).catch(() => {});
+      setMsg({ text: `Загружено снимков: ${ok.length}.${ruled ? ` С правилом (группой): ${ruled} арт.` : ''}${skipped.length ? ' Пропущено: ' + skipped.join('; ') : ''}` });
     } catch (x) { setMsg({ bad: true, text: 'Не удалось прочитать файл: ' + x.message }); } finally { setBusy(false); }
   }
   const mark = (offers, goal, note) => markPriceLog(cabinet, platform, sel, offers, goal, note).then(r => setLog(l => ({ ...l, marks: r.data.data.marks }))).catch(e => setMsg({ bad: true, text: e.message }));
@@ -517,7 +558,7 @@ export default function PriceLog({ cabinet }) {
                       {!ruleRows.length && <tr><td colSpan={8} className="muted" style={{ padding: 12 }}>Цены не менялись</td></tr>}
                       {ruleRows.map(g => (
                         <tr key={g.key} className={`pl-click ${fGroup === g.key ? 'pr-in-order' : ''}`} onClick={() => pickFilter('changed', fGroup === g.key ? '' : g.key)}>
-                          <td><b className={g.kind === 'zero' ? 's-down' : g.sort > 0 ? 's-up' : 's-down'}>{g.label}</b>{g.details.size > 0 && <small className="pr-sub2">{topList(g.details, 4)}</small>}</td>
+                          <td><b className={g.kind === 'zero' ? 's-down' : g.kind === 'user' ? (g.sb > g.sa ? 's-up' : 's-down') : g.sort > 0 ? 's-up' : 's-down'}>{g.kind === 'user' ? <span className="pl-user" title="Своё правило">★ </span> : null}{g.label}</b>{g.details.size > 0 && <small className="pr-sub2">{topList(g.details, 4)}</small>}</td>
                           <td className="n r"><b>{g.n}</b></td>
                           <td className="pl-cats">{topList(g.cats)}</td>
                           <td className="n r">{rub(g.sa / g.n)}</td>
@@ -589,6 +630,11 @@ export default function PriceLog({ cabinet }) {
               <select className="a-input" value={bulkGoal} onChange={e => setBulkGoal(e.target.value)}><option value="">цель…</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}<option value="-">снять цель</option></select>
               <input className="a-input" placeholder="заметка (почему меняли)" value={bulkNote} onChange={e => setBulkNote(e.target.value)} style={{ minWidth: 260 }} />
               <button type="button" className="a-btn" onClick={() => { mark([...picked], bulkGoal === '-' ? null : bulkGoal || undefined, bulkNote || undefined); setBulkNote(''); setBulkGoal(''); setPicked(new Set()); }}>Сохранить</button>
+              <span className="pl-rsep" />
+              <input className="a-input" list="pl-rules" placeholder="правило (группа)" value={bulkRule} onChange={e => setBulkRule(e.target.value.slice(0, 60))} style={{ minWidth: 180 }} />
+              <button type="button" className="a-btn" disabled={!bulkRule.trim()} onClick={() => { applyRule([...picked], bulkRule.trim()); setBulkRule(''); setPicked(new Set()); }}>Объединить в группу</button>
+              <button type="button" className="a-btn ghost" title="Группа снова определится автоматически" onClick={() => { applyRule([...picked], ''); setPicked(new Set()); }}>снять правило</button>
+              <datalist id="pl-rules">{ruleList.map(r => <option key={r} value={r} />)}</datalist>
               <button type="button" className="a-btn ghost" onClick={() => setPicked(new Set())}>Сбросить выбор</button>
             </div>
           )}

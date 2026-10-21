@@ -10,6 +10,10 @@ const { query } = require('../db');
 //       items — цена после изменения (стало), old — «было» из того же файла,
 //       zero — артикулы с новой ценой 0, site — цена на сайте с Ozon-картой при загрузке
 //   pricelog:<cab>:<platform>:marks      — { snapId: { артикул: { goal, note } } }
+//   pricelog:<cab>:<platform>:plans      — { артикул: [{ c, r, rule, at }] } — новые цены с правилом,
+//       выгруженные из «Набора для выгрузки» (c — цена клиента, r — цена реализации)
+//   pricelog:<cab>:<platform>:rules      — [название] — запомненные правила (группы), свежие первыми
+//   В снимке: rule — { артикул: правило }, ruleSrc — { артикул: 'f' (из файла) | 's' (запомнено сайтом) }
 // Снимки лежат по отдельности: страница грузит только выбранную неделю и прошлую.
 // ─────────────────────────────────────────────────────────────────────────
 const router = express.Router();
@@ -100,7 +104,7 @@ router.get('/dynamics', async (req, res) => {
 // POST /upload { cabinet, platform, date, file, items, old?, zero?, site? } — снимок на дату (та же дата заменяется).
 router.post('/upload', async (req, res) => {
   try {
-    const { cabinet, platform, date, file, items, old, zero, site, autoOld } = req.body || {};
+    const { cabinet, platform, date, file, items, old, zero, site, autoOld, rules } = req.body || {};
     if (!cabinet || !date || !items || typeof items !== 'object') return res.status(400).json({ success: false, error: 'Нужны cabinet, date и items' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ success: false, error: 'Дата в формате ГГГГ-ММ-ДД' });
     const cleanMap = m => {
@@ -135,6 +139,22 @@ router.post('/upload', async (req, res) => {
         if (Object.keys(st).length) snap.site = cleanMap(st);
       }
     }
+    // Правило (группа) артикула: колонка «Правило» в файле, иначе — запомненная выгрузка из «Набора».
+    {
+      const plans = await getJson(k(cabinet, platform, 'plans'), {});
+      const rule = {}, src = {};
+      for (const [o, b] of Object.entries(snap.items)) {
+        const a = snap.old?.[o];
+        if (a && Math.abs(a - b) < 0.5) continue; // цена не менялась — группа не нужна
+        const f = cleanRule(rules?.[o]);
+        if (f) { rule[o] = f; src[o] = 'f'; continue; }
+        const pr = planRule(plans, o, b, date);
+        if (pr) { rule[o] = pr; src[o] = 's'; }
+      }
+      if (Object.keys(rule).length) { snap.rule = rule; snap.ruleSrc = src; }
+      const fr = Object.entries(src).filter(([, v]) => v === 'f').map(([o]) => rule[o]);
+      if (fr.length) await addRules(cabinet, platform, fr);
+    }
     await setJson(k(cabinet, platform, `snap:${date}`), snap);
     let idx = (await index(cabinet, platform)).filter(s => s.id !== date);
     idx.push(metaOf(snap));
@@ -144,7 +164,82 @@ router.post('/upload', async (req, res) => {
       await query(`DELETE FROM app_settings WHERE key = $1`, [k(cabinet, platform, `snap:${d.id}`)]);
     }
     await setJson(k(cabinet, platform, 'index'), idx);
-    res.json({ success: true, data: { snaps: idx } });
+    res.json({ success: true, data: { snaps: idx, ruled: Object.keys(snap.rule || {}).length } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Правила (группы изменений) ───────────────────────────────────────────
+const cleanRule = v => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+async function addRules(c, p, names) {
+  const list = await getJson(k(c, p, 'rules'), []);
+  const add = [...new Set(names.map(cleanRule).filter(Boolean))];
+  if (!add.length) return list;
+  const out = [...add, ...list.filter(x => !add.includes(x))].slice(0, 60);
+  await setJson(k(c, p, 'rules'), out);
+  return out;
+}
+router.get('/rules', async (req, res) => {
+  try { res.json({ success: true, data: await getJson(k(req.query.cabinet || 'defly', req.query.platform, 'rules'), []) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+// POST /rules { cabinet, add: [...] , remove: [...] } — запомнить / забыть название группы.
+router.post('/rules', async (req, res) => {
+  try {
+    const { cabinet, platform, add, remove } = req.body || {};
+    if (!cabinet) return res.status(400).json({ success: false, error: 'Нужен cabinet' });
+    let list = await addRules(cabinet, platform, Array.isArray(add) ? add : []);
+    if (Array.isArray(remove) && remove.length) { const rm = new Set(remove.map(cleanRule)); list = list.filter(x => !rm.has(x)); await setJson(k(cabinet, platform, 'rules'), list); }
+    res.json({ success: true, data: list });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+// POST /plans { cabinet, items: [{ o, c, r, rule }] } — при выгрузке Excel из «Набора»: какие цены
+// и по какому правилу поставили. По ним журнал узнаёт группу, если в файле нет колонки «Правило».
+const PLAN_DAYS = 60;
+router.post('/plans', async (req, res) => {
+  try {
+    const { cabinet, platform, items } = req.body || {};
+    if (!cabinet || !Array.isArray(items)) return res.status(400).json({ success: false, error: 'Нужны cabinet и items' });
+    const plans = await getJson(k(cabinet, platform, 'plans'), {});
+    const at = new Date().toISOString(), old = Date.now() - PLAN_DAYS * 86400e3;
+    let n = 0;
+    for (const x of items) {
+      const o = String(x?.o ?? '').trim().slice(0, 128), c = Number(x?.c), r = Number(x?.r), rule = cleanRule(x?.rule);
+      if (!o || !rule || !(c > 0 || r > 0)) continue;
+      const arr = (plans[o] || []).filter(p => Date.parse(p.at) > old && !(p.c === Math.round(c) && p.rule === rule));
+      arr.push({ c: c > 0 ? Math.round(c) : null, r: r > 0 ? Math.round(r) : null, rule, at });
+      plans[o] = arr.slice(-5); n++;
+    }
+    for (const o of Object.keys(plans)) { plans[o] = plans[o].filter(p => Date.parse(p.at) > old); if (!plans[o].length) delete plans[o]; }
+    await setJson(k(cabinet, platform, 'plans'), plans);
+    await addRules(cabinet, platform, items.map(x => x?.rule));
+    res.json({ success: true, data: { saved: n } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+// Правило для артикула снимка по запомненным выгрузкам: та же новая цена (клиента или реализации)
+// (±2 ₽ или 0,5%), выгрузка не позже дня снимка +1 и не раньше чем за 30 дней.
+function planRule(plans, o, price, date) {
+  const t = Date.parse(date), arr = (plans[o] || []).filter(p => { const a = Date.parse(p.at); return a <= t + 2 * 86400e3 && a >= t - 30 * 86400e3; });
+  let best = null;
+  for (const p of arr) {
+    const dev = Math.min(p.c > 0 ? Math.abs(p.c - price) : Infinity, p.r > 0 ? Math.abs(p.r - price) : Infinity);
+    if (dev <= Math.max(2, price * 0.005) && (!best || dev < best.dev || (dev === best.dev && p.at > best.at))) best = { ...p, dev };
+  }
+  return best ? best.rule : null;
+}
+
+// POST /snap-rule { cabinet, snapId, offers: [...], rule } — поменять правило (группу) у артикулов
+// уже загруженного снимка; пустое правило — снять (группа считается автоматически).
+router.post('/snap-rule', async (req, res) => {
+  try {
+    const { cabinet, platform, snapId, offers, rule } = req.body || {};
+    if (!cabinet || !snapId || !Array.isArray(offers)) return res.status(400).json({ success: false, error: 'Нужны cabinet, snapId и offers' });
+    const key = k(cabinet, platform, `snap:${snapId}`), s = await getJson(key, null);
+    if (!s) return res.status(404).json({ success: false, error: 'Снимок не найден' });
+    const r = cleanRule(rule);
+    s.rule = s.rule || {}; s.ruleSrc = s.ruleSrc || {};
+    for (const o0 of offers) { const o = String(o0); if (!s.items[o]) continue; if (r) { s.rule[o] = r; s.ruleSrc[o] = 'm'; } else { delete s.rule[o]; delete s.ruleSrc[o]; } }
+    await setJson(key, s);
+    if (r) await addRules(cabinet, platform, [r]);
+    res.json({ success: true, data: s });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 

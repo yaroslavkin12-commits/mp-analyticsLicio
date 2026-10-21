@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { compute, priceFor } from './Calculator';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase } from '../api';
+import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, fmtPct } from './AdsStats2';
 
@@ -709,7 +709,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
             {full && shown.length > LIMIT && <div className="a-hint">Показаны первые {LIMIT} из {shown.length} — уточните фильтр или скачайте CSV.</div>}
           </div>
         )}
-      <PriceSet storeKey={storeKey} rows={table.setRows || []} cols={setColsEff} setCols={setSetCols} cell={(x, i) => cell(x, i, setColsEff)} prices={prices} coefOf={coefOf} tax={tax} data={data}
+      <PriceSet cabinet={cabinet} storeKey={storeKey} rows={table.setRows || []} cols={setColsEff} setCols={setSetCols} cell={(x, i) => cell(x, i, setColsEff)} prices={prices} coefOf={coefOf} tax={tax} data={data}
         onRemove={toggleSet} onClear={() => setSetList([])} setCount={setList.length} />
     </div>
   );
@@ -811,10 +811,26 @@ function PriceInput({ value, placeholder, onCommit }) {
   );
 }
 
+// Правило (группа) новой цены: вписать своё или выбрать из запомненных.
+function RuleInput({ value, auto, disabled, listId, onCommit }) {
+  const [v, setV] = useState(value ?? '');
+  const focus = useRef(false);
+  useEffect(() => { if (!focus.current) setV(value ?? ''); }, [value]);
+  return (
+    <input className={`a-input tb-rule ${value ? (auto ? 'auto' : 'own') : ''}`} list={listId} value={v} disabled={disabled}
+      placeholder={disabled ? '' : 'правило'} title={disabled ? 'Сначала впишите новую цену' : auto ? 'Правило проставлено автоматически — можно переписать' : 'Своё правило'}
+      onFocus={() => { focus.current = true; }} onBlur={() => { focus.current = false; if (v.trim() !== (value || '')) onCommit(v.trim()); }}
+      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setV(value ?? ''); e.currentTarget.blur(); } }}
+      onChange={e => setV(e.target.value.slice(0, 60))} />
+  );
+}
+const num1 = v => String(Math.round(v * 10) / 10).replace('.', ',');
+const BULK_RULE = { 'rub-': v => `−${fmtInt(v)} ₽`, 'rub+': v => `+${fmtInt(v)} ₽`, 'pct-': v => `−${num1(v)}%`, 'pct+': v => `+${num1(v)}%`, margin: v => `маржа ${num1(v)}%`, set: v => `цена ${fmtInt(v)} ₽` };
+
 // Набор для выгрузки: артикул, метрики верхней таблицы, текущая и новая цена и
 // прогноз при новой цене — как в калькуляторе (юнит-экономика артикула, ДРР — свой
 // за последние 30 дней: реклама / (заказы × % выкупа)). Скачивается в Excel с выбором столбцов.
-function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, data, onRemove, onClear, setCount }) {
+function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf, tax, data, onRemove, onClear, setCount }) {
   const [edit, setEdit] = useState(null);
   const [drag, setDrag] = useState(null);
   const [over, setOver] = useState(null);
@@ -838,10 +854,15 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
   const [fullS, setFullS] = useState(false);
   const [mode, setMode] = useState(() => load(storeKey + ':setmode') || 'client');
   useEffect(() => { save(storeKey + ':setmode', mode); }, [storeKey, mode]);
-  const [np, setNp] = useState(() => load(storeKey + ':setprices') || {}); // артикул -> { v, m }
+  const [np, setNp] = useState(() => load(storeKey + ':setprices') || {}); // артикул -> { v, m, r (правило), ra (проставлено автоматически) }
+  // Запомненные правила (группы) — общие для кабинета, хранятся на сервере.
+  const [ruleList, setRuleList] = useState([]);
+  useEffect(() => { getPriceRules(cabinet).then(r => setRuleList(r.data.data || [])).catch(() => {}); }, [cabinet]);
+  const rememberRule = name => { if (name && !ruleList.includes(name)) savePriceRules(cabinet, [name]).then(r => setRuleList(r.data.data || [])).catch(() => {}); };
+  const forgetRule = name => savePriceRules(cabinet, [], [name]).then(r => setRuleList(r.data.data || [])).catch(() => {});
   useEffect(() => { save(storeKey + ':setprices', np); }, [storeKey, np]);
   const [pick, setPick] = useState(false);
-  const [exp, setExp] = useState(() => load(storeKey + ':setexp') || { art: true, newPrice: true });
+  const [exp, setExp] = useState(() => { const e = load(storeKey + ':setexp') || { art: true, newPrice: true }; return e.rule === undefined ? { ...e, rule: true } : e; });
   useEffect(() => { save(storeKey + ':setexp', exp); }, [storeKey, exp]);
   const pickRef = useRef(null);
   useEffect(() => {
@@ -879,6 +900,7 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
     if (k === '__cur') return x.cur;
     if (k === '__client') return x.curClient;
     if (k === '__new') return x.newReal;
+    if (k === '__rule') return x.o?.r || null;
     if (k === '__profit') return x.res ? x.res.profit : null;
     if (k === '__margin') return x.res ? x.res.margin : null;
     const i = cols.findIndex(c => c.id === k); return i >= 0 ? x.vals[i]?.v ?? null : null;
@@ -889,8 +911,9 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
   const total = model.length, totalEd = model.filter(x => x.newReal).length, shownEd = sortedF.filter(x => x.newReal).length;
   // Массовое изменение цены у показанных строк (по текущим фильтрам набора).
   const [bulk, setBulk] = useState({ kind: 'rub-', val: '', skip: true });
+  const bulkNum = () => Number(String(bulk.val).replace(',', '.'));
   const bulkPrice = x => {
-    const v = Number(String(bulk.val).replace(',', '.'));
+    const v = bulkNum();
     if (!(v > 0) && bulk.kind !== 'margin') return null;
     const base = mode === 'client' ? x.curClient : x.cur;
     let p = null;
@@ -900,24 +923,45 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
     else if (bulk.kind === 'margin') { if (!x.v || !Number.isFinite(v)) return null; const r = priceFor(x.v, 'usn_income', v); p = r ? (mode === 'client' ? r * x.sppK : r) : null; }
     return p && p > 0 && Number.isFinite(p) ? Math.round(p) : null;
   };
-  const bulkTargets = sortedF.filter(x => !(bulk.skip && x.newReal));
+  // «Назначить правило» — только название группы, цены не трогает (у показанных с новой ценой).
+  const ruleOnly = bulk.kind === 'rule';
+  const bulkTargets = ruleOnly ? sortedF.filter(x => x.newReal) : sortedF.filter(x => !(bulk.skip && x.newReal));
   const applyBulk = () => {
+    if (ruleOnly) {
+      const name = String(bulk.val).trim(); if (!name) return;
+      const h = new Set(bulkTargets.map(x => x.a.o));
+      setNp(m => Object.fromEntries(Object.entries(m).map(([o, e]) => [o, h.has(o) ? { ...e, r: name, ra: false } : e])));
+      rememberRule(name);
+      setBulkMsg(`Правило «${name}» — у ${h.size} арт.`);
+      return;
+    }
     let n = 0, miss = 0;
-    const upd = {};
-    for (const x of bulkTargets) { const p = bulkPrice(x); if (p) { upd[x.a.o] = { v: p, m: mode }; n++; } else miss++; }
+    const upd = {}, rule = BULK_RULE[bulk.kind](bulkNum());
+    for (const x of bulkTargets) { const p = bulkPrice(x); if (p) { upd[x.a.o] = { v: p, m: mode, r: rule, ra: true }; n++; } else miss++; }
     setNp(m => ({ ...m, ...upd }));
-    setBulkMsg(`Изменено ${n} арт.${miss ? `, не посчитать — ${miss} (нет текущей цены или маржа недостижима)` : ''}`);
+    setBulkMsg(`Изменено ${n} арт. · правило «${rule}»${miss ? `, не посчитать — ${miss} (нет текущей цены или маржа недостижима)` : ''}`);
   };
   const [bulkMsg, setBulkMsg] = useState('');
   const resetShown = () => { const h = new Set(sortedF.map(x => x.a.o)); setNp(m => Object.fromEntries(Object.entries(m).filter(([o]) => !h.has(o)))); };
   const shownNew = x => (!x.o ? '' : x.o.m === mode ? x.o.v : Math.round(mode === 'client' ? x.o.v * x.sppK : x.o.v / (x.sppK || 1)));
-  const setPrice = (o, val) => setNp(m => { const n = { ...m }; if (!(Number(val) > 0)) delete n[o]; else n[o] = { v: Number(val), m: mode }; return n; });
+  // Ручная цена: автоматическое правило становится «вручную», своё — остаётся.
+  const setPrice = (o, val) => setNp(m => {
+    const n = { ...m }, e = m[o];
+    if (!(Number(val) > 0)) { delete n[o]; return n; }
+    if (e && e.m === mode && e.v === Number(val)) return m;
+    n[o] = { v: Number(val), m: mode, ...(e?.r && !e.ra ? { r: e.r, ra: false } : { r: 'вручную', ra: true }) };
+    return n;
+  });
+  const setRule = (o, name) => { setNp(m => (m[o] ? { ...m, [o]: { ...m[o], r: name || 'вручную', ra: !name } } : m)); if (name) rememberRule(name); };
+  const rulesUsed = useMemo(() => [...new Set([...Object.values(np).map(e => e.r).filter(Boolean), ...ruleList])], [np, ruleList]);
+  const listId = `tb-rules-${cabinet}`;
   const newOut = x => (x.newReal ? Math.round(mode === 'client' ? x.newReal * x.sppK : x.newReal) : Math.round(mode === 'client' ? x.curClient : x.cur) || null);
 
   const EXP = [
     ['art', 'Артикул', x => x.a.o], ['model', 'Название', x => x.a.n || ''], ['cat', 'Категория', x => x.a.cat],
     ['cur', 'Цена реализации сейчас', x => x.cur && Math.round(x.cur)], ['curClient', 'Цена клиента сейчас', x => x.curClient && Math.round(x.curClient)],
     ['newPrice', `Новая цена (${mode === 'client' ? 'клиента' : 'реализации'})`, newOut],
+    ['rule', 'Правило', x => (x.newReal ? x.o?.r || '' : '')],
     ['profit', 'Прибыль на 1 шт при новой цене (прогноз)', x => x.res && Math.round(x.res.profit)],
     ['margin', 'Маржинальность при новой цене (прогноз), %', x => x.res && Math.round(x.res.margin * 10) / 10],
     ...cols.map((c, i) => [c.id, colTitle(c), x => { const y = x.vals[i]?.v; return y === null || y === undefined || !Number.isFinite(y) ? '' : Math.round(y * 10) / 10; }]),
@@ -929,6 +973,10 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Набор');
     XLSX.writeFile(wb, `Набор ${dayjs().format('DD.MM.YYYY')}.xlsx`);
+    // Запомнить, какие цены и по какому правилу выгрузили, — журнал цен узнает группы,
+    // даже если цены потом перенесут в общий файл без колонки «Правило».
+    const items = sortedF.filter(x => x.newReal && x.o?.r).map(x => ({ o: x.a.o, c: Math.round(x.newReal * x.sppK), r: Math.round(x.newReal), rule: x.o.r }));
+    if (items.length) savePricePlans(cabinet, items).then(() => getPriceRules(cabinet)).then(r => setRuleList(r.data.data || [])).catch(() => {});
   }
 
   return (
@@ -975,12 +1023,15 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
             <option value="rub-">снизить на ₽</option><option value="rub+">поднять на ₽</option>
             <option value="pct-">снизить на %</option><option value="pct+">поднять на %</option>
             <option value="margin">цена под маржинальность, %</option><option value="set">поставить цену, ₽</option>
+            <option value="rule">назначить правило (без смены цены)</option>
           </select>
-          <input className="a-input" style={{ width: 80 }} inputMode="decimal" value={bulk.val} placeholder={bulk.kind === 'margin' ? '15' : bulk.kind.startsWith('pct') ? '3' : '500'}
-            onChange={e => setBulk(b => ({ ...b, val: e.target.value.replace(/[^\d.,-]/g, '') }))} />
-          <label className="tb-chk"><input type="checkbox" checked={bulk.skip} onChange={e => setBulk(b => ({ ...b, skip: e.target.checked }))} />не трогать уже изменённые</label>
+          {ruleOnly
+            ? <input className="a-input" style={{ width: 180 }} list={listId} value={bulk.val} placeholder="название группы" onChange={e => setBulk(b => ({ ...b, val: e.target.value.slice(0, 60) }))} />
+            : <input className="a-input" style={{ width: 80 }} inputMode="decimal" value={bulk.val} placeholder={bulk.kind === 'margin' ? '15' : bulk.kind.startsWith('pct') ? '3' : '500'}
+                onChange={e => setBulk(b => ({ ...b, val: e.target.value.replace(/[^\d.,-]/g, '') }))} />}
+          {!ruleOnly && <label className="tb-chk"><input type="checkbox" checked={bulk.skip} onChange={e => setBulk(b => ({ ...b, skip: e.target.checked }))} />не трогать уже изменённые</label>}
           <button type="button" className="a-btn" disabled={!bulk.val || !bulkTargets.length} onClick={applyBulk}
-            title={`От текущей ${mode === 'client' ? 'цены клиента' : 'цены реализации'}; маржинальность — как в калькуляторе. Ко всем строкам набора по текущим фильтрам${bulk.skip ? ', кроме уже изменённых' : ''}`}>Применить к {bulkTargets.length} арт.</button>
+            title={ruleOnly ? 'Название группы для показанных артикулов с новой ценой' : `От текущей ${mode === 'client' ? 'цены клиента' : 'цены реализации'}; маржинальность — как в калькуляторе. Ко всем строкам набора по текущим фильтрам${bulk.skip ? ', кроме уже изменённых' : ''}. Правило проставится само`}>Применить к {bulkTargets.length} арт.</button>
           <button type="button" className="a-btn ghost" disabled={!shownEd} onClick={() => { if (window.confirm(`Сбросить новые цены у ${shownEd} показанных арт.?`)) resetShown(); }}>сбросить у показанных</button>
           {bulkMsg && <span className="muted">{bulkMsg}</span>}
           <span className="a-seg" style={{ marginLeft: 'auto' }}>
@@ -996,6 +1047,7 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
               <ThCtl ctl={ctl} k="__name" className="" filter={false}>Артикул</ThCtl>
               <ThCtl ctl={ctl} k="__cur" unit="₽">Цена реализации</ThCtl><ThCtl ctl={ctl} k="__client" unit="₽">Цена клиента</ThCtl>
               <ThCtl ctl={ctl} k="__new" unit="₽" hint="Впишите новую цену — пересчитается прогноз строки">Новая цена ({mode === 'client' ? 'клиента' : 'реализации'})</ThCtl>
+              <ThCtl ctl={ctl} k="__rule" className="" filter={false} hint="Группа изменения: проставляется массовым изменением, можно переписать или выбрать из запомненных. Уходит в Excel и в журнал цен">Правило</ThCtl>
               <ThCtl ctl={ctl} k="__profit" unit="₽" hint="Как в калькуляторе: юнит-экономика артикула при новой цене (без новой — при текущей), ДРР — свой за 30 дней">Прибыль на 1 шт, прогноз</ThCtl>
               <ThCtl ctl={ctl} k="__margin" unit="%" hint="Прибыль / цена реализации при новой цене — как в калькуляторе">Маржинальность, прогноз</ThCtl>
               {cols.map(c => (
@@ -1011,6 +1063,7 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
                   <td className="n r">{x.cur ? fmtInt(x.cur) : '—'}</td>
                   <td className="n r">{x.curClient ? fmtInt(x.curClient) : '—'}</td>
                   <td className="r"><PriceInput value={shownNew(x)} placeholder={fmtInt(mode === 'client' ? x.curClient : x.cur)} onCommit={val => setPrice(x.a.o, val)} /></td>
+                  <td><RuleInput value={x.newReal ? x.o?.r || '' : ''} auto={x.o?.ra} disabled={!x.newReal} listId={listId} onCommit={v => setRule(x.a.o, v)} /></td>
                   <td className="n r" style={{ color: x.res && x.res.profit < 0 ? 'var(--a-bad)' : undefined }}>{x.res ? `${fmtInt(x.res.profit)} ₽` : '—'}</td>
                   <td className="n r"><b style={{ color: x.res && x.res.margin < 0 ? 'var(--a-bad)' : undefined }}>{x.res ? fmtPct(x.res.margin) : '—'}</b>{x.newReal && x.cur && x.v ? <small className="tb-was">было {fmtPct(compute(x.v, x.cur, 'usn_income').margin)}</small> : null}</td>
                   {x.vals.map((y, i) => <td key={cols[i].id} className="n r">{cell(y, i)}</td>)}
@@ -1020,6 +1073,13 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
             </tbody>
           </table>
           {sortedF.length > 30 && <button type="button" className="s-fold" onClick={() => setFullS(f => !f)}>{fullS ? 'Свернуть ▲' : `Показать все ${sortedF.length} ▼`}</button>}
+          <datalist id={listId}>{rulesUsed.map(r => <option key={r} value={r} />)}</datalist>
+          {ruleList.length > 0 && (
+            <div className="tb-rules">
+              <span className="muted">Запомненные правила:</span>
+              {ruleList.slice(0, 30).map(r => <span key={r} className="tb-rchip">{r}<button type="button" title="Забыть" onClick={() => forgetRule(r)}>×</button></span>)}
+            </div>
+          )}
         </div>
       )}
     </div>
