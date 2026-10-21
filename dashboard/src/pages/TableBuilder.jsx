@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { compute } from './Calculator';
+import { compute, priceFor } from './Calculator';
 import dayjs from 'dayjs';
 import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
@@ -883,6 +883,33 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
     if (k === '__margin') return x.res ? x.res.margin : null;
     const i = cols.findIndex(c => c.id === k); return i >= 0 ? x.vals[i]?.v ?? null : null;
   }), [model, ctl, cols]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Фильтр «изменённые»: все / с новой ценой / без неё.
+  const [chg, setChg] = useState('');
+  const sortedF = useMemo(() => (chg === 'ed' ? sorted.filter(x => x.newReal) : chg === 'no' ? sorted.filter(x => !x.newReal) : sorted), [sorted, chg]);
+  const total = model.length, totalEd = model.filter(x => x.newReal).length, shownEd = sortedF.filter(x => x.newReal).length;
+  // Массовое изменение цены у показанных строк (по текущим фильтрам набора).
+  const [bulk, setBulk] = useState({ kind: 'rub-', val: '', skip: true });
+  const bulkPrice = x => {
+    const v = Number(String(bulk.val).replace(',', '.'));
+    if (!(v > 0) && bulk.kind !== 'margin') return null;
+    const base = mode === 'client' ? x.curClient : x.cur;
+    let p = null;
+    if (bulk.kind === 'rub-') p = base - v; else if (bulk.kind === 'rub+') p = base + v;
+    else if (bulk.kind === 'pct-') p = base * (1 - v / 100); else if (bulk.kind === 'pct+') p = base * (1 + v / 100);
+    else if (bulk.kind === 'set') p = v;
+    else if (bulk.kind === 'margin') { if (!x.v || !Number.isFinite(v)) return null; const r = priceFor(x.v, 'usn_income', v); p = r ? (mode === 'client' ? r * x.sppK : r) : null; }
+    return p && p > 0 && Number.isFinite(p) ? Math.round(p) : null;
+  };
+  const bulkTargets = sortedF.filter(x => !(bulk.skip && x.newReal));
+  const applyBulk = () => {
+    let n = 0, miss = 0;
+    const upd = {};
+    for (const x of bulkTargets) { const p = bulkPrice(x); if (p) { upd[x.a.o] = { v: p, m: mode }; n++; } else miss++; }
+    setNp(m => ({ ...m, ...upd }));
+    setBulkMsg(`Изменено ${n} арт.${miss ? `, не посчитать — ${miss} (нет текущей цены или маржа недостижима)` : ''}`);
+  };
+  const [bulkMsg, setBulkMsg] = useState('');
+  const resetShown = () => { const h = new Set(sortedF.map(x => x.a.o)); setNp(m => Object.fromEntries(Object.entries(m).filter(([o]) => !h.has(o)))); };
   const shownNew = x => (!x.o ? '' : x.o.m === mode ? x.o.v : Math.round(mode === 'client' ? x.o.v * x.sppK : x.o.v / (x.sppK || 1)));
   const setPrice = (o, val) => setNp(m => { const n = { ...m }; if (!(Number(val) > 0)) delete n[o]; else n[o] = { v: Number(val), m: mode }; return n; });
   const newOut = x => (x.newReal ? Math.round(mode === 'client' ? x.newReal * x.sppK : x.newReal) : Math.round(mode === 'client' ? x.curClient : x.cur) || null);
@@ -898,7 +925,7 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
   async function download() {
     const XLSX = await import('xlsx');
     const use = EXP.filter(([k]) => exp[k]);
-    const aoa = [use.map(([, t]) => t), ...sorted.map(x => use.map(([, , f]) => f(x) ?? ''))];
+    const aoa = [use.map(([, t]) => t), ...sortedF.map(x => use.map(([, , f]) => f(x) ?? ''))];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Набор');
     XLSX.writeFile(wb, `Набор ${dayjs().format('DD.MM.YYYY')}.xlsx`);
@@ -908,7 +935,9 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
     <div className="tb-set">
       <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         <b style={{ fontSize: 14 }}>Набор для выгрузки</b>
-        <span className="a-hint" style={{ margin: 0 }}>{setCount ? `${setCount} арт. · новых цен ${model.filter(x => x.newReal).length}` : 'нажмите ＋ у артикула в таблице выше — он появится здесь (в таблице останется отмеченным)'}</span>
+        <span className="a-hint" style={{ margin: 0 }}>{setCount
+          ? <>показано <b>{sortedF.length}</b> из {total} арт. · с новой ценой <b className="tb-edn">{shownEd} / {total}</b>{shownEd !== totalEd ? ` (всего ${totalEd})` : ''}</>
+          : 'нажмите ＋ у артикула в таблице выше — он появится здесь (в таблице останется отмеченным)'}</span>
         {setCount > 0 && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="tb-lbl" style={{ width: 'auto' }}>новая цена —</span>
@@ -928,7 +957,7 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
                   ))}
                   <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                     <button type="button" className="a-btn ghost" onClick={() => setExp({ art: true, newPrice: true })}>артикул + цена</button>
-                    <button type="button" className="a-btn" onClick={() => { download(); setPick(false); }}>Скачать ({model.length})</button>
+                    <button type="button" className="a-btn" onClick={() => { download(); setPick(false); }}>Скачать показанные ({sortedF.length})</button>
                   </div>
                   <div className="a-hint" style={{ margin: '6px 2px 0' }}>Где новая цена не вписана — в файл уходит текущая.</div>
                 </div>
@@ -939,7 +968,27 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
         )}
       </div>
       {setCount > 0 && <ColsEditor cols={cols} setCols={setCols} edit={edit} setEdit={setEdit} dnd={dnd} hdrDrag={drag} hdrOver={over} />}
-      {setCount > 0 && <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctl} /></div>}
+      {setCount > 0 && (
+        <div className="tb-bar tb-bulk">
+          <span className="tb-lbl">Изменить</span>
+          <select className="a-input" value={bulk.kind} onChange={e => setBulk(b => ({ ...b, kind: e.target.value }))}>
+            <option value="rub-">снизить на ₽</option><option value="rub+">поднять на ₽</option>
+            <option value="pct-">снизить на %</option><option value="pct+">поднять на %</option>
+            <option value="margin">цена под маржинальность, %</option><option value="set">поставить цену, ₽</option>
+          </select>
+          <input className="a-input" style={{ width: 80 }} inputMode="decimal" value={bulk.val} placeholder={bulk.kind === 'margin' ? '15' : bulk.kind.startsWith('pct') ? '3' : '500'}
+            onChange={e => setBulk(b => ({ ...b, val: e.target.value.replace(/[^\d.,-]/g, '') }))} />
+          <label className="tb-chk"><input type="checkbox" checked={bulk.skip} onChange={e => setBulk(b => ({ ...b, skip: e.target.checked }))} />не трогать уже изменённые</label>
+          <button type="button" className="a-btn" disabled={!bulk.val || !bulkTargets.length} onClick={applyBulk}
+            title={`От текущей ${mode === 'client' ? 'цены клиента' : 'цены реализации'}; маржинальность — как в калькуляторе. Ко всем строкам набора по текущим фильтрам${bulk.skip ? ', кроме уже изменённых' : ''}`}>Применить к {bulkTargets.length} арт.</button>
+          <button type="button" className="a-btn ghost" disabled={!shownEd} onClick={() => { if (window.confirm(`Сбросить новые цены у ${shownEd} показанных арт.?`)) resetShown(); }}>сбросить у показанных</button>
+          {bulkMsg && <span className="muted">{bulkMsg}</span>}
+          <span className="a-seg" style={{ marginLeft: 'auto' }}>
+            {[['', 'все'], ['ed', `с новой ценой (${totalEd})`], ['no', `без неё (${total - totalEd})`]].map(([k, t]) => <button key={k} type="button" className={chg === k ? 'on' : ''} onClick={() => setChg(k)}>{t}</button>)}
+          </span>
+          <ResetCtl ctl={ctl} />
+        </div>
+      )}
       {setCount > 0 && (
         <div className="a-scroll">
           <table className="a-t s-slice tb-t">
@@ -956,9 +1005,9 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
               <th />
             </tr></thead>
             <tbody>
-              {(fullS ? sorted : sorted.slice(0, 30)).map(x => (
-                <tr key={x.key}>
-                  <td><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.a.o}</div><div className="model" title={x.a.n || ''}>{x.a.short}</div></div></div></td>
+              {(fullS ? sortedF : sortedF.slice(0, 30)).map(x => (
+                <tr key={x.key} className={x.newReal ? 'tb-ed-row' : ''}>
+                  <td><div className="a-art"><span className={`tb-dot ${x.newReal ? 'on' : ''}`} title={x.newReal ? 'Новая цена внесена' : 'Без изменений'} /><div style={{ minWidth: 0 }}><div className="id">{x.a.o}</div><div className="model" title={x.a.n || ''}>{x.a.short}</div></div></div></td>
                   <td className="n r">{x.cur ? fmtInt(x.cur) : '—'}</td>
                   <td className="n r">{x.curClient ? fmtInt(x.curClient) : '—'}</td>
                   <td className="r"><PriceInput value={shownNew(x)} placeholder={fmtInt(mode === 'client' ? x.curClient : x.cur)} onCommit={val => setPrice(x.a.o, val)} /></td>
@@ -970,7 +1019,7 @@ function PriceSet({ storeKey, rows, cols, setCols, cell, prices, coefOf, tax, da
               ))}
             </tbody>
           </table>
-          {sorted.length > 30 && <button type="button" className="s-fold" onClick={() => setFullS(f => !f)}>{fullS ? 'Свернуть ▲' : `Показать все ${sorted.length} ▼`}</button>}
+          {sortedF.length > 30 && <button type="button" className="s-fold" onClick={() => setFullS(f => !f)}>{fullS ? 'Свернуть ▲' : `Показать все ${sortedF.length} ▼`}</button>}
         </div>
       )}
     </div>
