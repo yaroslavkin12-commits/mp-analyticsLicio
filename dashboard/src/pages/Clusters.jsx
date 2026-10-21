@@ -102,7 +102,7 @@ export default function Clusters({ cabinet, nav }) {
           )}
           {ng.length > 0 && (
             <div className="a-card cl-card">
-              <div className="cl-title">Похоже на одну карточку, но на Ozon не склеены <span className="muted">· {ng.length}</span></div>
+              <div className="cl-title">{d.source === 'ozon' ? 'Похоже на одну карточку, но на Ozon не склеены' : 'Похоже на одну карточку, но нет в списке склеек'} <span className="muted">· {ng.length}</span></div>
               <div className="a-hint" style={{ margin: '0 0 8px' }}>Одиночные артикулы одной модели в разных материалах, сверху — с большим числом заказов. «Это склейка» — считать вместе у нас; «не склейка» — больше не предлагать.</div>
               {(full ? ng : ng.slice(0, 30)).map(g => (
                 <div key={g.id} className="cl-row">
@@ -165,6 +165,12 @@ export default function Clusters({ cabinet, nav }) {
       {!d && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
       {d && (
         <>
+          {d.source !== 'ozon' && (
+            <div className="c-msg" style={{ margin: '12px 0 0' }}>
+              Склейки пока не с Ozon, а из старого ручного списка (в нём только рекламируемые артикулы), поэтому «Проверить» показывает и то, что на Ozon уже склеено.
+              Обновите скрипт в таблице Дефлая и запустите <b>syncDaily</b> — через 10–20 минут склейки придут с Ozon и лишнее отсюда уйдёт.
+            </div>
+          )}
           <div className="cl-kpis">
             <div className="a-kpi"><span className="lbl">Склеек</span><span className="val">{fmtInt(d.clusters.length)}</span><span className="sub">{fmtInt(d.items.length - singles.length)} арт. в склейках</span></div>
             <div className="a-kpi"><span className="lbl">Без склейки</span><span className="val">{fmtInt(singles.length)}</span><span className="sub">одиночные карточки</span></div>
