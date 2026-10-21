@@ -124,10 +124,16 @@ async function syncCatalogFromSheet(cabinet) {
   // Пусто — не «успех»: иначе следующая попытка только через 6 ч (новый магазин,
   // скрипт ещё не собрал каталог). С ошибкой повтор через 10 мин.
   if (!filtered.length) throw new Error(`в Google-таблице нет каталога «${cabinet}» (вкладка Catalog) — запустите syncDaily в скрипте`);
-  const out = filtered.map(r => [cabinet, 'ozon', r.offer_id, r.sku || null, r.product_name ? String(r.product_name).slice(0, 500) : null, new Date()]);
+  // Склейка Ozon (model_id объединённой карточки), дата создания и архив — колонки появились
+  // в обновлённом скрипте; в старой таблице их нет — пишем как раньше.
+  const ext = filtered.some(r => r.model_id !== undefined);
+  if (ext) for (const c of ['model_id TEXT', 'model_count INT', 'created_ozon DATE', 'archived BOOLEAN']) await query(`ALTER TABLE ad_product_catalog ADD COLUMN IF NOT EXISTS ${c}`).catch(() => {});
+  const dt = v => { const m = String(v || '').match(/^(\d{4}-\d{2}-\d{2})/); return m ? m[1] : null; };
+  const out = filtered.map(r => [cabinet, 'ozon', r.offer_id, r.sku || null, r.product_name ? String(r.product_name).slice(0, 500) : null,
+    ...(ext ? [r.model_id ? String(r.model_id) : null, r.model_count ? Math.round(num(r.model_count)) : null, dt(r.created_at), String(r.archived) === 'true' || r.archived === '1'] : []), new Date()]);
   const saved = await bulkUpsert('ad_product_catalog',
-    ['cabinet', 'platform', 'offer_id', 'sku', 'product_name', 'updated_at'],
-    out, ['cabinet', 'platform', 'offer_id'], undefined, { diff: `catalog:${cabinet}`, skip: ['updated_at'] });
+    ['cabinet', 'platform', 'offer_id', 'sku', 'product_name', ...(ext ? ['model_id', 'model_count', 'created_ozon', 'archived'] : []), 'updated_at'],
+    out, ['cabinet', 'platform', 'offer_id'], undefined, { diff: `catalog${ext ? '2' : ''}:${cabinet}`, skip: ['updated_at'] });
   console.log(`[SheetCatalog:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
 }

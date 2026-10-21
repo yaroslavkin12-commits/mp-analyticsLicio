@@ -22,7 +22,7 @@ const parseCost = v => {
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
 };
 
-export default function Costs({ cabinet }) {
+export default function Costs({ cabinet, nav }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState({}); // offerId -> строка ввода
@@ -166,7 +166,8 @@ export default function Costs({ cabinet }) {
     <div className="mpui sa-costs">
       <div className="page-sticky">
       <div className="a-top">
-        <h1>Себестоимость</h1>
+        <h1>{nav ? 'Товары' : 'Себестоимость'}</h1>
+        {nav}
         <span className="a-hint">{fmtInt(filled)} из {fmtInt(items.length)} артикулов заполнено · из продававшихся за 30 дней — {fmtInt(soldFilled)} из {fmtInt(soldItems.length)}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button type="button" className="a-btn" onClick={() => downloadTemplate(items)} disabled={!items.length}>Скачать шаблон (все)</button>

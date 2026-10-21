@@ -300,3 +300,26 @@
 .pl-ggoal { display: inline-flex; flex-direction: column; gap: 2px; min-width: 150px; }
 .pl-ggoal .pr-sel { padding: 3px 6px; font-size: 12.5px; }
 .pl-gg-lbl { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--a-muted, #6b7280); }
+/* Товары → Склейки */
+.mpui .cl-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+@media (max-width: 760px) { .mpui .cl-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mpui .cl-kwarn .val { color: var(--a-warn); }
+.mpui .cl-card { padding: 6px 16px 10px; margin-bottom: 12px; }
+.mpui .cl-title { font-weight: 600; font-size: 14px; padding: 10px 0 4px; }
+.mpui .cl-row { padding: 10px 0; border-top: 1px solid var(--a-line); }
+.mpui .cl-row:first-of-type { border-top: 0; }
+.mpui .cl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 7px; font-size: 13.5px; }
+.mpui .cl-head .muted { font-size: 12.5px; }
+.mpui .cl-arts { display: flex; flex-wrap: wrap; gap: 6px; }
+.mpui .cl-art { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--a-line); background: var(--a-panel2); border-radius: 8px; padding: 4px 6px 4px 9px; font-size: 12.5px; }
+.mpui .cl-art b { font-weight: 600; font-family: var(--a-num, inherit); }
+.mpui .cl-art small { color: var(--a-ink3); font-size: 11.5px; }
+.mpui .cl-art.man { border-color: var(--a-accent); }
+.mpui .cl-art.sug { border: 1px dashed var(--a-warn); background: var(--a-warn-soft); }
+.mpui .cl-new { font-style: normal; font-size: 10.5px; font-weight: 600; color: var(--a-good); background: var(--a-good-soft); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+.mpui .cl-q { color: var(--a-warn); font-weight: 700; cursor: help; padding: 0 2px; }
+.mpui .cl-ok, .mpui .cl-x { border: 0; background: none; cursor: pointer; border-radius: 5px; padding: 0 5px; font-size: 13px; line-height: 18px; color: var(--a-ink3); }
+.mpui .cl-ok:hover { color: var(--a-good); background: var(--a-good-soft); }
+.mpui .cl-x:hover { color: var(--a-bad); background: var(--a-bad-soft); }
+.mpui .cl-tag { font-size: 11.5px; color: var(--a-accent); background: var(--a-accent-soft); border-radius: 5px; padding: 1px 7px; }
+.mpui .cl-warn { color: var(--a-warn); }

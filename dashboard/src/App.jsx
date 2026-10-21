@@ -14,7 +14,6 @@ import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
 import TrackedArticles from './pages/TrackedArticles';
 import SalesAnalytics from './pages/SalesAnalytics';
-import Costs from './pages/Costs';
 import Geography from './pages/Geography';
 import UnitEconomics from './pages/UnitEconomics';
 import PnL from './pages/PnL';
@@ -22,6 +21,7 @@ import Buyout from './pages/Buyout';
 import Inventory from './pages/Inventory';
 import Production from './pages/Production';
 import PriceLog from './pages/PriceLog';
+import Products from './pages/Products';
 import AvgCheck from './pages/AvgCheck';
 import Abc from './pages/Abc';
 import Recon from './pages/Recon';
@@ -49,7 +49,7 @@ class PageBoundary extends React.Component {
   }
 }
 
-const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Costs, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { sales: SalesAnalytics, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Products, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только

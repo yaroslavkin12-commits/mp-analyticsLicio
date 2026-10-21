@@ -84,7 +84,8 @@ const CPC_BIDS_HEADERS = ['cabinet', 'campaign_id', 'sku', 'bid', 'checked_at'];
 // kind: '' — «Оплата за заказ: выбранные товары» (продвижение в поиске), 'all' — «Оплата за заказ — все товары».
 const CPO_ORDERS_HEADERS = ['cabinet', 'date', 'order_id', 'sku', 'promoted_sku', 'offer_id', 'quantity', 'cost', 'expense', 'order_date', 'order_number', 'kind'];
 
-const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name'];
+// model_id — объединённая карточка Ozon (склейка), model_count — сколько товаров в ней.
+const CATALOG_HEADERS = ['cabinet', 'offer_id', 'sku', 'product_name', 'model_id', 'model_count', 'created_at', 'archived'];
 const ANALYTICS_HEADERS = ['cabinet', 'date', 'sku', 'hits_view', 'hits_view_search', 'hits_view_pdp', 'hits_tocart', 'orders_item', 'revenue', 'position_category'];
 const STOCKS_HEADERS = ['cabinet', 'product_id', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'];
 // Поисковые запросы по товарам (позиция, частота) — по дням.
@@ -236,7 +237,9 @@ function collectCatalog_(cab, out) {
     }, 'Каталог: инфо');
     (data.items || []).forEach(function (item) {
       const sku = item.sku || item.fbo_sku || item.fbs_sku || '';
-      out.push([cab.id, item.offer_id, sku, String(item.name || '').slice(0, 500)]);
+      const mi = item.model_info || {};
+      out.push([cab.id, item.offer_id, sku, String(item.name || '').slice(0, 500), mi.model_id ? String(mi.model_id) : '', mi.count || '',
+        String(item.created_at || '').slice(0, 10), item.is_archived || item.is_autoarchived ? 'true' : '']);
     });
     Utilities.sleep(250);
   }

@@ -118,6 +118,7 @@ app.use('/api/promo', adsRouter);
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/production', require('./routes/production'));
 app.use('/api/pricelog', require('./routes/pricelog'));
+app.use('/api/clusters', require('./routes/clusters'));
 app.use('/api/discounts', require('./routes/discounts'));
 app.use('/api/finance', require('./routes/finance'));
 app.use('/api/stocks', require('./routes/stocks'));

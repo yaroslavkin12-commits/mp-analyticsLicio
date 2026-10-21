@@ -179,3 +179,5 @@ export const getPriceRules = (cabinet, platform = 'ozon') => api.get('/pricelog/
 export const savePriceRules = (cabinet, add, remove, platform = 'ozon') => api.post('/pricelog/rules', { cabinet, platform, add, remove });
 export const savePricePlans = (cabinet, items, platform = 'ozon') => api.post('/pricelog/plans', { cabinet, platform, items });
 export const setSnapRule = (cabinet, platform, snapId, offers, rule) => api.post('/pricelog/snap-rule', { cabinet, platform, snapId, offers, rule });
+export const getClusters = cabinet => api.get('/clusters', { params: { cabinet }, timeout: 60000 });
+export const decideCluster = (cabinet, action, offers, id) => api.post('/clusters/decide', { cabinet, action, offers, id });
