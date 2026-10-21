@@ -107,9 +107,20 @@ async function pollOzonForCabinet(cabinet) {
 // Основной путь (Render в Ozon не ходит): заказы за 2 дня кладёт во вкладку
 // Orders Google-скрипт (syncOrders, каждые 5 минут), здесь только читаем
 // таблицу, отсеиваем уже виденные (tracked_orders_seen) и шлём уведомления.
-// Уведомляем только о заказах не старше NOTIFY_MAX_AGE_HOURS — иначе при
-// первом запуске пришли бы уведомления по всем заказам за 2 дня разом.
-const NOTIFY_MAX_AGE_HOURS = 3;
+// Уведомляем о заказах не старше NOTIFY_MAX_AGE_HOURS. Было 3 ч — и если
+// Google-скрипт запаздывал (лимит времени работы триггеров за сутки), заказ
+// попадал во вкладку позже и молча пропускался. Повторов нет — каждый заказ
+// запоминается в tracked_orders_seen, — поэтому окно можно держать сутки.
+// Самый первый прогон по кабинету (база пустая) только запоминает заказы,
+// чтобы не прислать разом всё за 2 дня.
+const NOTIFY_MAX_AGE_HOURS = 24;
+const SEEDED = new Set();
+async function isSeeded(cabinet) {
+  if (SEEDED.has(cabinet)) return true;
+  const r = await query(`SELECT 1 FROM tracked_orders_seen WHERE cabinet = $1 LIMIT 1`, [cabinet]).catch(() => [{}]);
+  if (r.length) SEEDED.add(cabinet);
+  return r.length > 0;
+}
 // Уже виденные заказы держим в памяти: опрос идёт каждые 4 минуты, и раньше
 // каждая строка вкладки (сотни заказов за 2 дня) шла в базу отдельным
 // INSERT — база не засыпала никогда. Теперь в базу идут только новые,
@@ -144,6 +155,7 @@ async function pollOrdersFromSheet(cabinet) {
   }
   if (!fresh.size) return 0;
   const list = [...fresh.values()];
+  const seeded = await isSeeded(cabinet);
   let inserted;
   try {
     inserted = await query(
@@ -153,6 +165,7 @@ async function pollOrdersFromSheet(cabinet) {
       [cabinet, list.map(x => String(x.r.posting_number)), list.map(x => x.sku)]);
   } catch (e) { console.warn(`[Orders:${cabinet}]`, e.message); return 0; }
   for (const k of fresh.keys()) seen.add(k);
+  if (!seeded) { SEEDED.add(cabinet); return 0; } // первый прогон — только запомнили
   if (seen.size > 20000) { const keep = [...seen].slice(-10000); seen.clear(); keep.forEach(k => seen.add(k)); }
   const isNew = new Set(inserted.map(x => `${x.posting_number}|${Number(x.sku) || 0}`));
   const newOrders = [];
