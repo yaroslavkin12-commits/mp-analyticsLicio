@@ -302,7 +302,10 @@ export default function PriceLog({ cabinet }) {
     return s;
   };
   const marks = (log?.marks || {})[sel] || {};
-  const daysAfter = cur ? Math.max(0, Math.min(7, dayjs().startOf('day').diff(dayjs(cur.date), 'day'))) : 0;
+  // День загрузки — переходный (цены могли смениться днём, вечером или ночью): не входит ни в «до»,
+  // ни в «после». «До» — 7 дней перед ним, «после» — со следующего дня, только полные прошедшие дни.
+  const daysAfter = cur ? Math.max(0, Math.min(7, dayjs().startOf('day').diff(dayjs(cur.date), 'day') - 1)) : 0;
+  const afterFrom = cur ? dayjs(cur.date).add(1, 'day') : null;
 
   // Изменения недели: «было» из того же файла, а для старых файлов — из прошлой загрузки.
   const changes = useMemo(() => {
@@ -354,7 +357,7 @@ export default function PriceLog({ cabinet }) {
 
   const rows = useMemo(() => changes.map(x => {
     const before = cur ? sumOrders(x.o, dayjs(cur.date).subtract(7, 'day'), 7) : 0;
-    const after = cur ? sumOrders(x.o, cur.date, daysAfter) : 0;
+    const after = cur ? sumOrders(x.o, afterFrom, daysAfter) : 0;
     const afterN = daysAfter > 0 ? after * 7 / daysAfter : null; // в пересчёте на 7 дней
     const mk = marks[x.o] || {};
     const st = siteOf(x);
@@ -549,7 +552,7 @@ export default function PriceLog({ cabinet }) {
         <div className="a-card pr-card">
           <div className="a-bar" style={{ marginBottom: 8, flexWrap: 'wrap', gap: 10 }}>
             <b style={{ fontSize: 14 }}>{two ? `Изменения цен с ${dayjs(cur.date).format('DD.MM.YYYY')}` : prev ? `Изменения ${dayjs(prev.date).format('DD.MM')} → ${dayjs(cur.date).format('DD.MM.YYYY')}` : `Первый снимок ${dayjs(cur.date).format('DD.MM.YYYY')} — изменения будут видны со следующей загрузки`}</b>
-            {(two || prev) && <span className="a-hint" style={{ margin: 0 }}>заказы Ozon: 7 дней до {dayjs(cur.date).format('DD.MM')} и {daysAfter > 0 ? `${daysAfter} дн после (изменение — по заказам в день)` : 'после — ещё нет данных'}</span>}
+            {(two || prev) && <span className="a-hint" style={{ margin: 0 }}>заказы Ozon: до — {dayjs(cur.date).subtract(7, 'day').format('DD.MM')}–{dayjs(cur.date).subtract(1, 'day').format('DD.MM')}, день загрузки {dayjs(cur.date).format('DD.MM')} не считается, после — {daysAfter > 0 ? `${afterFrom.format('DD.MM')}–${afterFrom.add(daysAfter - 1, 'day').format('DD.MM')} (${daysAfter} дн, изменение — по заказам в день)` : `с ${afterFrom.format('DD.MM')}, данных ещё нет`}</span>}
           </div>
           {(two || prev) && (
             <>
@@ -574,7 +577,7 @@ export default function PriceLog({ cabinet }) {
                   <table className="a-t pr-t pl-agg">
                     <thead><tr>
                       <th className="l">Правило</th><th className="r">Арт.</th><th className="l" title="Цель для всех артикулов группы">Цель</th><th className="l">Категории</th><th className="r">Средняя цена было</th><th className="r">стало</th>
-                      <th className="r" title="Заказы Ozon за 7 дней до изменения">Заказы 7 дн до</th><th className="r" title="Заказы Ozon после изменения — фактически, за прошедшие дни">после</th><th className="r">изм.</th>
+                      <th className="r" title="Заказы Ozon за 7 дней перед днём загрузки">Заказы 7 дн до</th><th className="r" title="Заказы Ozon со дня после загрузки — за полные прошедшие дни (день загрузки не считается)">после</th><th className="r">изм.</th>
                     </tr></thead>
                     <tbody>
                       {!ruleRows.length && <tr><td colSpan={9} className="muted" style={{ padding: 12 }}>Цены не менялись</td></tr>}
@@ -672,7 +675,7 @@ export default function PriceLog({ cabinet }) {
                 <ThCtl ctl={ctl} k="d" unit="₽">Изменение</ThCtl>
                 <ThCtl ctl={ctl} k="pct" unit="%">%</ThCtl>
                 <ThCtl ctl={ctl} k="before" hint="Заказы Ozon за 7 дней до изменения цены">Заказы до</ThCtl>
-                <ThCtl ctl={ctl} k="after" hint="Заказы Ozon после изменения — фактически, за прошедшие дни; % — по заказам в день к неделе до">Заказы после</ThCtl>
+                <ThCtl ctl={ctl} k="after" hint="Заказы Ozon со дня после загрузки — за полные прошедшие дни (день загрузки не считается); % — по заказам в день к неделе до">Заказы после</ThCtl>
                 <ThCtl ctl={ctl} k="off" unit="%" hint={`Цена для покупателя с Ozon-картой на сайте. Отличается от цены в файле больше чем на ${MIS}% — строка подсвечена: цена не применилась или её перебила акция`}>На сайте</ThCtl>
                 <ThCtl ctl={ctl} k="goal" className="" filter={false}>Цель и заметка</ThCtl>
                 <th style={{ textAlign: 'left' }}>Итог</th>
@@ -724,7 +727,7 @@ export default function PriceLog({ cabinet }) {
                         <td className="n r"><b>{rub(x.p)}</b></td>
                         <td className="n r"><span className={ch > 0 ? 's-up' : ch < 0 ? 's-down' : ''}>{ch && Math.abs(ch) >= 0.05 ? f1(ch) : '—'}</span></td>
                         <td className="n r">{fmtInt(sumOrders(hist.o, dayjs(x.date).subtract(7, 'day'), 7))}</td>
-                        <td className="n r">{fmtInt(sumOrders(hist.o, x.date, 7))}</td>
+                        <td className="n r">{fmtInt(sumOrders(hist.o, dayjs(x.date).add(1, 'day'), 7))}</td>
                         <td className="pr-l" style={{ whiteSpace: 'normal' }}>{mk?.goal ? GOAL[mk.goal] : ''}{mk?.note ? <span className="muted"> — {mk.note}</span> : ''}</td>
                       </tr>
                     );
