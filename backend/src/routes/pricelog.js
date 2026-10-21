@@ -211,13 +211,33 @@ router.post('/plans', async (req, res) => {
     for (const o of Object.keys(plans)) { plans[o] = plans[o].filter(p => Date.parse(p.at) > old); if (!plans[o].length) delete plans[o]; }
     await setJson(k(cabinet, platform, 'plans'), plans);
     await addRules(cabinet, platform, items.map(x => x?.rule));
-    res.json({ success: true, data: { saved: n } });
+    // Сразу проставить правила в уже загруженные снимки последних 30 дней (если цены туда
+    // загрузили раньше, чем выгрузили набор): только изменённым артикулам, у которых правило
+    // не задано в файле или в журнале руками.
+    const idx = await index(cabinet, platform), from = Date.now() - 30 * 86400e3, applied = [];
+    for (const m of idx) {
+      if (Date.parse(m.date) < from) continue;
+      const key = k(cabinet, platform, `snap:${m.id}`), sn = await getJson(key, null);
+      if (!sn?.old) continue;
+      let ch = 0;
+      for (const [o, b] of Object.entries(sn.items)) {
+        const a = sn.old[o];
+        if (!a || Math.abs(a - b) < 0.5 || !plans[o]) continue;
+        const src = sn.ruleSrc?.[o];
+        if (src === 'f' || src === 'm') continue;
+        const pr = planRule(plans, o, b, sn.date);
+        if (pr && sn.rule?.[o] !== pr) { sn.rule = sn.rule || {}; sn.ruleSrc = sn.ruleSrc || {}; sn.rule[o] = pr; sn.ruleSrc[o] = 's'; ch++; }
+      }
+      if (ch) { await setJson(key, sn); applied.push({ date: sn.date, n: ch }); }
+    }
+    res.json({ success: true, data: { saved: n, applied } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 // Правило для артикула снимка по запомненным выгрузкам: та же новая цена (клиента или реализации)
-// (±2 ₽ или 0,5%), выгрузка не позже дня снимка +1 и не раньше чем за 30 дней.
+// (±2 ₽ или 0,5%), выгрузка не раньше чем за 30 дней до снимка (позже — можно: правила
+// проставляют и задним числом, если цены загрузили раньше выгрузки набора).
 function planRule(plans, o, price, date) {
-  const t = Date.parse(date), arr = (plans[o] || []).filter(p => { const a = Date.parse(p.at); return a <= t + 2 * 86400e3 && a >= t - 30 * 86400e3; });
+  const t = Date.parse(date), arr = (plans[o] || []).filter(p => Date.parse(p.at) >= t - 30 * 86400e3);
   let best = null;
   for (const p of arr) {
     const dev = Math.min(p.c > 0 ? Math.abs(p.c - price) : Infinity, p.r > 0 ? Math.abs(p.r - price) : Infinity);

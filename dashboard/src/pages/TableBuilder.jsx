@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { compute, priceFor } from './Calculator';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans } from '../api';
+import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans, getPriceLog, getPriceSnap } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt, fmtPct } from './AdsStats2';
 
@@ -710,7 +710,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
           </div>
         )}
       <PriceSet cabinet={cabinet} storeKey={storeKey} rows={table.setRows || []} cols={setColsEff} setCols={setSetCols} cell={(x, i) => cell(x, i, setColsEff)} prices={prices} coefOf={coefOf} tax={tax} data={data}
-        onRemove={toggleSet} onClear={() => setSetList([])} setCount={setList.length} />
+        onRemove={toggleSet} onAdd={addSet} onClear={() => setSetList([])} setCount={setList.length} />
     </div>
   );
 }
@@ -830,7 +830,7 @@ const BULK_RULE = { 'rub-': v => `−${fmtInt(v)} ₽`, 'rub+': v => `+${fmtInt(
 // Набор для выгрузки: артикул, метрики верхней таблицы, текущая и новая цена и
 // прогноз при новой цене — как в калькуляторе (юнит-экономика артикула, ДРР — свой
 // за последние 30 дней: реклама / (заказы × % выкупа)). Скачивается в Excel с выбором столбцов.
-function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf, tax, data, onRemove, onClear, setCount }) {
+function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf, tax, data, onRemove, onAdd, onClear, setCount }) {
   const [edit, setEdit] = useState(null);
   const [drag, setDrag] = useState(null);
   const [over, setOver] = useState(null);
@@ -892,7 +892,10 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
     const newReal = o && o.v > 0 ? (o.m === 'client' ? o.v / (sppK || 1) : o.v) : null;
     const at = newReal || cur;
     const res = v && at ? compute(v, at, 'usn_income') : null;
-    return { ...r, k, v, cur, curClient, sppK, newReal, res, o };
+    // Цена «было» из журнала цен (если цены взяты оттуда — на сайте уже новые).
+    const wasReal = o?.w > 0 ? o.w / (sppK || 1) : null;
+    const baseReal = wasReal || cur;
+    return { ...r, k, v, cur, curClient, sppK, newReal, res, o, wasReal, baseReal, baseClient: o?.w > 0 ? o.w : curClient };
   }), [rows, coefOf, prices, tax, np, L]);
 
   const sorted = useMemo(() => ctl.apply(model, (x, k) => {
@@ -915,7 +918,7 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
   const bulkPrice = x => {
     const v = bulkNum();
     if (!(v > 0) && bulk.kind !== 'margin') return null;
-    const base = mode === 'client' ? x.curClient : x.cur;
+    const base = mode === 'client' ? x.baseClient : x.baseReal;
     let p = null;
     if (bulk.kind === 'rub-') p = base - v; else if (bulk.kind === 'rub+') p = base + v;
     else if (bulk.kind === 'pct-') p = base * (1 - v / 100); else if (bulk.kind === 'pct+') p = base * (1 + v / 100);
@@ -937,7 +940,7 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
     }
     let n = 0, miss = 0;
     const upd = {}, rule = BULK_RULE[bulk.kind](bulkNum());
-    for (const x of bulkTargets) { const p = bulkPrice(x); if (p) { upd[x.a.o] = { v: p, m: mode, r: rule, ra: true }; n++; } else miss++; }
+    for (const x of bulkTargets) { const p = bulkPrice(x); if (p) { upd[x.a.o] = { v: p, m: mode, r: rule, ra: true, ...(x.o?.w ? { w: x.o.w } : {}) }; n++; } else miss++; }
     setNp(m => ({ ...m, ...upd }));
     setBulkMsg(`Изменено ${n} арт. · правило «${rule}»${miss ? `, не посчитать — ${miss} (нет текущей цены или маржа недостижима)` : ''}`);
   };
@@ -949,7 +952,7 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
     const n = { ...m }, e = m[o];
     if (!(Number(val) > 0)) { delete n[o]; return n; }
     if (e && e.m === mode && e.v === Number(val)) return m;
-    n[o] = { v: Number(val), m: mode, ...(e?.r && !e.ra ? { r: e.r, ra: false } : { r: 'вручную', ra: true }) };
+    n[o] = { v: Number(val), m: mode, ...(e?.w ? { w: e.w } : {}), ...(e?.r && !e.ra ? { r: e.r, ra: false } : { r: 'вручную', ra: true }) };
     return n;
   });
   const setRule = (o, name) => { setNp(m => (m[o] ? { ...m, [o]: { ...m[o], r: name || 'вручную', ra: !name } } : m)); if (name) rememberRule(name); };
@@ -975,9 +978,42 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
     XLSX.writeFile(wb, `Набор ${dayjs().format('DD.MM.YYYY')}.xlsx`);
     // Запомнить, какие цены и по какому правилу выгрузили, — журнал цен узнает группы,
     // даже если цены потом перенесут в общий файл без колонки «Правило».
-    const items = sortedF.filter(x => x.newReal && x.o?.r).map(x => ({ o: x.a.o, c: Math.round(x.newReal * x.sppK), r: Math.round(x.newReal), rule: x.o.r }));
-    if (items.length) savePricePlans(cabinet, items).then(() => getPriceRules(cabinet)).then(r => setRuleList(r.data.data || [])).catch(() => {});
+    savePlans(sortedF, true);
   }
+  // Сохранить правила для журнала цен (и сразу проставить в уже загруженные недели).
+  const savePlans = (list, quiet) => {
+    const items = list.filter(x => x.newReal && x.o?.r).map(x => ({ o: x.a.o, c: x.o.m === 'client' ? Math.round(x.o.v) : Math.round(x.newReal * x.sppK), r: Math.round(x.newReal), rule: x.o.r }));
+    if (!items.length) { if (!quiet) setBulkMsg('Нет артикулов с новой ценой и правилом'); return; }
+    savePricePlans(cabinet, items).then(r => {
+      const ap = r.data.data?.applied || [];
+      if (!quiet || ap.length) setBulkMsg(`Правила сохранены (${items.length} арт.)${ap.length ? ` · в журнале цен проставлено: ${ap.map(a => `${dayjs(a.date).format('DD.MM')} — ${a.n} арт.`).join(', ')}` : ' · в загруженных неделях журнала совпадений нет — проставятся при загрузке файла'}`);
+      return getPriceRules(cabinet);
+    }).then(r => r && setRuleList(r.data.data || [])).catch(e => setBulkMsg('Не сохранилось: ' + e.message));
+  };
+  // Взять изменения из журнала цен (последняя загруженная неделя): артикулы с изменённой ценой
+  // попадают в набор с новой ценой и ценой «было» — когда цены на сайте уже поменялись.
+  const [jBusy, setJBusy] = useState(false);
+  const fromJournal = async () => {
+    setJBusy(true);
+    try {
+      const idx = (await getPriceLog(cabinet)).data.data.snaps || [];
+      const last = idx[idx.length - 1];
+      if (!last) { setBulkMsg('В журнале цен нет загрузок'); return; }
+      const sn = (await getPriceSnap(cabinet, 'ozon', last.id)).data.data;
+      const ch = Object.entries(sn.items).filter(([o, b]) => sn.old?.[o] && Math.abs(b - sn.old[o]) >= 0.5);
+      if (!ch.length) { setBulkMsg(`В журнале за ${dayjs(last.date).format('DD.MM')} нет изменённых цен`); return; }
+      if (!window.confirm(`Журнал цен, загрузка ${dayjs(last.date).format('DD.MM.YYYY')}: изменено ${ch.length} арт.\nДобавить их в набор с новыми ценами и ценой «было»? Уже вписанные в наборе цены у этих артикулов заменятся.`)) return;
+      setMode('client');
+      setNp(m => {
+        const n = { ...m };
+        for (const [o, b] of ch) { const r = sn.rule?.[o]; n[o] = { v: b, m: 'client', w: sn.old[o], ...(r ? { r, ra: false } : {}) }; }
+        return n;
+      });
+      onAdd(ch.map(([o]) => o));
+      setChg('ed');
+      setBulkMsg(`Из журнала за ${dayjs(last.date).format('DD.MM')}: ${ch.length} арт. Отфильтруйте (например, «Маржинальность, прогноз» около 0) → «назначить правило» → «Сохранить правила в журнал».`);
+    } catch (e) { setBulkMsg('Журнал не загрузился: ' + e.message); } finally { setJBusy(false); }
+  };
 
   return (
     <div className="tb-set">
@@ -986,6 +1022,8 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
         <span className="a-hint" style={{ margin: 0 }}>{setCount
           ? <>показано <b>{sortedF.length}</b> из {total} арт. · с новой ценой <b className="tb-edn">{shownEd} / {total}</b>{shownEd !== totalEd ? ` (всего ${totalEd})` : ''}</>
           : 'нажмите ＋ у артикула в таблице выше — он появится здесь (в таблице останется отмеченным)'}</span>
+        {!setCount && bulkMsg && <span className="muted">{bulkMsg}</span>}
+        <button type="button" className="a-btn ghost" disabled={jBusy} title="Если цены уже поменяли: взять изменённые артикулы последней загрузки журнала цен с новой ценой и ценой «было»" onClick={fromJournal}>{jBusy ? 'Загрузка…' : '⤓ Из журнала цен'}</button>
         {setCount > 0 && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="tb-lbl" style={{ width: 'auto' }}>новая цена —</span>
@@ -1011,6 +1049,7 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
                 </div>
               )}
             </span>
+            <button type="button" className="a-btn ghost" disabled={!totalEd} title="Запомнить правила показанных артикулов с новой ценой и проставить их в уже загруженные недели журнала цен" onClick={() => savePlans(sortedF)}>Сохранить правила в журнал</button>
             <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Очистить набор?')) { onClear(); setNp({}); } }}>очистить</button>
           </span>
         )}
@@ -1062,10 +1101,10 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
                   <td><div className="a-art"><span className={`tb-dot ${x.newReal ? 'on' : ''}`} title={x.newReal ? 'Новая цена внесена' : 'Без изменений'} /><div style={{ minWidth: 0 }}><div className="id">{x.a.o}</div><div className="model" title={x.a.n || ''}>{x.a.short}</div></div></div></td>
                   <td className="n r">{x.cur ? fmtInt(x.cur) : '—'}</td>
                   <td className="n r">{x.curClient ? fmtInt(x.curClient) : '—'}</td>
-                  <td className="r"><PriceInput value={shownNew(x)} placeholder={fmtInt(mode === 'client' ? x.curClient : x.cur)} onCommit={val => setPrice(x.a.o, val)} /></td>
+                  <td className="r"><PriceInput value={shownNew(x)} placeholder={fmtInt(mode === 'client' ? x.curClient : x.cur)} onCommit={val => setPrice(x.a.o, val)} />{x.o?.w ? <small className="tb-was" title="Цена клиента до изменения — из журнала цен">было {fmtInt(x.o.w)}</small> : null}</td>
                   <td><RuleInput value={x.newReal ? x.o?.r || '' : ''} auto={x.o?.ra} disabled={!x.newReal} listId={listId} onCommit={v => setRule(x.a.o, v)} /></td>
                   <td className="n r" style={{ color: x.res && x.res.profit < 0 ? 'var(--a-bad)' : undefined }}>{x.res ? `${fmtInt(x.res.profit)} ₽` : '—'}</td>
-                  <td className="n r"><b style={{ color: x.res && x.res.margin < 0 ? 'var(--a-bad)' : undefined }}>{x.res ? fmtPct(x.res.margin) : '—'}</b>{x.newReal && x.cur && x.v ? <small className="tb-was">было {fmtPct(compute(x.v, x.cur, 'usn_income').margin)}</small> : null}</td>
+                  <td className="n r"><b style={{ color: x.res && x.res.margin < 0 ? 'var(--a-bad)' : undefined }}>{x.res ? fmtPct(x.res.margin) : '—'}</b>{x.newReal && x.baseReal && x.v ? <small className="tb-was" title={x.wasReal ? 'При цене «было» из журнала цен' : 'При текущей цене'}>было {fmtPct(compute(x.v, x.baseReal, 'usn_income').margin)}</small> : null}</td>
                   {x.vals.map((y, i) => <td key={cols[i].id} className="n r">{cell(y, i)}</td>)}
                   <td className="r"><button type="button" className="tb-x" title="Убрать из набора" onClick={() => onRemove(x.a.o)}>×</button></td>
                 </tr>
