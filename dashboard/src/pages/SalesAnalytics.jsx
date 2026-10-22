@@ -7,6 +7,7 @@ import { unitCoefs, unitProfit } from './unitModel';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { useTax, useBuyerShare } from './finShared';
 import TableBuilder from './TableBuilder';
+import Rnp from './Rnp';
 import DateRangePicker from '../components/DateRangePicker';
 import {
   fmtInt, fmtPct, fmtBy, heatColor, naturalCompare, shortModel, derive, changePct, Delta,
@@ -491,7 +492,7 @@ const FINDER_HINT = {
 };
 
 // ═════════════════════════════════════════════════════════════════════════
-export default function SalesAnalytics({ cabinet }) {
+export default function SalesAnalytics({ cabinet, view }) {
   const today = dayjs().format('YYYY-MM-DD');
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(today);
@@ -986,6 +987,32 @@ export default function SalesAnalytics({ cabinet }) {
     const f = dayjs().subtract(n - 1, 'day').format('YYYY-MM-DD');
     return <button key={n} type="button" className={dateFrom === f && dateTo === today ? 'on' : ''} onClick={() => { setDateFrom(f); setDateTo(today); }}>{n} дн</button>;
   };
+
+  if (view === 'rnp') {
+    const len = dayjs(dateTo).diff(dayjs(dateFrom), 'day') + 1;
+    const prevDates = Array.from({ length: len }, (_, i) => dayjs(dateFrom).subtract(len - i, 'day').format('YYYY-MM-DD'));
+    return (
+      <div className="mpui sa-page">
+        <div className="page-sticky">
+          <div className="a-top">
+            <h1>РНП</h1>
+            <span className="a-seg">{[7, 14, 30, 90].map(periodBtn)}</span>
+            <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
+            {brands.length > 0 && (
+              <select className="a-sel" value={brand} onChange={e => setBrand(e.target.value)} title="Марка автомобиля">
+                <option value="">Все марки авто</option>
+                {brands.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+            )}
+            <ArtSearch value={search} onChange={setSearch} options={all} style={{ minWidth: 200 }} />
+            {loading && <span className="a-hint">обновляем…</span>}
+          </div>
+        </div>
+        <Rnp cabinet={cabinet} data={data} arts={filtered} fin={fin?.pnl || null} finPrev={fin?.pnlPrev || null} prevDates={prevDates}
+          forecast={builderForecast} shareAt={builderShareAt} coefOf={builderCoef} tax={tax} />
+      </div>
+    );
+  }
 
   return (
     <div className="mpui sa-page">
