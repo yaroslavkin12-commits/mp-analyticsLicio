@@ -20,7 +20,7 @@ const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other']
 const OZ_T = { commission: 'Комиссия', logistics: 'Логистика', acquiring: 'Эквайринг', storage: 'Хранение', promo: 'Продвижение и акции', other: 'Прочие услуги' };
 // Суммы по дню (складываются по артикулам и по дням).
 const KEYS = ['views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'adOrders', 'clicks', 'stock', 'stockN',
-  'buyQty', 'buyRub', ...OZ.map(k => 'oz_' + k), 'ozAds', 'nsOther', 'nsAds', 'adLate', 'cost', 'tax', 'profit', 'finAny',
+  'buyQty', 'buyRub', 'nsSale', ...OZ.map(k => 'oz_' + k), 'ozAds', 'nsOther', 'nsAds', 'adLate', 'cost', 'taxBase', 'finAny',
   'fProfit', 'fRev', 'fAny', 'bW', 'bN', 'pW', 'cW', 'wN', 'pS', 'cS', 'pN'];
 const LAST = new Set(['stock', 'stockN']); // остаток — на конец периода, а не сумма
 
@@ -53,7 +53,7 @@ const METRICS = [
   { g: 'Выкуп и прибыль', k: 'profitF', t: 'Прогноз: прибыль, ₽', kind: 'rub', dir: 1, v: S => (S.fAny ? S.fProfit : null) },
   { g: 'Выкуп и прибыль', k: 'marginF', t: 'Прогноз: маржинальность, %', kind: 'pct', dir: 1, v: S => (S.fAny ? pc(S.fProfit, S.fRev) : null) },
   { g: 'Выкуп и прибыль', k: 'profit', t: 'Прибыль факт, ₽', kind: 'rub', dir: 1, fin: true, tip: true, strong: true, v: S => (S.finAny ? S.profit : null) },
-  { g: 'Выкуп и прибыль', k: 'margin', t: 'Маржинальность факт, %', kind: 'pct', dir: 1, fin: true, tip: true, v: S => (S.finAny ? pc(S.profit, S.buyRub) : null) },
+  { g: 'Выкуп и прибыль', k: 'margin', t: 'Маржинальность факт, %', kind: 'pct', dir: 1, fin: true, tip: true, v: S => (S.finAny ? pc(S.profit, S.buyRub + S.nsSale) : null) },
 ];
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
 const fmt = (v, kind) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : kind === 'pct' ? fmtPct(v) : fmtInt(v));
@@ -61,7 +61,11 @@ const LS = 'mp-rnp';
 const ld = (k, d) => { try { const v = JSON.parse(localStorage.getItem(`${LS}:${k}`) || 'null'); return v ?? d; } catch (e) { return d; } };
 const sv = (k, v) => { try { localStorage.setItem(`${LS}:${k}`, JSON.stringify(v)); } catch (e) { /* ignore */ } };
 
-// Начисления Ozon по артикулу и дню (в датах dates) — как в конструкторе и P&L.
+// Начисления Ozon по артикулу и дню (в датах dates) — тем же способом, что «Фактическая
+// прибыль» в «Аналитике продаж» (= «P&L»): удержания и продажи без артикула — по доле
+// выручки дня; реклама без артикула — по доле расхода кабинета за период; реклама за
+// дни, которые Ozon ещё не провёл, — из кабинета; налог — по дням, день с
+// отрицательной базой — 0.
 function finByDay(fin, dates) {
   if (!fin) return null;
   const L = dates.length;
@@ -69,24 +73,29 @@ function finByDay(fin, dates) {
   const pd = fin.dates.map(d => di.get(d));
   const m = new Map();
   const arr = () => new Float64Array(L);
-  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), ad: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null }; m.set(o, x); } return x; };
-  const saleDay = arr(), adDay = arr(), nsOther = arr(), nsAds = arr();
+  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), ad: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null, sTot: 0 }; m.set(o, x); } return x; };
+  const saleDay = arr(), nsOther = arr(), nsSale = arr();
+  let saleAll = 0, adsAll = 0, nsAdsTot = 0;
   fin.articles.forEach((a, i) => { if (fin.cost?.[i]) get(a.o).cost = fin.cost[i]; });
+  const ai = fin.buckets.indexOf('ads');
+  let lastFin = -1; // последний день (индекс начислений), когда реклама уже проведена
+  for (const r of fin.rows) if (r[2] === ai && r[3]) lastFin = Math.max(lastFin, r[1]);
+  for (const [dd, b, a] of fin.noSku || []) if (b === ai && a) lastFin = Math.max(lastFin, dd);
   for (const [pai, dd, b, a, q] of fin.rows) {
     const o = fin.articles[pai]?.o, d = pd[dd]; if (!o || d === undefined) continue;
     const k = fin.buckets[b], x = get(o);
-    if (k === 'sale' || k === 'return') { x.s[d] += a; saleDay[d] += a; x.q[d] += k === 'sale' ? Math.abs(q) : -Math.abs(q); } else if (x.b[k]) x.b[k][d] += a;
+    if (k === 'sale' || k === 'return') { x.s[d] += a; x.sTot += a; saleDay[d] += a; saleAll += a; x.q[d] += k === 'sale' ? Math.abs(q) : -Math.abs(q); } else if (x.b[k]) x.b[k][d] += a;
   }
-  for (const [pai, dd, v] of fin.ads || []) { const o = fin.articles[pai]?.o, d = pd[dd]; if (!o || d === undefined) continue; get(o).ad[d] += v; adDay[d] += v; }
-  let lastFin = -1;
+  const late = new Uint8Array(L);
+  fin.dates.forEach((_, dd) => { const d = pd[dd]; if (d !== undefined && dd > lastFin) late[d] = 1; });
+  for (const [pai, dd, v] of fin.ads || []) { const o = fin.articles[pai]?.o, d = pd[dd]; if (!o || d === undefined) continue; get(o).ad[d] += v; adsAll += v; }
   for (const [dd, b, a] of fin.noSku || []) {
     const d = pd[dd]; if (d === undefined) continue;
     const k = fin.buckets[b];
-    if (k === 'ads') { nsAds[d] += a; if (a) lastFin = Math.max(lastFin, d); } else if (OZ.includes(k)) nsOther[d] += a;
+    if (k === 'ads') nsAdsTot += a; else if (OZ.includes(k)) nsOther[d] += a; else if (k === 'sale' || k === 'return') nsSale[d] += a;
   }
-  const ai = fin.buckets.indexOf('ads');
-  for (const r of fin.rows) if (r[2] === ai && r[3] && pd[r[1]] !== undefined) lastFin = Math.max(lastFin, pd[r[1]]);
-  return { m, saleDay, adDay, nsOther, nsAds, lastFin, L };
+  (fin.adNoSku || []).forEach((v, dd) => { const d = pd[dd]; if (d !== undefined && dd > lastFin && v) nsOther[d] -= v; });
+  return { m, saleDay, nsOther, nsSale, nsAdsTot, adsAll, saleAll, late, L };
 }
 
 // Суммы по дням для одного артикула: { key: Float64Array(L) }.
@@ -115,24 +124,24 @@ function artDays(a, dates, F, ctx) {
   }
   return S;
 }
-// Прибыль артикула за день (пишет в S[...][d]).
+// Начисления артикула за день (пишет в S[...][d]); прибыль считается на уровне ячейки (bucketSum).
 function finDay(S, x, F, d, o, dates, ctx) {
   const s = x.s[d], q = x.q[d];
-  const other = F.nsOther[d] * (F.saleDay[d] ? s / F.saleDay[d] : 0);
-  const nsA = F.nsAds[d] * (F.adDay[d] > 0 ? x.ad[d] / F.adDay[d] : F.saleDay[d] ? s / F.saleDay[d] : 0);
-  const adLate = d > F.lastFin ? x.ad[d] : 0;
-  let oz = 0;
-  for (const k of OZ) { S['oz_' + k][d] = x.b[k][d]; oz += x.b[k][d]; }
-  S.ozAds[d] = x.b.ads[d]; oz += x.b.ads[d];
-  const cost = (x.cost || 0) * Math.max(0, q);
-  const tax = s ? s * (ctx.shareAt ? (ctx.shareAt(o, dates[d]) ?? 1) : 1) * (ctx.tax || 0) / 100 : 0;
-  S.buyQty[d] = q; S.buyRub[d] = s; S.nsOther[d] = other; S.nsAds[d] = nsA; S.adLate[d] = adLate; S.cost[d] = cost; S.tax[d] = tax;
-  S.profit[d] = s + oz + other + nsA - adLate - cost - tax;
-  if (s || q || oz || adLate) S.finAny[d] = 1;
+  const sh = F.saleDay[d] > 0 ? s / F.saleDay[d] : F.saleAll > 0 ? x.sTot / F.saleAll : 0;
+  const nsA = F.nsAdsTot * (F.adsAll > 0 ? x.ad[d] / F.adsAll : F.saleAll > 0 ? s / F.saleAll : 0);
+  const adLate = F.late[d] ? x.ad[d] : 0;
+  let any = 0;
+  for (const k of OZ) { S['oz_' + k][d] = x.b[k][d]; any ||= x.b[k][d]; }
+  S.ozAds[d] = x.b.ads[d];
+  const k0 = ctx.coefOf ? ctx.coefOf(o) : null;
+  const cost = (k0?.cost || x.cost || 0) * q;
+  S.buyQty[d] = q; S.buyRub[d] = s; S.nsSale[d] = F.nsSale[d] * sh; S.nsOther[d] = F.nsOther[d] * sh; S.nsAds[d] = nsA; S.adLate[d] = adLate; S.cost[d] = cost;
+  S.taxBase[d] = s ? s * (ctx.shareAt ? (ctx.shareAt(o, dates[d]) ?? 1) : 1) : 0;
+  if (s || q || any || x.b.ads[d] || adLate || S.nsOther[d] || nsA) S.finAny[d] = 1;
 }
 const addInto = (T, S) => { for (const k of KEYS) { const a = T[k], b = S[k]; for (let i = 0; i < a.length; i++) a[i] += b[i]; } };
 // Ячейка периода: суммы по набору дней (остаток — последний день с данными).
-function bucketSum(S, idx) {
+function bucketSum(S, idx, taxPct) {
   const out = {};
   for (const k of KEYS) {
     if (LAST.has(k)) continue;
@@ -140,18 +149,23 @@ function bucketSum(S, idx) {
   }
   let li = -1; for (const i of idx) if (S.stockN[i] > 0 && i > li) li = i;
   out.stock = li >= 0 ? S.stock[li] : 0; out.stockN = li >= 0 ? S.stockN[li] : 0;
+  // Налог — по дням (день с отрицательной базой — 0), прибыль — как в «P&L».
+  let tb = 0; for (const i of idx) if (S.taxBase[i] > 0) tb += S.taxBase[i];
+  out.tax = tb * (taxPct || 0) / 100;
+  let oz = out.ozAds; for (const k of OZ) oz += out['oz_' + k];
+  out.profit = out.buyRub + out.nsSale + oz + out.nsOther + out.nsAds - out.adLate - out.cost - out.tax;
   return out;
 }
 
 // Цвет ячейки в строке: зелёный — лучше, красный — хуже (относительно соседних дней).
-function heat(vals, dir) {
+function heat(vals, dir, skip) {
   if (!dir) return vals.map(() => null);
-  const f = vals.filter(v => v !== null && Number.isFinite(v));
+  const f = vals.filter((v, i) => !skip[i] && v !== null && Number.isFinite(v));
   if (f.length < 3) return vals.map(() => null);
   const mn = Math.min(...f), mx = Math.max(...f);
   if (mx - mn < 1e-9) return vals.map(() => null);
-  return vals.map(v => {
-    if (v === null || !Number.isFinite(v)) return null;
+  return vals.map((v, i) => {
+    if (skip[i] || v === null || !Number.isFinite(v)) return null;
     let t = (v - mn) / (mx - mn); if (dir < 0) t = 1 - t;
     const s = Math.abs(t - 0.5) * 2;
     if (s < 0.12) return null;
@@ -222,20 +236,17 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   const Fp = useMemo(() => (finPrev && prevDates ? finByDay(finPrev, prevDates) : null), [finPrev, prevDates]);
   const prevOf = useMemo(() => {
     const m = new Map();
+    const PL = prevDates ? prevDates.length : 0;
     for (const a of arts) {
       const p = a.prev; const P = Object.fromEntries(KEYS.map(k => [k, 0]));
       if (p) { P.views = p.views; P.pdp = p.pdpViews; P.cart = p.cart; P.orders = p.orders; P.revenue = p.revenue; P.spend = p.spend; P.adOrders = p.adOrders; P.has = 1; }
       const x = Fp && Fp.m.get(a.o);
-      if (x) {
-        const S = {}; for (const k of KEYS) S[k] = new Float64Array(prevDates.length);
-        for (let d = 0; d < prevDates.length; d++) finDay(S, x, Fp, d, a.o, prevDates, { shareAt, tax });
-        for (const k of ['buyQty', 'buyRub', 'profit', 'finAny']) { let v = 0; for (const y of S[k]) v += y; P[k] = v; }
-        P.hasFin = 1;
-      }
-      m.set(a.o, P);
+      let D = null;
+      if (x) { D = {}; for (const k of KEYS) D[k] = new Float64Array(PL); for (let d = 0; d < PL; d++) finDay(D, x, Fp, d, a.o, prevDates, { shareAt, coefOf }); }
+      m.set(a.o, { P, D });
     }
     return m;
-  }, [arts, Fp, prevDates, shareAt, tax]);
+  }, [arts, Fp, prevDates, shareAt, coefOf]);
 
   // Дерево: категории или группы «Рекламы».
   const tree = useMemo(() => {
@@ -272,7 +283,18 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   };
   const prevSum = list => {
     const P = Object.fromEntries(KEYS.map(k => [k, 0])); let has = 0, hasFin = 0;
-    for (const o of list) { const p = prevOf.get(o); if (!p) continue; for (const k of KEYS) P[k] += p[k] || 0; has |= p.has || 0; hasFin |= p.hasFin || 0; }
+    const PL = prevDates ? prevDates.length : 0;
+    const D = {}; for (const k of KEYS) D[k] = new Float64Array(PL);
+    for (const o of list) {
+      const p = prevOf.get(o); if (!p) continue;
+      for (const k of ['views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'adOrders']) P[k] += p.P[k] || 0;
+      has |= p.P.has || 0;
+      if (p.D) { addInto(D, p.D); hasFin = 1; }
+    }
+    if (hasFin) {
+      const F2 = bucketSum(D, Array.from({ length: PL }, (_, i) => i), tax);
+      for (const k of ['buyQty', 'buyRub', 'profit', 'finAny']) P[k] = F2[k];
+    }
     return { P, has, hasFin };
   };
 
@@ -284,12 +306,16 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
       dates.forEach((d, i) => { const k = gran === 'week' ? dayjs(d).subtract((dayjs(d).day() + 6) % 7, 'day').format('YYYY-MM-DD') : d.slice(0, 8) + '01'; if (!map.has(k)) map.set(k, []); map.get(k).push(i); });
       b = [...map.entries()].map(([key, idx]) => ({ key, idx }));
     }
+    // Сегодняшний день неполный — в подсветке не участвует.
+    const today = dayjs().format('YYYY-MM-DD');
+    for (const x of b) x.partial = x.idx.some(i => dates[i] === today);
     return b.reverse(); // свежие слева
   }, [dates, gran]);
+  const skip = useMemo(() => buckets.map(b => b.partial), [buckets]);
   const allIdx = useMemo(() => dates.map((_, i) => i), [dates]);
   const bLabel = b => {
     const d = dayjs(b.key);
-    if (gran === 'day') return { t: d.format('DD.MM'), s: ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][d.day()], we: d.day() === 0 || d.day() === 6 };
+    if (gran === 'day') return { t: d.format('DD.MM'), s: b.partial ? 'сегодня' : ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][d.day()], we: d.day() === 0 || d.day() === 6 };
     if (gran === 'week') return { t: `${d.format('DD.MM')}–${d.add(6, 'day').format('DD.MM')}`, s: `нед · ${b.idx.length} дн` };
     return { t: d.format('MM.YYYY'), s: `${b.idx.length} дн` };
   };
@@ -308,9 +334,9 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   const block = (node, depth, isArt) => {
     const list = node.arts;
     const T = daysOf(node.key, list);
-    const tot = bucketSum(T, allIdx);
+    const tot = bucketSum(T, allIdx, tax);
     const { P, has, hasFin } = prevSum(list);
-    const cells = buckets.map(b => bucketSum(T, b.idx));
+    const cells = buckets.map(b => bucketSum(T, b.idx, tax));
     const perDayTot = tot.orders / fullL;
     const tr = list.reduce((s, o) => s + (Number(transit[o]?.q) || 0), 0);
     const kids = isArt ? [] : node.kids.length ? node.kids : list.map(o => ({ key: 'a:' + o, o, name: o, arts: [o], kids: [], art: true }));
@@ -339,7 +365,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
           {shownMets.map((m, mi) => {
             // «Запаса хватит» — от средних заказов в день за весь период.
             const vals = cells.map(S => m.v(S, { perDay: perDayTot }));
-            const hs = heat(vals, m.dir);
+            const hs = heat(vals, m.dir, skip);
             const vTot = m.k === 'transit' ? (tr || null) : m.k === 'cover' ? (tot.stockN && perDayTot > 0 ? tot.stock / perDayTot : null) : m.v(tot, { perDay: perDayTot });
             const prevOk = m.fin ? hasFin : has;
             const vPrev = !prevOk || ['stock', 'cover', 'transit', 'price', 'client', 'spp', 'buyout', 'profitF', 'marginF'].includes(m.k) ? null : m.v(P, { perDay: 0 });
@@ -381,6 +407,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   const T = tip?.S;
   const tipRows = T ? [
     ['Выкупы (за вычетом возвратов)', T.buyRub, true],
+    ['Продажи без артикула (доля)', T.nsSale],
     ...OZ.map(k => [OZ_T[k], T['oz_' + k]]),
     ['Прочее без артикула (доля)', T.nsOther],
     ['Реклама', T.ozAds + T.nsAds - T.adLate],
@@ -427,7 +454,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
               <th className="r rnp-tot">Итого</th>
               <th className="r rnp-prev" title="Такой же по длине период перед выбранным">Пред. период</th>
               <th className="r rnp-dyn">Динамика</th>
-              {buckets.map(b => { const l = bLabel(b); return <th key={b.key} className={`r rnp-d ${l.we ? 'we' : ''}`}><div>{l.t}</div><small>{l.s}</small></th>; })}
+              {buckets.map(b => { const l = bLabel(b); return <th key={b.key} className={`r rnp-d ${l.we ? 'we' : ''} ${b.partial ? 'part' : ''}`} title={b.partial ? 'Сегодня — день ещё идёт, в подсветке не участвует' : undefined}><div>{l.t}</div><small>{l.s}</small></th>; })}
             </tr></thead>
             {block(tree.root, 0, false)}
           </table>

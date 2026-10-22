@@ -366,3 +366,4 @@
 .mpui .rnp-tr.tot b { font-weight: 700; font-size: 15px; }
 .mpui .rnp-tipn { color: var(--a-ink3); font-size: 11px; margin-top: 8px; line-height: 1.35; }
 @media (max-width: 760px) { .mpui .rnp-t .rnp-name { width: 120px; min-width: 120px; max-width: 120px; } .mpui .rnp-t .rnp-m { left: 120px; min-width: 150px; } .mpui .rnp-pick { min-width: 300px; grid-template-columns: 1fr; } }
+.mpui .rnp-t thead th.part small { color: var(--a-accent); }
