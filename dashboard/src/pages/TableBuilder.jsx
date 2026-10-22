@@ -3,6 +3,7 @@ import { compute, priceFor } from './Calculator';
 import dayjs from 'dayjs';
 import { getSalesData, getFinancePnl, getSewing, saveSewing, getBuilderTemplates, saveBuilderTemplates, getCalcBase, getPriceRules, savePriceRules, savePricePlans, getSeason, getProduction } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
+import ArtSearch, { artFilter } from '../components/ArtSearch';
 import { fmtInt, fmtPct } from './AdsStats2';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -376,7 +377,13 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
 
   const ctl = useTableCtl(`builder-${cabinet}`);
   // «Пустые» строки — все значения нулевые или пустые (обычно артикулы без движения).
-  const rowsIn = useMemo(() => (hideEmpty ? table.rows.filter(r => r.vals.some(x => (x.v && Number.isFinite(x.v)) || (x.p && Number.isFinite(x.p)))) : table.rows), [table.rows, hideEmpty]);
+  // Поиск по артикулу или названию (в режиме категорий — по названию строки).
+  const [q, setQ] = useState('');
+  const rowsIn = useMemo(() => {
+    let r = hideEmpty ? table.rows.filter(x => x.vals.some(v => (v.v && Number.isFinite(v.v)) || (v.p && Number.isFinite(v.p)))) : table.rows;
+    if (q.trim()) r = cfg.rows === 'art' ? artFilter(r, q, x => x.a?.o || '', x => `${x.a?.n || ''} ${x.a?.cat || ''}`) : r.filter(x => String(x.name).toLowerCase().includes(q.trim().toLowerCase()));
+    return r;
+  }, [table.rows, hideEmpty, q, cfg.rows]);
   const shown = useMemo(() => ctl.apply(rowsIn, (r, k) => {
     if (k === '__name') return r.name;
     if (k === '__cat') return r.cat;
@@ -675,6 +682,10 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         <button type="button" className="a-toggle" style={{ marginLeft: 8 }} onClick={() => setHideEmpty(v => !v)} title="Не показывать строки, где во всех столбцах ноль или пусто">
           <span className={`a-sw ${hideEmpty ? 'on' : ''}`} />Скрыть пустые
         </button>
+        {cfg.rows === 'art'
+          ? <ArtSearch value={q} onChange={setQ} options={arts} style={{ marginLeft: 'auto', minWidth: 240 }} />
+          : <input className="a-input" style={{ marginLeft: 'auto', minWidth: 240 }} placeholder="Поиск по названию строки" value={q} onChange={e => setQ(e.target.value)} />}
+        {q && <span className="a-hint" style={{ margin: 0 }}>найдено {rowsIn.length}</span>}
       </div>
       <div className="tb-bar">
         <span className="tb-lbl">Категория</span>
@@ -957,7 +968,11 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
   }), [model, ctl, cols]); // eslint-disable-line react-hooks/exhaustive-deps
   // Фильтр «изменённые»: все / с новой ценой / без неё.
   const [chg, setChg] = useState('');
-  const sortedF = useMemo(() => (chg === 'ed' ? sorted.filter(x => x.newReal) : chg === 'no' ? sorted.filter(x => !x.newReal) : sorted), [sorted, chg]);
+  const [sq, setSq] = useState('');
+  const sortedF = useMemo(() => {
+    const r = chg === 'ed' ? sorted.filter(x => x.newReal) : chg === 'no' ? sorted.filter(x => !x.newReal) : sorted;
+    return sq.trim() ? artFilter(r, sq, x => x.a.o, x => `${x.a.n || ''} ${x.a.cat || ''}`) : r;
+  }, [sorted, chg, sq]);
   const total = model.length, totalEd = model.filter(x => x.newReal).length, shownEd = sortedF.filter(x => x.newReal).length;
   // Массовое изменение цены у показанных строк (по текущим фильтрам набора).
   const [bulk, setBulk] = useState({ kind: 'rub-', val: '', skip: true });
@@ -1096,6 +1111,7 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
           <span className="a-seg" style={{ marginLeft: 'auto' }}>
             {[['', 'все'], ['ed', `с новой ценой (${totalEd})`], ['no', `без неё (${total - totalEd})`]].map(([k, t]) => <button key={k} type="button" className={chg === k ? 'on' : ''} onClick={() => setChg(k)}>{t}</button>)}
           </span>
+          <ArtSearch value={sq} onChange={setSq} options={rows.map(x => x.a)} style={{ minWidth: 200 }} />
           <ResetCtl ctl={ctl} />
         </div>
       )}
