@@ -193,8 +193,23 @@ router.get('/pnl', async (req, res) => {
     const adRowsOut = [...ads.entries()].map(([k, v]) => { const [ai, d] = k.split('|').map(Number); return [ai, d, r2(v)]; });
     const cost = new Map();
     for (const r of costs) if (!r.cabinet || familyOf(r.cabinet) === familyOf(cabinet)) cost.set(r.article, num(r.cost_price));
+    // Самовыкупы: штуки, за которые себестоимость не вычитается — сопоставлены с продажами
+    // SKU в начислениях начиная с дня заказа: [ai, di, шт].
+    const self = [];
+    {
+      const OF = require('../lib/orderFeed');
+      const ext = dayjs(from).subtract(45, 'day').format('YYYY-MM-DD');
+      const saleRows = await query(`SELECT date::text d, sku, name, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 AND sku IS NOT NULL GROUP BY date, sku, name`, [cabinet, ext, to]).catch(() => []);
+      const sales = [];
+      for (const r of saleRows) { const b = bucketOf(r.name); if (b === 'sale') sales.push({ sku: r.sku, d: r.d, q: Math.abs(num(r.q)) }); }
+      const matched = await OF.matchToSales(cabinet, sales, ext, to).catch(() => new Map());
+      for (const [k, q] of matched) {
+        const [sku, d0] = k.split('|'); const d = di.get(d0); const o = m.offerBySku.get(String(sku));
+        if (d !== undefined && o && q) self.push([m.art(o), d, q]);
+      }
+    }
     res.json({ success: true, data: {
-      dates, articles: m.articles, buckets: BUCKET_KEYS, rows, noSku, ads: adRowsOut, adNoSku: adNoSku.map(r2),
+      dates, articles: m.articles, buckets: BUCKET_KEYS, rows, noSku, ads: adRowsOut, adNoSku: adNoSku.map(r2), self,
       cost: m.articles.map(a => (cost.has(a.o) ? cost.get(a.o) : null)), available: range[0] || null, order: ORDER[cabinet] || [],
     } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }

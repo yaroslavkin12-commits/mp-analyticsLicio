@@ -136,11 +136,13 @@ async function trackedOf(cabinet) {
   return list;
 }
 async function pollOrdersFromSheet(cabinet) {
-  const tracked = await trackedOf(cabinet);
-  if (!tracked.length) return 0;
   const { fetchSheetRows } = require('./ads/sheetSync');
   const rows = await fetchSheetRows('Orders', cabinet);
   if (!rows) return 0;
+  // Лента заказов (страница «Лента заказов») — копим все отправления.
+  await require('../lib/orderFeed').ingest(cabinet, rows).catch(e => console.warn(`[OrderFeed:${cabinet}]`, e.message));
+  const tracked = await trackedOf(cabinet);
+  if (!tracked.length) return 0;
   const cutoff = Date.now() - NOTIFY_MAX_AGE_HOURS * 3600 * 1000;
   let seen = SEEN.get(cabinet);
   if (!seen) { seen = new Set(); SEEN.set(cabinet, seen); }

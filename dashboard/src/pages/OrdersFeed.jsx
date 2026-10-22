@@ -1,0 +1,166 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import dayjs from 'dayjs';
+import { getOrderFeed, setSelfBuyout } from '../api';
+import DateRangePicker from '../components/DateRangePicker';
+import ArtSearch, { artFilter } from '../components/ArtSearch';
+import { fmtInt } from './AdsStats2';
+import './ads2.css';
+import './sales.css';
+
+// ─────────────────────────────────────────────────────────────────────────
+// «Лента заказов» — все отправления Ozon по мере поступления (их каждые
+// 5 минут кладёт во вкладку Orders Google-скрипт, сервис копит их в базе).
+// Здесь же отмечаются самовыкупы: такие заказы не считаются в заказах
+// («Аналитика продаж», РНП, «Реклама»), а в деньгах за них не вычитается
+// себестоимость — товар остаётся у нас.
+// ─────────────────────────────────────────────────────────────────────────
+
+const ST = {
+  awaiting_packaging: 'ожидает сборки', awaiting_deliver: 'ожидает отгрузки', delivering: 'доставляется', driver_pickup: 'у водителя',
+  delivered: 'доставлен', cancelled: 'отменён', awaiting_registration: 'регистрация', acceptance_in_progress: 'приёмка', not_accepted: 'не принят',
+  arbitration: 'спор', client_arbitration: 'спор', awaiting_approve: 'ожидает подтверждения', sent_by_seller: 'отправлен продавцом',
+};
+const msk = iso => dayjs(new Date(Date.parse(iso) + 3 * 3600e3).toISOString().slice(0, 19));
+
+export default function OrdersFeed({ cabinet }) {
+  const today = dayjs().format('YYYY-MM-DD');
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState('');
+  const [view, setView] = useState('all'); // all | self | real
+  const [hideCancel, setHideCancel] = useState(true);
+  const [picked, setPicked] = useState(new Set());
+  const [limit, setLimit] = useState(200);
+
+  const load = useCallback(() => {
+    setErr('');
+    return getOrderFeed(cabinet, from, to).then(r => setD(r.data.data)).catch(e => setErr(e.response?.data?.error || e.message));
+  }, [cabinet, from, to]);
+  useEffect(() => { setD(null); setPicked(new Set()); load(); }, [load]);
+  // Свежие заказы — обновление раз в минуту, пока вкладка открыта.
+  useEffect(() => { const t = setInterval(() => { if (!document.hidden) load(); }, 60000); return () => clearInterval(t); }, [load]);
+
+  const key = r => `${r.p}|${r.sku}`;
+  const rows = useMemo(() => {
+    let r = d?.rows || [];
+    if (hideCancel) r = r.filter(x => x.st !== 'cancelled');
+    if (view === 'self') r = r.filter(x => x.self); else if (view === 'real') r = r.filter(x => !x.self);
+    return q.trim() ? artFilter(r, q, x => x.o || '', x => `${x.n || ''} ${x.p}`) : r;
+  }, [d, q, view, hideCancel]);
+  const sum = useMemo(() => {
+    const all = (d?.rows || []).filter(x => x.st !== 'cancelled');
+    const s = { n: 0, q: 0, r: 0, sn: 0, sq: 0, sr: 0, c: (d?.rows || []).length - all.length };
+    for (const x of all) { const v = x.price * x.qty; if (x.self) { s.sn++; s.sq += x.qty; s.sr += v; } else { s.n++; s.q += x.qty; s.r += v; } }
+    return s;
+  }, [d]);
+  const opts = useMemo(() => { const m = new Map(); for (const x of d?.rows || []) if (x.o && !m.has(x.o)) m.set(x.o, { o: x.o, n: x.n }); return [...m.values()]; }, [d]);
+
+  const mark = async (items, on) => {
+    setBusy(true);
+    try {
+      await setSelfBuyout(cabinet, items.map(x => ({ p: x.p, sku: x.sku })), on);
+      setD(cur => cur && ({ ...cur, rows: cur.rows.map(x => (items.some(y => key(y) === key(x)) ? { ...x, self: on } : x)) }));
+      setPicked(new Set());
+    } catch (e) { setErr(e.response?.data?.error || e.message); } finally { setBusy(false); }
+  };
+  const pickedRows = rows.filter(x => picked.has(key(x)));
+  const toggle = x => setPicked(s => { const n = new Set(s); if (n.has(key(x))) n.delete(key(x)); else n.add(key(x)); return n; });
+  const period = n => { const f = dayjs().subtract(n - 1, 'day').format('YYYY-MM-DD'); return <button key={n} type="button" className={from === f && to === today ? 'on' : ''} onClick={() => { setFrom(f); setTo(today); }}>{n === 1 ? 'Сегодня' : `${n} дн`}</button>; };
+  const yest = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
+  // Разделители по дням.
+  let lastDay = '';
+  const shown = rows.slice(0, limit);
+
+  return (
+    <div className="mpui">
+      <div className="page-sticky">
+        <div className="a-top">
+          <h1>Лента заказов</h1>
+          <span className="a-seg">
+            {period(1)}
+            <button type="button" className={from === yest && to === yest ? 'on' : ''} onClick={() => { setFrom(yest); setTo(yest); }}>Вчера</button>
+            {[7, 30].map(period)}
+          </span>
+          <DateRangePicker from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
+          <ArtSearch value={q} onChange={setQ} options={opts} placeholder="Артикул, название или номер отправления" style={{ minWidth: 260 }} />
+        </div>
+      </div>
+      {err && <div className="c-msg bad" style={{ margin: '10px 0' }}>{err}</div>}
+      {!d && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
+      {d && (
+        <>
+          <div className="cl-kpis">
+            <div className="a-kpi"><span className="lbl">Заказы</span><span className="val">{fmtInt(sum.n)}</span><span className="sub">{fmtInt(sum.q)} шт · {fmtInt(sum.r)} ₽</span></div>
+            <div className="a-kpi"><span className="lbl">Самовыкупы</span><span className="val" style={{ color: sum.sn ? 'var(--a-accent)' : undefined }}>{fmtInt(sum.sn)}</span><span className="sub">{fmtInt(sum.sq)} шт · {fmtInt(sum.sr)} ₽ — не в заказах</span></div>
+            <div className="a-kpi"><span className="lbl">Средний чек</span><span className="val">{sum.q ? fmtInt(sum.r / sum.q) : '—'}</span><span className="sub">без самовыкупов, ₽ за шт</span></div>
+            <div className="a-kpi"><span className="lbl">Отменено</span><span className="val">{fmtInt(sum.c)}</span><span className="sub">за период</span></div>
+          </div>
+          <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 8px' }}>
+            <span className="a-seg">{[['all', 'Все'], ['real', 'Заказы'], ['self', `Самовыкупы (${sum.sn})`]].map(([k, t]) => <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => setView(k)}>{t}</button>)}</span>
+            <button type="button" className="a-toggle" onClick={() => setHideCancel(v => !v)}><span className={`a-sw ${hideCancel ? 'on' : ''}`} />Скрыть отменённые</button>
+            {pickedRows.length > 0 && (
+              <span className="of-bulk">
+                Выбрано {pickedRows.length}:
+                <button type="button" className="a-btn" disabled={busy} onClick={() => mark(pickedRows, true)}>Отметить самовыкупом</button>
+                <button type="button" className="a-btn ghost" disabled={busy} onClick={() => mark(pickedRows, false)}>снять отметку</button>
+                <button type="button" className="a-btn ghost" onClick={() => setPicked(new Set())}>сбросить выбор</button>
+              </span>
+            )}
+            <span className="a-hint" style={{ margin: '0 0 0 auto' }}>
+              обновляется раз в минуту{d.since ? ` · лента копится с ${msk(d.since).format('DD.MM.YYYY')}` : ''}
+            </span>
+          </div>
+          <div className="a-card" style={{ padding: 0 }}>
+            <div className="a-scroll">
+              <table className="a-t of-t">
+                <thead><tr>
+                  <th style={{ width: 30 }}><input type="checkbox" checked={shown.length > 0 && shown.every(x => picked.has(key(x)))} onChange={e => setPicked(e.target.checked ? new Set(shown.map(key)) : new Set())} title="Выбрать все показанные" /></th>
+                  <th className="l">Время</th>
+                  <th className="l">Артикул</th>
+                  <th className="r">Кол-во</th>
+                  <th className="r">Цена</th>
+                  <th className="r">Сумма</th>
+                  <th className="l">Схема · склад</th>
+                  <th className="l">Статус</th>
+                  <th className="l" title="Самовыкуп не считается в заказах, а себестоимость за него не вычитается">Самовыкуп</th>
+                </tr></thead>
+                <tbody>
+                  {!shown.length && <tr><td colSpan={9} className="muted" style={{ padding: 16, textAlign: 'center' }}>Заказов нет</td></tr>}
+                  {shown.map(x => {
+                    const t = x.at ? msk(x.at) : null;
+                    const day = t ? t.format('YYYY-MM-DD') : '';
+                    const sep = day !== lastDay ? (lastDay = day, true) : false;
+                    return (
+                      <React.Fragment key={key(x)}>
+                        {sep && rows.length && <tr className="of-day"><td colSpan={9}>{t ? t.format('dddd, D MMMM').replace(/^./, c => c.toUpperCase()) : '—'}</td></tr>}
+                        <tr className={`${x.self ? 'of-self' : ''} ${x.st === 'cancelled' ? 'of-cancel' : ''} ${picked.has(key(x)) ? 'pr-in-order' : ''}`}>
+                          <td><input type="checkbox" checked={picked.has(key(x))} onChange={() => toggle(x)} /></td>
+                          <td className="l n">{t ? t.format('HH:mm') : '—'}<small className="of-sub">{x.p}</small></td>
+                          <td className="l"><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.o || x.sku}</div><div className="model" title={x.n}>{x.n}</div></div></div></td>
+                          <td className="n r">{x.qty}</td>
+                          <td className="n r">{fmtInt(x.price)}</td>
+                          <td className="n r"><b>{fmtInt(x.price * x.qty)}</b></td>
+                          <td className="l"><span className="of-sch">{String(x.sch || '').toUpperCase()}</span> <span className="muted">{x.wh}</span></td>
+                          <td className="l">{ST[x.st] || x.st || '—'}</td>
+                          <td className="l">
+                            <button type="button" className={`of-self-btn ${x.self ? 'on' : ''}`} disabled={busy} onClick={() => mark([x], !x.self)}
+                              title={x.self ? 'Снять отметку — заказ снова будет считаться обычным' : 'Отметить самовыкупом'}>{x.self ? 'самовыкуп ✓' : 'отметить'}</button>
+                          </td>
+                        </tr>
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {rows.length > limit && <button type="button" className="s-fold" onClick={() => setLimit(l => l + 300)}>Показать ещё {Math.min(300, rows.length - limit)} из {rows.length - limit} ▼</button>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

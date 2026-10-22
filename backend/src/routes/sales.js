@@ -174,6 +174,19 @@ router.get('/data', async (req, res) => {
         : Promise.resolve([]),
     ]);
     const tQ = Date.now();
+    // Самовыкупы (лента заказов) — не заказы: убираем по дню заказа.
+    const OF = require('../lib/orderFeed');
+    const selfDay = await OF.selfByDay(cabinet, from, to);
+    const selfRows = [];
+    if (selfDay.size) {
+      const cp = anRows.map(r => ({ ...r }));
+      OF.applyToAnalytics(anRows, selfDay);
+      anRows.forEach((r, i) => { const dq = Number(cp[i].orders_item) - r.orders_item, dr = Number(cp[i].revenue) - r.revenue; if (dq > 0 || dr > 0) selfRows.push({ sku: r.sku, offer_id: r.offer_id, date: r.date, q: dq, r: dr }); });
+    }
+    if (compare && prevAnRows.length) {
+      const sp = await OF.selfBySku(cabinet, pFrom, pTo);
+      for (const r of prevAnRows) { const s = sp.get(String(r.sku)); if (!s) continue; const dq = Math.min(Number(r.o) || 0, s.q), dr = Math.min(Number(r.r) || 0, s.r); r.o = (Number(r.o) || 0) - dq; r.r = (Number(r.r) || 0) - dr; s.q -= dq; s.r -= dr; }
+    }
 
     const offerBySku = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
     const override = new Map(overrideRows.map(r => [r.offer_id, r.path]));
@@ -292,6 +305,8 @@ router.get('/data', async (req, res) => {
       success: true,
       data: {
         dates, articles, rows: outRows, stock, prev,
+        // Самовыкупы по дню заказа: [ai, di, шт, ₽] (уже вычтены из заказов).
+        self: selfRows.map(x => { const o = offerOf(x); const d = di.get(x.date); return o && idx.has(o) && d !== undefined ? [idx.get(o), d, x.q, r2(x.r)] : null; }).filter(Boolean),
         unallocated: { cur: r2(unallocatedCur), prev: r2(unallocatedPrev), byDate: unallocatedByDate },
         order: ORDER[cabinet] || [],
       },

@@ -593,6 +593,8 @@ export default function SalesAnalytics({ cabinet, view }) {
     // Реклама кабинета без артикула за дни, которых ещё нет в начислениях, — как в «P&L».
     (pnl.adNoSku || []).forEach((v, d) => { if (d > lastFin && v) noSkuDay[d] -= v; });
     for (const x of m.values()) saleAll += x.sRub;
+    // Самовыкупы — себестоимость за эти штуки не вычитается.
+    for (const [pai, , q] of pnl.self || []) { const o = pnl.articles[pai]?.o; const x = o && m.get(o); if (x) x.selfQ = (x.selfQ || 0) + q; }
     return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -675,7 +677,7 @@ export default function SalesAnalytics({ cabinet, view }) {
         sRub += x.sRub; sQty += x.sQty; oz += x.oz;
         // Налоговая база — как в «P&L»: по дням, доля оплаты покупателем из отчёта «Начисления» того периода.
         { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxDay[d] += x.sDay[d] * (bsF.shareAt ? (bsF.shareAt(a.o, parts, finPer.dates[d]) ?? 1) : 1); }
-        if (k?.cost) cost += k.cost * x.sQty; else if (x.sQty > 0) noCost++;
+        if (k?.cost) cost += k.cost * (x.sQty - (x.selfQ || 0)); else if (x.sQty > 0) noCost++;
       }
       // Прогноз — по дням, как в «Юнит-экономике»: комиссия по доле FBS
       // именно этого дня, реклама — и в дни без заказов.

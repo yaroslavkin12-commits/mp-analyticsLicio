@@ -19,7 +19,7 @@ const SEP = ' / ';
 const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other'];
 const OZ_T = { commission: 'Комиссия', logistics: 'Логистика', acquiring: 'Эквайринг', storage: 'Хранение', promo: 'Продвижение и акции', other: 'Прочие услуги' };
 // Суммы по дню (складываются по артикулам и по дням).
-const KEYS = ['views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'adOrders', 'clicks', 'stock', 'stockN',
+const KEYS = ['selfQ', 'selfR', 'views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'adOrders', 'clicks', 'stock', 'stockN',
   'buyQty', 'buyRub', 'nsSale', ...OZ.map(k => 'oz_' + k), 'ozAds', 'nsOther', 'nsAds', 'adLate', 'cost', 'taxBase', 'finAny',
   'fProfit', 'fRev', 'fAny', 'bW', 'bN', 'pW', 'cW', 'wN', 'pS', 'cS', 'pN'];
 const LAST = new Set(['stock', 'stockN']); // остаток — на конец периода, а не сумма
@@ -37,6 +37,8 @@ const METRICS = [
   { g: 'Заказы', k: 'orders', t: 'Заказы, шт', kind: 'int', dir: 1, v: S => S.orders, strong: true },
   { g: 'Заказы', k: 'revenue', t: 'Заказы, ₽', kind: 'rub', dir: 1, v: S => S.revenue, strong: true },
   { g: 'Заказы', k: 'avgCheck', t: 'Средний чек, ₽', kind: 'rub', dir: 0, v: S => d0(S.revenue, S.orders) },
+  { g: 'Заказы', k: 'selfQ', t: 'Самовыкупы, шт (не в заказах)', kind: 'int', dir: 0, v: S => S.selfQ },
+  { g: 'Заказы', k: 'selfR', t: 'Самовыкупы, ₽', kind: 'rub', dir: 0, v: S => S.selfR },
   { g: 'Цена', k: 'price', t: 'Цена до СПП, ₽', kind: 'rub', dir: 0, v: S => (S.wN ? S.pW / S.wN : d0(S.pS, S.pN)) },
   { g: 'Цена', k: 'client', t: 'Цена после СПП, ₽', kind: 'rub', dir: 0, v: S => (S.wN ? S.cW / S.wN : d0(S.cS, S.pN)) },
   { g: 'Цена', k: 'spp', t: 'СПП, %', kind: 'pct', dir: 0, v: S => { const p = S.wN ? S.pW / S.wN : d0(S.pS, S.pN), c = S.wN ? S.cW / S.wN : d0(S.cS, S.pN); return p && c ? (1 - c / p) * 100 : null; } },
@@ -73,7 +75,7 @@ function finByDay(fin, dates) {
   const pd = fin.dates.map(d => di.get(d));
   const m = new Map();
   const arr = () => new Float64Array(L);
-  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), ad: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null, sTot: 0 }; m.set(o, x); } return x; };
+  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), ad: arr(), self: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null, sTot: 0 }; m.set(o, x); } return x; };
   const saleDay = arr(), nsOther = arr(), nsSale = arr();
   let saleAll = 0, adsAll = 0, nsAdsTot = 0;
   fin.articles.forEach((a, i) => { if (fin.cost?.[i]) get(a.o).cost = fin.cost[i]; });
@@ -89,6 +91,7 @@ function finByDay(fin, dates) {
   const late = new Uint8Array(L);
   fin.dates.forEach((_, dd) => { const d = pd[dd]; if (d !== undefined && dd > lastFin) late[d] = 1; });
   for (const [pai, dd, v] of fin.ads || []) { const o = fin.articles[pai]?.o, d = pd[dd]; if (!o || d === undefined) continue; get(o).ad[d] += v; adsAll += v; }
+  for (const [pai, dd, q] of fin.self || []) { const o = fin.articles[pai]?.o, d = pd[dd]; if (!o || d === undefined) continue; get(o).self[d] += q; } // самовыкупы — без себестоимости
   for (const [dd, b, a] of fin.noSku || []) {
     const d = pd[dd]; if (d === undefined) continue;
     const k = fin.buckets[b];
@@ -109,6 +112,8 @@ function artDays(a, dates, F, ctx) {
     S.views[d] = a.views[d]; S.pdp[d] = a.pdpViews[d]; S.cart[d] = a.cart[d]; S.orders[d] = a.orders[d]; S.revenue[d] = a.revenue[d];
     S.spendCpc[d] = a.spendCpc[d]; S.spendCpo[d] = a.spendCpo[d]; S.spend[d] = a.spendCpc[d] + a.spendCpo[d];
     S.adOrders[d] = a.adOrders[d]; S.clicks[d] = a.clicks[d];
+    const sf = ctx.selfOf ? ctx.selfOf(a.i) : null;
+    if (sf && sf[d]) { S.selfQ[d] = sf[d][0]; S.selfR[d] = sf[d][1]; }
     if (a.stockArr[d] !== null && a.stockArr[d] !== undefined) { S.stock[d] = a.stockArr[d]; S.stockN[d] = 1; }
     if (k0 && a.orders[d] > 0) { S.bW[d] = k0.buyout * 100 * a.orders[d]; S.bN[d] = a.orders[d]; }
     if (ctx.forecast && (a.orders[d] > 0 || S.spend[d] > 0)) {
@@ -134,7 +139,7 @@ function finDay(S, x, F, d, o, dates, ctx) {
   for (const k of OZ) { S['oz_' + k][d] = x.b[k][d]; any ||= x.b[k][d]; }
   S.ozAds[d] = x.b.ads[d];
   const k0 = ctx.coefOf ? ctx.coefOf(o) : null;
-  const cost = (k0?.cost || x.cost || 0) * q;
+  const cost = (k0?.cost || x.cost || 0) * (q - x.self[d]);
   S.buyQty[d] = q; S.buyRub[d] = s; S.nsSale[d] = F.nsSale[d] * sh; S.nsOther[d] = F.nsOther[d] * sh; S.nsAds[d] = nsA; S.adLate[d] = adLate; S.cost[d] = cost;
   S.taxBase[d] = s ? s * (ctx.shareAt ? (ctx.shareAt(o, dates[d]) ?? 1) : 1) : 0;
   if (s || q || any || x.b.ads[d] || adLate || S.nsOther[d] || nsA) S.finAny[d] = 1;
@@ -194,6 +199,9 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   const [open, setOpen] = useState(() => new Set(['__all']));
   const [more, setMore] = useState({});
   const [pick, setPick] = useState(false);
+  // Свежие дни справа — при открытии и смене периода прокручиваем таблицу к концу.
+  const scrollRef = useRef(null);
+  useEffect(() => { const el = scrollRef.current; if (el) requestAnimationFrame(() => { el.scrollLeft = el.scrollWidth; }); }, [dates.length, dates[0], gran]); // eslint-disable-line react-hooks/exhaustive-deps
   const pickRef = useRef(null);
   useEffect(() => {
     if (!pick) return undefined;
@@ -230,7 +238,9 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   }, [prices, dates, L]);
 
   const F = useMemo(() => finByDay(fin, dates), [fin, dates]);
-  const ctx = useMemo(() => ({ coefOf, forecast, shareAt, tax, priceOf }), [coefOf, forecast, shareAt, tax, priceOf]);
+  // Самовыкупы по дню заказа (уже вычтены из заказов): ai → { d: [шт, ₽] }.
+  const selfMap = useMemo(() => { const m = new Map(); for (const [ai, d, q, r] of data.self || []) { let x = m.get(ai); if (!x) { x = {}; m.set(ai, x); } x[d] = [q, r]; } return m; }, [data]);
+  const ctx = useMemo(() => ({ coefOf, forecast, shareAt, tax, priceOf, selfOf: ai => selfMap.get(ai) || null }), [coefOf, forecast, shareAt, tax, priceOf, selfMap]);
   const perArt = useMemo(() => new Map(arts.map(a => [a.o, artDays(a, dates, F, ctx)])), [arts, dates, F, ctx]);
   // Прошлый период — итоги по артикулу (заказы и трафик из data.prev, прибыль — из начислений прошлого периода).
   const Fp = useMemo(() => (finPrev && prevDates ? finByDay(finPrev, prevDates) : null), [finPrev, prevDates]);
@@ -309,7 +319,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
     // Сегодняшний день неполный — в подсветке не участвует.
     const today = dayjs().format('YYYY-MM-DD');
     for (const x of b) x.partial = x.idx.some(i => dates[i] === today);
-    return b.reverse(); // свежие слева
+    return b; // по порядку: старые слева, свежие справа
   }, [dates, gran]);
   const skip = useMemo(() => buckets.map(b => b.partial), [buckets]);
   const allIdx = useMemo(() => dates.map((_, i) => i), [dates]);
@@ -368,13 +378,13 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
             const hs = heat(vals, m.dir, skip);
             const vTot = m.k === 'transit' ? (tr || null) : m.k === 'cover' ? (tot.stockN && perDayTot > 0 ? tot.stock / perDayTot : null) : m.v(tot, { perDay: perDayTot });
             const prevOk = m.fin ? hasFin : has;
-            const vPrev = !prevOk || ['stock', 'cover', 'transit', 'price', 'client', 'spp', 'buyout', 'profitF', 'marginF'].includes(m.k) ? null : m.v(P, { perDay: 0 });
+            const vPrev = !prevOk || ['stock', 'cover', 'transit', 'price', 'client', 'spp', 'buyout', 'profitF', 'marginF', 'selfQ', 'selfR'].includes(m.k) ? null : m.v(P, { perDay: 0 });
             const finMissing = m.fin && !fin;
             return (
-              <tr key={m.k} className={`${m.strong ? 'rnp-strong' : ''} ${mi === 0 ? 'rnp-first' : ''}`}>
-                {mi === 0 && (
-                  <td className="rnp-name" rowSpan={shownMets.length} style={{ paddingLeft: 10 + depth * 14 }}>
-                    <div className="rnp-nm">
+              <tr key={m.k} className={`${m.strong ? 'rnp-strong' : ''} ${mi === 0 ? 'rnp-first' : ''} ${mi === shownMets.length - 1 ? 'rnp-last' : ''}`}>
+                {mi !== 0 ? <td className="rnp-name" /> : (
+                  <td className="rnp-name rnp-head">
+                    <div className="rnp-nm" style={{ left: 10 + depth * 12 }}>
                       {!isArt && kids.length > 0 && <button type="button" className={`rnp-chev ${isOpen ? 'on' : ''}`} onClick={toggle} title={isOpen ? 'Свернуть' : 'Раскрыть'}>▶</button>}
                       <div style={{ minWidth: 0 }}>
                         <div className="rnp-ti" title={node.name}>{isArt ? node.o : node.name}</div>
@@ -446,8 +456,8 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
         <span className="a-hint" style={{ margin: 0 }}>▶ — раскрыть до подкатегорий и артикулов · ячейки: зеленее — лучше, краснее — хуже · наведите на прибыль — раскладка{!fin ? ' · начисления Ozon загружаются…' : ''}</span>
       </div>
       <div className="a-card rnp-card">
-        <div className="a-scroll rnp-scroll">
-          <table className="a-t rnp-t">
+        <div className="a-scroll rnp-scroll" ref={scrollRef}>
+          <table className="a-t rnp-t no-sh">
             <thead><tr>
               <th className="rnp-name l">Группа / артикул</th>
               <th className="rnp-m l">Метрика</th>

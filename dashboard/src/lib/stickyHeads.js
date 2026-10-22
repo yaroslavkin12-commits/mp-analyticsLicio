@@ -22,6 +22,7 @@ function update() {
   };
   for (const t of document.querySelectorAll(SEL)) {
     const head = t.tHead; if (!head || !t.offsetParent) continue;
+    if (t.classList.contains('no-sh')) continue; // своя прокрутка и position:sticky (РНП)
     if (t.checkVisibility && !t.checkVisibility({ visibilityProperty: true })) continue;
     const top = topOf(t);
     const r = t.getBoundingClientRect();

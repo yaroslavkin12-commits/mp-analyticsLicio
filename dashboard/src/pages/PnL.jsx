@@ -86,13 +86,15 @@ export default function PnL({ cabinet }) {
   const per = useMemo(() => {
     if (!data) return [];
     const P = cats.arts.map(() => null);
-    const get = ai => P[ai] || (P[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n) });
+    const get = ai => P[ai] || (P[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n), self: new Float64Array(n) });
     for (const [ai, d, bi, a, q] of data.rows) {
       const x = get(ai), k = data.buckets[bi], j = B.indexOf(k);
       x.b[j < 0 ? 7 : j][d] += a;
       if (k === 'sale') x.qty[d] += Math.abs(q); else if (k === 'return') x.qty[d] -= Math.abs(q);
     }
     for (const [ai, d, v] of data.ads) get(ai).ads[d] += v;
+    // Самовыкупы — себестоимость за эти штуки не вычитается (товар остаётся у нас).
+    for (const [ai, d, q] of data.self || []) get(ai).self[d] += q;
     return P;
   }, [data, cats.arts, n]);
   // Реклама: если Ozon списывает её в начислениях (PayPerClick и т. п.) —
@@ -138,7 +140,7 @@ export default function PnL({ cabinet }) {
         for (let j = 0; j < B.length; j++) v[B[j]][i] += x.b[j][i];
         v.qty[i] += x.qty[i]; v.adsRaw[i] += x.ads[i]; sold += x.qty[i];
         v.taxBase[i] += (x.b[iSale][i] + x.b[iRet][i]) * (shD ? shD[i] : 1);
-        if (cp) v.costRaw[i] += cp * x.qty[i];
+        if (cp) v.costRaw[i] += cp * (x.qty[i] - x.self[i]);
       }
       if (!cp && sold > 0) noCost++;
     }

@@ -170,6 +170,7 @@ export default function Margin({ cabinet }) {
       if (k === 'sale') { v.rev += a; v.qty += Math.abs(q); } else if (k === 'return') { v.rev += a; v.qty -= Math.abs(q); }
     }
     for (const [ai, d, val] of pnl.ads) if (d > lastFin) { const v = get(ai); if (v) { v.sum -= val; v.ads += val; } }
+    for (const [ai, , q] of pnl.self || []) { const v = get(ai); if (v) v.self = (v.self || 0) + q; } // самовыкупы — без себестоимости
     return m;
   }, [pnl]);
   const K = useMemo(() => {
@@ -243,7 +244,7 @@ export default function Margin({ cabinet }) {
         const sh = bs.shareOf ? (bs.shareOf(a.o, a.parts) ?? 1) : 1;
         const costP = pnl.cost?.[f.ai] || x[12] || 0;
         const taxF = f.rev > 0 ? f.rev * sh * tax / 100 : 0;
-        pf = { profit: f.sum - costP * f.qty - taxF, rev: f.rev, qty: f.qty, ads: f.ads };
+        pf = { profit: f.sum - costP * (f.qty - (f.self || 0)) - taxF, rev: f.rev, qty: f.qty, ads: f.ads };
       }
       out.push({ a, x, scheme, v, r, rb: r, pf, be, tp, tpc, beNo, tpNo, maxM, status, orders: x[25], rev: x[24], factDrr, drr7, drrSrc, curPrice, curClient, sppK, units, po: null, priceEd: false });
     }

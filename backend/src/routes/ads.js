@@ -571,6 +571,8 @@ router.get('/stats', async (req, res) => {
     const dates = [];
     for (let d = dayjs(from); !d.isAfter(to, 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
 
+    // Самовыкупы (лента заказов) — не заказы.
+    { const OF = require('../lib/orderFeed'); OF.applyToAnalytics(analyticsRows, await OF.selfByDay(cabinet, from, to)); }
     const analyticsByKey = new Map(); // sku|date -> row
     for (const r of analyticsRows) analyticsByKey.set(`${r.sku}|${r.date}`, r);
 
@@ -1081,6 +1083,7 @@ router.get('/stats', async (req, res) => {
              FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
             GROUP BY campaign_id`, [cabinet, pFrom, pTo])),
       ]);
+      { const sp = await require('../lib/orderFeed').selfBySku(cabinet, pFrom, pTo); for (const r of pAn) { const x = sp.get(String(r.sku)); if (!x) continue; const dq = Math.min(Number(r.o) || 0, x.q), dr = Math.min(Number(r.r) || 0, x.r); r.o = (Number(r.o) || 0) - dq; r.r = (Number(r.r) || 0) - dr; x.q -= dq; x.r -= dr; } }
       const anBySku = new Map(), anByOffer = new Map();
       for (const r of pAn) {
         anBySku.set(String(r.sku), r);

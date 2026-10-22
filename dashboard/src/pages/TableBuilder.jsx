@@ -253,7 +253,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     const di = new Map(data.dates.map((d, i) => [d, i]));
     const pd = fin.dates.map(d => di.get(d));
     const m = new Map();
-    const get = o => { let x = m.get(o); if (!x) { x = { s: new Float64Array(L), q: new Float64Array(L), oz: new Float64Array(L), ad: new Float64Array(L), cost: null }; m.set(o, x); } return x; };
+    const get = o => { let x = m.get(o); if (!x) { x = { s: new Float64Array(L), q: new Float64Array(L), oz: new Float64Array(L), ad: new Float64Array(L), self: new Float64Array(L), cost: null }; m.set(o, x); } return x; };
     const saleDay = new Float64Array(L), adDay = new Float64Array(L), nsOther = new Float64Array(L), nsAds = new Float64Array(L);
     fin.articles.forEach((a, i) => { if (fin.cost?.[i]) get(a.o).cost = fin.cost[i]; });
     for (const [pai, d0, b, a, q] of fin.rows) {
@@ -263,6 +263,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       else if (OZ.includes(k) || k === 'ads') x.oz[d] += a;
     }
     for (const [pai, d0, v] of fin.ads || []) { const o = fin.articles[pai]?.o, d = pd[d0]; if (!o || d === undefined) continue; get(o).ad[d] += v; adDay[d] += v; }
+    for (const [pai, d0, q] of fin.self || []) { const o = fin.articles[pai]?.o, d = pd[d0]; if (!o || d === undefined) continue; get(o).self[d] += q; } // самовыкупы — без себестоимости
     let lastFin = -1;
     for (const [d0, b, a] of fin.noSku || []) {
       const d = pd[d0]; if (d === undefined) continue;
@@ -301,8 +302,8 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     }
     const x = finArt?.m.get(a.o);
     if (finArt && x) {
-      let s = 0, q = 0, oz = 0, ad = 0, saleW = 0, adW = 0, nsA = 0;
-      for (let d = l; d <= hi; d++) { s += x.s[d]; q += x.q[d]; oz += x.oz[d]; ad += x.ad[d]; saleW += finArt.saleDay[d]; adW += finArt.adDay[d]; nsA += finArt.nsAds[d]; }
+      let s = 0, q = 0, oz = 0, ad = 0, saleW = 0, adW = 0, nsA = 0, sq = 0;
+      for (let d = l; d <= hi; d++) { sq += x.self[d]; s += x.s[d]; q += x.q[d]; oz += x.oz[d]; ad += x.ad[d]; saleW += finArt.saleDay[d]; adW += finArt.adDay[d]; nsA += finArt.nsAds[d]; }
       const shareW = saleW ? s / saleW : 0;
       // Прочее без артикула — по выручке дня (как в P&L), реклама без артикула — по расходу кабинета.
       let other = 0;
@@ -311,7 +312,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       let adLate = 0;
       for (let d = Math.max(l, finArt.lastFin + 1); d <= hi; d++) adLate += x.ad[d];
       const pay = s + oz + other + nsA * (adW > 0 ? ad / adW : shareW) - adLate;
-      const cost = (x.cost || 0) * Math.max(0, q);
+      const cost = (x.cost || 0) * Math.max(0, q - sq);
       S.buyQty = q; S.buyRub = s; S.payout = pay; S.cost = cost;
       // Налог — как в «P&L»: от оплаты покупателя по отчётам «Начисления» того дня.
       let base = 0;
