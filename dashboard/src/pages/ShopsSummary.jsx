@@ -82,16 +82,19 @@ export default function ShopsSummary({ active }) {
     const T = k => sum(ok, s => s.fin.cur.total[k]);
     const P = k => (ok.every(s => s.fin.prev) ? sum(ok, s => s.fin.prev.total[k]) : null);
     return {
-      oq: sum(shops, s => s.cur.q), or: sum(shops, s => s.cur.r), por: sum(shops, s => s.prev.r),
-      fin: ok.length ? { revenue: T('revenue'), ozonX: T('ozonX'), ads: T('ads'), payout: T('payout'), cost: T('cost'), tax: T('tax'), profit: T('profit') } : null,
-      pfin: ok.length && P('revenue') !== null ? { revenue: P('revenue'), profit: P('profit') } : null,
+      oq: sum(shops, s => s.cur.q), or: sum(shops, s => s.cur.r), por: sum(shops, s => s.prev.r), poq: sum(shops, s => s.prev.q),
+      fin: ok.length ? { revenue: T('revenue'), ozonX: T('ozonX'), ads: T('ads'), payout: T('payout'), cost: T('cost'), tax: T('tax'), profit: T('profit'), qty: T('qty') } : null,
+      pfin: ok.length && P('revenue') !== null ? { revenue: P('revenue'), profit: P('profit'), qty: P('qty'), payout: P('payout') } : null,
       loading: shops.some(s => !s.fin),
     };
   }, [shops]);
 
   const money = (v, rev) => (pct ? (rev > 0 && Number.isFinite(v) ? fmtPct((-v / rev) * 100) : '—') : `${fmtInt(-v)} ₽`);
-  const row = ({ key, name, sub, color, oq, or, por, F, PF, depth, onToggle, isOpen, onOpenShop, loading }) => {
+  const row = ({ key, name, sub, color, oq, or, por, poq, F, PF, depth, onToggle, isOpen, onOpenShop, loading }) => {
     const rev = F?.revenue;
+    const chk = oq > 0 ? or / oq : null, pchk = poq > 0 ? por / poq : null;
+    const bchk = F && F.qty > 0 ? rev / F.qty : null, pbchk = PF && PF.qty > 0 ? PF.revenue / PF.qty : null;
+    const pay1 = F && F.qty > 0 ? F.payout / F.qty : null, ppay1 = PF && PF.qty > 0 ? PF.payout / PF.qty : null;
     const margin = F && rev > 0 ? (F.profit / rev) * 100 : null;
     const pMargin = PF && PF.revenue > 0 ? (PF.profit / PF.revenue) * 100 : null;
     return (
@@ -107,7 +110,10 @@ export default function ShopsSummary({ active }) {
           </div>
         </td>
         <td className="n r">{fmtInt(or)} ₽<small className="ss-sub">{fmtInt(oq)} шт <Delta cur={or} prev={por} /></small></td>
-        <td className="n r">{F ? <>{fmtInt(rev)} ₽<Delta cur={rev} prev={PF?.revenue} /></> : loading ? '…' : '—'}</td>
+        <td className="n r">{chk !== null ? <>{fmtInt(chk)} ₽<Delta cur={chk} prev={pchk} /></> : '—'}</td>
+        <td className="n r">{F ? <>{fmtInt(rev)} ₽<small className="ss-sub">{fmtInt(F.qty)} шт</small><Delta cur={rev} prev={PF?.revenue} /></> : loading ? '…' : '—'}</td>
+        <td className="n r">{bchk !== null ? <>{fmtInt(bchk)} ₽<Delta cur={bchk} prev={pbchk} /></> : ''}</td>
+        <td className="n r ss-pay">{pay1 !== null ? <><b>{fmtInt(pay1)} ₽</b><Delta cur={pay1} prev={ppay1} /></> : ''}</td>
         <td className="n r">{F ? money(F.ozonX, rev) : ''}</td>
         <td className="n r">{F ? money(F.ads, rev) : ''}</td>
         <td className="n r">{F ? `${fmtInt(F.payout)} ₽` : ''}</td>
@@ -136,6 +142,26 @@ export default function ShopsSummary({ active }) {
       </div>
       {err && <div className="c-msg bad" style={{ margin: '10px 0' }}>{err}</div>}
       {!orders && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
+      {orders && (() => {
+        const F = total.fin, PF = total.pfin;
+        const k = (lbl, v, sub, d) => <div className="a-kpi"><span className="lbl">{lbl}</span><span className="val">{v}</span><span className="sub">{sub}{d}</span></div>;
+        const pay1 = F && F.qty > 0 ? F.payout / F.qty : null, ppay1 = PF && PF.qty > 0 ? PF.payout / PF.qty : null;
+        const bchk = F && F.qty > 0 ? F.revenue / F.qty : null, pbchk = PF && PF.qty > 0 ? PF.revenue / PF.qty : null;
+        const chk = total.oq > 0 ? total.or / total.oq : null, pchk = total.poq > 0 ? total.por / total.poq : null;
+        const mg = F && F.revenue > 0 ? (F.profit / F.revenue) * 100 : null;
+        const wait = total.loading ? '…' : '—';
+        return (
+          <div className="ss-kpis">
+            <div className="a-kpi ss-main"><span className="lbl">Поступление на счёт за 1 выкуп</span><span className="val">{pay1 !== null ? `${fmtInt(pay1)} ₽` : wait}</span>
+              <span className="sub">{F ? `${fmtInt(F.payout)} ₽ к перечислению / ${fmtInt(F.qty)} выкупов` : 'начисления загружаются…'}<Delta cur={pay1} prev={ppay1} /></span></div>
+            {k('Заказы', `${fmtInt(total.or)} ₽`, `${fmtInt(total.oq)} шт`, <Delta cur={total.or} prev={total.por} />)}
+            {k('Средний чек заказа', chk !== null ? `${fmtInt(chk)} ₽` : '—', 'без самовыкупов', <Delta cur={chk} prev={pchk} />)}
+            {k('Выкупы', F ? `${fmtInt(F.revenue)} ₽` : wait, F ? `${fmtInt(F.qty)} шт` : '', <Delta cur={F?.revenue} prev={PF?.revenue} />)}
+            {k('Средний чек выкупа', bchk !== null ? `${fmtInt(bchk)} ₽` : wait, 'выручка / выкупленные шт', <Delta cur={bchk} prev={pbchk} />)}
+            {k('Прибыль', F ? `${fmtInt(F.profit)} ₽` : wait, mg !== null ? `маржа ${fmtPct(mg)}` : '', <Delta cur={F?.profit} prev={PF?.profit} />)}
+          </div>
+        );
+      })()}
       {orders && (
         <div className="a-card" style={{ padding: 0, marginTop: 12 }}>
           <div className="a-scroll">
@@ -143,7 +169,10 @@ export default function ShopsSummary({ active }) {
               <thead><tr>
                 <th className="l">Магазин</th>
                 <th className="r" title="Заказы по дню заказа, без самовыкупов">Заказы</th>
-                <th className="r" title="Выкупы минус возвраты по начислениям Ozon">Выручка</th>
+                <th className="r" title="Заказы ₽ / заказы шт">Ср. чек заказа</th>
+                <th className="r" title="Выкупы минус возвраты по начислениям Ozon">Выручка (выкупы)</th>
+                <th className="r" title="Выручка / выкупленные штуки">Ср. чек выкупа</th>
+                <th className="r" title="К перечислению / выкупленные штуки: сколько в среднем приходит на счёт за 1 выкуп (до себестоимости и налога)">Поступление на 1 выкуп</th>
                 <th className="r" title="Комиссия, логистика, эквайринг, хранение и прочие удержания Ozon (без рекламы)">Услуги Ozon</th>
                 <th className="r">Реклама</th>
                 <th className="r" title="Выручка минус услуги Ozon и реклама">К перечислению</th>
@@ -153,7 +182,7 @@ export default function ShopsSummary({ active }) {
                 <th className="r" title="Прибыль / выручка">Рентаб.</th>
               </tr></thead>
               <tbody>
-                {row({ key: 'total', name: 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
+                {row({ key: 'total', name: 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
                 {shops.map(s => {
                   const F = s.fin?.cur?.total, PF = s.fin?.prev?.total;
                   const isOpen = open.has(s.id);
@@ -162,8 +191,8 @@ export default function ShopsSummary({ active }) {
                     .map(k => ({ k, r: s.cur.byCat[k]?.[1] || 0 })).sort((a, b) => b.r - a.r);
                   return (
                     <React.Fragment key={s.id}>
-                      {row({ key: s.id, name: s.shop.label, sub: s.fin?.error ? 'начисления не загрузились' : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '', color: s.shop.color, oq: s.cur.q, or: s.cur.r, por: s.prev.r, F, PF, depth: 1, onToggle: toggle, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
-                      {isOpen && cats.map(({ k }) => row({ key: s.id + k, name: k, oq: s.cur.byCat[k]?.[0] || 0, or: s.cur.byCat[k]?.[1] || 0, por: s.prev.byCat[k]?.[1] || 0,
+                      {row({ key: s.id, name: s.shop.label, sub: s.fin?.error ? 'начисления не загрузились' : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '', color: s.shop.color, oq: s.cur.q, or: s.cur.r, por: s.prev.r, poq: s.prev.q, F, PF, depth: 1, onToggle: toggle, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
+                      {isOpen && cats.map(({ k }) => row({ key: s.id + k, name: k, oq: s.cur.byCat[k]?.[0] || 0, or: s.cur.byCat[k]?.[1] || 0, por: s.prev.byCat[k]?.[1] || 0, poq: s.prev.byCat[k]?.[0] || 0,
                         F: s.fin?.cur?.byGroup?.[k] || null, PF: s.fin?.prev?.byGroup?.[k] || null, depth: 2, loading: !s.fin }))}
                     </React.Fragment>
                   );
