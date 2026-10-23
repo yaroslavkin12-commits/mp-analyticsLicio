@@ -422,3 +422,16 @@
 .mpui .rnp-secb small { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--a-ink3); font-size: 11.5px; }
 .mpui table.rnp-t tbody.rnp-sec:hover td.rnp-m { background: var(--a-panel2); }
 .mpui .rnp-key { color: var(--a-warn); margin-left: 4px; font-size: 10px; }
+/* РНП: подсветка строки при наведении — и ячейки, и название слева */
+.mpui table.rnp-t tbody tr:not(.rnp-sech):hover td { box-shadow: inset 0 1px 0 var(--a-accent), inset 0 -1px 0 var(--a-accent), inset 0 0 0 999px rgba(139,139,255,.10); color: var(--a-ink); }
+.mpui table.rnp-t tbody tr:not(.rnp-sech):hover td.rnp-m { background: color-mix(in srgb, var(--a-accent) 18%, var(--a-panel)); color: var(--a-ink); font-weight: 600; }
+.mpui table.rnp-t tbody.rnp-sec:hover td.rnp-m { background: var(--a-panel); }
+.mpui table.rnp-t tr.rnp-click { cursor: pointer; }
+.mpui .rnp-mini { display: inline-block; font-size: 8px; margin-right: 6px; color: var(--a-accent); transition: transform .12s; }
+.mpui .rnp-mini.on { transform: rotate(90deg); }
+.mpui table.rnp-t tr.rnp-sub td { font-size: 12px; color: var(--a-ink2); height: 24px; }
+.mpui table.rnp-t tr.rnp-sub td.rnp-m { padding-left: 26px; color: var(--a-ink3); }
+.mpui table.rnp-t tr.rnp-subh td { height: 22px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--a-ink3); background: var(--a-panel2); }
+.mpui .rnp-star { border: 0; background: transparent; color: var(--a-line2); cursor: pointer; font-size: 13px; padding: 0 4px; line-height: 1; }
+.mpui .rnp-star.on { color: var(--a-warn); }
+.mpui .rnp-pick .tb-chk { align-items: center; gap: 6px; }

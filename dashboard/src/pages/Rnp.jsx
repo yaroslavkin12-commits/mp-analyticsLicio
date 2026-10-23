@@ -21,7 +21,7 @@ const OZ_T = { commission: 'Комиссия', logistics: 'Логистика', 
 // Суммы по дню (складываются по артикулам и по дням).
 const KEYS = ['selfQ', 'selfR', 'views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'adOrders', 'clicks', 'adViews', 'stock', 'stockN',
   'buyQty', 'buyRub', 'nsSale', ...OZ.map(k => 'oz_' + k), 'ozAds', 'nsOther', 'nsAds', 'adLate', 'cost', 'taxBase', 'finAny',
-  'fProfit', 'fRev', 'fAny', 'bW', 'bN', 'pW', 'cW', 'wN', 'pS', 'cS', 'pN'];
+  'fProfit', 'fRev', 'fAny', 'fPay', 'fQty', 'bW', 'bN', 'pW', 'cW', 'wN', 'pS', 'cS', 'pN'];
 const LAST = new Set(['stock', 'stockN']); // остаток — на конец периода, а не сумма
 
 const d0 = (a, b) => (b ? a / b : null);
@@ -63,6 +63,8 @@ const METRICS = [
   { g: 'Прибыль', k: 'buyRub', t: 'Выручка, ₽', kind: 'rub', dir: 1, fin: true, key: true, v: S => (S.finAny ? S.buyRub : null) },
   { g: 'Прибыль', k: 'profit', t: 'Чистая прибыль, ₽', kind: 'rub', dir: 1, fin: true, tip: true, strong: true, key: true, v: S => (S.finAny ? S.profit : null) },
   { g: 'Прибыль', k: 'margin', t: 'Маржинальность, %', kind: 'pct', dir: 1, fin: true, tip: true, key: true, v: S => (S.finAny ? pc(S.profit, S.buyRub + S.nsSale) : null) },
+  { g: 'Прибыль', k: 'payF', t: 'Ср. поступление на счёт за выкуп (прогноз), ₽', kind: 'rub', dir: 1, key: true, strong: true, v: S => (S.fAny && S.fQty > 0 ? S.fPay / S.fQty : null) },
+  { g: 'Прибыль', k: 'payA', t: 'Ср. поступление на счёт за выкуп (факт), ₽', kind: 'rub', dir: 1, fin: true, key: true, strong: true, v: S => (S.finAny && S.buyQty > 0 ? S.payout / S.buyQty : null) },
 ];
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
 const fmt = (v, kind) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : kind === 'pct' ? fmtPct(v) : fmtInt(v));
@@ -125,7 +127,7 @@ function artDays(a, dates, F, ctx) {
     if (k0 && a.orders[d] > 0) { S.bW[d] = k0.buyout * 100 * a.orders[d]; S.bN[d] = a.orders[d]; }
     if (ctx.forecast && (a.orders[d] > 0 || S.spend[d] > 0)) {
       const r = ctx.forecast(a.o, dates[d], a.revenue[d], a.orders[d], S.spend[d]);
-      if (r) { S.fProfit[d] = r.profit; S.fRev[d] = r.expRev; S.fAny[d] = 1; }
+      if (r) { S.fProfit[d] = r.profit; S.fRev[d] = r.expRev; S.fAny[d] = 1; S.fPay[d] = r.expRev - r.comm - r.logi - r.acq - r.other - (r.ads || 0) - (r.selfCost || 0); S.fQty[d] = r.expQty || 0; }
     }
     const p = pr ? pr[d] : null;
     if (p && p[0]) {
@@ -166,22 +168,25 @@ function bucketSum(S, idx, taxPct) {
   out.tax = tb * (taxPct || 0) / 100;
   let oz = out.ozAds; for (const k of OZ) oz += out['oz_' + k];
   out.profit = out.buyRub + out.nsSale + oz + out.nsOther + out.nsAds - out.adLate - out.cost - out.tax;
+  // К перечислению: выкупы минус всё, что удержал Ozon (включая рекламу), — как в «Сводке по магазинам».
+  out.payout = out.buyRub + out.nsSale + oz + out.nsOther + out.nsAds - out.adLate;
   return out;
 }
 
 // Цвет ячейки в строке: зелёный — лучше, красный — хуже (относительно соседних дней).
 function heat(vals, dir, skip) {
-  if (!dir) return vals.map(() => null);
   const f = vals.filter((v, i) => !skip[i] && v !== null && Number.isFinite(v));
-  if (f.length < 3) return vals.map(() => null);
+  if (f.length < 2) return vals.map(() => null);
   const mn = Math.min(...f), mx = Math.max(...f);
-  if (mx - mn < 1e-9) return vals.map(() => null);
   return vals.map((v, i) => {
-    if (skip[i] || v === null || !Number.isFinite(v)) return null;
-    let t = (v - mn) / (mx - mn); if (dir < 0) t = 1 - t;
-    const s = Math.abs(t - 0.5) * 2;
-    if (s < 0.12) return null;
-    return `color-mix(in srgb, var(${t > 0.5 ? '--a-good' : '--a-bad'}) ${Math.round(6 + s * 24)}%, transparent)`;
+    if (v === null || !Number.isFinite(v)) return null;
+    // Без «лучше/хуже» (расход, остаток, СПП…) — один цвет, ярче там, где значение больше.
+    if (!dir) { const t = mx - mn < 1e-9 ? 0.5 : (v - mn) / (mx - mn); return `color-mix(in srgb, var(--a-accent) ${Math.round(6 + t * 22)}%, transparent)`; }
+    // Красный — хуже, жёлтый — средне, зелёный — лучше (относительно остальных дней строки).
+    let t = mx - mn < 1e-9 ? 0.5 : (v - mn) / (mx - mn); if (dir < 0) t = 1 - t;
+    const c = t < 0.4 ? '--a-bad' : t > 0.6 ? '--a-good' : '--a-warn';
+    const s = c === '--a-warn' ? 0.35 : Math.abs(t - 0.5) * 2;
+    return `color-mix(in srgb, var(${c}) ${Math.round(12 + s * 22)}%, transparent)`;
   });
 }
 
@@ -206,6 +211,13 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   // Раскрытые разделы (остальные — только главные строки).
   const [secOpen, setSecOpen] = useState(() => ld('secs', { 'Заказы': true }));
   useEffect(() => { sv('secs', secOpen); }, [secOpen]);
+  // Какие строки видны в «кратком» виде — настраивается (★ в «Строки»).
+  const [keyList, setKeyList] = useState(() => ld('keys', METRICS.filter(m => m.key).map(m => m.k)));
+  useEffect(() => { sv('keys', keyList); }, [keyList]);
+  const keysOn = new Set(keyList);
+  // Раскладка чистой прибыли по статьям (клик по строке).
+  const [profOpen, setProfOpen] = useState(() => ld('prof', false));
+  useEffect(() => { sv('prof', profOpen); }, [profOpen]);
   // Что показываем: узел дерева (категория / группа) и, при выборе, один артикул.
   const [sel, setSel] = useState('__all');
   const [selArt, setSelArt] = useState('');
@@ -384,8 +396,10 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
     const vPrev = !prevOk || ['stock', 'cover', 'transit', 'price', 'client', 'spp', 'buyout', 'drrB', 'adCtr', 'profitF', 'marginF', 'selfQ', 'selfR'].includes(m.k) ? null : m.v(P, { perDay: 0 });
     const finMissing = m.fin && !fin;
     return (
-      <tr key={m.k} className={`${m.strong ? 'rnp-strong' : ''} ${last ? 'rnp-last' : ''}`}>
-        <td className="rnp-m">{m.t}</td>
+      <React.Fragment key={m.k}>
+      <tr className={`${m.strong ? 'rnp-strong' : ''} ${last && !(m.k === 'profit' && profOpen) ? 'rnp-last' : ''} ${m.k === 'profit' ? 'rnp-click' : ''}`}
+        onClick={m.k === 'profit' ? () => setProfOpen(v => !v) : undefined} title={m.k === 'profit' ? 'Нажмите — раскладка по статьям в ₽ и в %' : undefined}>
+        <td className="rnp-m">{m.k === 'profit' && <span className={`rnp-mini ${profOpen ? 'on' : ''}`}>▶</span>}{m.t}</td>
         <td className="n r rnp-tot">{finMissing ? '…' : fmt(vTot, m.kind)}</td>
         <td className="n r rnp-prev">{m.now || finMissing ? '' : fmt(vPrev, m.kind)}</td>
         <td className="n r rnp-dyn">{m.now || finMissing ? '' : <Delta cur={vTot} prev={vPrev} kind={m.kind} dir={m.dir} />}</td>
@@ -396,6 +410,37 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
           </td>
         ))}
       </tr>
+      {m.k === 'profit' && profOpen && profitRows()}
+      </React.Fragment>
+    );
+  };
+  // Статьи прибыли (как в подсказке и «P&L»): сначала ₽, затем те же статьи в % от выкупов.
+  const PARTS = [
+    ['Выкупы (за вычетом возвратов)', S => S.buyRub],
+    ['Продажи без артикула (доля)', S => S.nsSale],
+    ...OZ.map(k => [OZ_T[k], S => S['oz_' + k]]),
+    ['Прочее без артикула (доля)', S => S.nsOther],
+    ['Реклама', S => S.ozAds + S.nsAds - S.adLate],
+    ['Себестоимость', S => -S.cost],
+    ['Налог', S => -S.tax],
+  ];
+  const profitRows = () => {
+    const used = PARTS.filter(([, f]) => Math.abs(f(tot)) >= 0.5 || cells.some(S => Math.abs(f(S)) >= 0.5));
+    const row = (key, label, f, kind, cls) => (
+      <tr key={key} className={`rnp-sub ${cls || ''}`}>
+        <td className="rnp-m">{label}</td>
+        <td className="n r rnp-tot">{tot.finAny ? fmt(f(tot), kind) : '—'}</td>
+        <td className="n r rnp-prev" /><td className="n r rnp-dyn" />
+        {cells.map((S, i) => <td key={i} className="n r">{S.finAny ? fmt(f(S), kind) : '—'}</td>)}
+      </tr>
+    );
+    const pctOf = f => S => (S.buyRub ? f(S) / S.buyRub * 100 : null);
+    return (
+      <>
+        {used.map(([t, f], i) => row('r' + i, t, f, 'rub'))}
+        <tr className="rnp-sub rnp-subh"><td className="rnp-m">в % от выкупов</td><td colSpan={3 + cells.length} /></tr>
+        {used.filter(([t]) => !t.startsWith('Выкупы')).map(([t, f], i) => row('p' + i, t, pctOf(f), 'pct', i === used.length - 2 ? 'rnp-last' : ''))}
+      </>
     );
   };
 
@@ -411,7 +456,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   ].filter(r => r[2] || Math.abs(r[1]) >= 0.5) : [];
 
   const allOpen = SECTIONS.every(g => secOpen[g]), noneOpen = SECTIONS.every(g => !secOpen[g]);
-  const tabs = tree.root.kids;
+  const tabs = [...tree.root.kids].map(n => ({ n, r: revOf(n.arts) })).sort((x, y) => (y.n.name === 'Чехлы') - (x.n.name === 'Чехлы') || y.r - x.r).map(x => x.n);
   const tabCnt = n => n.arts.length;
   return (
     <div className="rnp">
@@ -431,13 +476,16 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
                   <div className="rnp-pgt">{g}</div>
                   {METRICS.filter(m => m.g === g).map(m => (
                     <label key={m.k} className="tb-chk" style={{ display: 'flex', padding: '2px 0' }}>
-                      <input type="checkbox" checked={mets.includes(m.k)} onChange={e => setMets(x => (e.target.checked ? METRICS.map(y => y.k).filter(k => x.includes(k) || k === m.k) : x.filter(k => k !== m.k)))} />{m.t}{m.key ? <span className="rnp-key" title="Видна и в кратком виде">★</span> : null}
+                      <input type="checkbox" checked={mets.includes(m.k)} onChange={e => setMets(x => (e.target.checked ? METRICS.map(y => y.k).filter(k => x.includes(k) || k === m.k) : x.filter(k => k !== m.k)))} /><span style={{ flex: 1 }}>{m.t}</span>
+                      <button type="button" className={`rnp-star ${keysOn.has(m.k) ? 'on' : ''}`} title={keysOn.has(m.k) ? 'Видна в кратком виде — нажмите, чтобы убрать' : 'Показывать и в кратком виде'}
+                        onClick={e => { e.preventDefault(); e.stopPropagation(); setKeyList(x => (x.includes(m.k) ? x.filter(k => k !== m.k) : [...x, m.k])); }}>★</button>
                     </label>
                   ))}
                 </div>
               ))}
               <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                <button type="button" className="a-btn ghost" onClick={() => setMets(METRICS.filter(m => !m.off).map(m => m.k))}>по умолчанию</button>
+                <button type="button" className="a-btn ghost" onClick={() => { setMets(METRICS.filter(m => !m.off).map(m => m.k)); setKeyList(METRICS.filter(m => m.key).map(m => m.k)); }}>по умолчанию</button>
+                <span className="a-hint" style={{ margin: 0 }}>★ — строка видна и в кратком виде</span>
                 <button type="button" className="a-btn ghost" onClick={() => setMets(METRICS.map(m => m.k))}>все</button>
               </div>
             </div>
@@ -490,7 +538,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
               const all = shownMets.filter(m => m.g === g);
               if (!all.length) return null;
               const opened = !!secOpen[g];
-              const rows = opened ? all : all.filter(m => m.key);
+              const rows = opened ? all : all.filter(m => keysOn.has(m.k));
               const hidden = all.length - rows.length;
               return (
                 <tbody key={g} className="rnp-sec">

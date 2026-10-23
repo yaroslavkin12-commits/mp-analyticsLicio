@@ -89,7 +89,7 @@ export default function ShopsSummary({ active }) {
   const catList = useMemo(() => {
     const m = new Map();
     for (const s of orders?.shops || []) for (const [k, v] of Object.entries(s.cur.byCat)) m.set(k, (m.get(k) || 0) + v[1]);
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    return [...m.entries()].sort((a, b) => (b[0] === 'Чехлы') - (a[0] === 'Чехлы') || b[1] - a[1]); // «Чехлы» — всегда первыми
   }, [orders]);
   // Срез магазина под выбранную категорию: заказы, начисления, подгруппы для раскрытия.
   const viewOf = s => {

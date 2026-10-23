@@ -58,7 +58,7 @@ export default function OrdersFeed({ cabinet }) {
       top.set(parts[0], (top.get(parts[0]) || 0) + x.qty);
       for (let i = 2; i <= parts.length; i++) { const k = parts.slice(0, i).join(' / '); sub.set(k, (sub.get(k) || 0) + x.qty); }
     }
-    return { top: [...top.entries()].sort((a, b) => b[1] - a[1]), sub };
+    return { top: [...top.entries()].sort((a, b) => (b[0] === 'Чехлы') - (a[0] === 'Чехлы') || b[1] - a[1]), sub }; // «Чехлы» — первыми
   }, [d]);
   const catTop = cat ? cat.split(' / ')[0] : '';
   const subs = useMemo(() => [...cats.sub.entries()].filter(([k]) => catTop && k.startsWith(catTop + ' / ')).sort((a, b) => (a[0] < b[0] ? -1 : 1)), [cats, catTop]);
