@@ -1,6 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SHOPS, shopOf, isDeflyLike } from '../lib/cabinets';
 import { getAdsCabinets } from '../api';
+import { Store, TrendingUp, Activity, ShoppingCart, Target, Receipt, ChartColumn, CalendarRange, Map as MapIcon, Megaphone, Search, BadgePercent,
+  Warehouse, Scissors, PackageCheck, Layers, Tag, NotebookPen, Wallet, ScanSearch, Bell, Calculator, Boxes, Sun, Moon, ChevronsLeft, ChevronsRight } from 'lucide-react';
+
+// Значки разделов меню (Lucide — один стиль, перекрашиваются вместе с темой). Licio — как было, эмодзи.
+const ICONS = { summary: Store, sales: TrendingUp, rnp: Activity, orders: ShoppingCart, plan: Target, check: Receipt, abc: ChartColumn,
+  season: CalendarRange, geo: MapIcon, ads: Megaphone, search: Search, discounts: BadgePercent, inventory: Warehouse, production: Scissors,
+  buyout: PackageCheck, unit: Layers, margin: Tag, pricelog: NotebookPen, pnl: Wallet, recon: ScanSearch, notifications: Bell, calculator: Calculator, costs: Boxes };
 
 const NAV_BY_CABINET = {
   licio: [['dashboard','📊','Дашборд'],['ads','📣','Реклама'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
@@ -41,6 +48,7 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
   const shop = shopOf(cabinet);
   const cabinetLabel = shop?.label || cabinet;
   const nav = navOf(cabinet);
+  const lucide = isDeflyLike(cabinet);
   // Какие магазины уже подключены (есть своя Google-таблица на сервере).
   const [conn, setConn] = useState(null);
   useEffect(() => { if (open && !conn) getAdsCabinets().then(r => setConn(Object.fromEntries((r.data.data || []).map(c => [c.id, c.connected !== false])))).catch(() => setConn({})); }, [open, conn]);
@@ -118,7 +126,9 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
             border:'none', marginBottom:2, background:page===id?'var(--surface2)':'transparent', position:'relative',
             color:page===id?'var(--text)':'var(--text2)', fontWeight:page===id?600:400, fontSize:13, textAlign:'left', transition:'all .12s', whiteSpace:'nowrap',
           }}>
-            <span style={{ fontSize: mini ? 17 : 15 }}>{icon}</span>{!mini && label}
+            {lucide && ICONS[id]
+              ? (() => { const I = ICONS[id]; return <I size={mini ? 18 : 16} strokeWidth={1.75} style={{ flexShrink:0, color: page===id ? 'var(--accent-wb)' : 'var(--text3)' }} />; })()
+              : <span style={{ fontSize: mini ? 17 : 15 }}>{icon}</span>}{!mini && label}
             {page===id && <span style={{ marginLeft:'auto', width:3, height:16, borderRadius:2, background:'var(--accent-wb)', ...(mini ? { position:'absolute', right:2 } : {}) }}/>}
           </button>
         ))}
@@ -128,12 +138,12 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
           display:'flex', alignItems:'center', gap:8, padding:'7px 10px', borderRadius:8, border:'1px solid var(--border)',
           background:'var(--surface2)', color:'var(--text2)', fontSize:12.5, cursor:'pointer',
         }}>
-          <span style={{ fontSize:14 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>{!mini && (theme === 'dark' ? 'Светлая тема' : 'Тёмная тема')}
+          {lucide ? (theme === 'dark' ? <Sun size={15} strokeWidth={1.75} /> : <Moon size={15} strokeWidth={1.75} />) : <span style={{ fontSize:14 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>}{!mini && (theme === 'dark' ? 'Светлая тема' : 'Тёмная тема')}
         </button>
         {!mobile && <button onClick={() => setMini(m => !m)} title={mini ? 'Развернуть меню' : 'Свернуть меню — оставить только значки'} style={{
           marginLeft: mini ? 0 : 'auto', padding:'6px 8px', borderRadius:8, border:'1px solid var(--border)', background:'transparent',
-          color:'var(--text2)', fontSize:13, cursor:'pointer', lineHeight:1,
-        }}>{mini ? '»' : '«'}</button>}
+          color:'var(--text2)', fontSize:13, cursor:'pointer', lineHeight:1, display:'flex', alignItems:'center',
+        }}>{lucide ? (mini ? <ChevronsRight size={15} strokeWidth={1.75} /> : <ChevronsLeft size={15} strokeWidth={1.75} />) : (mini ? '»' : '«')}</button>}
       </div>
     </div>
   );
