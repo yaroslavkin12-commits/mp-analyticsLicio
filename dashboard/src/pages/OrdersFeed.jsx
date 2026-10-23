@@ -34,6 +34,8 @@ export default function OrdersFeed({ cabinet }) {
   const [hideCancel, setHideCancel] = useState(true);
   const [picked, setPicked] = useState(new Set());
   const [limit, setLimit] = useState(200);
+  const [pMin, setPMin] = useState('');
+  const [pMax, setPMax] = useState('');
   const [cat, setCat] = useState(''); // путь категории: «Чехлы», «Чехлы / Чехлы на сиденья»…
 
   const load = useCallback(() => {
@@ -64,8 +66,12 @@ export default function OrdersFeed({ cabinet }) {
     let r = catRows;
     if (hideCancel) r = r.filter(x => x.st !== 'cancelled');
     if (view === 'self') r = r.filter(x => x.self); else if (view === 'real') r = r.filter(x => !x.self);
+    // Цена за штуку «от — до» — например, найти самовыкуп по низкой цене.
+    const lo = parseFloat(String(pMin).replace(/\s/g, '').replace(',', '.')), hi = parseFloat(String(pMax).replace(/\s/g, '').replace(',', '.'));
+    if (Number.isFinite(lo)) r = r.filter(x => x.price >= lo);
+    if (Number.isFinite(hi)) r = r.filter(x => x.price <= hi);
     return q.trim() ? artFilter(r, q, x => x.o || '', x => `${x.n || ''} ${x.p}`) : r;
-  }, [catRows, q, view, hideCancel]);
+  }, [catRows, q, view, hideCancel, pMin, pMax]);
   const sum = useMemo(() => {
     const all = catRows.filter(x => x.st !== 'cancelled');
     const s = { n: 0, q: 0, r: 0, sn: 0, sq: 0, sr: 0, c: catRows.length - all.length };
@@ -130,6 +136,11 @@ export default function OrdersFeed({ cabinet }) {
           <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 8px' }}>
             <span className="a-seg">{[['all', 'Все'], ['real', 'Заказы'], ['self', `Самовыкупы (${sum.sn})`]].map(([k, t]) => <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => setView(k)}>{t}</button>)}</span>
             <button type="button" className="a-toggle" onClick={() => setHideCancel(v => !v)}><span className={`a-sw ${hideCancel ? 'on' : ''}`} />Скрыть отменённые</button>
+            <span className="of-price" title="Цена за штуку">
+              Цена <input inputMode="numeric" value={pMin} onChange={e => setPMin(e.target.value)} placeholder="от" />
+              — <input inputMode="numeric" value={pMax} onChange={e => setPMax(e.target.value)} placeholder="до" /> ₽
+              {(pMin || pMax) && <button type="button" className="of-x" onClick={() => { setPMin(''); setPMax(''); }} title="Сбросить">×</button>}
+            </span>
             {pickedRows.length > 0 && (
               <span className="of-bulk">
                 Выбрано {pickedRows.length}:
