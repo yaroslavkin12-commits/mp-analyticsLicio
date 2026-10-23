@@ -941,12 +941,12 @@ router.get('/stats', async (req, res) => {
       const byDate = {};
       let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0, totalSpend = 0;
       let totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0, totalSpendCpc = 0, totalSpendCpo = 0;
-      let totalSelfQ = 0, totalSelfR = 0;
+      let totalSelfQ = 0, totalSelfR = 0, totalSelfFbs = 0;
       const selfSku = article.sku || (article.offerId ? skuByOfferId.get(article.offerId) : null);
       for (const date of dates) {
         // Самовыкупы дня (из заказов уже убраны) — фронту для прогноза прибыли: их расходы реальны.
         const sf = selfSku ? selfMap.get(`${selfSku}|${date}`) : null;
-        if (sf) { totalSelfQ += sf.q; totalSelfR += sf.r; }
+        if (sf) { totalSelfQ += sf.q; totalSelfR += sf.r; totalSelfFbs += sf.fbs || 0; }
         // У артикула без своей РК (добавлен в группу вручную, см. forced-
         // include выше) нет sku из ad_campaigns — тогда берём ту же
         // аналитику по offer_id напрямую (analyticsByOfferDate, см. выше).
@@ -1031,7 +1031,7 @@ router.get('/stats', async (req, res) => {
           adViews, adOrders, adRevenue, adToCart, spendCpc, spendCpo, spendCpoUndated,
           spendSearch, clicksSearch, spendRec, clicksRec,
           spendCir, clicksCir, spendAuto, clicksAuto, spendTop, clicksTop,
-          selfQ: sf ? sf.q : 0, selfR: sf ? sf.r : 0,
+          selfQ: sf ? sf.q : 0, selfR: sf ? sf.r : 0, selfFbs: sf ? sf.fbs || 0 : 0,
           stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
@@ -1093,7 +1093,7 @@ router.get('/stats', async (req, res) => {
           spend: totalSpend, drr: totalDrr,
           ctr: totalCtr, crToCart: totalCrToCart, crToOrder: totalCrToOrder,
           clicks: totalClicks, adViews: totalAdViews, adOrders: totalAdOrders, adRevenue: totalAdRevenue,
-          spendCpc: totalSpendCpc, spendCpo: totalSpendCpo, selfQ: totalSelfQ, selfR: totalSelfR,
+          spendCpc: totalSpendCpc, spendCpo: totalSpendCpo, selfQ: totalSelfQ, selfR: totalSelfR, selfFbs: totalSelfFbs,
           // Рекламный ДРР — расход / выручка, которую Ozon отнёс к рекламе.
           // null, если рекламной выручки не было (делить не на что).
           adDrr: totalAdRevenue > 0 ? totalSpend / totalAdRevenue * 100 : null,

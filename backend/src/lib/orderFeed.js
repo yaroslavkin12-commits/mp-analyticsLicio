@@ -74,9 +74,11 @@ const JOIN = `LEFT JOIN order_feed f ON f.cabinet = s.cabinet AND f.posting_numb
 // Самовыкупы за даты заказа [from, to]: Map('sku|date' → { q, r }).
 async function selfByDay(cabinet, from, to) {
   await ensure();
-  const rows = await query(`SELECT s.sku, s.order_date::text d, SUM(s.qty)::int q, SUM(${PRICE} * s.qty) r FROM self_buyouts s ${JOIN}
+  // fbs — отправлений FBS/rFBS: за каждое Ozon берёт сервисный сбор за интеграцию с логистикой (20 ₽).
+  const rows = await query(`SELECT s.sku, s.order_date::text d, SUM(s.qty)::int q, SUM(${PRICE} * s.qty) r,
+      COUNT(DISTINCT s.posting_number) FILTER (WHERE f.scheme = 'fbs')::int fbs FROM self_buyouts s ${JOIN}
     WHERE s.cabinet = $1 AND s.order_date BETWEEN $2 AND $3 GROUP BY s.sku, s.order_date`, [cabinet, from, to]).catch(() => []);
-  return new Map(rows.map(x => [`${x.sku}|${x.d}`, { q: num(x.q), r: num(x.r) }]));
+  return new Map(rows.map(x => [`${x.sku}|${x.d}`, { q: num(x.q), r: num(x.r), fbs: num(x.fbs) }]));
 }
 
 // Убрать самовыкупы из строк product_analytics_daily (поля orders_item, revenue).

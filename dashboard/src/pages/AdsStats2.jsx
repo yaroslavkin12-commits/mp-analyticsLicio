@@ -161,7 +161,7 @@ export const drrClass = v => v === null || v === undefined || !Number.isFinite(v
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
 const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'clicks', 'adViews', 'adOrders', 'adRevenue',
   'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCir', 'clicksCir', 'spendAuto', 'clicksAuto', 'spendTop', 'clicksTop',
-  'spendCpoUndated', 'expRev', 'profitF', 'selfQ', 'selfR'];
+  'spendCpoUndated', 'expRev', 'profitF', 'selfQ', 'selfR', 'selfFbs'];
 // Коэффициенты юнит-экономики по артикулам (ставит страница «Реклама»): для ДРР
 // с учётом выкупа и прогнозируемой прибыли по дням.
 const UNIT_CTX = { k: null, tax: 6 };
@@ -175,7 +175,7 @@ const STRAT_PARTS = [
   { k: 'Top', t: 'вывод в ТОП', s: 'ТОП' },
 ];
 const zoneRaw = d => {
-  const o = { spendCpoUndated: d.spendCpoUndated || 0, selfQ: d.selfQ || 0, selfR: d.selfR || 0 };
+  const o = { spendCpoUndated: d.spendCpoUndated || 0, selfQ: d.selfQ || 0, selfR: d.selfR || 0, selfFbs: d.selfFbs || 0 };
   for (const p of STRAT_PARTS) { o['spend' + p.k] = d['spend' + p.k] || 0; o['clicks' + p.k] = d['clicks' + p.k] || 0; }
   return o;
 };
@@ -250,7 +250,7 @@ function buildModel(articles, dates, mode) {
       for (const a of articles) {
         const k = UNIT_CTX.k.get(a.offerId); if (!k) continue;
         const dr = dayRaw(a.byDate[d], mode);
-        const u = unitProfit(k, { ordRub: dr.revenue, ordQty: dr.orders, ads: dr.spend, selfRub: dr.selfR, selfQty: dr.selfQ }, UNIT_CTX.tax);
+        const u = unitProfit(k, { ordRub: dr.revenue, ordQty: dr.orders, ads: dr.spend, selfRub: dr.selfR, selfFbs: dr.selfFbs }, UNIT_CTX.tax);
         er += u.expRev; pf += u.profit; any = true;
       }
       if (any) { raw.expRev = er; raw.profitF = pf; }
@@ -584,7 +584,7 @@ const DAY_ROWS = [
   { block: 'Заказы и остаток', tone: 'rev' },
   { key: 'revenue', label: 'Заказы, ₽', fmt: 'money', good: 'up', editable: true },
   { key: 'orders', label: 'Заказы, шт', fmt: 'int', good: 'up', editable: true },
-  { key: 'selfQ', label: 'самовыкупы (не в заказах)', fmt: 'int', sub: true, hideEmpty: true, hint: 'Отмечены в «Ленте заказов»: из заказов и ДРР убраны, их комиссия, эквайринг и налог вычтены из прогнозируемой прибыли' },
+  { key: 'selfQ', label: 'самовыкупы (не в заказах)', fmt: 'int', sub: true, hideEmpty: true, hint: 'Отмечены в «Ленте заказов»: из заказов и ДРР убраны, их комиссия, эквайринг, налог и сервисный сбор 20 ₽ (FBS) вычтены из прогнозируемой прибыли' },
   { key: 'stock', label: 'Остаток, шт', fmt: 'int', good: 'up', total: 'last' },
   { block: 'Трафик и позиции', tone: 'traffic' },
   { key: 'position', label: 'Позиция в поиске', fmt: 'pos', good: 'down', editable: true, total: 'avg', onlyAll: true },
@@ -606,7 +606,7 @@ const DAY_ROWS = [
   { key: 'drr', label: 'ДРР', fmt: 'pct', good: 'down', hint: 'Расход / сумма заказов (без учёта выкупа)' },
   { key: 'drrB', label: 'ДРР с учётом выкупа', fmt: 'pct', good: 'down', hint: 'Расход / (сумма заказов × % выкупа артикула) — сколько реклама будет стоить с каждой продажи. Так же считается ДРР в «Цены и маржа» и калькуляторе' },
   { block: 'Прогноз', tone: 'rev' },
-  { key: 'profitF', label: 'Прогнозируемая прибыль после рекламы, ₽', fmt: 'money0', good: 'up', hint: 'С заказов дня: ожидаемая выручка (с % выкупа) минус комиссия, логистика, эквайринг, хранение, себестоимость, налог и реклама — как в «Юнит-экономике». Самовыкупы в заказы не входят, но их комиссия, эквайринг и налог вычитаются как расход (логистики у самовыкупа нет)' },
+  { key: 'profitF', label: 'Прогнозируемая прибыль после рекламы, ₽', fmt: 'money0', good: 'up', hint: 'С заказов дня: ожидаемая выручка (с % выкупа) минус комиссия, логистика, эквайринг, хранение, себестоимость, налог и реклама — как в «Юнит-экономике». Самовыкупы в заказы не входят, но их комиссия, эквайринг, налог и сервисный сбор 20 ₽ за FBS-отправление вычитаются как расход (логистики у самовыкупа нет)' },
 ];
 
 function rowTotal(row, byDate, dates, totals) {
@@ -1070,7 +1070,7 @@ export default function AdsStats2({ cabinet }) {
     const k = unitK && unitK.get(a.offerId);
     if (!k) return null;
     const t = a.totals || {};
-    return unitProfit(k, { ordRub: (mode === 'ads' ? t.adRevenue : t.revenue) || 0, ordQty: (mode === 'ads' ? t.adOrders : t.orders) || 0, ads: t.spend || 0, selfRub: t.selfR || 0, selfQty: t.selfQ || 0 }, taxPct);
+    return unitProfit(k, { ordRub: (mode === 'ads' ? t.adRevenue : t.revenue) || 0, ordQty: (mode === 'ads' ? t.adOrders : t.orders) || 0, ads: t.spend || 0, selfRub: t.selfR || 0, selfFbs: t.selfFbs || 0 }, taxPct);
   }
   const taxPct = (() => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cabinet}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } })();
   UNIT_CTX.k = unitK; UNIT_CTX.tax = taxPct;
