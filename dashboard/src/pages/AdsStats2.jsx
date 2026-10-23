@@ -133,8 +133,9 @@ const isCpoCampaign = c => String(c.paymentType || '').toUpperCase() === 'CPO';
 export const STRATEGY = {
   TARGET_BIDS: { t: 'Средняя стоимость клика', s: 'ср. клик' },
   TARGET_CIR: { t: 'Целевой расход', s: 'ЦР' },
-  MAX_CLICKS: { t: 'Автостратегия', s: 'АС' },
-  TOP_MAX_CLICKS: { t: 'Вывод в ТОП', s: 'ТОП' },
+  // Сверено с кабинетом Ozon: TOP_MAX_CLICKS в интерфейсе — «Автостратегия».
+  TOP_MAX_CLICKS: { t: 'Автостратегия', s: 'АС' },
+  MAX_CLICKS: { t: 'Вывод в ТОП', s: 'ТОП' },
 };
 export function stratOf(c) {
   if (isCpoCampaign(c)) return { k: 'cpo', t: 'Оплата за заказ', s: 'за заказ' };

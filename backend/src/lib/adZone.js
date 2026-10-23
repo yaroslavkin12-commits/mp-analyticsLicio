@@ -11,7 +11,7 @@ function zoneOf(camp) {
   return null;
 }
 // Стратегия кампании (productAutopilotStrategy) — по-русски, как в кабинете Ozon.
-const STRATEGY_RU = { TARGET_BIDS: 'средняя стоимость клика', TARGET_CIR: 'целевой расход', MAX_CLICKS: 'автостратегия', TOP_MAX_CLICKS: 'вывод в ТОП' };
+const STRATEGY_RU = { TARGET_BIDS: 'средняя стоимость клика', TARGET_CIR: 'целевой расход', TOP_MAX_CLICKS: 'автостратегия', MAX_CLICKS: 'вывод в ТОП' };
 function strategyOf(camp) { return STRATEGY_RU[String(camp?.autopilot_strategy || '').toUpperCase()] || null; }
 // Целевой ДРР стратегии «Целевой расход» — из сырых полей кампании (колонка extra
 // вкладки Campaigns, JSON). Ozon называет поле по-разному — ищем по смыслу ключа.

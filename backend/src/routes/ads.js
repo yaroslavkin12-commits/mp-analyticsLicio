@@ -816,7 +816,7 @@ router.get('/stats', async (req, res) => {
         // вывод в ТОП) — отдельные строки цены клика и расхода; ручные ставки и
         // «средняя стоимость клика» — по зоне (поиск / поиск + рекомендации).
         const strat = String(camp.autopilot_strategy || '').toUpperCase();
-        const kind = isCpo ? null : strat === 'TARGET_CIR' ? 'Cir' : strat === 'MAX_CLICKS' ? 'Auto' : strat === 'TOP_MAX_CLICKS' ? 'Top' : null;
+        const kind = isCpo ? null : strat === 'TARGET_CIR' ? 'Cir' : strat === 'TOP_MAX_CLICKS' ? 'Auto' : strat === 'MAX_CLICKS' ? 'Top' : null;
         const targetDrr = targets.get(String(camp.campaign_id)) ?? targetDrrOf(camp.extra);
         let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
         let splitDays = 0;
