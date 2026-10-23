@@ -285,3 +285,14 @@ tr:hover .a-ungroup { opacity: 1; }
    Дни внутри «По дням» листаются своим скроллом, «Метрика» и «Итого» закреплены. */
 .mpui .a-scroll{container-type:inline-size}
 .mpui tr.a-detail>td>.a-dwrap{position:sticky;left:0;width:100cqw;box-sizing:border-box}
+/* Основная таблица «Рекламы» — компактнее, чтобы целиком влезала в экран ноутбука:
+   шапка в две строки, меньше отступы, подписи под цифрами переносятся. */
+.mpui table.a-t.a-main{min-width:0}
+.mpui table.a-t.a-main th{white-space:normal;line-height:1.25;padding:8px 7px;vertical-align:bottom;max-width:96px}
+.mpui table.a-t.a-main th:first-child{max-width:none}
+.mpui table.a-t.a-main td{padding:8px 7px;font-size:13px}
+.mpui table.a-t.a-main .a-spendsub{white-space:normal;max-width:118px;margin-left:auto;line-height:1.25}
+.mpui table.a-t.a-main .a-art .model{max-width:150px}
+.mpui table.a-t.a-main .pill{min-width:50px;padding:2px 6px}
+.mpui .a-subtg{margin-left:6px;border:1px solid var(--a-line2);background:transparent;color:var(--a-ink3);border-radius:5px;font-size:10.5px;padding:0 5px;line-height:16px;cursor:pointer;font-family:var(--a-ui)}
+.mpui .a-subtg:hover{color:var(--a-ink);border-color:var(--a-ink3)}

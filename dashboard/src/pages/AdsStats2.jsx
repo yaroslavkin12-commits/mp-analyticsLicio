@@ -584,7 +584,7 @@ const DAY_ROWS = [
   { block: 'Заказы и остаток', tone: 'rev' },
   { key: 'revenue', label: 'Заказы, ₽', fmt: 'money', good: 'up', editable: true },
   { key: 'orders', label: 'Заказы, шт', fmt: 'int', good: 'up', editable: true },
-  { key: 'selfQ', label: 'самовыкупы (не в заказах)', fmt: 'int', sub: true, hideEmpty: true, hint: 'Отмечены в «Ленте заказов»: из заказов и ДРР убраны, их комиссия, эквайринг, налог и сервисный сбор 20 ₽ (FBS) вычтены из прогнозируемой прибыли' },
+  { key: 'selfQ', label: 'самовыкупы (не в заказах)', fmt: 'int', sub: true, hideEmpty: true, toggleOf: 'orders', hint: 'Отмечены в «Ленте заказов»: из заказов и ДРР убраны, их комиссия, эквайринг, налог и сервисный сбор 20 ₽ (FBS) вычтены из прогнозируемой прибыли' },
   { key: 'stock', label: 'Остаток, шт', fmt: 'int', good: 'up', total: 'last' },
   { block: 'Трафик и позиции', tone: 'traffic' },
   { key: 'position', label: 'Позиция в поиске', fmt: 'pos', good: 'down', editable: true, total: 'avg', onlyAll: true },
@@ -649,11 +649,15 @@ function EditCell({ value, fmt, bg, manual, onSave }) {
 
 export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys }) {
   const ref = useRef(null);
+  const [openSub, setOpenSub] = useState(false);
   const today = dayjs().format('YYYY-MM-DD');
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
   const rows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
     // Строки стратегий — только если у товара за период был такой расход.
-    && !(r.hideEmpty && !dates.some(d => (model.byDate[d]?.[r.spendKey || r.key] || 0) > 0))));
+    && !(r.hideEmpty && !dates.some(d => (model.byDate[d]?.[r.spendKey || r.key] || 0) > 0))
+    // Самовыкупы — под «+» у строки заказов, чтобы не перегружать таблицу.
+    && !(r.toggleOf && !openSub)));
+  const selfN = dates.reduce((s, d) => s + (model.byDate[d]?.selfQ || 0), 0);
   return (
     <div className="a-days" ref={ref}>
       <table className="a-dt">
@@ -673,7 +677,8 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
             const label = mode === 'ads' && row.adsLabel ? row.adsLabel : row.label;
             return (
               <tr key={row.key} className={row.sub ? `sub${row.sub === 2 ? ' sub2' : ''}` : ''}>
-                <td className="lbl" title={row.hint || undefined} style={row.hint ? { textDecoration: 'underline dotted var(--a-line2)', textUnderlineOffset: 3 } : undefined}>{row.sub === 2 ? '· ' : row.sub ? '— ' : ''}{label}</td>
+                <td className="lbl" title={row.hint || undefined} style={row.hint ? { textDecoration: 'underline dotted var(--a-line2)', textUnderlineOffset: 3 } : undefined}>{row.sub === 2 ? '· ' : row.sub ? '— ' : ''}{label}
+                  {row.key === 'orders' && selfN > 0 && <button type="button" className="a-subtg" onClick={e => { e.stopPropagation(); setOpenSub(v => !v); }} title="Самовыкупы: из заказов убраны">{openSub ? '−' : '+'} сам. {fmtInt(selfN)}</button>}</td>
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {
                   const d = dates[i];
@@ -1421,7 +1426,7 @@ export default function AdsStats2({ cabinet }) {
               )}
             </div>
           </td>
-          <td><SparkBars values={dates.map(d => m.byDate[d]?.orders || 0)} /></td>
+          <td><SparkBars values={dates.map(d => m.byDate[d]?.orders || 0)} w={78} /></td>
           <td className="n">{fmtInt(m.totals.revenue)}{showAssoc && assocLine(a.associated, 'revenue', m.totals.revenue)}</td>
           <td className="n">{fmtInt(m.totals.orders)}{showAssoc && assocLine(a.associated, 'orders', m.totals.orders)}</td>
           <td>
@@ -1433,13 +1438,13 @@ export default function AdsStats2({ cabinet }) {
           <td className="n" onClick={e => e.stopPropagation()}><TransitCell value={transit[key]} onSave={p => saveTransit(key, p)} /></td>
           <td className="n">
             {fmtInt(m.totals.spend)}{split && <span className="a-approx" title="Часть расхода — мультитоварная РК, поделена поровну между её артикулами">≈</span>}
-            <span className="a-spendsub">клик {fmtInt(m.totals.spendCpc)} · заказ {m.totals.spendCpo ? fmtInt(m.totals.spendCpo) : '—'}
+            <span className="a-spendsub">{m.totals.spendCpo ? <>клик {fmtInt(m.totals.spendCpc)}<br />заказ {fmtInt(m.totals.spendCpo)}</> : m.totals.spendCpc ? 'за клик' : ''}
               {m.totals.spendCpoUndated > 0 && <span className="a-undated" title={`${fmtInt(m.totals.spendCpoUndated)} ₽ расхода за заказ без найденной даты заказа — стоит на дне списания`}>!</span>}
             </span>
           </td>
           {(() => { const pr = profitOf(a); const db = pr && pr.expRev > 0 ? (m.totals.spend || 0) / pr.expRev * 100 : null; return (
             <td title="Сверху — расход / сумма заказов; ниже — с учётом выкупа: расход / (заказы × % выкупа)"><span className={`pill ${drrClass(m.totals.drr)}`}>{m.totals.drr === null ? (m.totals.spend > 0 ? '×' : '—') : fmtPct(m.totals.drr)}</span>
-              {db !== null && m.totals.spend > 0 ? <span className="a-spendsub">с выкупом {fmtPct(db)}</span> : null}</td>); })()}
+              {db !== null && m.totals.spend > 0 ? <span className="a-spendsub" title="С учётом выкупа">выкуп {fmtPct(db)}</span> : null}</td>); })()}
           {(() => { const pr = profitOf(a); return (
             <>
               <td className="n" title={pr ? `Ожидаемая выручка ${fmtInt(pr.expRev)} ₽ (выкуп), комиссия ${fmtInt(pr.comm)}, логистика ${fmtInt(pr.logi)}, эквайринг ${fmtInt(pr.acq)}, прочее ${fmtInt(pr.other)}, себестоимость ${fmtInt(pr.cost)}, налог ${fmtInt(pr.tax)}, реклама ${fmtInt(pr.ads)}${pr.selfCost ? `, самовыкупы ${fmtInt(pr.selfCost)}` : ''}` : 'Нет данных юнит-экономики'}>
@@ -1635,7 +1640,7 @@ export default function AdsStats2({ cabinet }) {
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctlAds} /></div>
         <div className="a-scroll">
-          <table className="a-t">
+          <table className="a-t a-main">
             <thead>
               <tr>
                 {COLS.map((c, i) => c.k ? (
@@ -1660,8 +1665,8 @@ export default function AdsStats2({ cabinet }) {
                   <td className="n">{fmtInt(T.orders)}{showAssoc && assocLine(assocForRows, 'orders', T.orders)}</td>
                   <td className="n">{fmtInt(total.stockNow)}</td>
                   <td className="n">{(() => { const t = rows.reduce((x, r) => x + trQ(transit[r.offerId]), 0); return t ? fmtInt(t) : '—'; })()}</td>
-                  <td className="n">{fmtInt(T.spend)}<span className="a-spendsub">клик {fmtInt(T.spendCpc)} · заказ {T.spendCpo ? fmtInt(T.spendCpo) : '—'}</span></td>
-                  <td><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span>{T.drrB !== null && T.drrB !== undefined ? <span className="a-spendsub">с выкупом {fmtPct(T.drrB)}</span> : null}</td>
+                  <td className="n">{fmtInt(T.spend)}<span className="a-spendsub">{T.spendCpo ? <>клик {fmtInt(T.spendCpc)}<br />заказ {fmtInt(T.spendCpo)}</> : 'за клик'}</span></td>
+                  <td><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span>{T.drrB !== null && T.drrB !== undefined ? <span className="a-spendsub" title="С учётом выкупа">выкуп {fmtPct(T.drrB)}</span> : null}</td>
                   {(() => { let p = 0, e = 0, any = false; for (const r of rows) { const x = profitOf(r); if (x) { p += x.profit; e += x.expRev; any = true; } } return (
                     <><td className="n"><b style={{ color: p < 0 ? 'var(--a-bad)' : undefined }}>{any ? fmtInt(p) : '—'}</b></td>
                     <td>{any && e > 0 ? <span className={`pill ${p < 0 ? 'b' : p / e * 100 < 10 ? 'w' : 'g'}`}>{fmtPct(p / e * 100)}</span> : '—'}</td></>
