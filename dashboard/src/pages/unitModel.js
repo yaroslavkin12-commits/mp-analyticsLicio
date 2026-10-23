@@ -63,17 +63,17 @@ export function unitCoefs(coefs, arts, shareOf) {
 }
 
 // Прогноз по заказам: ordRub, ordQty, ads (расход на рекламу), fbs — доля FBS (по умолчанию из 30 дней).
-// selfRub / selfQty — самовыкупы (в заказах их нет): товар и деньги возвращаются, но Ozon
-// берёт комиссию, эквайринг и прямую логистику, а выручка облагается налогом — это расход.
-export function unitProfit(k, { ordRub, ordQty, ads = 0, fbs, selfRub = 0, selfQty = 0 }, taxPct = 6) {
+// selfRub — самовыкупы (в заказах их нет): товар и деньги возвращаются, но Ozon берёт
+// комиссию и эквайринг, а выручка попадает в налог (как в P&L) — это расход. Логистики нет:
+// доставку Ozon списывает, но столько же перечисляет «за доставку от покупателя».
+export function unitProfit(k, { ordRub, ordQty, ads = 0, fbs, selfRub = 0 }, taxPct = 6) {
   const sh = fbs === undefined || fbs === null ? k.fbs30 : fbs;
   const expRev = ordRub * k.buyout, expQty = ordQty * k.buyout;
   const comm = expRev * (k.commFbo * (1 - sh) + k.commFbs * sh);
   const logi = ordQty * k.logi, acq = expRev * k.acq, other = expRev * k.other;
   // Налог — от того, что заплатил покупатель (цена после скидки Ozon), а не от нашей цены.
   const cost = k.cost ? expQty * k.cost : 0, tax = expRev * (k.share ?? 1) * taxPct / 100;
-  const selfCost = selfRub > 0 || selfQty > 0
-    ? selfRub * (k.commFbo * (1 - sh) + k.commFbs * sh + k.acq) + selfQty * (k.direct ?? k.logi) + selfRub * (k.share ?? 1) * taxPct / 100 : 0;
+  const selfCost = selfRub > 0 ? selfRub * (k.commFbo * (1 - sh) + k.commFbs * sh + k.acq) + selfRub * (k.share ?? 1) * taxPct / 100 : 0;
   const profit = expRev - comm - logi - acq - other - cost - tax - ads - selfCost;
   return { expRev, expQty, comm, logi, acq, other, cost, tax, ads, selfCost, profit, margin: expRev > 0 ? profit / expRev * 100 : null, noCost: !k.cost };
 }
