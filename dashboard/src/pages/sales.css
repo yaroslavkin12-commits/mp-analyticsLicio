@@ -407,3 +407,18 @@
 .mpui .of-price{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--a-ink2)}
 .mpui .of-price input{width:70px;padding:5px 7px;border:1px solid var(--a-line2);border-radius:7px;background:var(--a-panel);color:var(--a-ink);font-size:12.5px;text-align:right}
 .mpui .of-price .of-x{border:0;background:transparent;color:var(--a-ink3);cursor:pointer;font-size:15px;padding:0 4px}
+/* РНП: одна таблица — вкладки категорий сверху, разделы метрик сворачиваются */
+.mpui .rnp-nav { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0 10px; }
+.mpui .rnp-subs { display: flex; gap: 8px; flex-wrap: wrap; }
+.mpui .rnp-subs .a-sel { max-width: 300px; }
+.mpui .rnp-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 2px 8px; }
+.mpui .rnp-title b { font-size: 16px; }
+.mpui .rnp-title span { color: var(--a-ink3); font-size: 12.5px; }
+.mpui .rnp-title .a-btn { padding: 3px 10px; font-size: 12px; }
+.mpui table.rnp-t.rnp-one .rnp-m { left: 0; width: 230px; min-width: 230px; max-width: 230px; }
+.mpui table.rnp-t tr.rnp-sech td { padding: 0; height: auto; overflow: visible; background: var(--a-panel2); border-bottom: 1px solid var(--a-line); }
+.mpui .rnp-secb { position: sticky; left: 0; display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--a-ink); font-weight: 700; font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; padding: 7px 10px; cursor: pointer; }
+.mpui .rnp-secb .rnp-chev { width: 18px; height: 18px; display: inline-grid; place-items: center; }
+.mpui .rnp-secb small { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--a-ink3); font-size: 11.5px; }
+.mpui table.rnp-t tbody.rnp-sec:hover td.rnp-m { background: var(--a-panel2); }
+.mpui .rnp-key { color: var(--a-warn); margin-left: 4px; font-size: 10px; }

@@ -23,7 +23,7 @@ import './sales.css';
 // и срезы считаются мгновенно.
 // ─────────────────────────────────────────────────────────────────────────
 
-const K = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spendCpc', 'spendCpo', 'clicks', 'adOrders', 'adRevenue'];
+const K = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spendCpc', 'spendCpo', 'clicks', 'adOrders', 'adRevenue', 'adViews'];
 const SEP = ' / ';
 // Цвета категорий (проверены на различимость, в т.ч. при дальтонизме).
 // Цвет закреплён за категорией по её месту в справочнике, а не по рангу.
@@ -54,6 +54,7 @@ function prepare(data) {
     a.views[d] = r[2]; a.pdpViews[d] = r[3]; a.cart[d] = r[4]; a.orders[d] = r[5]; a.revenue[d] = r[6];
     a.spendCpc[d] = r[7]; a.spendCpo[d] = r[8]; a.clicks[d] = r[9]; a.adOrders[d] = r[10]; a.adRevenue[d] = r[11];
     if (r[12] !== null) a.pos[d] = r[12];
+    a.adViews[d] = r[13] || 0;
   }
   // Остаток: в данных только дни, когда он менялся — переносим вперёд.
   const byArt = new Map();

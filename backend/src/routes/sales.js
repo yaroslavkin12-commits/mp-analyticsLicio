@@ -60,7 +60,7 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
   const add = (offer, date, k, v) => {
     if (!v) return;
     const key = `${offer}|${date}`;
-    const cur = out.get(key) || { cpc: 0, cpo: 0, clicks: 0, adOrders: 0, adRevenue: 0 };
+    const cur = out.get(key) || { cpc: 0, cpo: 0, clicks: 0, adOrders: 0, adRevenue: 0, adViews: 0 };
     cur[k] += v;
     out.set(key, cur);
   };
@@ -85,6 +85,7 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
     if (!o) { lost(r.date, num(r.expense)); continue; }
     add(o, r.date, 'cpc', num(r.expense));
     add(o, r.date, 'clicks', num(r.clicks));
+    add(o, r.date, 'adViews', num(r.views));
     add(o, r.date, 'adOrders', num(r.orders));
     add(o, r.date, 'adRevenue', num(r.sales));
   }
@@ -120,6 +121,7 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
     for (const o of targets) {
       add(o, r.date, isCpo ? 'cpo' : 'cpc', spend / k);
       add(o, r.date, 'clicks', num(r.clicks) / k);
+      add(o, r.date, 'adViews', num(r.views) / k);
       add(o, r.date, 'adOrders', num(r.orders) / k);
       add(o, r.date, 'adRevenue', num(r.orders_money) / k);
     }
@@ -160,9 +162,9 @@ router.get('/data', async (req, res) => {
               GROUP BY offer_id`, P),
       query(`SELECT campaign_id, matched_offer_id, payment_type, adv_object_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, P),
       query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, P).catch(() => []),
-      query(`SELECT date::text AS date, campaign_id, spend, clicks, orders, orders_money
+      query(`SELECT date::text AS date, campaign_id, spend, clicks, views, orders, orders_money
                FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, adFrom, to]),
-      query(`SELECT date::text AS date, campaign_id, sku, clicks, orders, sales, expense
+      query(`SELECT date::text AS date, campaign_id, sku, clicks, views, orders, sales, expense
                FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, adFrom, to]).catch(() => []),
       query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense, COALESCE(to_jsonb(t)->>'kind', '') AS kind
                FROM ad_cpo_orders t WHERE cabinet = $1 AND platform = 'ozon'
@@ -206,12 +208,12 @@ router.get('/data', async (req, res) => {
     const offerOf = r => r.offer_id || offerBySku.get(String(r.sku)) || (r.sku ? `sku:${r.sku}` : null);
 
     const di = new Map(dates.map((d, i) => [d, i]));
-    // Строка дня: [ai, di, views, pdp, cart, orders, revenue, spendCpc, spendCpo, clicks, adOrders, adRevenue, position]
+    // Строка дня: [ai, di, views, pdp, cart, orders, revenue, spendCpc, spendCpo, clicks, adOrders, adRevenue, position, adViews]
     const rows = new Map();
     const row = (ai, d) => {
       const k = ai * 1000 + d;
       let r = rows.get(k);
-      if (!r) { r = [ai, d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null]; rows.set(k, r); }
+      if (!r) { r = [ai, d, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, 0]; rows.set(k, r); }
       return r;
     };
     for (const r of anRows) {
@@ -246,12 +248,12 @@ router.get('/data', async (req, res) => {
       const dIdx = di.get(d);
       if (dIdx === undefined) continue;
       const x = row(art(o, '', null), dIdx);
-      x[7] += v.cpc; x[8] += v.cpo; x[9] += v.clicks; x[10] += v.adOrders; x[11] += v.adRevenue;
+      x[7] += v.cpc; x[8] += v.cpo; x[9] += v.clicks; x[10] += v.adOrders; x[11] += v.adRevenue; x[13] += v.adViews || 0;
     }
     const outRows = [];
     for (const r of rows.values()) {
       for (const k of [6, 7, 8, 11]) r[k] = r2(r[k]);
-      for (const k of [9, 10]) r[k] = Math.round(r[k] * 10) / 10;
+      for (const k of [9, 10, 13]) r[k] = Math.round(r[k] * 10) / 10;
       outRows.push(r);
     }
 

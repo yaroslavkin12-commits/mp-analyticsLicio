@@ -19,7 +19,7 @@ const SEP = ' / ';
 const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other'];
 const OZ_T = { commission: 'Комиссия', logistics: 'Логистика', acquiring: 'Эквайринг', storage: 'Хранение', promo: 'Продвижение и акции', other: 'Прочие услуги' };
 // Суммы по дню (складываются по артикулам и по дням).
-const KEYS = ['selfQ', 'selfR', 'views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'adOrders', 'clicks', 'stock', 'stockN',
+const KEYS = ['selfQ', 'selfR', 'views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'adOrders', 'clicks', 'adViews', 'stock', 'stockN',
   'buyQty', 'buyRub', 'nsSale', ...OZ.map(k => 'oz_' + k), 'ozAds', 'nsOther', 'nsAds', 'adLate', 'cost', 'taxBase', 'finAny',
   'fProfit', 'fRev', 'fAny', 'bW', 'bN', 'pW', 'cW', 'wN', 'pS', 'cS', 'pN'];
 const LAST = new Set(['stock', 'stockN']); // остаток — на конец периода, а не сумма
@@ -27,35 +27,42 @@ const LAST = new Set(['stock', 'stockN']); // остаток — на конец
 const d0 = (a, b) => (b ? a / b : null);
 const pc = (a, b) => (b ? (a / b) * 100 : null);
 // dir: 1 — больше лучше, -1 — меньше лучше, 0 — без подсветки.
+// Разделы таблицы. key — строка видна и в свёрнутом разделе («кратко»).
+const SECTIONS = ['Заказы', 'Воронка', 'Реклама', 'Прогноз прибыли', 'Прибыль'];
+const buyPct = S => d0(S.bW, S.bN); // % выкупа (модель), взвешенный по заказам
+const priceP = S => (S.wN ? S.pW / S.wN : d0(S.pS, S.pN)), priceC = S => (S.wN ? S.cW / S.wN : d0(S.cS, S.pN));
 const METRICS = [
-  { g: 'Воронка', k: 'views', t: 'Показы', kind: 'int', dir: 1, v: S => S.views },
-  { g: 'Воронка', k: 'pdp', t: 'Переходы в карточку', kind: 'int', dir: 1, v: S => S.pdp },
-  { g: 'Воронка', k: 'ctr', t: 'CTR (показ → карточка), %', kind: 'pct', dir: 1, v: S => pc(S.pdp, S.views) },
-  { g: 'Воронка', k: 'cart', t: 'В корзину, шт', kind: 'int', dir: 1, v: S => S.cart },
-  { g: 'Воронка', k: 'crCart', t: 'Конверсия в корзину, %', kind: 'pct', dir: 1, v: S => pc(S.cart, S.pdp) },
-  { g: 'Воронка', k: 'crOrder', t: 'Конверсия в заказ, %', kind: 'pct', dir: 1, v: S => pc(S.orders, S.pdp) },
-  { g: 'Заказы', k: 'orders', t: 'Заказы, шт', kind: 'int', dir: 1, v: S => S.orders, strong: true },
-  { g: 'Заказы', k: 'revenue', t: 'Заказы, ₽', kind: 'rub', dir: 1, v: S => S.revenue, strong: true },
-  { g: 'Заказы', k: 'avgCheck', t: 'Средний чек, ₽', kind: 'rub', dir: 0, v: S => d0(S.revenue, S.orders) },
+  { g: 'Заказы', k: 'orders', t: 'Заказы, шт', kind: 'int', dir: 1, key: true, strong: true, v: S => S.orders },
+  { g: 'Заказы', k: 'revenue', t: 'Заказы, ₽', kind: 'rub', dir: 1, key: true, strong: true, v: S => S.revenue },
+  { g: 'Заказы', k: 'spp', t: 'СПП, %', kind: 'pct', dir: 0, key: true, v: S => { const p = priceP(S), c = priceC(S); return p && c ? (1 - c / p) * 100 : null; } },
+  { g: 'Заказы', k: 'buyout', t: 'Выкуп, %', kind: 'pct', dir: 1, key: true, v: S => buyPct(S) },
+  { g: 'Заказы', k: 'avgCheck', t: 'Средний чек, ₽', kind: 'rub', dir: 0, key: true, v: S => d0(S.revenue, S.orders) },
+  { g: 'Заказы', k: 'stock', t: 'Остаток, шт', kind: 'int', dir: 0, v: S => (S.stockN ? S.stock : null) },
+  { g: 'Заказы', k: 'cover', t: 'Хватит на, дней', kind: 'int', dir: 1, v: (S, ctx) => (S.stockN && ctx.perDay > 0 ? S.stock / ctx.perDay : null) },
+  { g: 'Заказы', k: 'transit', t: 'В пути, шт', kind: 'int', dir: 0, now: true, v: () => null },
   { g: 'Заказы', k: 'selfQ', t: 'Самовыкупы, шт (не в заказах)', kind: 'int', dir: 0, v: S => S.selfQ },
-  { g: 'Заказы', k: 'selfR', t: 'Самовыкупы, ₽', kind: 'rub', dir: 0, v: S => S.selfR },
-  { g: 'Цена', k: 'price', t: 'Цена до СПП, ₽', kind: 'rub', dir: 0, v: S => (S.wN ? S.pW / S.wN : d0(S.pS, S.pN)) },
-  { g: 'Цена', k: 'client', t: 'Цена после СПП, ₽', kind: 'rub', dir: 0, v: S => (S.wN ? S.cW / S.wN : d0(S.cS, S.pN)) },
-  { g: 'Цена', k: 'spp', t: 'СПП, %', kind: 'pct', dir: 0, v: S => { const p = S.wN ? S.pW / S.wN : d0(S.pS, S.pN), c = S.wN ? S.cW / S.wN : d0(S.cS, S.pN); return p && c ? (1 - c / p) * 100 : null; } },
-  { g: 'Реклама', k: 'spend', t: 'Расход на рекламу, ₽', kind: 'rub', dir: 0, v: S => S.spend },
-  { g: 'Реклама', k: 'drr', t: 'ДРР от заказов, %', kind: 'pct', dir: -1, v: S => pc(S.spend, S.revenue) },
+  { g: 'Заказы', k: 'selfR', t: 'Самовыкупы, ₽', kind: 'rub', dir: 0, off: true, v: S => S.selfR },
+  { g: 'Заказы', k: 'price', t: 'Цена до СПП, ₽', kind: 'rub', dir: 0, off: true, v: S => priceP(S) },
+  { g: 'Заказы', k: 'client', t: 'Цена после СПП, ₽', kind: 'rub', dir: 0, off: true, v: S => priceC(S) },
+  { g: 'Воронка', k: 'views', t: 'Показы', kind: 'int', dir: 1, v: S => S.views },
+  { g: 'Воронка', k: 'pdp', t: 'Клики (переходы в карточку)', kind: 'int', dir: 1, v: S => S.pdp },
+  { g: 'Воронка', k: 'cart', t: 'Корзины, шт', kind: 'int', dir: 1, key: true, v: S => S.cart },
+  { g: 'Воронка', k: 'fOrders', t: 'Заказы, шт', kind: 'int', dir: 1, v: S => S.orders },
+  { g: 'Воронка', k: 'ctr', t: 'CTR (показ → клик), %', kind: 'pct', dir: 1, v: S => pc(S.pdp, S.views) },
+  { g: 'Воронка', k: 'crCart', t: 'CR в корзину, %', kind: 'pct', dir: 1, v: S => pc(S.cart, S.pdp) },
+  { g: 'Воронка', k: 'crOrder', t: 'CR в заказ, %', kind: 'pct', dir: 1, v: S => pc(S.orders, S.cart) },
+  { g: 'Реклама', k: 'spend', t: 'Расход, ₽', kind: 'rub', dir: 0, key: true, v: S => S.spend },
+  { g: 'Реклама', k: 'drr', t: 'ДРР от заказов, %', kind: 'pct', dir: -1, key: true, v: S => pc(S.spend, S.revenue) },
+  { g: 'Реклама', k: 'drrB', t: 'ДРР с учётом выкупа, %', kind: 'pct', dir: -1, v: S => { const b = buyPct(S); return b ? pc(S.spend, S.revenue * b / 100) : null; } },
   { g: 'Реклама', k: 'adOrders', t: 'Заказы с рекламы, шт', kind: 'int', dir: 1, v: S => S.adOrders },
   { g: 'Реклама', k: 'adShare', t: 'Доля заказов с рекламы, %', kind: 'pct', dir: 0, v: S => pc(S.adOrders, S.orders) },
-  { g: 'Остатки', k: 'stock', t: 'Остаток, шт', kind: 'int', dir: 0, v: S => (S.stockN ? S.stock : null) },
-  { g: 'Остатки', k: 'transit', t: 'В пути, шт', kind: 'int', dir: 0, now: true, v: () => null },
-  { g: 'Остатки', k: 'cover', t: 'Запаса хватит, дней', kind: 'int', dir: 1, v: (S, ctx) => (S.stockN && ctx.perDay > 0 ? S.stock / ctx.perDay : null) },
-  { g: 'Выкуп и прибыль', k: 'buyout', t: 'Выкуп (модель), %', kind: 'pct', dir: 1, v: S => d0(S.bW, S.bN) },
-  { g: 'Выкуп и прибыль', k: 'buyQty', t: 'Выкупы, шт', kind: 'int', dir: 1, fin: true, v: S => (S.finAny ? S.buyQty : null) },
-  { g: 'Выкуп и прибыль', k: 'buyRub', t: 'Выкупы, ₽', kind: 'rub', dir: 1, fin: true, v: S => (S.finAny ? S.buyRub : null) },
-  { g: 'Выкуп и прибыль', k: 'profitF', t: 'Прогноз: прибыль, ₽', kind: 'rub', dir: 1, v: S => (S.fAny ? S.fProfit : null) },
-  { g: 'Выкуп и прибыль', k: 'marginF', t: 'Прогноз: маржинальность, %', kind: 'pct', dir: 1, v: S => (S.fAny ? pc(S.fProfit, S.fRev) : null) },
-  { g: 'Выкуп и прибыль', k: 'profit', t: 'Прибыль факт, ₽', kind: 'rub', dir: 1, fin: true, tip: true, strong: true, v: S => (S.finAny ? S.profit : null) },
-  { g: 'Выкуп и прибыль', k: 'margin', t: 'Маржинальность факт, %', kind: 'pct', dir: 1, fin: true, tip: true, v: S => (S.finAny ? pc(S.profit, S.buyRub + S.nsSale) : null) },
+  { g: 'Реклама', k: 'adCtr', t: 'CTR рекламы, %', kind: 'pct', dir: 1, v: S => pc(S.clicks, S.adViews) },
+  { g: 'Прогноз прибыли', k: 'profitF', t: 'Прогноз прибыли, ₽', kind: 'rub', dir: 1, key: true, v: S => (S.fAny ? S.fProfit : null) },
+  { g: 'Прогноз прибыли', k: 'marginF', t: 'Прогноз маржинальности, %', kind: 'pct', dir: 1, key: true, v: S => (S.fAny ? pc(S.fProfit, S.fRev) : null) },
+  { g: 'Прибыль', k: 'buyQty', t: 'Выкупы, шт', kind: 'int', dir: 1, fin: true, key: true, v: S => (S.finAny ? S.buyQty : null) },
+  { g: 'Прибыль', k: 'buyRub', t: 'Выручка, ₽', kind: 'rub', dir: 1, fin: true, key: true, v: S => (S.finAny ? S.buyRub : null) },
+  { g: 'Прибыль', k: 'profit', t: 'Чистая прибыль, ₽', kind: 'rub', dir: 1, fin: true, tip: true, strong: true, key: true, v: S => (S.finAny ? S.profit : null) },
+  { g: 'Прибыль', k: 'margin', t: 'Маржинальность, %', kind: 'pct', dir: 1, fin: true, tip: true, key: true, v: S => (S.finAny ? pc(S.profit, S.buyRub + S.nsSale) : null) },
 ];
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
 const fmt = (v, kind) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : kind === 'pct' ? fmtPct(v) : fmtInt(v));
@@ -111,7 +118,7 @@ function artDays(a, dates, F, ctx) {
   for (let d = 0; d < L; d++) {
     S.views[d] = a.views[d]; S.pdp[d] = a.pdpViews[d]; S.cart[d] = a.cart[d]; S.orders[d] = a.orders[d]; S.revenue[d] = a.revenue[d];
     S.spendCpc[d] = a.spendCpc[d]; S.spendCpo[d] = a.spendCpo[d]; S.spend[d] = a.spendCpc[d] + a.spendCpo[d];
-    S.adOrders[d] = a.adOrders[d]; S.clicks[d] = a.clicks[d];
+    S.adOrders[d] = a.adOrders[d]; S.clicks[d] = a.clicks[d]; S.adViews[d] = a.adViews ? a.adViews[d] : 0;
     const sf = ctx.selfOf ? ctx.selfOf(a.i) : null;
     if (sf && sf[d]) { S.selfQ[d] = sf[d][0]; S.selfR[d] = sf[d][1]; }
     if (a.stockArr[d] !== null && a.stockArr[d] !== undefined) { S.stock[d] = a.stockArr[d]; S.stockN[d] = 1; }
@@ -194,10 +201,15 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   useEffect(() => { sv('gran', gran); }, [gran]);
   const [mode, setMode] = useState(() => ld('mode', 'cats'));
   useEffect(() => { sv('mode', mode); }, [mode]);
-  const [mets, setMets] = useState(() => ld('mets', METRICS.map(m => m.k)));
-  useEffect(() => { sv('mets', mets); }, [mets]);
-  const [open, setOpen] = useState(() => new Set(['__all']));
-  const [more, setMore] = useState({});
+  const [mets, setMets] = useState(() => ld('mets2', METRICS.filter(m => !m.off).map(m => m.k)));
+  useEffect(() => { sv('mets2', mets); }, [mets]);
+  // Раскрытые разделы (остальные — только главные строки).
+  const [secOpen, setSecOpen] = useState(() => ld('secs', { 'Заказы': true }));
+  useEffect(() => { sv('secs', secOpen); }, [secOpen]);
+  // Что показываем: узел дерева (категория / группа) и, при выборе, один артикул.
+  const [sel, setSel] = useState('__all');
+  const [selArt, setSelArt] = useState('');
+  useEffect(() => { setSel('__all'); setSelArt(''); }, [mode, cabinet]);
   const [pick, setPick] = useState(false);
   // Свежие дни справа — при открытии и смене периода прокручиваем таблицу к концу.
   const scrollRef = useRef(null);
@@ -341,142 +353,167 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   const shownMets = METRICS.filter(m => mets.includes(m.k));
   const fullL = L || 1;
 
-  const block = (node, depth, isArt) => {
-    const list = node.arts;
-    const T = daysOf(node.key, list);
-    const tot = bucketSum(T, allIdx, tax);
-    const { P, has, hasFin } = prevSum(list);
-    const cells = buckets.map(b => bucketSum(T, b.idx, tax));
-    const perDayTot = tot.orders / fullL;
-    const tr = list.reduce((s, o) => s + (Number(transit[o]?.q) || 0), 0);
-    const kids = isArt ? [] : node.kids.length ? node.kids : list.map(o => ({ key: 'a:' + o, o, name: o, arts: [o], kids: [], art: true }));
-    const isOpen = open.has(node.key);
-    const a = isArt ? artBy.get(node.o) : null;
-    const toggle = () => setOpen(s => { const n = new Set(s); if (n.has(node.key)) n.delete(node.key); else n.add(node.key); return n; });
-    // Дети: сортировка по заказам ₽ за период, первые 20 + «ещё».
-    let kidRows = null;
-    if (isOpen && kids.length) {
-      const sorted = [...kids].map(k => ({ k, rev: k.arts.reduce((s, o) => { const S = perArt.get(o); if (!S) return s; let v = 0; for (const x of S.revenue) v += x; return s + v; }, 0) })).sort((x, y) => y.rev - x.rev).map(x => x.k);
-      const lim = more[node.key] || 20;
-      kidRows = (
-        <>
-          {sorted.slice(0, lim).map(k => block(k, depth + 1, !!k.art))}
-          {sorted.length > lim && (
-            <tbody className="rnp-more"><tr><td colSpan={5 + buckets.length}>
-              <button type="button" className="s-fold" style={{ marginLeft: 12 + (depth + 1) * 14 }} onClick={() => setMore(m => ({ ...m, [node.key]: lim + 30 }))}>Показать ещё {Math.min(30, sorted.length - lim)} из {sorted.length - lim} ▼</button>
-            </td></tr></tbody>
-          )}
-        </>
-      );
-    }
+  // Выбранный узел: вкладка (верхний уровень) → подкатегории → артикул.
+  const node = tree.byKey.get(sel) || tree.root;
+  const pathKeys = []; { let k = node.key; while (k && k !== '__all') { pathKeys.unshift(k); const parent = [...tree.byKey.values()].find(n => n.kids.some(c => c.key === k)); k = parent ? parent.key : null; } }
+  const top = pathKeys[0] ? tree.byKey.get(pathKeys[0]) : null;
+  const lvl2 = pathKeys[1] ? tree.byKey.get(pathKeys[1]) : null;
+  const revOf = list => list.reduce((s0, o) => { const S = perArt.get(o); if (!S) return s0; let v = 0; for (const x of S.revenue) v += x; return s0 + v; }, 0);
+  const artsSorted = useMemo(() => [...node.arts].map(o => ({ o, r: revOf([o]) })).sort((x, y) => y.r - x.r).map(x => x.o), [node, perArt]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Поиск сузил список до одного артикула — сразу его и показываем.
+  const onlyArt = arts.length === 1 ? arts[0].o : '';
+  const curArt = onlyArt || (selArt && node.arts.includes(selArt) ? selArt : '');
+  const list = curArt ? [curArt] : node.arts;
+  const curKey = curArt ? 'a:' + curArt : node.key;
+  const a = curArt ? artBy.get(curArt) : null;
+  const title = curArt ? curArt : node.key === '__all' ? (mode === 'groups' ? 'Все группы' : 'Все категории') : node.name;
+
+  const T = daysOf(curKey, list);
+  const tot = bucketSum(T, allIdx, tax);
+  const { P, has, hasFin } = prevSum(list);
+  const cells = buckets.map(b => bucketSum(T, b.idx, tax));
+  const perDayTot = tot.orders / fullL;
+  const tr = list.reduce((s0, o) => s0 + (Number(transit[o]?.q) || 0), 0);
+  const ncol = 4 + buckets.length;
+
+  const metricRow = (m, mi, last) => {
+    const vals = cells.map(S => m.v(S, { perDay: perDayTot }));
+    const hs = heat(vals, m.dir, skip);
+    const vTot = m.k === 'transit' ? (tr || null) : m.k === 'cover' ? (tot.stockN && perDayTot > 0 ? tot.stock / perDayTot : null) : m.v(tot, { perDay: perDayTot });
+    const prevOk = m.fin ? hasFin : has;
+    const vPrev = !prevOk || ['stock', 'cover', 'transit', 'price', 'client', 'spp', 'buyout', 'drrB', 'adCtr', 'profitF', 'marginF', 'selfQ', 'selfR'].includes(m.k) ? null : m.v(P, { perDay: 0 });
+    const finMissing = m.fin && !fin;
     return (
-      <React.Fragment key={node.key}>
-        <tbody className={`rnp-block ${depth === 0 ? 'top' : ''} ${isArt ? 'art' : ''}`}>
-          {shownMets.map((m, mi) => {
-            // «Запаса хватит» — от средних заказов в день за весь период.
-            const vals = cells.map(S => m.v(S, { perDay: perDayTot }));
-            const hs = heat(vals, m.dir, skip);
-            const vTot = m.k === 'transit' ? (tr || null) : m.k === 'cover' ? (tot.stockN && perDayTot > 0 ? tot.stock / perDayTot : null) : m.v(tot, { perDay: perDayTot });
-            const prevOk = m.fin ? hasFin : has;
-            const vPrev = !prevOk || ['stock', 'cover', 'transit', 'price', 'client', 'spp', 'buyout', 'profitF', 'marginF', 'selfQ', 'selfR'].includes(m.k) ? null : m.v(P, { perDay: 0 });
-            const finMissing = m.fin && !fin;
-            return (
-              <tr key={m.k} className={`${m.strong ? 'rnp-strong' : ''} ${mi === 0 ? 'rnp-first' : ''} ${mi === shownMets.length - 1 ? 'rnp-last' : ''}`}>
-                {mi !== 0 ? <td className="rnp-name" /> : (
-                  <td className="rnp-name rnp-head">
-                    <div className="rnp-nm" style={{ left: 10 + depth * 12 }}>
-                      {!isArt && kids.length > 0 && <button type="button" className={`rnp-chev ${isOpen ? 'on' : ''}`} onClick={toggle} title={isOpen ? 'Свернуть' : 'Раскрыть'}>▶</button>}
-                      <div style={{ minWidth: 0 }}>
-                        <div className="rnp-ti" title={node.name}>{isArt ? node.o : node.name}</div>
-                        <div className="rnp-s">{isArt ? (a?.short || '') : `${list.length} арт.`}</div>
-                        {isArt && a?.cat && <div className="rnp-s" title={a.cat}>{a.parts?.slice(-1)[0]}</div>}
-                      </div>
-                    </div>
-                  </td>
-                )}
-                <td className="rnp-m">{m.t}</td>
-                <td className="n r rnp-tot">{finMissing ? '…' : fmt(vTot, m.kind)}</td>
-                <td className="n r rnp-prev">{m.now || finMissing ? '' : fmt(vPrev, m.kind)}</td>
-                <td className="n r rnp-dyn">{m.now || finMissing ? '' : <Delta cur={vTot} prev={vPrev} kind={m.kind} dir={m.dir} />}</td>
-                {cells.map((S, i) => (
-                  <td key={i} className={`n r ${m.tip ? 'rnp-tipc' : ''}`} style={hs[i] ? { background: hs[i] } : undefined}
-                    onMouseEnter={m.tip ? e => showTip(e, S, `${isArt ? node.o : node.name} · ${bLabel(buckets[i]).t}`) : undefined} onMouseLeave={m.tip ? () => setTip(null) : undefined}>
-                    {m.now ? '' : finMissing ? '…' : fmt(vals[i], m.kind)}
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-        {kidRows}
-      </React.Fragment>
+      <tr key={m.k} className={`${m.strong ? 'rnp-strong' : ''} ${last ? 'rnp-last' : ''}`}>
+        <td className="rnp-m">{m.t}</td>
+        <td className="n r rnp-tot">{finMissing ? '…' : fmt(vTot, m.kind)}</td>
+        <td className="n r rnp-prev">{m.now || finMissing ? '' : fmt(vPrev, m.kind)}</td>
+        <td className="n r rnp-dyn">{m.now || finMissing ? '' : <Delta cur={vTot} prev={vPrev} kind={m.kind} dir={m.dir} />}</td>
+        {cells.map((S, i) => (
+          <td key={i} className={`n r ${m.tip ? 'rnp-tipc' : ''}`} style={hs[i] ? { background: hs[i] } : undefined}
+            onMouseEnter={m.tip ? e => showTip(e, S, `${title} · ${bLabel(buckets[i]).t}`) : undefined} onMouseLeave={m.tip ? () => setTip(null) : undefined}>
+            {m.now ? '' : finMissing ? '…' : fmt(vals[i], m.kind)}
+          </td>
+        ))}
+      </tr>
     );
   };
 
-  const groupsList = [...new Set(METRICS.map(m => m.g))];
-  const T = tip?.S;
-  const tipRows = T ? [
-    ['Выкупы (за вычетом возвратов)', T.buyRub, true],
-    ['Продажи без артикула (доля)', T.nsSale],
-    ...OZ.map(k => [OZ_T[k], T['oz_' + k]]),
-    ['Прочее без артикула (доля)', T.nsOther],
-    ['Реклама', T.ozAds + T.nsAds - T.adLate],
-    ['Себестоимость', -T.cost],
-    ['Налог', -T.tax],
+  const TT = tip?.S;
+  const tipRows = TT ? [
+    ['Выкупы (за вычетом возвратов)', TT.buyRub, true],
+    ['Продажи без артикула (доля)', TT.nsSale],
+    ...OZ.map(k => [OZ_T[k], TT['oz_' + k]]),
+    ['Прочее без артикула (доля)', TT.nsOther],
+    ['Реклама', TT.ozAds + TT.nsAds - TT.adLate],
+    ['Себестоимость', -TT.cost],
+    ['Налог', -TT.tax],
   ].filter(r => r[2] || Math.abs(r[1]) >= 0.5) : [];
 
+  const allOpen = SECTIONS.every(g => secOpen[g]), noneOpen = SECTIONS.every(g => !secOpen[g]);
+  const tabs = tree.root.kids;
+  const tabCnt = n => n.arts.length;
   return (
     <div className="rnp">
-      <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '10px 0' }}>
-        <span className="tb-lbl" style={{ width: 'auto' }}>Группировка</span>
+      <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '10px 0 6px' }}>
         <span className="a-seg">{[['cats', 'Категории'], ['groups', 'Группы «Рекламы»']].map(([k, t]) => <button key={k} type="button" className={mode === k ? 'on' : ''} onClick={() => setMode(k)}>{t}</button>)}</span>
         <span className="a-seg">{[['day', 'Дни'], ['week', 'Недели'], ['month', 'Месяцы']].map(([k, t]) => <button key={k} type="button" className={gran === k ? 'on' : ''} onClick={() => setGran(k)}>{t}</button>)}</span>
+        <span className="a-seg" title="Кратко — в каждом разделе только главные строки; Подробно — все">
+          <button type="button" className={noneOpen ? 'on' : ''} onClick={() => setSecOpen({})}>Кратко</button>
+          <button type="button" className={allOpen ? 'on' : ''} onClick={() => setSecOpen(Object.fromEntries(SECTIONS.map(g => [g, true])))}>Подробно</button>
+        </span>
         <span className="tb-tplwrap" ref={pickRef}>
-          <button type="button" className="a-btn" onClick={() => setPick(p => !p)}>Метрики · {shownMets.length} ▾</button>
+          <button type="button" className="a-btn" onClick={() => setPick(p => !p)}>Строки · {shownMets.length} ▾</button>
           {pick && (
             <div className="tb-tplpop rnp-pick">
-              {groupsList.map(g => (
+              {SECTIONS.map(g => (
                 <div key={g} className="rnp-pg">
                   <div className="rnp-pgt">{g}</div>
                   {METRICS.filter(m => m.g === g).map(m => (
                     <label key={m.k} className="tb-chk" style={{ display: 'flex', padding: '2px 0' }}>
-                      <input type="checkbox" checked={mets.includes(m.k)} onChange={e => setMets(x => (e.target.checked ? METRICS.map(y => y.k).filter(k => x.includes(k) || k === m.k) : x.filter(k => k !== m.k)))} />{m.t}
+                      <input type="checkbox" checked={mets.includes(m.k)} onChange={e => setMets(x => (e.target.checked ? METRICS.map(y => y.k).filter(k => x.includes(k) || k === m.k) : x.filter(k => k !== m.k)))} />{m.t}{m.key ? <span className="rnp-key" title="Видна и в кратком виде">★</span> : null}
                     </label>
                   ))}
                 </div>
               ))}
               <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button type="button" className="a-btn ghost" onClick={() => setMets(METRICS.filter(m => !m.off).map(m => m.k))}>по умолчанию</button>
                 <button type="button" className="a-btn ghost" onClick={() => setMets(METRICS.map(m => m.k))}>все</button>
-                <button type="button" className="a-btn ghost" onClick={() => setMets(['orders', 'revenue', 'spend', 'drr', 'stock', 'profitF', 'profit', 'margin'])}>главное</button>
               </div>
             </div>
           )}
         </span>
-        <button type="button" className="a-btn ghost" onClick={() => setOpen(new Set(['__all']))}>свернуть всё</button>
-        <span className="a-hint" style={{ margin: 0 }}>▶ — раскрыть до подкатегорий и артикулов · ячейки: зеленее — лучше, краснее — хуже · наведите на прибыль — раскладка{!fin ? ' · начисления Ozon загружаются…' : ''}</span>
+        <span className="a-hint" style={{ margin: 0 }}>ячейки: зеленее — лучше, краснее — хуже · наведите на прибыль — раскладка{!fin ? ' · начисления Ozon загружаются…' : ''}</span>
+      </div>
+      {!onlyArt && (
+        <div className="rnp-nav">
+          <div className="a-tabs">
+            <button type="button" className={`a-tab ${node.key === '__all' ? 'on' : ''}`} onClick={() => { setSel('__all'); setSelArt(''); }}>Все<span className="c">{arts.length}</span></button>
+            {tabs.map(n => <button key={n.key} type="button" className={`a-tab ${top && top.key === n.key ? 'on' : ''}`} onClick={() => { setSel(n.key); setSelArt(''); }}>{n.name}<span className="c">{tabCnt(n)}</span></button>)}
+          </div>
+          <div className="rnp-subs">
+            {top && top.kids.length > 0 && (
+              <select className="a-sel" value={lvl2 ? lvl2.key : ''} onChange={e => { setSel(e.target.value || top.key); setSelArt(''); }} title="Подкатегория">
+                <option value="">Все: {top.name}</option>
+                {top.kids.map(k => <option key={k.key} value={k.key}>{k.name} · {k.arts.length}</option>)}
+              </select>
+            )}
+            {lvl2 && lvl2.kids.length > 0 && (
+              <select className="a-sel" value={pathKeys[2] || ''} onChange={e => { setSel(e.target.value || lvl2.key); setSelArt(''); }} title="Подкатегория">
+                <option value="">Все: {lvl2.name}</option>
+                {lvl2.kids.map(k => <option key={k.key} value={k.key}>{k.name} · {k.arts.length}</option>)}
+              </select>
+            )}
+            <select className="a-sel" value={curArt} onChange={e => setSelArt(e.target.value)} title="Один артикул — по убыванию заказов, ₽">
+              <option value="">Все артикулы · {node.arts.length}</option>
+              {artsSorted.map(o => <option key={o} value={o}>{o}{artBy.get(o)?.short ? ` · ${artBy.get(o).short}` : ''}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+      <div className="rnp-title">
+        <b>{title}</b>
+        <span>{curArt ? (a?.n || a?.short || '') : `${list.length} арт.`}{curArt && a?.cat ? ` · ${a.cat}` : ''}</span>
+        {curArt && !onlyArt && <button type="button" className="a-btn ghost" onClick={() => setSelArt('')}>← ко всем артикулам</button>}
       </div>
       <div className="a-card rnp-card">
         <div className="a-scroll rnp-scroll" ref={scrollRef}>
-          <table className="a-t rnp-t no-sh">
+          <table className="a-t rnp-t no-sh rnp-one">
             <thead><tr>
-              <th className="rnp-name l">Группа / артикул</th>
               <th className="rnp-m l">Метрика</th>
               <th className="r rnp-tot">Итого</th>
               <th className="r rnp-prev" title="Такой же по длине период перед выбранным">Пред. период</th>
               <th className="r rnp-dyn">Динамика</th>
               {buckets.map(b => { const l = bLabel(b); return <th key={b.key} className={`r rnp-d ${l.we ? 'we' : ''} ${b.partial ? 'part' : ''}`} title={b.partial ? 'Сегодня — день ещё идёт, в подсветке не участвует' : undefined}><div>{l.t}</div><small>{l.s}</small></th>; })}
             </tr></thead>
-            {block(tree.root, 0, false)}
+            {SECTIONS.map(g => {
+              const all = shownMets.filter(m => m.g === g);
+              if (!all.length) return null;
+              const opened = !!secOpen[g];
+              const rows = opened ? all : all.filter(m => m.key);
+              const hidden = all.length - rows.length;
+              return (
+                <tbody key={g} className="rnp-sec">
+                  <tr className="rnp-sech"><td colSpan={ncol}>
+                    <button type="button" className="rnp-secb" onClick={() => setSecOpen(x => ({ ...x, [g]: !x[g] }))}>
+                      <span className={`rnp-chev ${opened ? 'on' : ''}`}>▶</span>{g}
+                      {!opened && hidden > 0 && <small>ещё {hidden}</small>}
+                    </button>
+                  </td></tr>
+                  {rows.map((m, i) => metricRow(m, i, i === rows.length - 1))}
+                </tbody>
+              );
+            })}
           </table>
         </div>
       </div>
-      {tip && T && (
+      {tip && TT && (
         <div className="rnp-tip" style={{ left: tip.x, top: tip.y }}>
           <div className="rnp-tipt">Прибыль · {tip.title}</div>
           {tipRows.map(([t, v, head]) => (
-            <div key={t} className={`rnp-tr ${head ? 'h' : ''}`}><span>{t}</span><b>{fmtInt(v)} ₽</b><i>{T.buyRub ? fmtPct((v / T.buyRub) * 100) : ''}</i></div>
+            <div key={t} className={`rnp-tr ${head ? 'h' : ''}`}><span>{t}</span><b>{fmtInt(v)} ₽</b><i>{TT.buyRub ? fmtPct((v / TT.buyRub) * 100) : ''}</i></div>
           ))}
-          <div className="rnp-tr tot"><span>Прибыль</span><b className={T.profit < 0 ? 's-down' : 's-up'}>{fmtInt(T.profit)} ₽</b><i>{T.buyRub ? fmtPct((T.profit / T.buyRub) * 100) : ''}</i></div>
+          <div className="rnp-tr tot"><span>Прибыль</span><b className={TT.profit < 0 ? 's-down' : 's-up'}>{fmtInt(TT.profit)} ₽</b><i>{TT.buyRub ? fmtPct((TT.profit / TT.buyRub) * 100) : ''}</i></div>
           <div className="rnp-tipn">% — от выкупов. Как в «P&L»: начисления Ozon дня; реклама за дни, которые Ozon ещё не провёл, — из кабинета.</div>
         </div>
       )}
