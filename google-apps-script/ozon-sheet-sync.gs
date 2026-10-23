@@ -642,9 +642,18 @@ function collectPostings_(cab, url, scheme, since, out) {
 }
 
 // Каждые 5 минут (триггер) — заказы за 2 дня по всем кабинетам.
-function syncOrders() {
+// Разово: перезабрать заказы за 14 дней (например, чтобы подтянулись цены после смены
+// методов Ozon). Вкладка Orders 3 часа хранит 14 дней — сервис успевает их забрать.
+function backfillOrders14d() {
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('ORDERS_KEEP_UNTIL', String(Date.now() + 3 * 3600000));
+  syncOrders(14);
+}
+
+function syncOrders(days) {
   const cabinets = getCabinets_();
-  const since = new Date(Date.now() - 2 * 86400000).toISOString();
+  const sinceDays = typeof days === 'number' && days > 0 ? days : 2;
+  const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
   const rows = [];
   cabinets.forEach(function (cab) {
     try { collectPostings_(cab, 'https://api-seller.ozon.ru/v2/posting/fbo/list', 'fbo', since, rows); } catch (e) { Logger.log('Заказы FBO ' + cab.id + ': ' + e.message); }
@@ -653,7 +662,8 @@ function syncOrders() {
   });
   const map = readSheetAsMap_(SHEET_NAMES.orders, [0, 1, 2]);
   rows.forEach(function (r) { map[[r[0], r[1], r[2]].join('|')] = r; });
-  const cutoff = new Date(Date.now() - ORDERS_KEEP_DAYS * 86400000).toISOString();
+  const keepLong = Number(PropertiesService.getScriptProperties().getProperty('ORDERS_KEEP_UNTIL') || 0) > Date.now();
+  const cutoff = new Date(Date.now() - (keepLong ? 15 : ORDERS_KEEP_DAYS) * 86400000).toISOString();
   const all = Object.keys(map).map(function (k) { return map[k]; })
     .filter(function (r) { return !r[9] || String(r[9]) >= cutoff; });
   writeRows_(SHEET_NAMES.orders, ORDERS_HEADERS, all);
