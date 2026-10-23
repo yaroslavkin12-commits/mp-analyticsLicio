@@ -610,7 +610,8 @@ router.get('/stats', async (req, res) => {
     for (let d = dayjs(from); !d.isAfter(to, 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
 
     // Самовыкупы (лента заказов) — не заказы.
-    { const OF = require('../lib/orderFeed'); OF.applyToAnalytics(analyticsRows, await OF.selfByDay(cabinet, from, to)); }
+    const selfMap = await require('../lib/orderFeed').selfByDay(cabinet, from, to);
+    require('../lib/orderFeed').applyToAnalytics(analyticsRows, selfMap);
     const analyticsByKey = new Map(); // sku|date -> row
     for (const r of analyticsRows) analyticsByKey.set(`${r.sku}|${r.date}`, r);
 
@@ -940,7 +941,12 @@ router.get('/stats', async (req, res) => {
       const byDate = {};
       let totalRevenue = 0, totalOrders = 0, totalViews = 0, totalPdpViews = 0, totalCart = 0, totalSpend = 0;
       let totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0, totalSpendCpc = 0, totalSpendCpo = 0;
+      let totalSelfQ = 0, totalSelfR = 0;
+      const selfSku = article.sku || (article.offerId ? skuByOfferId.get(article.offerId) : null);
       for (const date of dates) {
+        // Самовыкупы дня (из заказов уже убраны) — фронту для прогноза прибыли: их расходы реальны.
+        const sf = selfSku ? selfMap.get(`${selfSku}|${date}`) : null;
+        if (sf) { totalSelfQ += sf.q; totalSelfR += sf.r; }
         // У артикула без своей РК (добавлен в группу вручную, см. forced-
         // include выше) нет sku из ad_campaigns — тогда берём ту же
         // аналитику по offer_id напрямую (analyticsByOfferDate, см. выше).
@@ -1025,6 +1031,7 @@ router.get('/stats', async (req, res) => {
           adViews, adOrders, adRevenue, adToCart, spendCpc, spendCpo, spendCpoUndated,
           spendSearch, clicksSearch, spendRec, clicksRec,
           spendCir, clicksCir, spendAuto, clicksAuto, spendTop, clicksTop,
+          selfQ: sf ? sf.q : 0, selfR: sf ? sf.r : 0,
           stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
@@ -1086,7 +1093,7 @@ router.get('/stats', async (req, res) => {
           spend: totalSpend, drr: totalDrr,
           ctr: totalCtr, crToCart: totalCrToCart, crToOrder: totalCrToOrder,
           clicks: totalClicks, adViews: totalAdViews, adOrders: totalAdOrders, adRevenue: totalAdRevenue,
-          spendCpc: totalSpendCpc, spendCpo: totalSpendCpo,
+          spendCpc: totalSpendCpc, spendCpo: totalSpendCpo, selfQ: totalSelfQ, selfR: totalSelfR,
           // Рекламный ДРР — расход / выручка, которую Ozon отнёс к рекламе.
           // null, если рекламной выручки не было (делить не на что).
           adDrr: totalAdRevenue > 0 ? totalSpend / totalAdRevenue * 100 : null,
