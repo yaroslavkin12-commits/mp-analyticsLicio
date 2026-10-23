@@ -740,6 +740,19 @@ router.get('/stats', async (req, res) => {
       if (!campaignOfferIds.has(r.campaign_id)) campaignOfferIds.set(r.campaign_id, new Set());
       campaignOfferIds.get(r.campaign_id).add(offerId);
     }
+    // Товар РК по статистике Ozon по товарам — точнее, чем артикул в названии
+    // (в «… ПОИСК V017-2 (АС)» на самом деле продвигается V017-2K).
+    {
+      const fromStats = new Map();
+      for (const r of skuStatRows) {
+        if (campaignOfferIds.has(r.campaign_id)) continue;
+        const offerId = offerBySkuCat.get(String(r.sku));
+        if (!offerId) continue;
+        if (!fromStats.has(r.campaign_id)) fromStats.set(r.campaign_id, new Set());
+        fromStats.get(r.campaign_id).add(offerId);
+      }
+      for (const [k, v] of fromStats) campaignOfferIds.set(k, v);
+    }
 
     // Точный расход за клик по артикулу: если Google-скрипт уже прислал
     // статистику по товарам за (кампания, день) — берём её вместо деления
@@ -807,12 +820,14 @@ router.get('/stats', async (req, res) => {
         // затем по полю placement.
         const titleLc = String(camp.title || '').toLowerCase();
         const placementUc = String(camp.placement || '').toUpperCase();
+        // Зона — по полю placement (оно точное: TOP_PROMOTION — «Поиск», SEARCH_AND_CATEGORY —
+        // «Поиск и рекомендации»); название — только если placement пустой (в названии бывает
+        // обрезано: «поиск + реком»).
         const zone = isCpo ? null
-          : /рекоменд|полк/.test(titleLc) ? 'rec'
-          : /поиск/.test(titleLc) ? 'search'
           : placementUc.includes('CATEGORY') || placementUc.includes('RECOMM') ? 'rec'
-          // PLACEMENT_TOP_PROMOTION — продвижение в поиске ("Поиск" в кабинете).
-          : placementUc.includes('SEARCH') || placementUc.includes('TOP_PROMOTION') ? 'search' : null;
+          : placementUc.includes('TOP_PROMOTION') || placementUc.includes('SEARCH') ? 'search'
+          : /реком|полк|\+/.test(titleLc) ? 'rec'
+          : /поиск/.test(titleLc) ? 'search' : null;
         // Стратегия оплаты за клик: автостратегии Ozon (целевой расход, автостратегия,
         // вывод в ТОП) — отдельные строки цены клика и расхода; ручные ставки и
         // «средняя стоимость клика» — по зоне (поиск / поиск + рекомендации).

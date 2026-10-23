@@ -270,6 +270,16 @@ async function syncCampaignsFromSheet(cabinet) {
   return { rows: saved };
 }
 
+// Товары РК по статистике Ozon по товарам (последние 60 дней) — точнее артикула в названии.
+async function statOffersOf(cabinet, ids) {
+  const r = await query(`SELECT DISTINCT s.campaign_id::text AS id, c.offer_id FROM ad_sku_stats_daily s
+      JOIN ad_product_catalog c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
+     WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2) AND s.date >= CURRENT_DATE - 60`, [cabinet, ids]).catch(() => []);
+  const m = new Map();
+  for (const x of r) { if (!m.has(x.id)) m.set(x.id, new Set()); m.get(x.id).add(x.offer_id); }
+  return m;
+}
+
 // Журнал: РК включилась / выключилась — запись у каждого её товара.
 const RUNNING = st => String(st || '') === 'CAMPAIGN_STATE_RUNNING';
 async function logCampaignSwitches(cabinet, rows, prevCamps) {
@@ -289,10 +299,12 @@ async function logCampaignSwitches(cabinet, rows, prevCamps) {
   // Привязка по названию уже обновлена выше (matched_offer_id) — берём свежую, для новых РК её в prev нет.
   const nowM = await query(`SELECT campaign_id, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id::text = ANY($2)`, [cabinet, ids]).catch(() => []);
   const matchedNow = new Map(nowM.map(r => [String(r.campaign_id), r.matched_offer_id]));
+  const byStats = await statOffersOf(cabinet, ids);
   for (const r of changed) {
     const id = String(r.campaign_id), on = RUNNING(r.state), isNew = !prev.has(id);
     const set = offersOf.get(id) || new Set();
-    const m = matchedNow.get(id) || prev.get(id)?.matched_offer_id; if (m) set.add(m);
+    if (!set.size && byStats.has(id)) for (const o of byStats.get(id)) set.add(o);
+    const m = matchedNow.get(id) || prev.get(id)?.matched_offer_id; if (m && !set.size) set.add(m);
     const title = String(r.title || '').slice(0, 80);
     const verb = isNew ? 'запущена (новая)' : on ? 'включена' : 'выключена';
     for (const o of [...set].slice(0, 200)) {
@@ -334,7 +346,9 @@ async function backfillNewCampaigns(cabinet, rows) {
   const m = await query(`SELECT campaign_id::text AS id, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id::text = ANY($2)`, [cabinet, tIds]).catch(() => []);
   const offersOf = new Map();
   for (const x of skuRows) { const k = String(x.campaign_id); if (!offersOf.has(k)) offersOf.set(k, new Set()); offersOf.get(k).add(x.offer_id); }
-  for (const x of m) if (x.matched_offer_id) { if (!offersOf.has(x.id)) offersOf.set(x.id, new Set()); offersOf.get(x.id).add(x.matched_offer_id); }
+  const byStats = await statOffersOf(cabinet, tIds);
+  for (const [k, v] of byStats) if (!offersOf.has(k)) offersOf.set(k, new Set(v));
+  for (const x of m) if (x.matched_offer_id && !offersOf.has(x.id)) offersOf.set(x.id, new Set([x.matched_offer_id]));
   for (const { r, id, d } of todo) {
     const title = String(r.title || '').slice(0, 80);
     for (const o of [...(offersOf.get(id) || [])].slice(0, 200)) {

@@ -748,6 +748,28 @@ function Journal({ events, offerId, onAdd, onDelete }) {
   );
 }
 
+// «Работает»: какие виды рекламы запущены у товара — по стратегиям и зонам, плюс ОЗЗ.
+const KIND_ORDER = ['поиск', 'п+р', 'ср. клик', 'ЦР', 'АС', 'ТОП'];
+function AdKinds({ cpcAll, cpo, hasCpo }) {
+  const by = new Map();
+  for (const c of cpcAll) {
+    const st = stratOf(c), k = st.s;
+    const x = by.get(k) || { k, t: st.t, on: [], off: [], target: null };
+    (c.state === 'CAMPAIGN_STATE_RUNNING' ? x.on : x.off).push(c);
+    if (c.targetDrr && c.state === 'CAMPAIGN_STATE_RUNNING') x.target = c.targetDrr;
+    by.set(k, x);
+  }
+  const list = [...by.values()].sort((a, b) => (b.on.length > 0) - (a.on.length > 0) || (KIND_ORDER.indexOf(a.k) + 99) % 99 - (KIND_ORDER.indexOf(b.k) + 99) % 99);
+  const cpoOn = cpo ? !!cpo.enabled : hasCpo;
+  const chips = list.filter(x => x.on.length).map(x => (
+    <span key={x.k} className="a-kind on" title={`${x.t}: запущено ${x.on.length}${x.off.length ? `, выключено ${x.off.length}` : ''}\n${x.on.map(c => `• ${c.title || c.campaignId}`).join('\n')}`}>
+      {x.k}{x.target ? ` ${String(x.target).replace('.', ',')}%` : ''}</span>));
+  if (cpoOn) chips.push(<span key="cpo" className="a-kind on cpo" title={cpo ? cpoText(cpo) : 'Оплата за заказ'}>ОЗЗ{cpo && cpo.bidPct !== null && cpo.bidPct !== undefined ? ` ${String(cpo.bidPct).replace('.', ',')}%` : ''}</span>);
+  const offKinds = list.filter(x => !x.on.length);
+  if (!chips.length) return <span className="tag off" title={offKinds.length ? `Выключены: ${offKinds.map(x => x.t).join(', ')}` : 'Нет рекламных кампаний'}>выкл</span>;
+  return <span className="a-kinds">{chips}</span>;
+}
+
 // Кабинет страницы — для сохранения цели ДРР из списка кампаний.
 const CAB_CTX = { cabinet: null };
 function TargetInput({ c }) {
@@ -867,48 +889,68 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
   const assocOrders = assocList.reduce((s, x) => s + (x.totals.orders || 0), 0);
   const assocRevenue = assocList.reduce((s, x) => s + (x.totals.revenue || 0), 0);
   const perDay = dates.length ? t.orders / dates.length : null;
+  const P = model.prev;
+  const n1 = v => v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toFixed(v < 10 ? 1 : 0).replace('.', ',');
+  const nDays = dates.length || 1;
+  const stockNow = model.stockNow;
+  const stockDays = !isAggregate ? a?.stockDays : (perDay > 0 && stockNow !== null ? stockNow / perDay : null);
+  const selfN = sumT('selfQ');
+  const margin = t.expRev > 0 && t.profitF !== undefined ? t.profitF / t.expRev * 100 : null;
+  const cpcAll = campaigns.filter(c => !isCpoCampaign(c));
+  const hasCpo = campaigns.some(isCpoCampaign);
   return (
-    <div className="a-dwrap">
-      <div className="a-box wide">
-        <h4>Динамика по дням
-          <span className="a-legend"><span><i style={{ background: 'var(--a-accent)', borderRadius: '50%' }} />запись журнала</span></span>
-        </h4>
-        <DualChart dates={dates} byDate={model.byDate} events={myEvents} tip={tip} mode={mode} />
+    <div className="a-dwrap a-dwrap2">
+      <div className="a-dhead">
+        {!isAggregate
+          ? <><b className="a-dh-id">{offerId}</b><span className="a-dh-nm">{a?.productName}</span></>
+          : <><b className="a-dh-id">{articles.length} арт.</b><span className="a-dh-nm">итого по списку</span></>}
+        {!isAggregate && <AdKinds cpcAll={cpcAll} cpo={a?.cpo} hasCpo={hasCpo} />}
+        {!isAggregate && a?.cpo && !a.cpo.enabled && <span className="tag off" title={cpoText(a.cpo)}>ОЗЗ выкл</span>}
+        {mode === 'ads' && <span className="tag off">только реклама</span>}
+        {!isAggregate && offerId && groups && (
+          <span className="a-dh-grp">
+            <select className="a-sel" value={currentGroupId || ''} onChange={e => onAssignGroup(offerId, e.target.value || null)} title="Группа">
+              <option value="">Без группы</option>
+              {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+            {activeGroupId && currentGroupId === activeGroupId && (
+              <button type="button" className="a-btn" onClick={() => onAssignGroup(offerId, null)}>Убрать из группы</button>
+            )}
+          </span>
+        )}
       </div>
-      <div className="a-box">
-        <h4>Воронка за период {mode === 'ads' && <span className="tag off">только реклама</span>}</h4>
-        <Funnel totals={t} prev={model.prev} mode={mode} />
-        <div className="a-kv">
-          <span>Заказов в день (в среднем)</span><b className="n">{perDay === null ? '—' : perDay.toFixed(perDay < 10 ? 1 : 0).replace('.', ',')}</b>
-          {showAssoc && <><span>+ по склейке</span><b className="n">{fmtInt(assocOrders)} шт · {fmtInt(assocRevenue)} ₽</b></>}
-          {showAssoc && <><span>Итого со склейкой</span><b className="n">{fmtInt(t.orders + assocOrders)} шт · {fmtInt(t.revenue + assocRevenue)} ₽</b></>}
-          <span>Расход за клик</span><b className="n">{fmtInt(t.spendCpc)} ₽</b>
-          <span title="Оплата за заказ — в дне заказа; Ozon списывает её в день выкупа">Расход за заказ (по дню заказа)</span><b className="n">{t.spendCpo ? `${fmtInt(t.spendCpo)} ₽` : '—'}</b>
-          {STRAT_PARTS.filter(p => t['clicks' + p.k] > 0).map(p => (
-            <React.Fragment key={p.k}><span>Клик · {p.t}</span><b className="n">{fmtMoney2(t['avgCpc' + p.k])} ₽ · {fmtInt(t['spend' + p.k])} ₽</b></React.Fragment>
-          ))}
-          <span>Рекламный ДРР</span><b className="n">{fmtPct(adDrr)}</b>
-          <span>CTR рекламы</span><b className="n">{fmtPct(adCtr)}</b>
-          <span>Оплата за заказ (ОЗЗ)</span><span>{cpoText(isAggregate ? null : a?.cpo)}</span>
-          {!isAggregate && offerId && groups && (
-            <>
-              <span>Группа</span>
-              <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                <select className="a-sel" value={currentGroupId || ''} onChange={e => onAssignGroup(offerId, e.target.value || null)} style={{ padding: '3px 6px', fontSize: 12 }}>
-                  <option value="">Без группы</option>
-                  {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                </select>
-                {activeGroupId && currentGroupId === activeGroupId && (
-                  <button type="button" className="a-btn" style={{ padding: '3px 9px', fontSize: 12 }} onClick={() => onAssignGroup(offerId, null)}>Убрать из группы</button>
-                )}
-              </span>
-            </>
-          )}
+      <div className="a-dkpis">
+        <div className="a-dk"><div className="l">Заказы, шт</div>
+          <div className="v">{fmtInt(t.orders)} <Delta value={P ? changePct(t.orders, P.orders) : null} /></div>
+          <div className="s">в день в среднем <b>{n1(perDay)}</b>
+            {selfN > 0 && <><br />самовыкупов <b>{fmtInt(selfN)}</b> (не учтены)</>}
+            {showAssoc && <><br />+ склейка <b>{fmtInt(assocOrders)}</b> → <b>{fmtInt(t.orders + assocOrders)}</b></>}</div></div>
+        <div className="a-dk"><div className="l">Заказано, ₽</div>
+          <div className="v">{fmtInt(t.revenue)} <Delta value={P ? changePct(t.revenue, P.revenue) : null} /></div>
+          <div className="s">средний чек <b>{t.orders > 0 ? `${fmtInt(t.revenue / t.orders)} ₽` : '—'}</b><br />в день <b>{fmtInt(t.revenue / nDays)} ₽</b>
+            {showAssoc && <><br />+ склейка <b>{fmtInt(assocRevenue)} ₽</b></>}</div></div>
+        <div className="a-dk"><div className="l">Остаток</div>
+          <div className="v">{stockNow === null ? '—' : `${fmtInt(stockNow)} шт`}</div>
+          <div className="s">{stockDays !== null && stockDays !== undefined ? <>хватит на <b>≈{fmtInt(stockDays)} дн</b></> : perDay > 0 ? '' : 'заказов не было'}</div></div>
+        <div className="a-dk"><div className="l">Расход на рекламу, ₽</div>
+          <div className="v">{fmtInt(t.spend)} <Delta value={P ? changePct(t.spend, P.spend) : null} goodWhen="down" /></div>
+          <div className="s">за клик <b>{fmtInt(t.spendCpc)}</b> · за заказ <b>{t.spendCpo ? fmtInt(t.spendCpo) : '—'}</b><br />в день <b>{fmtInt(t.spend / nDays)} ₽</b> · клик <b>{fmtMoney2(t.avgCpc)} ₽</b></div></div>
+        <div className="a-dk"><div className="l">ДРР</div>
+          <div className={`v drr-${drrClass(t.drr)}`}>{fmtPct(t.drr)} <Delta value={P && t.drr !== null && P.drr !== null ? t.drr - P.drr : null} unit="pp" goodWhen="down" /></div>
+          <div className="s">с выкупом <b>{fmtPct(t.drrB)}</b><br />рекламный <b>{fmtPct(adDrr)}</b> · CTR рекл. <b>{fmtPct(adCtr)}</b></div></div>
+        <div className="a-dk"><div className="l">Прогноз прибыли, ₽</div>
+          <div className={`v ${t.profitF > 0 ? 'pos' : t.profitF < 0 ? 'neg' : ''}`}>{t.profitF === undefined || t.profitF === null ? '—' : `${t.profitF > 0 ? '+' : ''}${fmtInt(t.profitF)}`}</div>
+          <div className="s">маржа <b>{fmtPct(margin)}</b><br />на заказ <b>{t.orders > 0 && t.profitF !== undefined ? `${fmtInt(t.profitF / t.orders)} ₽` : '—'}</b></div></div>
+      </div>
+      <div className="a-drow">
+        <div className="a-box">
+          <h4>Воронка за период<span className="a-hint">к прошлому периоду той же длины</span></h4>
+          <FunnelSteps totals={t} prev={P} mode={mode} />
         </div>
-      </div>
-      <div className="a-box">
-        <h4>Журнал изменений</h4>
-        <Journal events={myEvents} offerId={offerId} onAdd={onAddNote} onDelete={onDeleteNote} />
+        <div className="a-box">
+          <h4>Журнал изменений</h4>
+          <Journal events={myEvents} offerId={offerId} onAdd={onAddNote} onDelete={onDeleteNote} />
+        </div>
       </div>
       <div className="a-box wide">
         <h4>По дням
@@ -923,12 +965,53 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
           onManualSave={offerId ? (d, k, v) => onManualSave(offerId, d, k, v) : null} />
       </div>
       <div className="a-box wide">
+        <h4>Динамика по дням
+          <span className="a-legend"><span><i style={{ background: 'var(--a-accent)', borderRadius: '50%' }} />запись журнала</span></span>
+        </h4>
+        <DualChart dates={dates} byDate={model.byDate} events={myEvents} tip={tip} mode={mode} />
+      </div>
+      <div className="a-box wide">
         <h4 style={{ cursor: 'pointer', marginBottom: showCampaigns ? 10 : 0 }} onClick={() => setShowCampaigns(v => !v)}>
           <span className="a-chev" style={{ transform: showCampaigns ? 'rotate(90deg)' : 'none' }}>▶</span>Кампании ({campaigns.length})
+          <span className="a-hint">запущено {campaigns.filter(c => c.state === 'CAMPAIGN_STATE_RUNNING').length} · нажмите, чтобы {showCampaigns ? 'свернуть' : 'развернуть'}</span>
         </h4>
         {showCampaigns && <CampaignsTable campaigns={campaigns} />}
       </div>
       {showAssoc && <AssociatedTable associated={assocList} dates={dates} />}
+    </div>
+  );
+}
+
+// Воронка ступенями: полосы в логарифмической шкале, между ступенями — конверсия и её изменение.
+function FunnelSteps({ totals, prev, mode }) {
+  const steps = mode === 'ads'
+    ? [['Показы рекламы', 'views'], ['Клики', 'pdpViews'], ...(totals.cart !== null && totals.cart !== undefined ? [['Корзины', 'cart']] : []), ['Заказы', 'orders']]
+    : [['Показы', 'views'], ['Переходы', 'pdpViews'], ['Корзины', 'cart'], ['Заказы', 'orders']];
+  const convName = { pdpViews: 'CTR', cart: 'в корзину', orders: 'в заказ' };
+  const top = Math.max(1, totals[steps[0][1]] || 1);
+  const w = v => (v > 0 ? Math.max(9, Math.log10(v + 1) / Math.log10(top + 1) * 100) : 3);
+  return (
+    <div className="a-fs">
+      {steps.map(([label, k], i) => {
+        const v = totals[k];
+        const pk = i ? steps[i - 1][1] : null;
+        const conv = i && totals[pk] > 0 && v !== null && v !== undefined ? v / totals[pk] * 100 : null;
+        const pconv = i && prev && prev[pk] > 0 && prev[k] !== null && prev[k] !== undefined ? prev[k] / prev[pk] * 100 : null;
+        return (
+          <React.Fragment key={k}>
+            {i > 0 && (
+              <div className="a-fs-cv"><span />
+                <span>↓ {convName[k] || 'конверсия'} <b>{conv !== null ? fmtPct(conv) : '—'}</b>{' '}
+                  {conv !== null && pconv !== null ? <Delta value={conv - pconv} unit="pp" title={`В прошлом периоде: ${fmtPct(pconv)}`} /> : null}</span><span /></div>
+            )}
+            <div className="a-fs-st">
+              <span className="nm">{label}</span>
+              <div><div className="bar" style={{ width: `${w(v)}%` }}>{fmtInt(v)}</div></div>
+              <span className="dl"><Delta value={prev ? changePct(v, prev[k]) : null} title="Изменение к прошлому периоду той же длины" /></span>
+            </div>
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -1358,7 +1441,7 @@ export default function AdsStats2({ cabinet }) {
     { k: 'drr', t: 'ДРР', h: 'Расход / сумма заказов; ниже — с учётом выкупа: расход / (заказы × % выкупа артикула)', u: '%' },
     { k: 'profit', t: 'Прогнозируемая прибыль', h: 'Ожидаемая прибыль с заказов периода после выкупа, комиссии, логистики, рекламы, себестоимости и налога (коэффициенты — из «Юнит-экономики»)' },
     { k: 'margin', t: 'Маржа', h: 'Прогнозируемая прибыль / ожидаемая выручка', u: '%' },
-    { k: null, t: 'ОЗК', h: 'Оплата за клик: вкл — есть запущенная РК с оплатой за клик; под ней — стратегии: поиск / п+р (средняя стоимость клика по зоне показа), ЦР — целевой расход, АС — автостратегия, ТОП — вывод в топ' }, { k: null, t: 'ОЗЗ', h: 'Оплата за заказ: статус на товаре и ставка' }, { k: null, t: 'РК', h: 'Рекламные кампании товара' },
+    { k: null, t: 'Работает', h: 'Запущенные виды рекламы. Оплата за клик: поиск / п+р — средняя стоимость клика по зоне показа (поиск или поиск + рекомендации), ЦР — целевой расход (с целью ДРР), АС — автостратегия, ТОП — вывод в топ. ОЗЗ — оплата за заказ со ставкой. Ниже — сколько РК запущено из всех' },
   ];
   const ctlAds = {
     sort: sort.key && sort.key !== 'manual' ? { k: sort.key, dir: sort.dir } : null,
@@ -1454,20 +1537,8 @@ export default function AdsStats2({ cabinet }) {
               <td>{pr && pr.margin !== null ? <span className={`pill ${pr.margin < 0 ? 'b' : pr.margin < 10 ? 'w' : 'g'}`}>{fmtPct(pr.margin)}</span> : '—'}</td>
             </>
           ); })()}
-          <td>{cpcAll.length
-            ? (cpcOn.length
-              ? (() => { const ss = [...new Set(cpcOn.map(c => stratOf(c).s))]; return (
-                <span title={`Запущено РК с оплатой за клик: ${cpcOn.length} из ${cpcAll.length}\n${cpcOn.map(c => `• ${stratOf(c).t}${c.targetDrr ? ` (цель ДРР ${c.targetDrr}%)` : ''}: ${c.title || c.campaignId}`).join('\n')}`}>
-                  <span className="tag on">вкл</span><span className="a-strat">{ss.join(' · ')}</span>
-                </span>); })()
-              : <span className="tag off" title={`РК с оплатой за клик не запущены (${cpcAll.length})`}>выкл</span>)
-            : <span className="tag off" title="Нет РК с оплатой за клик">—</span>}</td>
-          <td>{a.cpo
-            ? (a.cpo.enabled
-              ? <span className="tag on" title={cpoText(a.cpo)}>вкл{a.cpo.bidPct !== null ? ` · ${String(a.cpo.bidPct).replace('.', ',')}%` : ''}</span>
-              : <span className="tag off" title={cpoText(a.cpo)}>выкл</span>)
-            : (hasCpo ? <span className="tag on">вкл</span> : <span className="tag off" title="Нет данных по оплате за заказ">—</span>)}</td>
-          <td className="n muted">{a.campaigns.filter(c => c.state === 'CAMPAIGN_STATE_RUNNING').length}/{a.campaigns.length}</td>
+          <td className="a-kinds-td"><AdKinds cpcAll={cpcAll} cpo={a.cpo} hasCpo={hasCpo} />
+            <span className="a-spendsub" title="Рекламных кампаний: запущено / всего">РК {a.campaigns.filter(c => c.state === 'CAMPAIGN_STATE_RUNNING').length}/{a.campaigns.length}</span></td>
         </tr>
         {isOpen && (
           <tr className="a-detail"><td colSpan={COLS.length}>
@@ -1671,7 +1742,7 @@ export default function AdsStats2({ cabinet }) {
                     <><td className="n"><b style={{ color: p < 0 ? 'var(--a-bad)' : undefined }}>{any ? fmtInt(p) : '—'}</b></td>
                     <td>{any && e > 0 ? <span className={`pill ${p < 0 ? 'b' : p / e * 100 < 10 ? 'w' : 'g'}`}>{fmtPct(p / e * 100)}</span> : '—'}</td></>
                   ); })()}
-                  <td /><td /><td />
+                  <td />
                 </tr>
                 {open.has(aggKey) && (
                   <tr className="a-detail"><td colSpan={COLS.length}>

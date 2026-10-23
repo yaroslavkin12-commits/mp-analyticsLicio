@@ -4,10 +4,10 @@ function zoneOf(camp) {
   if (!camp) return null;
   if (String(camp.payment_type || '').toUpperCase() === 'CPO') return 'оплата за заказ';
   const t = String(camp.title || '').toLowerCase(), p = String(camp.placement || '').toUpperCase();
-  if (/рекоменд|полк/.test(t)) return 'поиск + рекомендации';
-  if (/поиск/.test(t)) return 'поиск';
   if (p.includes('CATEGORY') || p.includes('RECOMM')) return 'поиск + рекомендации';
   if (p.includes('SEARCH') || p.includes('TOP_PROMOTION')) return 'поиск';
+  if (/реком|полк|\+/.test(t)) return 'поиск + рекомендации';
+  if (/поиск/.test(t)) return 'поиск';
   return null;
 }
 // Стратегия кампании (productAutopilotStrategy) — по-русски, как в кабинете Ozon.
