@@ -383,3 +383,4 @@
 .mpui .of-self-btn:hover { border-color: var(--a-accent); color: var(--a-accent); }
 .mpui .of-self-btn.on { border: 1px solid var(--a-accent); background: var(--a-accent-soft); color: var(--a-accent); font-weight: 600; }
 .mpui .of-bulk { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.mpui .of-cat { color: var(--a-ink3); font-size: 11px; }

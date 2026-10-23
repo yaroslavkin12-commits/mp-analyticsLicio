@@ -34,6 +34,7 @@ export default function OrdersFeed({ cabinet }) {
   const [hideCancel, setHideCancel] = useState(true);
   const [picked, setPicked] = useState(new Set());
   const [limit, setLimit] = useState(200);
+  const [cat, setCat] = useState(''); // путь категории: «Чехлы», «Чехлы / Чехлы на сиденья»…
 
   const load = useCallback(() => {
     setErr('');
@@ -44,18 +45,33 @@ export default function OrdersFeed({ cabinet }) {
   useEffect(() => { const t = setInterval(() => { if (!document.hidden) load(); }, 60000); return () => clearInterval(t); }, [load]);
 
   const key = r => `${r.p}|${r.sku}`;
+  const inCat = x => !cat || x.cat === cat || String(x.cat || '').startsWith(cat + ' / ');
+  const catRows = useMemo(() => (d?.rows || []).filter(inCat), [d, cat]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Категории: верхний уровень — вкладками, глубже — списком подкатегорий выбранной.
+  const cats = useMemo(() => {
+    const top = new Map(), sub = new Map();
+    for (const x of d?.rows || []) {
+      if (x.st === 'cancelled') continue;
+      const parts = String(x.cat || 'Без категории').split(' / ');
+      top.set(parts[0], (top.get(parts[0]) || 0) + x.qty);
+      for (let i = 2; i <= parts.length; i++) { const k = parts.slice(0, i).join(' / '); sub.set(k, (sub.get(k) || 0) + x.qty); }
+    }
+    return { top: [...top.entries()].sort((a, b) => b[1] - a[1]), sub };
+  }, [d]);
+  const catTop = cat ? cat.split(' / ')[0] : '';
+  const subs = useMemo(() => [...cats.sub.entries()].filter(([k]) => catTop && k.startsWith(catTop + ' / ')).sort((a, b) => (a[0] < b[0] ? -1 : 1)), [cats, catTop]);
   const rows = useMemo(() => {
-    let r = d?.rows || [];
+    let r = catRows;
     if (hideCancel) r = r.filter(x => x.st !== 'cancelled');
     if (view === 'self') r = r.filter(x => x.self); else if (view === 'real') r = r.filter(x => !x.self);
     return q.trim() ? artFilter(r, q, x => x.o || '', x => `${x.n || ''} ${x.p}`) : r;
-  }, [d, q, view, hideCancel]);
+  }, [catRows, q, view, hideCancel]);
   const sum = useMemo(() => {
-    const all = (d?.rows || []).filter(x => x.st !== 'cancelled');
-    const s = { n: 0, q: 0, r: 0, sn: 0, sq: 0, sr: 0, c: (d?.rows || []).length - all.length };
+    const all = catRows.filter(x => x.st !== 'cancelled');
+    const s = { n: 0, q: 0, r: 0, sn: 0, sq: 0, sr: 0, c: catRows.length - all.length };
     for (const x of all) { const v = x.price * x.qty; if (x.self) { s.sn++; s.sq += x.qty; s.sr += v; } else { s.n++; s.q += x.qty; s.r += v; } }
     return s;
-  }, [d]);
+  }, [catRows]);
   const opts = useMemo(() => { const m = new Map(); for (const x of d?.rows || []) if (x.o && !m.has(x.o)) m.set(x.o, { o: x.o, n: x.n }); return [...m.values()]; }, [d]);
 
   const mark = async (items, on) => {
@@ -93,6 +109,18 @@ export default function OrdersFeed({ cabinet }) {
       {!d && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
       {d && (
         <>
+          <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 0' }}>
+            <div className="a-tabs">
+              <button type="button" className={`a-tab ${!cat ? 'on' : ''}`} onClick={() => setCat('')}>Все</button>
+              {cats.top.map(([k, n]) => <button key={k} type="button" className={`a-tab ${catTop === k ? 'on' : ''}`} onClick={() => setCat(catTop === k && cat === k ? '' : k)}>{k}<span className="c">{fmtInt(n)}</span></button>)}
+            </div>
+            {subs.length > 0 && (
+              <select className="a-sel" value={cat !== catTop ? cat : ''} onChange={e => setCat(e.target.value || catTop)} title="Подкатегория">
+                <option value="">все в «{catTop}»</option>
+                {subs.map(([k, n]) => <option key={k} value={k}>{'\u00a0\u00a0'.repeat(k.split(' / ').length - 2)}{k.split(' / ').pop()} · {fmtInt(n)}</option>)}
+              </select>
+            )}
+          </div>
           <div className="cl-kpis">
             <div className="a-kpi"><span className="lbl">Заказы</span><span className="val">{fmtInt(sum.n)}</span><span className="sub">{fmtInt(sum.q)} шт · {fmtInt(sum.r)} ₽</span></div>
             <div className="a-kpi"><span className="lbl">Самовыкупы</span><span className="val" style={{ color: sum.sn ? 'var(--a-accent)' : undefined }}>{fmtInt(sum.sn)}</span><span className="sub">{fmtInt(sum.sq)} шт · {fmtInt(sum.sr)} ₽ — не в заказах</span></div>
@@ -140,7 +168,7 @@ export default function OrdersFeed({ cabinet }) {
                         <tr className={`${x.self ? 'of-self' : ''} ${x.st === 'cancelled' ? 'of-cancel' : ''} ${picked.has(key(x)) ? 'pr-in-order' : ''}`}>
                           <td><input type="checkbox" checked={picked.has(key(x))} onChange={() => toggle(x)} /></td>
                           <td className="l n">{t ? t.format('HH:mm') : '—'}<small className="of-sub">{x.p}</small></td>
-                          <td className="l"><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.o || x.sku}</div><div className="model" title={x.n}>{x.n}</div></div></div></td>
+                          <td className="l"><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.o || x.sku}</div><div className="model" title={x.n}>{x.n}</div><div className="of-cat">{String(x.cat || '').split(' / ').slice(-1)[0]}</div></div></div></td>
                           <td className="n r">{x.qty}</td>
                           <td className="n r">{fmtInt(x.price)}</td>
                           <td className="n r"><b>{fmtInt(x.price * x.qty)}</b></td>

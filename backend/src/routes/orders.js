@@ -2,6 +2,7 @@ const express = require('express');
 const dayjs = require('dayjs');
 const { query } = require('../db');
 const OF = require('../lib/orderFeed');
+const { autoPath, OV_SQL, overrideArgs } = require('../lib/categories');
 
 // «Лента заказов»: отправления Ozon (копятся из вкладки Orders) и отметка самовыкупов.
 const router = express.Router();
@@ -20,9 +21,17 @@ router.get('/feed', async (req, res) => {
       WHERE f.cabinet = $1 AND f.created_at >= ($2::date - INTERVAL '3 hours') AND f.created_at < ($3::date + INTERVAL '21 hours')
       ORDER BY f.created_at DESC LIMIT 5000`, [cabinet, from, to]);
     const first = await query(`SELECT MIN(created_at) mn FROM order_feed WHERE cabinet = $1`, [cabinet]);
+    // Категория артикула — как в аналитике (ручная, иначе по названию из каталога).
+    const [ov, cat] = await Promise.all([
+      query(OV_SQL, overrideArgs(cabinet)).catch(() => []),
+      query(`SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []),
+    ]);
+    const ovm = new Map(ov.map(r => [r.offer_id, r.path])), nm = new Map(cat.map(r => [r.offer_id, r.product_name]));
+    const catOf = new Map();
+    const cOf = (o, n) => { if (!o) return 'Без категории'; if (!catOf.has(o)) catOf.set(o, ovm.get(o) || autoPath(cabinet, nm.get(o) || n, o).join(' / ') || 'Без категории'); return catOf.get(o); };
     res.json({ success: true, data: {
       from, to, since: first[0]?.mn || null,
-      rows: rows.map(r => ({ p: r.posting_number, sku: String(r.sku), o: r.offer_id, n: r.name, price: num(r.price), qty: num(r.qty) || 1, st: r.status, wh: r.warehouse, at: r.created_at, sch: r.scheme, self: !!r.self })),
+      rows: rows.map(r => ({ p: r.posting_number, sku: String(r.sku), o: r.offer_id, n: r.name, cat: cOf(r.offer_id, r.name), price: num(r.price), qty: num(r.qty) || 1, st: r.status, wh: r.warehouse, at: r.created_at, sch: r.scheme, self: !!r.self })),
     } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
