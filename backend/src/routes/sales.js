@@ -317,6 +317,48 @@ router.get('/data', async (req, res) => {
   }
 });
 
+// GET /api/sales/summary?dateFrom=&dateTo= — заказы по магазинам Ozon (без самовыкупов):
+// { shops: [{ id, cur: { q, r, byCat: { кат: [q, r] } }, prev: { q, r, byCat } }] } — для «Сводки по магазинам».
+router.get('/summary', async (req, res) => {
+  try {
+    await ensureSchema();
+    const { listCabinets } = require('../config/cabinets');
+    const OF = require('../lib/orderFeed');
+    const { from, to } = period(req.query);
+    const len = dayjs(to).diff(from, 'day') + 1;
+    const pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD'), pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
+    const shops = listCabinets().filter(c => c.platform === 'ozon' && c.connected);
+    const out = [];
+    for (const c of shops) {
+      const cab = c.id;
+      const [cat, ov, rows] = await Promise.all([
+        query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cab]),
+        query(OV_SQL, overrideArgs(cab)).catch(() => []),
+        query(`SELECT date::text AS date, sku, offer_id, orders_item, revenue FROM product_analytics_daily
+                WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3 AND (orders_item > 0 OR revenue > 0)`, [cab, pFrom, to]),
+      ]);
+      const ovm = new Map(ov.map(r => [r.offer_id, r.path]));
+      const bySku = new Map(cat.filter(r => r.sku != null).map(r => [String(r.sku), r]));
+      const byOffer = new Map(cat.map(r => [r.offer_id, r]));
+      OF.applyToAnalytics(rows, await OF.selfByDay(cab, pFrom, to));
+      const topOf = r => {
+        const o = r.offer_id || bySku.get(String(r.sku))?.offer_id;
+        const n = (o && byOffer.get(o)?.product_name) || '';
+        const path = (o && ovm.get(o)) || autoPath(cab, n, o || '').join(' / ') || 'Без категории';
+        return path.split(' / ')[0];
+      };
+      const agg = () => ({ q: 0, r: 0, byCat: {} });
+      const cur = agg(), prev = agg();
+      for (const r of rows) {
+        const t = r.date >= from ? cur : prev, k = topOf(r), q = num(r.orders_item), v = num(r.revenue);
+        t.q += q; t.r += v; const b = t.byCat[k] || (t.byCat[k] = [0, 0]); b[0] += q; b[1] += v;
+      }
+      out.push({ id: cab, label: c.label, cur, prev });
+    }
+    res.json({ success: true, data: { from, to, pFrom, pTo, shops: out } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /api/sales/geo?cabinet=defly&dateFrom=&dateTo=&compare=1 — география
 // заказов: суммы за период по артикулу × региону × городу, по дням по
 // регионам и прошлый период для сравнения долей.

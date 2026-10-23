@@ -183,3 +183,4 @@ export const getClusters = cabinet => api.get('/clusters', { params: { cabinet }
 export const decideCluster = (cabinet, action, offers, id) => api.post('/clusters/decide', { cabinet, action, offers, id });
 export const getOrderFeed = (cabinet, dateFrom, dateTo) => api.get('/orders/feed', { params: { cabinet, dateFrom, dateTo }, timeout: 60000 });
 export const setSelfBuyout = (cabinet, items, on) => api.post('/orders/self', { cabinet, items, on });
+export const getSalesSummary = (dateFrom, dateTo) => api.get('/sales/summary', { params: { dateFrom, dateTo }, timeout: 120000 });

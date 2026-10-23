@@ -63,3 +63,21 @@ export function useBuyerShare(cabinet, arts) {
   const shareAt = useMemo(() => (periods.length ? (o, parts, date) => { const k = date ? periodAt(date) : latest; return k >= 0 ? fns[k](o, parts) : 1; } : null), [periods, fns, periodAt, latest]);
   return { data, periods, shareOf, shareAt };
 }
+
+// То же без хука — для страниц, которые считают сразу по нескольким магазинам.
+// raw — ответ /api/finance/buyer-share (data.data), arts — [{ o, parts }].
+export function makeShareAt(raw, arts) {
+  const periods = raw && Array.isArray(raw.periods) ? raw.periods.filter(p => p.total > 0).sort((a, b) => (a.from < b.from ? -1 : 1)) : [];
+  if (!periods.length) return null;
+  const fns = periods.map(p => buildFn(p, arts));
+  let latest = 0; periods.forEach((p, i) => { if (p.to > periods[latest].to) latest = i; });
+  const cache = new Map();
+  const periodAt = date => {
+    if (cache.has(date)) return cache.get(date);
+    let k = -1;
+    periods.forEach((p, i) => { if (date >= p.from && date <= p.to && (k < 0 || String(p.at) > String(periods[k].at))) k = i; });
+    if (k < 0) { let best = Infinity; periods.forEach((p, i) => { const dd = date < p.from ? Date.parse(p.from) - Date.parse(date) : Date.parse(date) - Date.parse(p.to); if (dd < best) { best = dd; k = i; } }); }
+    cache.set(date, k); return k;
+  };
+  return (o, parts, date) => { const k = date ? periodAt(date) : latest; return k >= 0 ? fns[k](o, parts) : 1; };
+}

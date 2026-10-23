@@ -23,6 +23,7 @@ import Production from './pages/Production';
 import PriceLog from './pages/PriceLog';
 import Products from './pages/Products';
 import OrdersFeed from './pages/OrdersFeed';
+import ShopsSummary from './pages/ShopsSummary';
 const RnpPage = props => <SalesAnalytics {...props} view="rnp" />;
 import AvgCheck from './pages/AvgCheck';
 import Abc from './pages/Abc';
@@ -51,7 +52,7 @@ class PageBoundary extends React.Component {
   }
 }
 
-const PAGES = { sales: SalesAnalytics, rnp: RnpPage, orders: OrdersFeed, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Products, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { summary: ShopsSummary, sales: SalesAnalytics, rnp: RnpPage, orders: OrdersFeed, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Products, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы вообще доступны в каждом кабинете (Defly пока видит только
@@ -61,7 +62,7 @@ const PAGES = { sales: SalesAnalytics, rnp: RnpPage, orders: OrdersFeed, geo: Ge
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET_RAW = {
   licio: ['dashboard', 'ads', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
-  defly: ['sales', 'rnp', 'orders', 'plan', 'ads', 'search', 'inventory', 'production', 'pricelog', 'geo', 'check', 'abc', 'season', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
+  defly: ['sales', 'summary', 'rnp', 'orders', 'plan', 'ads', 'search', 'inventory', 'production', 'pricelog', 'geo', 'check', 'abc', 'season', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 // Магазины семейства Defly видят те же разделы.
 const PAGES_BY_CABINET = new Proxy(PAGES_BY_CABINET_RAW, { get: (t, k) => t[k] || (isDeflyLike(k) ? t.defly : undefined) });
@@ -102,6 +103,13 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
     try { localStorage.setItem(THEME_KEY, theme); } catch(e) { /* ignore */ }
   }, [theme]);
+
+  // Переход из «Сводки по магазинам»: открыть раздел нужного магазина.
+  useEffect(() => {
+    const h = e => { const { cabinet: c, page: p } = e.detail || {}; if (c) setCabinet(c); if (p) setTimeout(() => setPage(p), 0); };
+    window.addEventListener('mp-open', h);
+    return () => window.removeEventListener('mp-open', h);
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem(CABINET_KEY, cabinet); } catch(e) { /* ignore */ }
