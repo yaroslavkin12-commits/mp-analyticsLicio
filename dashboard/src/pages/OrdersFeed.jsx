@@ -170,8 +170,8 @@ export default function OrdersFeed({ cabinet }) {
                           <td className="l n">{t ? t.format('HH:mm') : '—'}<small className="of-sub">{x.p}</small></td>
                           <td className="l"><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.o || x.sku}</div><div className="model" title={x.n}>{x.n}</div><div className="of-cat">{String(x.cat || '').split(' / ').slice(-1)[0]}</div></div></div></td>
                           <td className="n r">{x.qty}</td>
-                          <td className="n r">{fmtInt(x.price)}</td>
-                          <td className="n r"><b>{fmtInt(x.price * x.qty)}</b></td>
+                          <td className="n r" title={x.est ? 'Ozon не передал цену в заказе — показана цена продавца на день заказа из истории цен' : undefined}>{x.est ? '≈' : ''}{fmtInt(x.price)}</td>
+                          <td className="n r"><b>{x.est ? '≈' : ''}{fmtInt(x.price * x.qty)}</b></td>
                           <td className="l"><span className="of-sch">{String(x.sch || '').toUpperCase()}</span> <span className="muted">{x.wh}</span></td>
                           <td className="l">{ST[x.st] || x.st || '—'}</td>
                           <td className="l">

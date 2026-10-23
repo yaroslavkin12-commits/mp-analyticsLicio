@@ -29,9 +29,30 @@ router.get('/feed', async (req, res) => {
     const ovm = new Map(ov.map(r => [r.offer_id, r.path])), nm = new Map(cat.map(r => [r.offer_id, r.product_name]));
     const catOf = new Map();
     const cOf = (o, n) => { if (!o) return 'Без категории'; if (!catOf.has(o)) catOf.set(o, ovm.get(o) || autoPath(cabinet, nm.get(o) || n, o).join(' / ') || 'Без категории'); return catOf.get(o); };
+    // Цены в отправлении нет (новые методы Ozon отдавали её в другом виде, пока скрипт
+    // этого не учитывал) — подставляем цену продавца на день заказа из истории цен, помечая «≈».
+    const noPrice = [...new Set(rows.filter(r => !(Number(r.price) > 0) && r.offer_id).map(r => r.offer_id))];
+    const est = new Map(), estCur = new Map();
+    if (noPrice.length) {
+      const [pd, pp] = await Promise.all([
+        query(`SELECT offer_id, date::text d, COALESCE(seller, card) v FROM price_daily
+          WHERE cabinet = $1 AND offer_id = ANY($2) AND date BETWEEN ($3::date - 30) AND $4::date AND COALESCE(seller, card) > 0 ORDER BY date`, [cabinet, noPrice, from, to]).catch(() => []),
+        query(`SELECT offer_id, COALESCE(seller_price, price) v FROM product_prices WHERE cabinet = $1 AND offer_id = ANY($2)`, [cabinet, noPrice]).catch(() => []),
+      ]);
+      for (const r of pd) { if (!est.has(r.offer_id)) est.set(r.offer_id, []); est.get(r.offer_id).push([r.d, Number(r.v)]); }
+      for (const r of pp) if (Number(r.v) > 0) estCur.set(r.offer_id, Number(r.v));
+    }
+    const mskDay = at => new Date(new Date(at).getTime() + 3 * 3600e3).toISOString().slice(0, 10);
+    const priceOf = r => {
+      if (Number(r.price) > 0) return [num(r.price), false];
+      const list = est.get(r.offer_id);
+      if (list && r.created_at) { const d = mskDay(r.created_at); let v = null; for (const [dd, pv] of list) { if (dd <= d) v = pv; else break; } if (v === null) v = list[0][1]; return [v, true]; }
+      if (estCur.has(r.offer_id)) return [estCur.get(r.offer_id), true];
+      return [0, false];
+    };
     res.json({ success: true, data: {
       from, to, since: first[0]?.mn || null,
-      rows: rows.map(r => ({ p: r.posting_number, sku: String(r.sku), o: r.offer_id, n: r.name, cat: cOf(r.offer_id, r.name), price: num(r.price), qty: num(r.qty) || 1, st: r.status, wh: r.warehouse, at: r.created_at, sch: r.scheme, self: !!r.self })),
+      rows: rows.map(r => { const [pr, pe] = priceOf(r); return { p: r.posting_number, sku: String(r.sku), o: r.offer_id, n: r.name, cat: cOf(r.offer_id, r.name), price: pr, est: pe || undefined, qty: num(r.qty) || 1, st: r.status, wh: r.warehouse, at: r.created_at, sch: r.scheme, self: !!r.self }; }),
     } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });

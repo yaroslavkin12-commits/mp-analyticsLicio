@@ -449,7 +449,8 @@ function probeOrders() {
           const d = JSON.parse(txt), r = d.result;
           const ps = (Array.isArray(r) ? r : (r && r.postings) || d.postings) || [];
           shape = ' | ключи: ' + Object.keys(d).join(',') + (r && !Array.isArray(r) ? ' / result: ' + Object.keys(r).join(',') : '') + ' | отправлений ' + ps.length
-            + (ps[0] ? ' | пример: ' + JSON.stringify({ n: ps[0].posting_number, st: ps[0].status, in: ps[0].in_process_at, cr: ps[0].created_at }) : '');
+            + (ps[0] ? ' | пример: ' + JSON.stringify({ n: ps[0].posting_number, st: ps[0].status, in: ps[0].in_process_at, cr: ps[0].created_at })
+              + ' | товар: ' + JSON.stringify((ps[0].products || [])[0] || null).slice(0, 400) : '');
         } catch (e) { /* не JSON */ }
         Logger.log(cab.id + ' · ' + t[0] + ': HTTP ' + resp.getResponseCode() + shape + ' | ' + txt.slice(0, 300));
       } catch (e) { Logger.log(cab.id + ' · ' + t[0] + ': ' + e.message); }
@@ -609,16 +610,35 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campai
 }
 
 // ---------- Заказы для уведомлений ----------
+// Цена товара в отправлении. В новых методах (FBO v3, FBS v4) поле price может прийти
+// объектом ({ amount / value, currency_code }), а не строкой, — тогда в таблицу писался
+// мусор и сумма заказа была 0. Запасной вариант — financial_data (цена клиента).
+function postingPrice_(p, prod, i) {
+  const pick = function (v) {
+    if (v === null || v === undefined || v === '') return '';
+    if (typeof v === 'object') return pick(v.amount !== undefined ? v.amount : v.value !== undefined ? v.value : v.price !== undefined ? v.price : v.units);
+    const n = parseFloat(String(v).replace(',', '.'));
+    return isFinite(n) && n > 0 ? n : '';
+  };
+  let v = pick(prod.price);
+  if (v === '') v = pick(prod.client_price) || pick(prod.customer_price);
+  if (v === '' && p.financial_data && p.financial_data.products) {
+    const fp = p.financial_data.products.filter(function (x) { return String(x.product_id) === String(prod.sku); })[0] || p.financial_data.products[i];
+    if (fp) v = pick(fp.client_price) || pick(fp.price) || pick(fp.old_price);
+  }
+  return v;
+}
+
 function collectPostings_(cab, url, scheme, since, out) {
   const push = function (p) {
-    (p.products || []).forEach(function (prod) {
+    (p.products || []).forEach(function (prod, i) {
       out.push([cab.id, p.posting_number, prod.sku || '', prod.offer_id || '', String(prod.name || '').slice(0, 200),
-        prod.price || '', prod.quantity || 1, p.status || '', (p.analytics_data && p.analytics_data.warehouse_name) || '',
+        postingPrice_(p, prod, i), prod.quantity || 1, p.status || '', (p.analytics_data && p.analytics_data.warehouse_name) || '',
         p.in_process_at || p.created_at || '', scheme]);
     });
   };
-  if (scheme === 'fbo') eachFboPosting_(cab, since, new Date().toISOString(), { analytics_data: true }, push);
-  else eachFbsPosting_(cab, since, new Date().toISOString(), { analytics_data: true }, push);
+  if (scheme === 'fbo') eachFboPosting_(cab, since, new Date().toISOString(), { analytics_data: true, financial_data: true }, push);
+  else eachFbsPosting_(cab, since, new Date().toISOString(), { analytics_data: true, financial_data: true }, push);
 }
 
 // Каждые 5 минут (триггер) — заказы за 2 дня по всем кабинетам.
