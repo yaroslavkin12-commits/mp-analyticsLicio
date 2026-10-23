@@ -1,7 +1,7 @@
 const { OV_SQL, overrideArgs } = require('../lib/categories');
 const express = require('express');
 const router = express.Router();
-const { campLabel } = require('../lib/adZone');
+const { campLabel, targetDrrOf } = require('../lib/adZone');
 const { autoPath } = require('../lib/categories');
 const dayjs = require('dayjs');
 const { query } = require('../db');
@@ -55,6 +55,12 @@ router.post('/collect', async (req, res) => {
 // Таблицу создаём и здесь, лениво, при первом обращении — initSchema() на
 // старте уже однажды "пропустил" новую таблицу (см. ad_campaign_skus).
 let adEventsReady = null;
+// Сырые поля кампании (JSON из вкладки Campaigns) — там целевой ДРР «Целевого расхода».
+let extraColP = null;
+function ensureCampExtra() {
+  if (!extraColP) extraColP = query(`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS extra TEXT`).catch(() => { extraColP = null; });
+  return extraColP;
+}
 function ensureAdEvents() {
   if (!adEventsReady) {
     adEventsReady = (async () => {
@@ -71,7 +77,7 @@ function ensureAdEvents() {
 // GET /api/ads/events?cabinet=defly&dateFrom=&dateTo=
 router.get('/events', async (req, res) => {
   try {
-    await ensureAdEvents();
+    await ensureAdEvents(); await ensureCampExtra();
     const cabinet = req.query.cabinet || 'defly';
     const from = req.query.dateFrom || dayjs().subtract(90, 'day').format('YYYY-MM-DD');
     const to = req.query.dateTo || dayjs().format('YYYY-MM-DD');
@@ -80,7 +86,7 @@ router.get('/events', async (req, res) => {
          FROM ad_events WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3
         ORDER BY date DESC, id DESC`, [cabinet, from, to]);
     // Старые записи «(РК 123)» дополняем зоной показа: поиск / поиск + рекомендации.
-    const camps = await query(`SELECT campaign_id, title, placement, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
+    const camps = await query(`SELECT campaign_id, title, placement, payment_type, autopilot_strategy, extra FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
     const campById = new Map(camps.map(c => [String(c.campaign_id), c]));
     const enrich = t => String(t || '').replace(/\(РК (\d+)\)/g, (m, id) => `(${campLabel(campById.get(id), id)})`);
     // Изменения цены клиента (журнал цен + цена на сайте) — считаются на лету, в базу не пишутся.
@@ -490,9 +496,10 @@ router.get('/stats', async (req, res) => {
     // попадут на страницу. Затем тяжёлые таблицы по дням — только по этим
     // артикулам, а не по всем ~1800 товарам кабинета (раньше аналитика одна
     // тянула ~27 тыс. строк и занимала больше 2 секунд).
+    await ensureCampExtra();
     const [campaigns, catalogRows, campaignSkuRows, groupsInfo, extraSkuRows] = await Promise.all([
       timed('campaigns', query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
-                    payment_type, autopilot_strategy, placement, expense_strategy
+                    payment_type, autopilot_strategy, placement, expense_strategy, extra
              FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet])),
       timed('catalog', query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet])),
       // Товары мультитоварных кампаний — одна РК продвигает сразу несколько
@@ -774,6 +781,12 @@ router.get('/stats', async (req, res) => {
           : placementUc.includes('CATEGORY') || placementUc.includes('RECOMM') ? 'rec'
           // PLACEMENT_TOP_PROMOTION — продвижение в поиске ("Поиск" в кабинете).
           : placementUc.includes('SEARCH') || placementUc.includes('TOP_PROMOTION') ? 'search' : null;
+        // Стратегия оплаты за клик: автостратегии Ozon (целевой расход, автостратегия,
+        // вывод в ТОП) — отдельные строки цены клика и расхода; ручные ставки и
+        // «средняя стоимость клика» — по зоне (поиск / поиск + рекомендации).
+        const strat = String(camp.autopilot_strategy || '').toUpperCase();
+        const kind = isCpo ? null : strat === 'TARGET_CIR' ? 'Cir' : strat === 'MAX_CLICKS' ? 'Auto' : strat === 'TOP_MAX_CLICKS' ? 'Top' : null;
+        const targetDrr = targetDrrOf(camp.extra);
         let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
         let splitDays = 0;
         for (const date of dates) {
@@ -802,8 +815,9 @@ router.get('/stats', async (req, res) => {
           // Тип оплаты кампании — чтобы показывать расход отдельно "за клик"
           // и "за заказ" (CPO: "Оплата за заказ"), а не только общей суммой.
           if (isCpo) byDate[date].spendCpo = spend; else byDate[date].spendCpc = spend;
-          if (zone === 'search') { byDate[date].spendSearch = spend; byDate[date].clicksSearch = clicks; }
-          if (zone === 'rec') { byDate[date].spendRec = spend; byDate[date].clicksRec = clicks; }
+          if (kind) { byDate[date]['spend' + kind] = spend; byDate[date]['clicks' + kind] = clicks; }
+          else if (zone === 'search') { byDate[date].spendSearch = spend; byDate[date].clicksSearch = clicks; }
+          else if (zone === 'rec') { byDate[date].spendRec = spend; byDate[date].clicksRec = clicks; }
         }
         // Кампании без единого рубля расхода за период — VK/блогерские
         // реф-ссылки, архивные, завершённые — раньше уходили на фронт с
@@ -832,6 +846,8 @@ router.get('/stats', async (req, res) => {
           // кампании" вместо того, чтобы молча выдавать точную с виду цифру.
           splitAcross: splitCount > 1 && splitDays > 0 ? splitCount : null,
           zone,
+          kind,
+          targetDrr,
           byDate,
         });
       }
@@ -920,6 +936,9 @@ router.get('/stats', async (req, res) => {
         const spendCpc = sumCamp('spendCpc'), spendCpo = sumCamp('spendCpo'), spendCpoUndated = sumCamp('spendCpoUndated');
         const spendSearch = sumCamp('spendSearch'), clicksSearch = sumCamp('clicksSearch');
         const spendRec = sumCamp('spendRec'), clicksRec = sumCamp('clicksRec');
+        const spendCir = sumCamp('spendCir'), clicksCir = sumCamp('clicksCir');
+        const spendAuto = sumCamp('spendAuto'), clicksAuto = sumCamp('clicksAuto');
+        const spendTop = sumCamp('spendTop'), clicksTop = sumCamp('clicksTop');
         totalSpendCpc += spendCpc; totalSpendCpo += spendCpo;
         totalClicks += mpClicks; totalAdViews += adViews; totalAdOrders += adOrders; totalAdRevenue += adRevenue;
 
@@ -974,6 +993,7 @@ router.get('/stats', async (req, res) => {
           clicks: mpClicks,
           adViews, adOrders, adRevenue, adToCart, spendCpc, spendCpo, spendCpoUndated,
           spendSearch, clicksSearch, spendRec, clicksRec,
+          spendCir, clicksCir, spendAuto, clicksAuto, spendTop, clicksTop,
           stock: stockOnDate(article.offerId, date),
           manual: {
             views: views.manual, pdpViews: pdpViews.manual, cart: cart.manual,
@@ -990,6 +1010,8 @@ router.get('/stats', async (req, res) => {
       // byDate выше), чтобы сортировка и сводка сразу отражали правку.
       for (const camp of article.campaigns) {
         camp.drr = totalRevenue > 0 ? camp.totalSpend / totalRevenue * 100 : (camp.totalSpend > 0 ? 100 : 0);
+        // ДРР самой РК — по заказам, которые Ozon отнёс к ней (с ним сравнивается цель «Целевого расхода»).
+        camp.adDrr = camp.totalAdRevenue > 0 ? camp.totalSpend / camp.totalAdRevenue * 100 : null;
       }
       const totalDrr = totalRevenue > 0 ? totalSpend / totalRevenue * 100 : (totalSpend > 0 ? 100 : 0);
       const stock = article.offerId ? computeStock(article.offerId) : null;

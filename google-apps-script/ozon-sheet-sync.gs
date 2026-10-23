@@ -94,7 +94,7 @@ const QUERIES_HEADERS = ['cabinet', 'date', 'sku', 'query', 'position', 'searche
 const MONTHLY_HEADERS = ['cabinet', 'month', 'sku', 'revenue', 'orders'];
 // Остатки FBO по складам и кластерам (для вкладки «Остатки» и поставок).
 const STOCKS_WH_HEADERS = ['cabinet', 'sku', 'offer_id', 'cluster', 'warehouse', 'available', 'transit', 'reserved', 'ads', 'idc', 'checked_at'];
-const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy', 'daily_budget', 'weekly_budget', 'budget'];
+const CAMPAIGNS_HEADERS = ['cabinet', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type', 'autopilot_strategy', 'placement', 'expense_strategy', 'daily_budget', 'weekly_budget', 'budget', 'extra'];
 // Товары МУЛЬТИТОВАРНЫХ кампаний ("Оплата за заказ: выбранные товары" и
 // подобные, где одна РК продвигает сразу пачку SKU, а не один артикул) —
 // см. backend/postgres/init.sql (ad_campaign_skus) и sheetSync.js. checked_at
@@ -496,6 +496,28 @@ function getCampaignProducts_(campaignId, headers) {
   }
 }
 
+const CAMPAIGN_KNOWN_ = { id: 1, title: 1, state: 1, advObjectType: 1, PaymentType: 1, paymentType: 1, productAutopilotStrategy: 1, placement: 1, expenseStrategy: 1, dailyBudget: 1, weeklyBudget: 1, budget: 1 };
+function campaignExtra_(c) {
+  const x = {};
+  Object.keys(c || {}).forEach(function (k) { if (!CAMPAIGN_KNOWN_[k] && c[k] !== null && c[k] !== '') x[k] = c[k]; });
+  const s = JSON.stringify(x);
+  return s.length > 3500 ? s.slice(0, 3500) : s;
+}
+
+// Диагностика: все поля кампаний с автостратегией (запустить вручную, смотреть «Журнал выполнения»).
+function probeCampaigns() {
+  getCabinets_().forEach(function (cab) {
+    const headers = perfHeaders_(cab);
+    if (!headers) return;
+    try {
+      const list = (fetchJson_('https://api-performance.ozon.ru/api/client/campaign', { method: 'get', headers: headers }, 'Список кампаний').list || [])
+        .filter(function (c) { return c.state === 'CAMPAIGN_STATE_RUNNING' && c.productAutopilotStrategy; });
+      list.slice(0, 6).forEach(function (c) { Logger.log(cab.id + ' · ' + JSON.stringify(c).slice(0, 1500)); });
+      if (!list.length) Logger.log(cab.id + ': нет запущенных РК со стратегией');
+    } catch (e) { Logger.log(cab.id + ': ' + e.message); }
+  });
+}
+
 // ---------- Кампании + расход/клики ----------
 function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campaignSkusOut) {
   const headers = perfHeaders_(cab);
@@ -507,7 +529,9 @@ function collectCampaignsAndStats_(cab, from, to, campaignsOut, statsOut, campai
       c.PaymentType || c.paymentType || '', c.productAutopilotStrategy || '',
       Array.isArray(c.placement) ? c.placement.join(',') : (c.placement || ''), c.expenseStrategy || '',
       // Бюджеты (в API — в миллионных долях рубля; сервис переводит в рубли) — для журнала изменений.
-      c.dailyBudget || '', c.weeklyBudget || '', c.budget || '']);
+      c.dailyBudget || '', c.weeklyBudget || '', c.budget || '',
+      // Остальные поля кампании как есть (JSON) — там дата создания и целевой ДРР «Целевого расхода».
+      campaignExtra_(c)]);
   });
 
   const expData = fetchJson_('https://api-performance.ozon.ru/api/client/statistics/expense/json?dateFrom=' + from + '&dateTo=' + to,

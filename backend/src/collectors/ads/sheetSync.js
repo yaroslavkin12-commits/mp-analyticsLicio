@@ -207,19 +207,23 @@ async function syncCampaignsFromSheet(cabinet) {
     await query(`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS daily_budget NUMERIC(14,2)`).catch(() => {});
     await query(`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS weekly_budget NUMERIC(14,2)`).catch(() => {});
     await query(`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS total_budget NUMERIC(14,2)`).catch(() => {});
+    await query(`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS extra TEXT`).catch(() => {});
     budgetColsReady = true;
   }
   // Бюджет в API Ozon — в миллионных долях рубля (500 ₽ = 500000000); пусто или 0 — без ограничения.
   const rub = v => { const n = Number(String(v ?? '').replace(',', '.')); if (!Number.isFinite(n) || n <= 0) return null; return n >= 1e6 ? Math.round(n / 1e6 * 100) / 100 : n; };
   const hasBudget = filtered.some(r => 'daily_budget' in r);
+  const hasExtra = filtered.some(r => 'extra' in r);
   const out = filtered.map(r => [cabinet, 'ozon', r.campaign_id, r.title || null, r.state || null, r.adv_object_type || null,
     r.payment_type || null, r.autopilot_strategy || null, r.placement || null, r.expense_strategy || null,
-    ...(hasBudget ? [rub(r.daily_budget), rub(r.weekly_budget), rub(r.budget)] : []), new Date()]);
+    ...(hasBudget ? [rub(r.daily_budget), rub(r.weekly_budget), rub(r.budget)] : []),
+    ...(hasExtra ? [r.extra ? String(r.extra).slice(0, 4000) : null] : []), new Date()]);
   // Прежние статусы и бюджеты — чтобы записать в журнал включение/выключение РК и смену бюджета.
   const prevCamps = await query(`SELECT campaign_id, state, matched_offer_id, daily_budget, weekly_budget, total_budget FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
   const saved = await bulkUpsert('ad_campaigns',
     ['cabinet', 'platform', 'campaign_id', 'title', 'state', 'adv_object_type', 'payment_type',
-     'autopilot_strategy', 'placement', 'expense_strategy', ...(hasBudget ? ['daily_budget', 'weekly_budget', 'total_budget'] : []), 'updated_at'],
+     'autopilot_strategy', 'placement', 'expense_strategy', ...(hasBudget ? ['daily_budget', 'weekly_budget', 'total_budget'] : []),
+     ...(hasExtra ? ['extra'] : []), 'updated_at'],
     out, ['cabinet', 'platform', 'campaign_id'], undefined, { diff: `camps:${cabinet}`, skip: ['updated_at'] });
   if (hasBudget) await logBudgetChanges(cabinet, filtered, prevCamps, rub).catch(e => console.warn('[SheetCampaigns] бюджет:', e.message));
 
@@ -260,6 +264,7 @@ async function syncCampaignsFromSheet(cabinet) {
       [cabinet, ids, matches]);
   }
   try { await logCampaignSwitches(cabinet, filtered, prevCamps); } catch (e) { console.warn(`[SheetCampaigns:${cabinet}] журнал:`, e.message); }
+  try { await backfillNewCampaigns(cabinet, filtered); } catch (e) { console.warn(`[SheetCampaigns:${cabinet}] журнал (новые РК):`, e.message); }
   same.save();
   console.log(`[SheetCampaigns:${cabinet}] ${saved} (из Google-таблицы)`);
   return { rows: saved };
@@ -270,7 +275,8 @@ const RUNNING = st => String(st || '') === 'CAMPAIGN_STATE_RUNNING';
 async function logCampaignSwitches(cabinet, rows, prevCamps) {
   if (!prevCamps.length) return; // первый импорт — сравнивать не с чем
   const prev = new Map(prevCamps.map(c => [String(c.campaign_id), c]));
-  const changed = rows.filter(r => { const p = prev.get(String(r.campaign_id)); return p && RUNNING(p.state) !== RUNNING(r.state); });
+  // Сменился статус — или РК новая и сразу запущена (раньше новые РК в журнал не попадали).
+  const changed = rows.filter(r => { const p = prev.get(String(r.campaign_id)); return p ? RUNNING(p.state) !== RUNNING(r.state) : RUNNING(r.state); });
   if (!changed.length) return;
   // Массовая смена статусов разом — скорее сбой выгрузки, чем действия продавца.
   if (changed.length > 60) { console.warn(`[SheetCampaigns:${cabinet}] сменилось ${changed.length} статусов — в журнал не пишем`); return; }
@@ -280,13 +286,59 @@ async function logCampaignSwitches(cabinet, rows, prevCamps) {
      WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2)`, [cabinet, ids]).catch(() => []);
   const offersOf = new Map();
   for (const r of skuRows) { const k = String(r.campaign_id); if (!offersOf.has(k)) offersOf.set(k, new Set()); offersOf.get(k).add(r.offer_id); }
+  // Привязка по названию уже обновлена выше (matched_offer_id) — берём свежую, для новых РК её в prev нет.
+  const nowM = await query(`SELECT campaign_id, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id::text = ANY($2)`, [cabinet, ids]).catch(() => []);
+  const matchedNow = new Map(nowM.map(r => [String(r.campaign_id), r.matched_offer_id]));
   for (const r of changed) {
-    const id = String(r.campaign_id), on = RUNNING(r.state);
+    const id = String(r.campaign_id), on = RUNNING(r.state), isNew = !prev.has(id);
     const set = offersOf.get(id) || new Set();
-    const m = prev.get(id)?.matched_offer_id; if (m) set.add(m);
+    const m = matchedNow.get(id) || prev.get(id)?.matched_offer_id; if (m) set.add(m);
     const title = String(r.title || '').slice(0, 80);
+    const verb = isNew ? 'запущена (новая)' : on ? 'включена' : 'выключена';
     for (const o of [...set].slice(0, 200)) {
-      await addAutoEvent(cabinet, o, on ? 'camp_on' : 'camp_off', `РК ${on ? 'включена' : 'выключена'}${title ? ` — «${title}»` : ''} (РК ${id})`, on ? 'off' : 'on', on ? 'on' : 'off');
+      await addAutoEvent(cabinet, o, on ? 'camp_on' : 'camp_off', `РК ${verb}${title ? ` — «${title}»` : ''} (РК ${id})`, on ? 'off' : 'on', on ? 'on' : 'off');
+    }
+  }
+}
+
+// Запущенные за последние 3 недели РК, о запуске которых в журнале ничего нет (созданы
+// до того, как журнал стал ловить новые РК), — запись задним числом: на дату создания
+// (createdAt из сырых полей), иначе на первый день расхода.
+async function backfillNewCampaigns(cabinet, rows) {
+  const running = rows.filter(r => RUNNING(r.state));
+  if (!running.length) return;
+  const ids = running.map(r => String(r.campaign_id));
+  const logged = await query(`SELECT DISTINCT substring(text from '\\(РК (\\d+)\\)') AS id FROM ad_events
+     WHERE cabinet = $1 AND platform = 'ozon' AND kind IN ('camp_on', 'camp_off')`, [cabinet]).catch(() => null);
+  if (!logged) return;
+  const has = new Set(logged.map(r => r.id).filter(Boolean));
+  const firstSpend = await query(`SELECT campaign_id::text AS id, MIN(date)::text AS d FROM ad_stats_daily
+     WHERE cabinet = $1 AND platform = 'ozon' AND spend > 0 AND campaign_id::text = ANY($2) GROUP BY 1`, [cabinet, ids]).catch(() => []);
+  const fsOf = new Map(firstSpend.map(r => [r.id, r.d]));
+  const minDate = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
+  const todo = [];
+  for (const r of running) {
+    const id = String(r.campaign_id);
+    if (has.has(id)) continue;
+    let created = null;
+    try { const x = r.extra ? JSON.parse(r.extra) : null; created = x && (x.createdAt || x.created_at || x.fromDate) ? String(x.createdAt || x.created_at || x.fromDate).slice(0, 10) : null; } catch { /* нет сырых полей */ }
+    const d = created || fsOf.get(id);
+    if (!d || d < minDate) continue;
+    todo.push({ r, id, d });
+  }
+  if (!todo.length || todo.length > 30) return;
+  const tIds = todo.map(t => t.id);
+  const skuRows = await query(`SELECT s.campaign_id, c.offer_id FROM ad_campaign_skus s
+      JOIN ad_product_catalog c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
+     WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2)`, [cabinet, tIds]).catch(() => []);
+  const m = await query(`SELECT campaign_id::text AS id, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id::text = ANY($2)`, [cabinet, tIds]).catch(() => []);
+  const offersOf = new Map();
+  for (const x of skuRows) { const k = String(x.campaign_id); if (!offersOf.has(k)) offersOf.set(k, new Set()); offersOf.get(k).add(x.offer_id); }
+  for (const x of m) if (x.matched_offer_id) { if (!offersOf.has(x.id)) offersOf.set(x.id, new Set()); offersOf.get(x.id).add(x.matched_offer_id); }
+  for (const { r, id, d } of todo) {
+    const title = String(r.title || '').slice(0, 80);
+    for (const o of [...(offersOf.get(id) || [])].slice(0, 200)) {
+      await addAutoEvent(cabinet, o, 'camp_on', `РК запущена (новая)${title ? ` — «${title}»` : ''} (РК ${id})`, 'off', 'on', d);
     }
   }
 }
@@ -401,12 +453,12 @@ async function logBudgetChanges(cabinet, rows, prevCamps, rub) {
   }
 }
 
-async function addAutoEvent(cabinet, offerId, kind, text, oldValue, newValue) {
+async function addAutoEvent(cabinet, offerId, kind, text, oldValue, newValue, date = null) {
   require('../../lib/dataVersion').bump();
   await query(
     `INSERT INTO ad_events (cabinet, platform, offer_id, date, kind, text, old_value, new_value, auto)
-     VALUES ($1, 'ozon', $2, (NOW() AT TIME ZONE 'Europe/Moscow')::date, $3, $4, $5, $6, true)`,
-    [cabinet, offerId, kind, text, oldValue === null || oldValue === undefined ? null : String(oldValue), newValue === null || newValue === undefined ? null : String(newValue)]);
+     VALUES ($1, 'ozon', $2, COALESCE($7::date, (NOW() AT TIME ZONE 'Europe/Moscow')::date), $3, $4, $5, $6, true)`,
+    [cabinet, offerId, kind, text, oldValue === null || oldValue === undefined ? null : String(oldValue), newValue === null || newValue === undefined ? null : String(newValue), date]);
 }
 const fmtRub = v => `${Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`;
 
@@ -719,6 +771,7 @@ async function cleanupSheetJunk() {
 }
 
 module.exports = {
+  backfillNewCampaigns, logCampaignSwitches,
   addAutoEvent,
   importPrices,
   dropSheetCache: name => { for (const k of [...SHEET_CACHE.keys()]) if (k.endsWith('|' + name)) SHEET_CACHE.delete(k); },

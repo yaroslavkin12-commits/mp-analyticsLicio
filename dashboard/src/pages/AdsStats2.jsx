@@ -159,11 +159,25 @@ export const drrClass = v => v === null || v === undefined || !Number.isFinite(v
 
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
 const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'clicks', 'adViews', 'adOrders', 'adRevenue',
-  'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCpoUndated', 'expRev', 'profitF'];
+  'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCir', 'clicksCir', 'spendAuto', 'clicksAuto', 'spendTop', 'clicksTop',
+  'spendCpoUndated', 'expRev', 'profitF'];
 // Коэффициенты юнит-экономики по артикулам (ставит страница «Реклама»): для ДРР
 // с учётом выкупа и прогнозируемой прибыли по дням.
 const UNIT_CTX = { k: null, tax: 6 };
-const zoneRaw = d => ({ spendSearch: d.spendSearch || 0, clicksSearch: d.clicksSearch || 0, spendRec: d.spendRec || 0, clicksRec: d.clicksRec || 0, spendCpoUndated: d.spendCpoUndated || 0 });
+// Расход и клики по стратегиям оплаты за клик: ручные ставки / «средняя стоимость клика»
+// по зоне (поиск, поиск + рек.) и автостратегии Ozon (целевой расход, автостратегия, ТОП).
+const STRAT_PARTS = [
+  { k: 'Search', t: 'ср. клик · поиск', s: 'поиск' },
+  { k: 'Rec', t: 'ср. клик · поиск + рек.', s: 'п+р' },
+  { k: 'Cir', t: 'целевой расход', s: 'ЦР' },
+  { k: 'Auto', t: 'автостратегия', s: 'АС' },
+  { k: 'Top', t: 'вывод в ТОП', s: 'ТОП' },
+];
+const zoneRaw = d => {
+  const o = { spendCpoUndated: d.spendCpoUndated || 0 };
+  for (const p of STRAT_PARTS) { o['spend' + p.k] = d['spend' + p.k] || 0; o['clicks' + p.k] = d['clicks' + p.k] || 0; }
+  return o;
+};
 
 // Значения дня с учётом режима: "all" — общая аналитика товара, "ads" —
 // только то, что Ozon отнёс к рекламе (корзин в рекламной статистике нет).
@@ -199,6 +213,9 @@ export function derive(r, mode) {
   out.avgCpc = r.clicks > 0 ? (r.spendCpc || r.spend) / r.clicks : null;
   out.avgCpcSearch = r.clicksSearch > 0 ? r.spendSearch / r.clicksSearch : null;
   out.avgCpcRec = r.clicksRec > 0 ? r.spendRec / r.clicksRec : null;
+  out.avgCpcCir = r.clicksCir > 0 ? r.spendCir / r.clicksCir : null;
+  out.avgCpcAuto = r.clicksAuto > 0 ? r.spendAuto / r.clicksAuto : null;
+  out.avgCpcTop = r.clicksTop > 0 ? r.spendTop / r.clicksTop : null;
   return out;
 }
 function sumRaw(list) {
@@ -331,6 +348,9 @@ export const CHART_METRICS = [
   { key: 'avgCpc', label: 'Ср. цена клика, ₽', fmt: 'money2', free: true },
   { key: 'avgCpcSearch', label: 'Цена клика: поиск, ₽', fmt: 'money2', free: true },
   { key: 'avgCpcRec', label: 'Цена клика: поиск+рек., ₽', fmt: 'money2', free: true },
+  { key: 'avgCpcCir', label: 'Цена клика: целевой расход, ₽', fmt: 'money2', free: true },
+  { key: 'avgCpcAuto', label: 'Цена клика: автостратегия, ₽', fmt: 'money2', free: true },
+  { key: 'avgCpcTop', label: 'Цена клика: вывод в ТОП, ₽', fmt: 'money2', free: true },
   { key: 'spend', label: 'Расход, ₽', fmt: 'int' },
   { key: 'spendCpc', label: 'Расход за клик, ₽', fmt: 'int' },
   { key: 'spendCpo', label: 'Расход за заказ, ₽', fmt: 'int' },
@@ -575,10 +595,11 @@ const DAY_ROWS = [
   { key: 'crToOrder', label: 'CR в заказ', fmt: 'pct', good: 'up' },
   { block: 'Расход и ДРР', tone: 'spend' },
   { key: 'avgCpc', label: 'Ср. цена клика, ₽', fmt: 'money2', good: 'down', editable: true },
-  { key: 'avgCpcSearch', label: 'поиск', fmt: 'money2', good: 'down', sub: true, ratio: ['spendSearch', 'clicksSearch'] },
-  { key: 'avgCpcRec', label: 'поиск + рекомендации', fmt: 'money2', good: 'down', sub: true, ratio: ['spendRec', 'clicksRec'] },
+  ...STRAT_PARTS.map(p => ({ key: 'avgCpc' + p.k, label: p.t, fmt: 'money2', good: 'down', sub: true, ratio: ['spend' + p.k, 'clicks' + p.k], clicks: 'clicks' + p.k, spendKey: 'spend' + p.k, hideEmpty: true,
+    hint: p.k === 'Cir' ? 'Целевой расход: Ozon сам держит ставку так, чтобы ДРР кампании был около заданного. Цель ДРР — в списке кампаний артикула' : undefined })),
   { key: 'spend', label: 'Расход общий, ₽', fmt: 'money0', good: 'up', editable: true },
   { key: 'spendCpc', label: 'оплата за клик', fmt: 'money0', good: 'up', sub: true },
+  ...STRAT_PARTS.map(p => ({ key: 'spend' + p.k, label: p.t, fmt: 'money0', good: 'up', sub: 2, clicks: 'clicks' + p.k, hideEmpty: true })),
   { key: 'spendCpo', label: 'оплата за заказ', fmt: 'money0', good: 'up', sub: true, hint: 'Оплата за заказ стоит в дне заказа — так видно эффективность дня. Ozon списывает её позже, в день выкупа: в P&L и финансах эти суммы в других днях' },
   { key: 'drr', label: 'ДРР', fmt: 'pct', good: 'down', hint: 'Расход / сумма заказов (без учёта выкупа)' },
   { key: 'drrB', label: 'ДРР с учётом выкупа', fmt: 'pct', good: 'down', hint: 'Расход / (сумма заказов × % выкупа артикула) — сколько реклама будет стоить с каждой продажи. Так же считается ДРР в «Цены и маржа» и калькуляторе' },
@@ -628,7 +649,9 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
   const ref = useRef(null);
   const today = dayjs().format('YYYY-MM-DD');
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
-  const rows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))));
+  const rows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
+    // Строки стратегий — только если у товара за период был такой расход.
+    && !(r.hideEmpty && !dates.some(d => (model.byDate[d]?.[r.spendKey || r.key] || 0) > 0))));
   return (
     <div className="a-days" ref={ref}>
       <table className="a-dt">
@@ -647,8 +670,8 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
             const min = nums.length ? Math.min(...nums) : 0, max = nums.length ? Math.max(...nums) : 0;
             const label = mode === 'ads' && row.adsLabel ? row.adsLabel : row.label;
             return (
-              <tr key={row.key} className={row.sub ? 'sub' : ''}>
-                <td className="lbl" title={row.hint || undefined} style={row.hint ? { textDecoration: 'underline dotted var(--a-line2)', textUnderlineOffset: 3 } : undefined}>{row.sub ? '— ' : ''}{label}</td>
+              <tr key={row.key} className={row.sub ? `sub${row.sub === 2 ? ' sub2' : ''}` : ''}>
+                <td className="lbl" title={row.hint || undefined} style={row.hint ? { textDecoration: 'underline dotted var(--a-line2)', textUnderlineOffset: 3 } : undefined}>{row.sub === 2 ? '· ' : row.sub ? '— ' : ''}{label}</td>
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {
                   const d = dates[i];
@@ -670,7 +693,8 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
                       </td>
                     );
                   }
-                  return <td key={d} style={{ background: bg }}>{fmtBy(v, row.fmt)}</td>;
+                  const cl = row.clicks ? model.byDate[d]?.[row.clicks] : null;
+                  return <td key={d} style={{ background: bg }} title={cl ? `${fmtInt(cl)} клик. · ${fmtInt(model.byDate[d]?.[row.spendKey || row.key] || 0)} ₽` : undefined}>{fmtBy(v, row.fmt)}</td>;
                 })}
               </tr>
             );
@@ -722,18 +746,21 @@ function CampaignsTable({ campaigns }) {
   return (
     <div style={{ maxHeight: 260, overflowY: 'auto' }}>
       <table className="a-campaigns">
-        <thead><tr><th>Кампания</th><th>Статус</th><th>Оплата</th><th>Цена клика</th><th>Расход, ₽</th></tr></thead>
+        <thead><tr><th>Кампания</th><th>Статус</th><th>Оплата</th><th>Цена клика</th><th>Расход, ₽</th><th title="Расход РК / выручка заказов, которые Ozon отнёс к этой РК">ДРР РК</th></tr></thead>
         <tbody>
           {sorted.map(c => (
             <tr key={c.campaignId}>
               <td>{c.title || c.campaignId}{c.splitAcross > 1 && <span className="a-approx" title={`Расход поделён поровну на ${c.splitAcross} артикула`}>÷{c.splitAcross}</span>}</td>
               <td><span className={`tag ${c.state === 'CAMPAIGN_STATE_RUNNING' ? 'on' : 'off'}`}>{c.state === 'CAMPAIGN_STATE_RUNNING' ? 'активна' : 'выкл.'}</span></td>
-              <td>{isCpoCampaign(c) ? 'за заказ' : <>за клик<small className="a-strat" style={{ display: 'block' }}>{stratOf(c).t}</small></>}</td>
+              <td>{isCpoCampaign(c) ? 'за заказ' : <>за клик<small className="a-strat" style={{ display: 'block' }}>{stratOf(c).t}{c.targetDrr ? ` · цель ДРР ${String(c.targetDrr).replace('.', ',')}%` : ''}</small></>}</td>
               <td className="n">{fmtMoney2(c.avgCpc)}</td>
               <td className="n">{fmtInt(c.totalSpend)}</td>
+              <td className="n" title={c.targetDrr ? `Цель стратегии: ${String(c.targetDrr).replace('.', ',')}%` : undefined}
+                style={c.targetDrr && c.adDrr !== null ? { color: c.adDrr > c.targetDrr * 1.15 ? 'var(--a-bad, #c0392b)' : 'var(--a-good, #1e8e5a)' } : undefined}>
+                {c.adDrr === null || c.adDrr === undefined ? '—' : fmtPct(c.adDrr)}{c.targetDrr ? <small style={{ display: 'block', color: 'var(--a-ink3)' }}>цель {String(c.targetDrr).replace('.', ',')}%</small> : null}</td>
             </tr>
           ))}
-          {!sorted.length && <tr><td colSpan={5} style={{ color: 'var(--a-ink3)' }}>Своих рекламных кампаний нет</td></tr>}
+          {!sorted.length && <tr><td colSpan={6} style={{ color: 'var(--a-ink3)' }}>Своих рекламных кампаний нет</td></tr>}
         </tbody>
       </table>
     </div>
@@ -831,8 +858,9 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
           {showAssoc && <><span>Итого со склейкой</span><b className="n">{fmtInt(t.orders + assocOrders)} шт · {fmtInt(t.revenue + assocRevenue)} ₽</b></>}
           <span>Расход за клик</span><b className="n">{fmtInt(t.spendCpc)} ₽</b>
           <span title="Оплата за заказ — в дне заказа; Ozon списывает её в день выкупа">Расход за заказ (по дню заказа)</span><b className="n">{t.spendCpo ? `${fmtInt(t.spendCpo)} ₽` : '—'}</b>
-          <span>Ср. цена клика: поиск / поиск+рек.</span>
-          <b className="n">{fmtMoney2(t.avgCpcSearch)} / {fmtMoney2(t.avgCpcRec)}</b>
+          {STRAT_PARTS.filter(p => t['clicks' + p.k] > 0).map(p => (
+            <React.Fragment key={p.k}><span>Клик · {p.t}</span><b className="n">{fmtMoney2(t['avgCpc' + p.k])} ₽ · {fmtInt(t['spend' + p.k])} ₽</b></React.Fragment>
+          ))}
           <span>Рекламный ДРР</span><b className="n">{fmtPct(adDrr)}</b>
           <span>CTR рекламы</span><b className="n">{fmtPct(adCtr)}</b>
           <span>Оплата за заказ (ОЗЗ)</span><span>{cpoText(isAggregate ? null : a?.cpo)}</span>
@@ -1402,7 +1430,7 @@ export default function AdsStats2({ cabinet }) {
           <td>{cpcAll.length
             ? (cpcOn.length
               ? (() => { const ss = [...new Set(cpcOn.map(c => stratOf(c).s))]; return (
-                <span title={`Запущено РК с оплатой за клик: ${cpcOn.length} из ${cpcAll.length}\n${cpcOn.map(c => `• ${stratOf(c).t}: ${c.title || c.campaignId}`).join('\n')}`}>
+                <span title={`Запущено РК с оплатой за клик: ${cpcOn.length} из ${cpcAll.length}\n${cpcOn.map(c => `• ${stratOf(c).t}${c.targetDrr ? ` (цель ДРР ${c.targetDrr}%)` : ''}: ${c.title || c.campaignId}`).join('\n')}`}>
                   <span className="tag on">вкл</span><span className="a-strat">{ss.join(' · ')}</span>
                 </span>); })()
               : <span className="tag off" title={`РК с оплатой за клик не запущены (${cpcAll.length})`}>выкл</span>)
