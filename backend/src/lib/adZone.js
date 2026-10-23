@@ -35,7 +35,7 @@ function targetDrrOf(extra) {
 }
 // «РК 123» → «РК 123 · поиск» (для журнала).
 function campLabel(camp, id) {
-  const z = zoneOf(camp), st = strategyOf(camp), t = targetDrrOf(camp?.extra);
+  const z = zoneOf(camp), st = strategyOf(camp), t = camp?.target_drr ?? targetDrrOf(camp?.extra);
   return `РК ${id}${z ? ` · ${z}` : ''}${st ? ` · ${st}${t ? ` ${t}%` : ''}` : ''}`;
 }
 module.exports = { zoneOf, campLabel, strategyOf, targetDrrOf };

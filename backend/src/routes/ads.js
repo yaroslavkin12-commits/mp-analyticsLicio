@@ -58,9 +58,36 @@ let adEventsReady = null;
 // Сырые поля кампании (JSON из вкладки Campaigns) — там целевой ДРР «Целевого расхода».
 let extraColP = null;
 function ensureCampExtra() {
-  if (!extraColP) extraColP = query(`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS extra TEXT`).catch(() => { extraColP = null; });
+  if (!extraColP) extraColP = (async () => {
+    await query(`ALTER TABLE ad_campaigns ADD COLUMN IF NOT EXISTS extra TEXT`);
+    // Цель ДРР «Целевого расхода», введённая вручную: Ozon в API кампаний её не отдаёт.
+    await query(`CREATE TABLE IF NOT EXISTS ad_campaign_targets (cabinet TEXT NOT NULL, campaign_id TEXT NOT NULL,
+      target_drr NUMERIC(6,2), updated_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY (cabinet, campaign_id))`);
+  })().catch(() => { extraColP = null; });
   return extraColP;
 }
+async function campTargets(cabinet) {
+  const r = await query(`SELECT campaign_id, target_drr FROM ad_campaign_targets WHERE cabinet = $1`, [cabinet]).catch(() => []);
+  return new Map(r.map(x => [String(x.campaign_id), Number(x.target_drr)]));
+}
+
+// POST /api/promo/campaign-target { cabinet, campaignId, drr } — цель ДРР РК (пусто — убрать).
+router.post('/campaign-target', async (req, res) => {
+  try {
+    await ensureCampExtra();
+    const { cabinet, campaignId, drr } = req.body || {};
+    if (!cabinet || !campaignId) return res.status(400).json({ success: false, error: 'Нужны cabinet и campaignId' });
+    const v = drr === null || drr === undefined || drr === '' ? null : Number(String(drr).replace(',', '.'));
+    if (v === null || !Number.isFinite(v) || v <= 0) {
+      await query(`DELETE FROM ad_campaign_targets WHERE cabinet = $1 AND campaign_id = $2`, [cabinet, String(campaignId)]);
+    } else {
+      await query(`INSERT INTO ad_campaign_targets (cabinet, campaign_id, target_drr) VALUES ($1, $2, $3)
+        ON CONFLICT (cabinet, campaign_id) DO UPDATE SET target_drr = EXCLUDED.target_drr, updated_at = NOW()`, [cabinet, String(campaignId), Math.min(100, v)]);
+    }
+    require('../lib/dataVersion').bump();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
 function ensureAdEvents() {
   if (!adEventsReady) {
     adEventsReady = (async () => {
@@ -87,6 +114,8 @@ router.get('/events', async (req, res) => {
         ORDER BY date DESC, id DESC`, [cabinet, from, to]);
     // Старые записи «(РК 123)» дополняем зоной показа: поиск / поиск + рекомендации.
     const camps = await query(`SELECT campaign_id, title, placement, payment_type, autopilot_strategy, extra FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
+    const tg = await campTargets(cabinet);
+    for (const c of camps) if (tg.has(String(c.campaign_id))) c.target_drr = tg.get(String(c.campaign_id));
     const campById = new Map(camps.map(c => [String(c.campaign_id), c]));
     const enrich = t => String(t || '').replace(/\(РК (\d+)\)/g, (m, id) => `(${campLabel(campById.get(id), id)})`);
     // Изменения цены клиента (журнал цен + цена на сайте) — считаются на лету, в базу не пишутся.
@@ -497,6 +526,7 @@ router.get('/stats', async (req, res) => {
     // артикулам, а не по всем ~1800 товарам кабинета (раньше аналитика одна
     // тянула ~27 тыс. строк и занимала больше 2 секунд).
     await ensureCampExtra();
+    const targetsP = campTargets(cabinet);
     const [campaigns, catalogRows, campaignSkuRows, groupsInfo, extraSkuRows] = await Promise.all([
       timed('campaigns', query(`SELECT campaign_id, title, state, adv_object_type, matched_offer_id, matched_sku,
                     payment_type, autopilot_strategy, placement, expense_strategy, extra
@@ -512,6 +542,7 @@ router.get('/stats', async (req, res) => {
              UNION SELECT COALESCE(NULLIF(promoted_sku, ''), sku) FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`,
              [cabinet, from, to]).catch(() => [])),
     ]);
+    const targets = await targetsP;
 
     const offerBySkuPre = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
     const neededOffers = new Set();
@@ -786,7 +817,7 @@ router.get('/stats', async (req, res) => {
         // «средняя стоимость клика» — по зоне (поиск / поиск + рекомендации).
         const strat = String(camp.autopilot_strategy || '').toUpperCase();
         const kind = isCpo ? null : strat === 'TARGET_CIR' ? 'Cir' : strat === 'MAX_CLICKS' ? 'Auto' : strat === 'TOP_MAX_CLICKS' ? 'Top' : null;
-        const targetDrr = targetDrrOf(camp.extra);
+        const targetDrr = targets.get(String(camp.campaign_id)) ?? targetDrrOf(camp.extra);
         let totalSpend = 0, totalClicks = 0, totalAdViews = 0, totalAdOrders = 0, totalAdRevenue = 0;
         let splitDays = 0;
         for (const date of dates) {

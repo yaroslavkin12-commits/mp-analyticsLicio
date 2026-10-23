@@ -63,6 +63,7 @@ export const getOzonCategories  = p => api.get('/analytics/ozon/categories', { p
 export const getAdsCabinets = () => api.get('/promo/cabinets');
 export const collectAds     = (cabinet, days) => api.post('/promo/collect', {}, { params: { cabinet, days } });
 export const getAdsDataStatus = cabinet => api.get('/promo/data-status', { params: { cabinet } });
+export const saveCampaignTarget = (cabinet, campaignId, drr) => api.post('/promo/campaign-target', { cabinet, campaignId, drr });
 export const getAdsStats    = (cabinet, params) => api.get('/promo/stats', { params: { cabinet, ...params } });
 export const saveManualAdsMetric = (cabinet, offerId, date, metric, value) =>
   api.post('/promo/manual', { cabinet, offerId, date, metric, value });

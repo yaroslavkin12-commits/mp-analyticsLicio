@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import {
-  getAdsStats, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder, getAdsTransit, saveAdsTransit,
+  getAdsStats, saveCampaignTarget, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder, getAdsTransit, saveAdsTransit,
   getAdsGroups, addAdsGroup, removeAdsGroup, renameAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
   reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs, latestOnly,
 } from '../api';
@@ -741,6 +741,25 @@ function Journal({ events, offerId, onAdd, onDelete }) {
   );
 }
 
+// Кабинет страницы — для сохранения цели ДРР из списка кампаний.
+const CAB_CTX = { cabinet: null };
+function TargetInput({ c }) {
+  const [v, setV] = useState(c.targetDrr ? String(c.targetDrr).replace('.', ',') : '');
+  const [st, setSt] = useState('');
+  const save = () => {
+    const cur = c.targetDrr ? String(c.targetDrr).replace('.', ',') : '';
+    if (v.trim() === cur) return;
+    setSt('…');
+    saveCampaignTarget(CAB_CTX.cabinet, c.campaignId, v.trim() || null)
+      .then(() => { c.targetDrr = v.trim() ? Number(v.replace(',', '.')) : null; setSt('✓'); })
+      .catch(() => setSt('ошибка'));
+  };
+  return (
+    <span className="a-target" title="Цель ДРР, которую вы поставили в стратегии «Целевой расход» в кабинете Ozon (Ozon её в API не отдаёт)">
+      цель ДРР <input value={v} onChange={e => setV(e.target.value)} onBlur={save} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} placeholder="—" />% {st}
+    </span>
+  );
+}
 function CampaignsTable({ campaigns }) {
   const sorted = [...campaigns].sort((a, b) => b.totalSpend - a.totalSpend);
   return (
@@ -752,7 +771,7 @@ function CampaignsTable({ campaigns }) {
             <tr key={c.campaignId}>
               <td>{c.title || c.campaignId}{c.splitAcross > 1 && <span className="a-approx" title={`Расход поделён поровну на ${c.splitAcross} артикула`}>÷{c.splitAcross}</span>}</td>
               <td><span className={`tag ${c.state === 'CAMPAIGN_STATE_RUNNING' ? 'on' : 'off'}`}>{c.state === 'CAMPAIGN_STATE_RUNNING' ? 'активна' : 'выкл.'}</span></td>
-              <td>{isCpoCampaign(c) ? 'за заказ' : <>за клик<small className="a-strat" style={{ display: 'block' }}>{stratOf(c).t}{c.targetDrr ? ` · цель ДРР ${String(c.targetDrr).replace('.', ',')}%` : ''}</small></>}</td>
+              <td>{isCpoCampaign(c) ? 'за заказ' : <>за клик<small className="a-strat" style={{ display: 'block' }}>{stratOf(c).t}</small>{stratOf(c).k === 'TARGET_CIR' && <TargetInput c={c} />}</>}</td>
               <td className="n">{fmtMoney2(c.avgCpc)}</td>
               <td className="n">{fmtInt(c.totalSpend)}</td>
               <td className="n" title={c.targetDrr ? `Цель стратегии: ${String(c.targetDrr).replace('.', ',')}%` : undefined}
@@ -1030,6 +1049,7 @@ export function AddToGroup({ catalog, exclude, onPick }) {
 
 // ═════════════════════════════════════════════════════════════════════════
 export default function AdsStats2({ cabinet }) {
+  CAB_CTX.cabinet = cabinet;
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [data, setData] = useState(null);
