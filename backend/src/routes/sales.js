@@ -345,13 +345,14 @@ router.get('/summary', async (req, res) => {
         const o = r.offer_id || bySku.get(String(r.sku))?.offer_id;
         const n = (o && byOffer.get(o)?.product_name) || '';
         const path = (o && ovm.get(o)) || autoPath(cab, n, o || '').join(' / ') || 'Без категории';
-        return path.split(' / ')[0];
+        return path.split(' / ');
       };
-      const agg = () => ({ q: 0, r: 0, byCat: {} });
+      const agg = () => ({ q: 0, r: 0, byCat: {}, byCat2: {} });
       const cur = agg(), prev = agg();
       for (const r of rows) {
-        const t = r.date >= from ? cur : prev, k = topOf(r), q = num(r.orders_item), v = num(r.revenue);
+        const t = r.date >= from ? cur : prev, parts = topOf(r), k = parts[0], k2 = parts.slice(0, 2).join(' / '), q = num(r.orders_item), v = num(r.revenue);
         t.q += q; t.r += v; const b = t.byCat[k] || (t.byCat[k] = [0, 0]); b[0] += q; b[1] += v;
+        const b2 = t.byCat2[k2] || (t.byCat2[k2] = [0, 0]); b2[0] += q; b2[1] += v;
       }
       out.push({ id: cab, label: c.label, cur, prev });
     }

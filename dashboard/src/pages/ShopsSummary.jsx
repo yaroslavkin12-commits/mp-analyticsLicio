@@ -21,6 +21,9 @@ const OZON = SHOPS.filter(s => s.platform === 'ozon');
 const taxOf = cab => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cab}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } };
 const SEP = ' / ';
 const top = a => String(a.cat || 'Без категории').split(SEP)[0];
+const top2 = a => String(a.cat || 'Без категории').split(SEP).slice(0, 2).join(SEP);
+const FK = ['revenue', 'ozonX', 'ads', 'payout', 'cost', 'tax', 'profit', 'qty'];
+const addF = (list) => { const ok = list.filter(Boolean); if (!ok.length) return null; const o = {}; for (const k of FK) o[k] = ok.reduce((x, f) => x + (f[k] || 0), 0); return o; };
 
 function Delta({ cur, prev, pp }) {
   if (cur === null || prev === null || cur === undefined || prev === undefined || !Number.isFinite(cur) || !Number.isFinite(prev)) return null;
@@ -65,9 +68,11 @@ export default function ShopsSummary({ active }) {
           const shareAt = makeShareAt(bs, arts);
           const tax = taxOf(s.id);
           const c = pnlTotals(cur, { tax, shareAt, groupOf: top });
+          c.byGroup2 = pnlTotals(cur, { tax, shareAt, groupOf: top2 }).byGroup;
           // Прошлый период — только если начисления за него есть целиком.
           const pOk = prev && prev.available?.mn && prev.available.mn <= pFrom;
           const p = pOk ? pnlTotals(prev, { tax, shareAt, groupOf: top }) : null;
+          if (p) p.byGroup2 = pnlTotals(prev, { tax, shareAt, groupOf: top2 }).byGroup;
           setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax } }));
         } catch (e) { if (!off) setFin(f => ({ ...f, [s.id]: { error: e.message } })); }
       }
@@ -76,18 +81,41 @@ export default function ShopsSummary({ active }) {
   }, [from, to, armed]);
 
   const shops = useMemo(() => (orders?.shops || []).map(o => ({ ...o, shop: OZON.find(s => s.id === o.id) || { id: o.id, label: o.label, color: '#888' }, fin: fin[o.id] })), [orders, fin]);
+  // Категория сверху: «Все» — магазины целиком, иначе — только эта категория.
+  const [cat, setCat] = useState(() => { try { return localStorage.getItem('mp-ss-cat') || ''; } catch (e) { return ''; } });
+  useEffect(() => { try { localStorage.setItem('mp-ss-cat', cat); } catch (e) { /* ignore */ } }, [cat]);
+  const catList = useMemo(() => {
+    const m = new Map();
+    for (const s of orders?.shops || []) for (const [k, v] of Object.entries(s.cur.byCat)) m.set(k, (m.get(k) || 0) + v[1]);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [orders]);
+  // Срез магазина под выбранную категорию: заказы, начисления, подгруппы для раскрытия.
+  const viewOf = s => {
+    const o0 = [0, 0];
+    if (!cat) {
+      return { oq: s.cur.q, or: s.cur.r, poq: s.prev.q, por: s.prev.r, F: s.fin?.cur?.total || null, PF: s.fin?.prev?.total || null,
+        kids: [...new Set([...Object.keys(s.cur.byCat), ...Object.keys(s.fin?.cur?.byGroup || {})])].map(k => ({
+          k, name: k, oq: (s.cur.byCat[k] || o0)[0], or: (s.cur.byCat[k] || o0)[1], poq: (s.prev.byCat[k] || o0)[0], por: (s.prev.byCat[k] || o0)[1],
+          F: s.fin?.cur?.byGroup?.[k] || null, PF: s.fin?.prev?.byGroup?.[k] || null })) };
+    }
+    const pre = cat + SEP;
+    return { oq: (s.cur.byCat[cat] || o0)[0], or: (s.cur.byCat[cat] || o0)[1], poq: (s.prev.byCat[cat] || o0)[0], por: (s.prev.byCat[cat] || o0)[1],
+      F: s.fin?.cur?.byGroup?.[cat] || null, PF: s.fin?.prev?.byGroup?.[cat] || null,
+      kids: [...new Set([...Object.keys(s.cur.byCat2 || {}), ...Object.keys(s.fin?.cur?.byGroup2 || {})])].filter(k => k.startsWith(pre)).map(k => ({
+        k, name: k.slice(pre.length), oq: (s.cur.byCat2[k] || o0)[0], or: (s.cur.byCat2[k] || o0)[1], poq: (s.prev.byCat2?.[k] || o0)[0], por: (s.prev.byCat2?.[k] || o0)[1],
+        F: s.fin?.cur?.byGroup2?.[k] || null, PF: s.fin?.prev?.byGroup2?.[k] || null })) };
+  };
   const sum = (list, f) => list.reduce((s, x) => s + (f(x) || 0), 0);
   const total = useMemo(() => {
-    const ok = shops.filter(s => s.fin?.cur);
-    const T = k => sum(ok, s => s.fin.cur.total[k]);
-    const P = k => (ok.every(s => s.fin.prev) ? sum(ok, s => s.fin.prev.total[k]) : null);
+    const v = shops.map(s => ({ s, v: viewOf(s) }));
+    const ok = v.filter(x => x.s.fin?.cur);
     return {
-      oq: sum(shops, s => s.cur.q), or: sum(shops, s => s.cur.r), por: sum(shops, s => s.prev.r), poq: sum(shops, s => s.prev.q),
-      fin: ok.length ? { revenue: T('revenue'), ozonX: T('ozonX'), ads: T('ads'), payout: T('payout'), cost: T('cost'), tax: T('tax'), profit: T('profit'), qty: T('qty') } : null,
-      pfin: ok.length && P('revenue') !== null ? { revenue: P('revenue'), profit: P('profit'), qty: P('qty'), payout: P('payout') } : null,
+      oq: sum(v, x => x.v.oq), or: sum(v, x => x.v.or), por: sum(v, x => x.v.por), poq: sum(v, x => x.v.poq),
+      fin: ok.length ? addF(ok.map(x => x.v.F)) : null,
+      pfin: ok.length && ok.every(x => x.s.fin.prev) ? addF(ok.map(x => x.v.PF)) : null,
       loading: shops.some(s => !s.fin),
     };
-  }, [shops]);
+  }, [shops, cat]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const money = (v, rev) => (pct ? (rev > 0 && Number.isFinite(v) ? fmtPct((-v / rev) * 100) : '—') : `${fmtInt(-v)} ₽`);
   const row = ({ key, name, sub, color, oq, or, por, poq, F, PF, depth, onToggle, isOpen, onOpenShop, loading }) => {
@@ -142,26 +170,14 @@ export default function ShopsSummary({ active }) {
       </div>
       {err && <div className="c-msg bad" style={{ margin: '10px 0' }}>{err}</div>}
       {!orders && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
-      {orders && (() => {
-        const F = total.fin, PF = total.pfin;
-        const k = (lbl, v, sub, d) => <div className="a-kpi"><span className="lbl">{lbl}</span><span className="val">{v}</span><span className="sub">{sub}{d}</span></div>;
-        const pay1 = F && F.qty > 0 ? F.payout / F.qty : null, ppay1 = PF && PF.qty > 0 ? PF.payout / PF.qty : null;
-        const bchk = F && F.qty > 0 ? F.revenue / F.qty : null, pbchk = PF && PF.qty > 0 ? PF.revenue / PF.qty : null;
-        const chk = total.oq > 0 ? total.or / total.oq : null, pchk = total.poq > 0 ? total.por / total.poq : null;
-        const mg = F && F.revenue > 0 ? (F.profit / F.revenue) * 100 : null;
-        const wait = total.loading ? '…' : '—';
-        return (
-          <div className="ss-kpis">
-            <div className="a-kpi ss-main"><span className="lbl">Поступление на счёт за 1 выкуп</span><span className="val">{pay1 !== null ? `${fmtInt(pay1)} ₽` : wait}</span>
-              <span className="sub">{F ? `${fmtInt(F.payout)} ₽ к перечислению / ${fmtInt(F.qty)} выкупов` : 'начисления загружаются…'}<Delta cur={pay1} prev={ppay1} /></span></div>
-            {k('Заказы', `${fmtInt(total.or)} ₽`, `${fmtInt(total.oq)} шт`, <Delta cur={total.or} prev={total.por} />)}
-            {k('Средний чек заказа', chk !== null ? `${fmtInt(chk)} ₽` : '—', 'без самовыкупов', <Delta cur={chk} prev={pchk} />)}
-            {k('Выкупы', F ? `${fmtInt(F.revenue)} ₽` : wait, F ? `${fmtInt(F.qty)} шт` : '', <Delta cur={F?.revenue} prev={PF?.revenue} />)}
-            {k('Средний чек выкупа', bchk !== null ? `${fmtInt(bchk)} ₽` : wait, 'выручка / выкупленные шт', <Delta cur={bchk} prev={pbchk} />)}
-            {k('Прибыль', F ? `${fmtInt(F.profit)} ₽` : wait, mg !== null ? `маржа ${fmtPct(mg)}` : '', <Delta cur={F?.profit} prev={PF?.profit} />)}
+      {orders && (
+        <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 0' }}>
+          <div className="a-tabs">
+            <button type="button" className={`a-tab ${!cat ? 'on' : ''}`} onClick={() => setCat('')}>Все</button>
+            {catList.map(([k, r]) => <button key={k} type="button" className={`a-tab ${cat === k ? 'on' : ''}`} onClick={() => setCat(cat === k ? '' : k)} title={`Заказы: ${fmtInt(r)} ₽`}>{k}</button>)}
           </div>
-        );
-      })()}
+        </div>
+      )}
       {orders && (
         <div className="a-card" style={{ padding: 0, marginTop: 12 }}>
           <div className="a-scroll">
@@ -182,18 +198,16 @@ export default function ShopsSummary({ active }) {
                 <th className="r" title="Прибыль / выручка">Рентаб.</th>
               </tr></thead>
               <tbody>
-                {row({ key: 'total', name: 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
+                {row({ key: 'total', name: cat ? `Итого · ${cat}` : 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
                 {shops.map(s => {
-                  const F = s.fin?.cur?.total, PF = s.fin?.prev?.total;
+                  const V = viewOf(s);
                   const isOpen = open.has(s.id);
                   const toggle = () => setOpen(o => { const n = new Set(o); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; });
-                  const cats = [...new Set([...Object.keys(s.cur.byCat), ...Object.keys(s.fin?.cur?.byGroup || {})])]
-                    .map(k => ({ k, r: s.cur.byCat[k]?.[1] || 0 })).sort((a, b) => b.r - a.r);
+                  const kids = [...V.kids].sort((a, b) => b.or - a.or);
                   return (
                     <React.Fragment key={s.id}>
-                      {row({ key: s.id, name: s.shop.label, sub: s.fin?.error ? 'начисления не загрузились' : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '', color: s.shop.color, oq: s.cur.q, or: s.cur.r, por: s.prev.r, poq: s.prev.q, F, PF, depth: 1, onToggle: toggle, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
-                      {isOpen && cats.map(({ k }) => row({ key: s.id + k, name: k, oq: s.cur.byCat[k]?.[0] || 0, or: s.cur.byCat[k]?.[1] || 0, por: s.prev.byCat[k]?.[1] || 0, poq: s.prev.byCat[k]?.[0] || 0,
-                        F: s.fin?.cur?.byGroup?.[k] || null, PF: s.fin?.prev?.byGroup?.[k] || null, depth: 2, loading: !s.fin }))}
+                      {row({ key: s.id, name: s.shop.label, sub: s.fin?.error ? 'начисления не загрузились' : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '', color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
+                      {isOpen && kids.map(x => row({ key: s.id + x.k, name: x.name, oq: x.oq, or: x.or, por: x.por, poq: x.poq, F: x.F, PF: x.PF, depth: 2, loading: !s.fin }))}
                     </React.Fragment>
                   );
                 })}
