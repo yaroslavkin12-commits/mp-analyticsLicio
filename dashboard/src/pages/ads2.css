@@ -280,3 +280,8 @@ tr:hover .a-ungroup { opacity: 1; }
 .mpui .a-strat { display: block; font-size: 10.5px; color: var(--a-ink3); margin-top: 2px; white-space: nowrap; }
 .mpui .a-target{display:block;font-size:11px;color:var(--a-ink3);margin-top:2px;white-space:nowrap}
 .mpui .a-target input{width:38px;padding:1px 4px;font-size:11px;border:1px solid var(--a-line2);border-radius:4px;background:transparent;color:var(--a-ink);text-align:right}
+/* Карточка артикула внутри широкой таблицы не уезжает при прокрутке таблицы вправо:
+   держится у левого края видимой области и занимает ровно её ширину (100cqw — ширина .a-scroll).
+   Дни внутри «По дням» листаются своим скроллом, «Метрика» и «Итого» закреплены. */
+.mpui .a-scroll{container-type:inline-size}
+.mpui tr.a-detail>td>.a-dwrap{position:sticky;left:0;width:100cqw;box-sizing:border-box}
