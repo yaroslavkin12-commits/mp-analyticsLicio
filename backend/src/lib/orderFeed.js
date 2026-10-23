@@ -66,11 +66,16 @@ async function ingest(cabinet, rows) {
   return out.length;
 }
 
+// Цена самовыкупа — актуальная из ленты: отметить заказ могли, когда Ozon ещё не передал
+// цену (в self_buyouts тогда пусто), — иначе выручка самовыкупа вычиталась бы как 0.
+const PRICE = `COALESCE(NULLIF(f.price, 0), s.price, 0)`;
+const JOIN = `LEFT JOIN order_feed f ON f.cabinet = s.cabinet AND f.posting_number = s.posting_number AND f.sku = s.sku`;
+
 // Самовыкупы за даты заказа [from, to]: Map('sku|date' → { q, r }).
 async function selfByDay(cabinet, from, to) {
   await ensure();
-  const rows = await query(`SELECT sku, order_date::text d, SUM(qty)::int q, SUM(price * qty) r FROM self_buyouts
-    WHERE cabinet = $1 AND order_date BETWEEN $2 AND $3 GROUP BY sku, order_date`, [cabinet, from, to]).catch(() => []);
+  const rows = await query(`SELECT s.sku, s.order_date::text d, SUM(s.qty)::int q, SUM(${PRICE} * s.qty) r FROM self_buyouts s ${JOIN}
+    WHERE s.cabinet = $1 AND s.order_date BETWEEN $2 AND $3 GROUP BY s.sku, s.order_date`, [cabinet, from, to]).catch(() => []);
   return new Map(rows.map(x => [`${x.sku}|${x.d}`, { q: num(x.q), r: num(x.r) }]));
 }
 
@@ -91,8 +96,8 @@ function applyToAnalytics(rows, map) {
 // Самовыкупы за период по SKU (для итогов прошлого периода): Map(sku → { q, r }).
 async function selfBySku(cabinet, from, to) {
   await ensure();
-  const rows = await query(`SELECT sku, SUM(qty)::int q, SUM(price * qty) r FROM self_buyouts
-    WHERE cabinet = $1 AND order_date BETWEEN $2 AND $3 GROUP BY sku`, [cabinet, from, to]).catch(() => []);
+  const rows = await query(`SELECT s.sku, SUM(s.qty)::int q, SUM(${PRICE} * s.qty) r FROM self_buyouts s ${JOIN}
+    WHERE s.cabinet = $1 AND s.order_date BETWEEN $2 AND $3 GROUP BY s.sku`, [cabinet, from, to]).catch(() => []);
   return new Map(rows.map(x => [String(x.sku), { q: num(x.q), r: num(x.r) }]));
 }
 
