@@ -226,22 +226,37 @@ async function syncCampaignsFromSheet(cabinet) {
   // Привязка кампании к артикулу по вхождению offer_id в название — тот же
   // запасной вариант, что и в ozonPerf.js, только без похода за товарами
   // кампании (дорого делать из Apps Script на весь список кампаний).
+  // Артикул ищем целым словом и берём самый длинный: в «… Hnd1-2K (ЦР)» — это Hnd1-2K, а
+  // не Hnd1-2; в «… V017-2 (АС)» — V017-2, а не V017. Пишем артикул как в каталоге (регистр).
   const catalogRows = await query(`SELECT offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
-  const offerIds = catalogRows.map(r => String(r.offer_id).toLowerCase()).filter(o => o && o.length >= 4);
+  const offers = catalogRows.map(r => String(r.offer_id)).filter(o => o && o.length >= 4).sort((x, y) => y.length - x.length);
+  const isWord = ch => !ch || !/[0-9a-zа-яё\-]/i.test(ch);
+  const findOffer = title => {
+    const t = String(title).toLowerCase();
+    for (const o of offers) {
+      const lo = o.toLowerCase();
+      let i = t.indexOf(lo);
+      while (i >= 0) {
+        if (isWord(t[i - 1]) && isWord(t[i + lo.length])) return o;
+        i = t.indexOf(lo, i + 1);
+      }
+    }
+    return null;
+  };
   const ids = [], matches = [];
   for (const r of filtered) {
     if (!r.title) continue;
-    const t = String(r.title).trim().toLowerCase();
-    const match = offerIds.find(o => t.includes(o));
+    const match = findOffer(r.title);
     if (match) { ids.push(String(r.campaign_id)); matches.push(match); }
   }
   // Одним запросом, а не по UPDATE на каждую из ~900 кампаний (это одно
-  // занимало десятки секунд и роняло задачу по таймауту).
+  // занимало десятки секунд и роняло задачу по таймауту). Старые неточные
+  // привязки (по части артикула, в нижнем регистре) переписываем.
   if (ids.length) {
     await query(
-      `UPDATE ad_campaigns c SET matched_offer_id = COALESCE(c.matched_offer_id, m.offer_id)
+      `UPDATE ad_campaigns c SET matched_offer_id = m.offer_id
          FROM unnest($2::text[], $3::text[]) AS m(campaign_id, offer_id)
-        WHERE c.cabinet = $1 AND c.platform = 'ozon' AND c.campaign_id = m.campaign_id`,
+        WHERE c.cabinet = $1 AND c.platform = 'ozon' AND c.campaign_id = m.campaign_id AND c.matched_offer_id IS DISTINCT FROM m.offer_id`,
       [cabinet, ids, matches]);
   }
   try { await logCampaignSwitches(cabinet, filtered, prevCamps); } catch (e) { console.warn(`[SheetCampaigns:${cabinet}] журнал:`, e.message); }

@@ -129,6 +129,24 @@ function TransitCell({ value, onSave }) {
   );
 }
 const isCpoCampaign = c => String(c.paymentType || '').toUpperCase() === 'CPO';
+// Стратегия РК с оплатой за клик (как в кабинете Ozon): поле productAutopilotStrategy.
+export const STRATEGY = {
+  TARGET_BIDS: { t: 'Средняя стоимость клика', s: 'ср. клик' },
+  TARGET_CIR: { t: 'Целевой расход', s: 'ЦР' },
+  MAX_CLICKS: { t: 'Автостратегия', s: 'АС' },
+  TOP_MAX_CLICKS: { t: 'Вывод в ТОП', s: 'ТОП' },
+};
+export function stratOf(c) {
+  if (isCpoCampaign(c)) return { k: 'cpo', t: 'Оплата за заказ', s: 'за заказ' };
+  const k = String(c.autopilotStrategy || '').toUpperCase();
+  const st = STRATEGY[k] || (k && k !== 'NO_AUTO_STRATEGY' ? { t: k, s: k } : STRATEGY.TARGET_BIDS);
+  // У «средней стоимости клика» важна зона показа — поиск или поиск + рекомендации.
+  if (!STRATEGY[k] || k === 'TARGET_BIDS') {
+    const z = c.zone === 'search' ? 'поиск' : c.zone === 'rec' ? 'поиск + рек.' : '';
+    return { k: k || 'TARGET_BIDS', t: z ? `${st.t} · ${z}` : st.t, s: z ? (c.zone === 'search' ? 'поиск' : 'п+р') : st.s };
+  }
+  return { k, t: st.t, s: st.s };
+}
 function cpoText(cpo) {
   if (!cpo) return 'нет данных';
   if (!cpo.available) return 'недоступна для товара';
@@ -710,7 +728,7 @@ function CampaignsTable({ campaigns }) {
             <tr key={c.campaignId}>
               <td>{c.title || c.campaignId}{c.splitAcross > 1 && <span className="a-approx" title={`Расход поделён поровну на ${c.splitAcross} артикула`}>÷{c.splitAcross}</span>}</td>
               <td><span className={`tag ${c.state === 'CAMPAIGN_STATE_RUNNING' ? 'on' : 'off'}`}>{c.state === 'CAMPAIGN_STATE_RUNNING' ? 'активна' : 'выкл.'}</span></td>
-              <td>{isCpoCampaign(c) ? 'за заказ' : 'за клик'}</td>
+              <td>{isCpoCampaign(c) ? 'за заказ' : <>за клик<small className="a-strat" style={{ display: 'block' }}>{stratOf(c).t}</small></>}</td>
               <td className="n">{fmtMoney2(c.avgCpc)}</td>
               <td className="n">{fmtInt(c.totalSpend)}</td>
             </tr>
@@ -1100,7 +1118,7 @@ export default function AdsStats2({ cabinet }) {
       if (!onlyActive && !payFilter) return true;
       if (a.campaigns.length === 0) return tab !== 'all' && !isCat;
       return a.campaigns.some(c => (!onlyActive || c.state === 'CAMPAIGN_STATE_RUNNING')
-        && (!payFilter || (payFilter === 'cpo') === isCpoCampaign(c)));
+        && (!payFilter || (payFilter.startsWith('s:') ? !isCpoCampaign(c) && stratOf(c).k === payFilter.slice(2) : (payFilter === 'cpo') === isCpoCampaign(c))));
     });
     const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
     const valK = (a, k) => {
@@ -1285,7 +1303,7 @@ export default function AdsStats2({ cabinet }) {
     { k: 'drr', t: 'ДРР', h: 'Расход / сумма заказов; ниже — с учётом выкупа: расход / (заказы × % выкупа артикула)', u: '%' },
     { k: 'profit', t: 'Прогнозируемая прибыль', h: 'Ожидаемая прибыль с заказов периода после выкупа, комиссии, логистики, рекламы, себестоимости и налога (коэффициенты — из «Юнит-экономики»)' },
     { k: 'margin', t: 'Маржа', h: 'Прогнозируемая прибыль / ожидаемая выручка', u: '%' },
-    { k: null, t: 'ОЗК', h: 'Оплата за клик: вкл — есть запущенная РК с оплатой за клик' }, { k: null, t: 'ОЗЗ', h: 'Оплата за заказ: статус на товаре и ставка' }, { k: null, t: 'РК', h: 'Рекламные кампании товара' },
+    { k: null, t: 'ОЗК', h: 'Оплата за клик: вкл — есть запущенная РК с оплатой за клик; под ней — стратегии: поиск / п+р (средняя стоимость клика по зоне показа), ЦР — целевой расход, АС — автостратегия, ТОП — вывод в топ' }, { k: null, t: 'ОЗЗ', h: 'Оплата за заказ: статус на товаре и ставка' }, { k: null, t: 'РК', h: 'Рекламные кампании товара' },
   ];
   const ctlAds = {
     sort: sort.key && sort.key !== 'manual' ? { k: sort.key, dir: sort.dir } : null,
@@ -1383,7 +1401,10 @@ export default function AdsStats2({ cabinet }) {
           ); })()}
           <td>{cpcAll.length
             ? (cpcOn.length
-              ? <span className="tag on" title={`Запущено РК с оплатой за клик: ${cpcOn.length} из ${cpcAll.length}`}>вкл</span>
+              ? (() => { const ss = [...new Set(cpcOn.map(c => stratOf(c).s))]; return (
+                <span title={`Запущено РК с оплатой за клик: ${cpcOn.length} из ${cpcAll.length}\n${cpcOn.map(c => `• ${stratOf(c).t}: ${c.title || c.campaignId}`).join('\n')}`}>
+                  <span className="tag on">вкл</span><span className="a-strat">{ss.join(' · ')}</span>
+                </span>); })()
               : <span className="tag off" title={`РК с оплатой за клик не запущены (${cpcAll.length})`}>выкл</span>)
             : <span className="tag off" title="Нет РК с оплатой за клик">—</span>}</td>
           <td>{a.cpo
@@ -1545,6 +1566,9 @@ export default function AdsStats2({ cabinet }) {
           <option value="">Все типы оплаты</option>
           <option value="cpc">Оплата за клик</option>
           <option value="cpo">Оплата за заказ</option>
+          <optgroup label="Стратегия оплаты за клик">
+            {Object.entries(STRATEGY).map(([k, v]) => <option key={k} value={`s:${k}`}>{v.t}</option>)}
+          </optgroup>
         </select>
         <button type="button" className="a-toggle" onClick={() => setShowAssoc(v => !v)} title="Добавить заказы по остальным артикулам склейки: отдельно и итогом">
           <span className={`a-sw ${showAssoc ? 'on' : ''}`} />Показать склейку

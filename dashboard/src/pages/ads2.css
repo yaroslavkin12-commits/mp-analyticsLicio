@@ -276,3 +276,4 @@
 tr:hover .a-ungroup { opacity: 1; }
 .a-ungroup:hover { color: var(--a-bad, #ef4444); background: rgba(239,68,68,.1); }
 @media (hover: none) { .a-ungroup { opacity: .7; } }
+.mpui .a-strat { display: block; font-size: 10.5px; color: var(--a-ink3); margin-top: 2px; white-space: nowrap; }

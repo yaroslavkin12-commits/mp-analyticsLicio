@@ -21,7 +21,9 @@ const OZON = SHOPS.filter(s => s.platform === 'ozon');
 const taxOf = cab => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cab}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } };
 const SEP = ' / ';
 const top = a => String(a.cat || 'Без категории').split(SEP)[0];
-const top2 = a => String(a.cat || 'Без категории').split(SEP).slice(0, 2).join(SEP);
+const pre = d => a => String(a.cat || 'Без категории').split(SEP).slice(0, d).join(SEP);
+// Начисления по всем уровням категорий (1–3): путь → итоги.
+const byPathOf = (data, opts) => Object.assign({}, ...[1, 2, 3].map(d => pnlTotals(data, { ...opts, groupOf: pre(d) }).byGroup));
 const FK = ['revenue', 'ozonX', 'ads', 'payout', 'cost', 'tax', 'profit', 'qty'];
 const addF = (list) => { const ok = list.filter(Boolean); if (!ok.length) return null; const o = {}; for (const k of FK) o[k] = ok.reduce((x, f) => x + (f[k] || 0), 0); return o; };
 
@@ -68,11 +70,11 @@ export default function ShopsSummary({ active }) {
           const shareAt = makeShareAt(bs, arts);
           const tax = taxOf(s.id);
           const c = pnlTotals(cur, { tax, shareAt, groupOf: top });
-          c.byGroup2 = pnlTotals(cur, { tax, shareAt, groupOf: top2 }).byGroup;
+          c.byPath = byPathOf(cur, { tax, shareAt });
           // Прошлый период — только если начисления за него есть целиком.
           const pOk = prev && prev.available?.mn && prev.available.mn <= pFrom;
           const p = pOk ? pnlTotals(prev, { tax, shareAt, groupOf: top }) : null;
-          if (p) p.byGroup2 = pnlTotals(prev, { tax, shareAt, groupOf: top2 }).byGroup;
+          if (p) p.byPath = byPathOf(prev, { tax, shareAt });
           setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax } }));
         } catch (e) { if (!off) setFin(f => ({ ...f, [s.id]: { error: e.message } })); }
       }
@@ -92,19 +94,22 @@ export default function ShopsSummary({ active }) {
   // Срез магазина под выбранную категорию: заказы, начисления, подгруппы для раскрытия.
   const viewOf = s => {
     const o0 = [0, 0];
-    if (!cat) {
-      return { oq: s.cur.q, or: s.cur.r, poq: s.prev.q, por: s.prev.r, F: s.fin?.cur?.total || null, PF: s.fin?.prev?.total || null,
-        kids: [...new Set([...Object.keys(s.cur.byCat), ...Object.keys(s.fin?.cur?.byGroup || {})])].map(k => ({
-          k, name: k, oq: (s.cur.byCat[k] || o0)[0], or: (s.cur.byCat[k] || o0)[1], poq: (s.prev.byCat[k] || o0)[0], por: (s.prev.byCat[k] || o0)[1],
-          F: s.fin?.cur?.byGroup?.[k] || null, PF: s.fin?.prev?.byGroup?.[k] || null })) };
-    }
-    const pre = cat + SEP;
-    return { oq: (s.cur.byCat[cat] || o0)[0], or: (s.cur.byCat[cat] || o0)[1], poq: (s.prev.byCat[cat] || o0)[0], por: (s.prev.byCat[cat] || o0)[1],
-      F: s.fin?.cur?.byGroup?.[cat] || null, PF: s.fin?.prev?.byGroup?.[cat] || null,
-      kids: [...new Set([...Object.keys(s.cur.byCat2 || {}), ...Object.keys(s.fin?.cur?.byGroup2 || {})])].filter(k => k.startsWith(pre)).map(k => ({
-        k, name: k.slice(pre.length), oq: (s.cur.byCat2[k] || o0)[0], or: (s.cur.byCat2[k] || o0)[1], poq: (s.prev.byCat2?.[k] || o0)[0], por: (s.prev.byCat2?.[k] || o0)[1],
-        F: s.fin?.cur?.byGroup2?.[k] || null, PF: s.fin?.prev?.byGroup2?.[k] || null })) };
+    const depth = cat ? cat.split(SEP).length : 0;
+    const kidsOf = keys => keys.filter(k => k.split(SEP).length === depth + 1 && (!cat || k.startsWith(cat + SEP))).map(k => ({
+      k, name: k.split(SEP).pop(), oq: (s.cur.byPath[k] || o0)[0], or: (s.cur.byPath[k] || o0)[1], poq: (s.prev.byPath?.[k] || o0)[0], por: (s.prev.byPath?.[k] || o0)[1],
+      F: s.fin?.cur?.byPath?.[k] || null, PF: s.fin?.prev?.byPath?.[k] || null }));
+    const keys = [...new Set([...Object.keys(s.cur.byPath || {}), ...Object.keys(s.fin?.cur?.byPath || {})])];
+    if (!cat) return { oq: s.cur.q, or: s.cur.r, poq: s.prev.q, por: s.prev.r, F: s.fin?.cur?.total || null, PF: s.fin?.prev?.total || null, kids: kidsOf(keys) };
+    return { oq: (s.cur.byPath[cat] || o0)[0], or: (s.cur.byPath[cat] || o0)[1], poq: (s.prev.byPath?.[cat] || o0)[0], por: (s.prev.byPath?.[cat] || o0)[1],
+      F: s.fin?.cur?.byPath?.[cat] || null, PF: s.fin?.prev?.byPath?.[cat] || null, kids: kidsOf(keys) };
   };
+  // Подкатегории выбранной верхней категории — для выпадающего списка.
+  const catTop = cat ? cat.split(SEP)[0] : '';
+  const subList = useMemo(() => {
+    const m = new Map();
+    for (const s of orders?.shops || []) for (const [k, v] of Object.entries(s.cur.byPath || {})) if (catTop && k.startsWith(catTop + SEP)) m.set(k, (m.get(k) || 0) + v[1]);
+    return [...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  }, [orders, catTop]);
   const sum = (list, f) => list.reduce((s, x) => s + (f(x) || 0), 0);
   const total = useMemo(() => {
     const v = shops.map(s => ({ s, v: viewOf(s) }));
@@ -174,8 +179,14 @@ export default function ShopsSummary({ active }) {
         <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 0' }}>
           <div className="a-tabs">
             <button type="button" className={`a-tab ${!cat ? 'on' : ''}`} onClick={() => setCat('')}>Все</button>
-            {catList.map(([k, r]) => <button key={k} type="button" className={`a-tab ${cat === k ? 'on' : ''}`} onClick={() => setCat(cat === k ? '' : k)} title={`Заказы: ${fmtInt(r)} ₽`}>{k}</button>)}
+            {catList.map(([k, r]) => <button key={k} type="button" className={`a-tab ${catTop === k ? 'on' : ''}`} onClick={() => setCat(cat === k ? '' : k)} title={`Заказы: ${fmtInt(r)} ₽`}>{k}</button>)}
           </div>
+          {subList.length > 0 && (
+            <select className="a-sel" value={cat !== catTop ? cat : ''} onChange={e => setCat(e.target.value || catTop)} title="Подкатегория">
+              <option value="">все в «{catTop}»</option>
+              {subList.map(([k]) => <option key={k} value={k}>{'\u00a0\u00a0'.repeat(k.split(SEP).length - 2)}{k.split(SEP).pop()}</option>)}
+            </select>
+          )}
         </div>
       )}
       {orders && (
@@ -198,7 +209,7 @@ export default function ShopsSummary({ active }) {
                 <th className="r" title="Прибыль / выручка">Рентаб.</th>
               </tr></thead>
               <tbody>
-                {row({ key: 'total', name: cat ? `Итого · ${cat}` : 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
+                {row({ key: 'total', name: cat ? `Итого · ${cat.split(SEP).join(' › ')}` : 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
                 {shops.map(s => {
                   const V = viewOf(s);
                   const isOpen = open.has(s.id);
