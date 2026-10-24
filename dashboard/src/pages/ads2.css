@@ -246,6 +246,9 @@
 .mpui .a-dt{--a-rowhl:rgba(255,255,255,.09)}
 [data-theme="light"] .mpui .a-dt{--a-rowhl:rgba(20,30,60,.07)}
 .mpui .a-dt tbody tr:not(.blk):hover>td.lbl,.mpui .a-dt tbody tr:not(.blk):hover>td.tot,.mpui .a-dt tbody tr:not(.blk):hover>td.stk{background-image:linear-gradient(var(--a-rowhl),var(--a-rowhl));color:var(--a-ink)}
+/* «Артикулы по дням»: подсветка продолжается на все даты поверх цветовой
+   шкалы. Внутренняя тень работает и при фоне, заданном прямо в ячейке. */
+.mpui .a-matrix-row-hover tbody tr:hover>td:not(.lbl):not(.tot):not(.stk){box-shadow:inset 0 0 0 9999px var(--a-rowhl)}
 /* Закреплённая шапка длинных таблиц: при прокрутке страницы шапку сдвигает
    вниз lib/stickyHeads.js (обычный position:sticky не работает внутри
    области с горизонтальной прокруткой). */

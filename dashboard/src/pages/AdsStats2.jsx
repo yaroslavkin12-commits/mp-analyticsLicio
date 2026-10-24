@@ -1029,7 +1029,7 @@ const MATRIX_METRICS = [
   { key: 'crToOrder', label: 'CR в заказ', fmt: 'pct', good: 'up' },
   { key: 'stock', label: 'Остаток', fmt: 'int', good: 'up' },
 ];
-function Matrix({ rows, dates, mode }) {
+function Matrix({ rows, dates, mode, cabinet }) {
   const [metric, setMetric] = useState('orders');
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length, rows.length]);
@@ -1052,7 +1052,7 @@ function Matrix({ rows, dates, mode }) {
         </span>
       </div>
       <div className="a-days" ref={ref}>
-        <table className="a-dt a-matrix">
+        <table className={`a-dt a-matrix${cabinet === 'licio' ? '' : ' a-matrix-row-hover'}`}>
           <thead><tr><th className="lbl">Артикул</th><th className="tot">Итого</th><th className="stk">Остаток</th>{dates.map(d => <th key={d}>{d.slice(8)}.{d.slice(5, 7)}</th>)}</tr></thead>
           <tbody>
             {models.map(({ a, m }) => (
@@ -1706,7 +1706,7 @@ export default function AdsStats2({ cabinet }) {
         {isGroup && <AddToGroup catalog={catalog} exclude={memberIds} onPick={id => assignGroup(id, tab)} />}
       </div>
 
-      <Matrix rows={rows} dates={dates} mode={mode} />
+      <Matrix rows={rows} dates={dates} mode={mode} cabinet={cabinet} />
 
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctlAds} /></div>
