@@ -102,7 +102,7 @@ export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFro
 // Таблица «строки × дни» как в «Рекламе». rows: [{ block, tone } | { key,
 // label, fmt, good: 'up'|'down'|'neutral', sub, strong, hint }]; vals[key] —
 // массив по дням, totals[key] — итог.
-export function RowsTable({ dates, rows, vals, totals, firstCol = 'Статья' }) {
+export function RowsTable({ dates, rows, vals, totals, firstCol = 'Статья', onCell, clickable }) {
   const ref = useRef(null);
   const today = dayjs().format('YYYY-MM-DD');
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
@@ -125,10 +125,13 @@ export function RowsTable({ dates, rows, vals, totals, firstCol = 'Статья'
             return (
               <tr key={row.key} className={`${row.sub ? 'sub' : ''} ${row.strong ? 'f-strong' : ''}`}>
                 <td className="lbl" title={row.hint || row.label} data-hint={row.hint ? 1 : undefined}>{row.sub ? '— ' : ''}{row.label}</td>
-                <td className="tot">{fmtBy(totals[row.key], row.fmt)}</td>
+                <td className={`tot ${onCell && clickable && clickable.has(row.key) ? 'f-click' : ''}`} onClick={onCell && clickable && clickable.has(row.key) ? () => onCell(row.key, null) : undefined}
+                  title={onCell && clickable && clickable.has(row.key) ? 'Из чего состоит — нажмите' : undefined}>{fmtBy(totals[row.key], row.fmt)}</td>
                 {dates.map((d, i) => {
                   const x = v[i];
-                  return <td key={d} style={{ background: heatColor(x, min, max, row.good || 'neutral') }} className={row.signed && x < 0 ? 'f-neg' : ''}>{fmtBy(x, row.fmt)}</td>;
+                  const can = onCell && clickable && clickable.has(row.key) && x;
+                  return <td key={d} style={{ background: heatColor(x, min, max, row.good || 'neutral') }} className={`${row.signed && x < 0 ? 'f-neg' : ''} ${can ? 'f-click' : ''}`}
+                    onClick={can ? () => onCell(row.key, i) : undefined} title={can ? 'Из чего состоит — нажмите' : undefined}>{fmtBy(x, row.fmt)}</td>;
                 })}
               </tr>
             );

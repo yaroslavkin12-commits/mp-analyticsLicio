@@ -352,7 +352,7 @@
 .mpui .rnp-s { color: var(--a-ink3); font-size: 11.5px; line-height: 1.3; margin-top: 2px; word-break: break-word; }
 .mpui .rnp-chev { border: 0; background: var(--a-panel2); color: var(--a-ink2); width: 20px; height: 20px; border-radius: 5px; cursor: pointer; font-size: 9px; flex: none; transition: transform .12s; }
 .mpui .rnp-chev.on { transform: rotate(90deg); background: var(--a-accent-soft); color: var(--a-accent); }
-.mpui table.rnp-t td.rnp-tipc { cursor: help; }
+.mpui table.rnp-t td.rnp-tipc { cursor: pointer; }
 .mpui table.rnp-t .rnp-more td { padding: 4px 0 8px; border-bottom: 1px solid var(--a-line); background: var(--a-panel); text-align: left; }
 .mpui .rnp-pick { min-width: 520px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
 .mpui .rnp-pick > div:last-child { grid-column: 1 / -1; }
@@ -423,11 +423,11 @@
 .mpui table.rnp-t tbody.rnp-sec:hover td.rnp-m { background: var(--a-panel2); }
 .mpui .rnp-key { color: var(--a-warn); margin-left: 4px; font-size: 10px; }
 /* РНП: подсветка строки при наведении — и ячейки, и название слева */
-.mpui table.rnp-t tbody tr:not(.rnp-sech):hover td { box-shadow: inset 0 1px 0 var(--a-accent), inset 0 -1px 0 var(--a-accent), inset 0 0 0 999px rgba(139,139,255,.10); color: var(--a-ink); }
-.mpui table.rnp-t tbody tr:not(.rnp-sech):hover td.rnp-m { background: color-mix(in srgb, var(--a-accent) 18%, var(--a-panel)); color: var(--a-ink); font-weight: 600; }
+.mpui table.rnp-t tbody tr:not(.rnp-sech):hover td { box-shadow: inset 0 1px 0 var(--a-ink3), inset 0 -1px 0 var(--a-ink3), inset 0 0 0 999px rgba(127,127,127,.12); color: var(--a-ink); }
+.mpui table.rnp-t tbody tr:not(.rnp-sech):hover td.rnp-m { background: color-mix(in srgb, var(--a-ink3) 22%, var(--a-panel)); color: var(--a-ink); font-weight: 600; }
 .mpui table.rnp-t tbody.rnp-sec:hover td.rnp-m { background: var(--a-panel); }
-.mpui table.rnp-t tr.rnp-click { cursor: pointer; }
-.mpui .rnp-mini { display: inline-block; font-size: 8px; margin-right: 6px; color: var(--a-accent); transition: transform .12s; }
+.mpui table.rnp-t td.rnp-click, .mpui table.rnp-t td.rnp-tipc { cursor: pointer; }
+.mpui .rnp-mini { display: inline-block; font-size: 8px; margin-right: 6px; color: var(--a-ink3); transition: transform .12s; }
 .mpui .rnp-mini.on { transform: rotate(90deg); }
 .mpui table.rnp-t tr.rnp-sub td { font-size: 12px; color: var(--a-ink2); height: 24px; }
 .mpui table.rnp-t tr.rnp-sub td.rnp-m { padding-left: 26px; color: var(--a-ink3); }
@@ -435,3 +435,18 @@
 .mpui .rnp-star { border: 0; background: transparent; color: var(--a-line2); cursor: pointer; font-size: 13px; padding: 0 4px; line-height: 1; }
 .mpui .rnp-star.on { color: var(--a-warn); }
 .mpui .rnp-pick .tb-chk { align-items: center; gap: 6px; }
+/* P&L: расшифровка статьи до операций Ozon */
+.mpui .a-dt td.f-click { cursor: pointer; }
+.mpui .a-dt td.f-click:hover { outline: 1px solid var(--a-accent); outline-offset: -1px; }
+.mpui .f-drill-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 60px 16px; overflow: auto; }
+.mpui .f-drill { background: var(--a-panel); border: 1px solid var(--a-line); border-radius: 14px; width: min(860px, 100%); padding: 16px 18px; box-shadow: 0 16px 48px rgba(0,0,0,.35); }
+.mpui .f-drill-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.mpui .f-drill-h b { font-size: 16px; } .mpui .f-drill-h span { color: var(--a-ink3); font-size: 13px; } .mpui .f-drill-h .a-btn { margin-left: auto; }
+.mpui .f-drill-t { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mpui .f-drill-t th { text-align: left; color: var(--a-ink3); font-weight: 600; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--a-line); }
+.mpui .f-drill-t td { padding: 7px 8px; border-bottom: 1px solid var(--a-line); }
+.mpui .f-drill-t .r { text-align: right; } .mpui .f-drill-t .n { font-family: var(--a-num); font-variant-numeric: tabular-nums; }
+.mpui .f-drill-t tr.f-click { cursor: pointer; } .mpui .f-drill-t tr.f-click:hover td { background: var(--a-panel2); }
+.mpui .f-drill-t tr.f-drill-sub td { font-size: 12px; color: var(--a-ink2); padding-left: 30px; background: var(--a-panel2); }
+.mpui .f-drill-t tfoot td { font-weight: 600; border-bottom: 0; }
+.mpui .f-chev { display: inline-block; width: 16px; font-size: 9px; color: var(--a-ink3); }

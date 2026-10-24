@@ -129,6 +129,7 @@ export const getBuyerShare = cabinet => api.get('/finance/buyer-share', { params
 export const saveBuyerShare = (cabinet, body) => api.post('/finance/buyer-share', { cabinet, ...body });
 export const deleteBuyerShare = (cabinet, from, to) => api.post('/finance/buyer-share/delete', { cabinet, from, to });
 export const getFinanceCoefs = cabinet => api.get('/finance/coefs', { params: { cabinet }, timeout: 90000 });
+export const getFinanceOps = (cabinet, bucket, p) => api.get('/finance/ops', { params: { cabinet, bucket, ...p }, timeout: 60000 });
 export const getFinancePnl = (cabinet, p) => api.get('/finance/pnl', { params: { cabinet, ...p }, timeout: 90000 });
 export const getBuyoutData = (cabinet, p) => api.get('/finance/buyout', { params: { cabinet, ...p }, timeout: 90000 });
 export const getCalcBase = (cabinet, fresh) => api.get('/finance/calc-base', { params: fresh ? { cabinet, fresh: 1 } : { cabinet }, timeout: 90000 });

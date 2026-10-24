@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getFinancePnl, latestOnly } from '../api';
+import { getFinancePnl, getFinanceOps, latestOnly } from '../api';
 import { fmtInt, useTip, DualChart, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, useBuyerShare } from './finShared';
 import './ads2.css';
@@ -50,6 +50,74 @@ const METRICS = [
   { key: 'qty', label: 'Выкуплено, шт', fmt: 'int' },
 ];
 
+// Статьи, которые можно расшифровать до операций Ozon.
+const DRILL = new Set(['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other', 'ads', 'return']);
+function OpsDrill({ cabinet, drill, dates, dateFrom, dateTo, arts, filtered, selName, shareOf, onClose }) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState('');
+  const [open, setOpen] = useState(null);
+  useEffect(() => {
+    setRows(null); setErr('');
+    getFinanceOps(cabinet, drill.bucket, { dateFrom, dateTo }).then(r => setRows(r.data.data.rows)).catch(e => setErr(e.response?.data?.error || e.message));
+  }, [cabinet, drill.bucket, dateFrom, dateTo]);
+  useEffect(() => { const on = e => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', on); return () => window.removeEventListener('keydown', on); }, [onClose]);
+  const mine = useMemo(() => new Set(arts.map(a => a.o)), [arts]);
+  const nameOf = useMemo(() => new Map(arts.map(a => [a.o, a.n])), [arts]);
+  const view = useMemo(() => {
+    if (!rows) return null;
+    const by = new Map();
+    let sumArt = 0, sumNo = 0;
+    for (const [d, name, o, a] of rows) {
+      if (drill.i !== null && d !== drill.i) continue;
+      if (o && filtered && !mine.has(o)) continue;
+      let x = by.get(name); if (!x) { x = { name, art: 0, no: 0, items: new Map(), days: new Set() }; by.set(name, x); }
+      x.days.add(d);
+      if (o) { x.art += a; sumArt += a; x.items.set(o, (x.items.get(o) || 0) + a); } else { x.no += a; sumNo += a; }
+    }
+    return { list: [...by.values()].sort((p, q2) => (p.art + p.no) - (q2.art + q2.no)), sumArt, sumNo };
+  }, [rows, drill, filtered, mine]);
+  const when = drill.i === null ? `${dayjs(dates[0]).format('DD.MM')}–${dayjs(dates.at(-1)).format('DD.MM')}` : dayjs(dates[drill.i]).format('DD.MM.YYYY');
+  const rub = v => `${fmtInt(v)} ₽`;
+  return (
+    <div className="f-drill-bg" onClick={onClose}>
+      <div className="f-drill" onClick={e => e.stopPropagation()}>
+        <div className="f-drill-h"><b>{LABEL[drill.bucket] || (drill.bucket === 'ads' ? 'Реклама' : drill.bucket === 'return' ? 'Возвраты' : drill.bucket)}</b><span>{when} · {selName}</span><button type="button" className="a-btn ghost" onClick={onClose}>✕</button></div>
+        {err && <div className="c-msg bad">{err}</div>}
+        {!view && !err && <div className="a-hint">Загрузка операций Ozon…</div>}
+        {view && !view.list.length && <div className="a-hint">Операций нет.</div>}
+        {view && view.list.length > 0 && (
+          <>
+            <table className="f-drill-t">
+              <thead><tr><th>Операция Ozon (как в начислениях)</th><th className="r">По артикулам</th><th className="r">Без артикула</th><th className="r">Артикулов</th></tr></thead>
+              <tbody>
+                {view.list.map(x => (
+                  <React.Fragment key={x.name}>
+                    <tr className={x.items.size ? 'f-click' : ''} onClick={x.items.size ? () => setOpen(open === x.name ? null : x.name) : undefined}>
+                      <td>{x.items.size ? <span className="f-chev">{open === x.name ? '▼' : '▶'}</span> : <span className="f-chev" />}{x.name}</td>
+                      <td className="r n">{x.art ? rub(x.art) : '—'}</td>
+                      <td className="r n">{x.no ? rub(x.no) : '—'}</td>
+                      <td className="r n">{x.items.size || '—'}</td>
+                    </tr>
+                    {open === x.name && [...x.items.entries()].sort((p, q2) => p[1] - q2[1]).slice(0, 60).map(([o, a]) => (
+                      <tr key={o} className="f-drill-sub"><td title={nameOf.get(o) || ''}>{o}<span className="muted"> {String(nameOf.get(o) || '').slice(0, 60)}</span></td><td className="r n">{rub(a)}</td><td /><td /></tr>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </tbody>
+              <tfoot><tr><td>Итого</td><td className="r n">{rub(view.sumArt)}</td><td className="r n">{rub(view.sumNo)}</td><td /></tr></tfoot>
+            </table>
+            {view.sumNo !== 0 && (
+              <div className="a-hint" style={{ marginTop: 8 }}>
+                «Без артикула» — Ozon списал на весь кабинет, без привязки к товару. В P&L такие суммы делятся по доле выручки дня{filtered ? `: на «${selName}» за период пришлось ≈${(shareOf * 100).toFixed(1).replace('.', ',')}% — поэтому в выбранной категории статья может вырасти, даже если по её товарам ничего не списывали` : ''}.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function PnL({ cabinet }) {
   const today = dayjs().format('YYYY-MM-DD');
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
@@ -69,6 +137,8 @@ export default function PnL({ cabinet }) {
   const setPct = v => { setPctRaw(v); if (v) setPerUnit(false); try { localStorage.setItem('mp-pnl-pct', v ? '1' : '0'); } catch (e) { /* ignore */ } };
   const setUnit = v => { setPerUnit(v); if (v) setPctRaw(false); };
   const grp = useGroups(cabinet);
+  // Расшифровка статьи: из каких операций Ozon она состоит (клик по ячейке).
+  const [drill, setDrill] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true); setError(null);
@@ -277,10 +347,12 @@ export default function PnL({ cabinet }) {
               </label>
               <span className="a-hint">по дате начисления в Ozon; данные есть с {data.available?.mn ? dayjs(data.available.mn).format('DD.MM.YYYY') : '—'}</span>
             </div>
-            <RowsTable dates={dates} rows={shownRows} vals={shownVals} totals={shownT} />
+            <RowsTable dates={dates} rows={shownRows} vals={shownVals} totals={shownT} clickable={DRILL} onCell={(k, i) => setDrill({ bucket: k, i })} />
           </div>
 
           <CatTable cats={cats} sel={sel} setSel={setSel} list={list} cols={cols} aggOf={aggOf} sortKey="revenue" />
+          {drill && <OpsDrill cabinet={cabinet} drill={drill} dates={dates} dateFrom={dateFrom} dateTo={dateTo} arts={list.arts} filtered={filtered}
+            selName={sel ? sel.split(' / ').pop() : q ? `поиск «${search}»` : grp.sel ? 'группа' : 'весь кабинет'} shareOf={shareOf(list.arts)} onClose={() => setDrill(null)} />}
         </>
       )}
       {tip.node}

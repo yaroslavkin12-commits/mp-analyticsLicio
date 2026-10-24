@@ -215,6 +215,31 @@ router.get('/pnl', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
+// GET /api/finance/ops?cabinet=&dateFrom=&dateTo=&bucket=storage — из чего состоит статья
+// P&L: исходные операции Ozon (название начисления) по дням и артикулам.
+// rows: [d, название операции, offer_id | null (без артикула), сумма, кол-во].
+router.get('/ops', async (req, res) => {
+  try {
+    await ensureFinTables();
+    const cabinet = req.query.cabinet || 'defly';
+    const bucket = String(req.query.bucket || '');
+    if (!BUCKET_KEYS.includes(bucket)) return res.status(400).json({ success: false, error: 'Неизвестная статья' });
+    const { from, to, dates } = period(req.query);
+    const m = await meta(cabinet);
+    const fin = await query(`SELECT date::text d, sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily
+      WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, sku, name`, [cabinet, from, to]);
+    const di = new Map(dates.map((d, i) => [d, i]));
+    const rows = [];
+    for (const r of fin) {
+      if (bucketOf(r.name) !== bucket) continue;
+      const d = di.get(r.d); if (d === undefined) continue;
+      const o = r.sku ? (m.offerBySku.get(String(r.sku)) || `sku:${r.sku}`) : null;
+      rows.push([d, r.name, o, r2(num(r.a)), num(r.q)]);
+    }
+    res.json({ success: true, data: { dates, rows } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /api/finance/buyout?cabinet=&dateFrom=&dateTo= — заказы по дню заказа:
 // [ai, di, ordered, delivered, cancelled, in_progress] + прошлый период.
 router.get('/buyout', async (req, res) => {

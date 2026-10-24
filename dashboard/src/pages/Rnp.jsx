@@ -28,7 +28,7 @@ const d0 = (a, b) => (b ? a / b : null);
 const pc = (a, b) => (b ? (a / b) * 100 : null);
 // dir: 1 — больше лучше, -1 — меньше лучше, 0 — без подсветки.
 // Разделы таблицы. key — строка видна и в свёрнутом разделе («кратко»).
-const SECTIONS = ['Заказы', 'Воронка', 'Реклама', 'Прогноз прибыли', 'Прибыль'];
+const SECTIONS = ['Заказы', 'Воронка', 'Реклама', 'Прибыль ПРОГНОЗ', 'Прибыль ФАКТ'];
 const buyPct = S => d0(S.bW, S.bN); // % выкупа (модель), взвешенный по заказам
 const priceP = S => (S.wN ? S.pW / S.wN : d0(S.pS, S.pN)), priceC = S => (S.wN ? S.cW / S.wN : d0(S.cS, S.pN));
 const METRICS = [
@@ -57,14 +57,14 @@ const METRICS = [
   { g: 'Реклама', k: 'adOrders', t: 'Заказы с рекламы, шт', kind: 'int', dir: 1, v: S => S.adOrders },
   { g: 'Реклама', k: 'adShare', t: 'Доля заказов с рекламы, %', kind: 'pct', dir: 0, v: S => pc(S.adOrders, S.orders) },
   { g: 'Реклама', k: 'adCtr', t: 'CTR рекламы, %', kind: 'pct', dir: 1, v: S => pc(S.clicks, S.adViews) },
-  { g: 'Прогноз прибыли', k: 'profitF', t: 'Прогноз прибыли, ₽', kind: 'rub', dir: 1, key: true, v: S => (S.fAny ? S.fProfit : null) },
-  { g: 'Прогноз прибыли', k: 'marginF', t: 'Прогноз маржинальности, %', kind: 'pct', dir: 1, key: true, v: S => (S.fAny ? pc(S.fProfit, S.fRev) : null) },
-  { g: 'Прибыль', k: 'buyQty', t: 'Выкупы, шт', kind: 'int', dir: 1, fin: true, key: true, v: S => (S.finAny ? S.buyQty : null) },
-  { g: 'Прибыль', k: 'buyRub', t: 'Выручка, ₽', kind: 'rub', dir: 1, fin: true, key: true, v: S => (S.finAny ? S.buyRub : null) },
-  { g: 'Прибыль', k: 'profit', t: 'Чистая прибыль, ₽', kind: 'rub', dir: 1, fin: true, tip: true, strong: true, key: true, v: S => (S.finAny ? S.profit : null) },
-  { g: 'Прибыль', k: 'margin', t: 'Маржинальность, %', kind: 'pct', dir: 1, fin: true, tip: true, key: true, v: S => (S.finAny ? pc(S.profit, S.buyRub + S.nsSale) : null) },
-  { g: 'Прибыль', k: 'payF', t: 'Ср. поступление на счёт за выкуп (прогноз), ₽', kind: 'rub', dir: 1, key: true, strong: true, v: S => (S.fAny && S.fQty > 0 ? S.fPay / S.fQty : null) },
-  { g: 'Прибыль', k: 'payA', t: 'Ср. поступление на счёт за выкуп (факт), ₽', kind: 'rub', dir: 1, fin: true, key: true, strong: true, v: S => (S.finAny && S.buyQty > 0 ? S.payout / S.buyQty : null) },
+  { g: 'Прибыль ПРОГНОЗ', k: 'profitF', t: 'Прогноз прибыли, ₽', kind: 'rub', dir: 1, key: true, v: S => (S.fAny ? S.fProfit : null) },
+  { g: 'Прибыль ПРОГНОЗ', k: 'marginF', t: 'Прогноз маржинальности, %', kind: 'pct', dir: 1, key: true, v: S => (S.fAny ? pc(S.fProfit, S.fRev) : null) },
+  { g: 'Прибыль ПРОГНОЗ', k: 'payF', t: 'Ср. поступ. на счёт ПРОГНОЗ, ₽', h: 'Средняя сумма поступления на счёт за один выкуп по прогнозу: ожидаемая выручка минус комиссия, логистика, эквайринг, прочие услуги и реклама', kind: 'rub', dir: 1, key: true, strong: true, v: S => (S.fAny && S.fQty > 0 ? S.fPay / S.fQty : null) },
+  { g: 'Прибыль ФАКТ', k: 'buyQty', t: 'Выкупы, шт', kind: 'int', dir: 1, fin: true, key: true, v: S => (S.finAny ? S.buyQty : null) },
+  { g: 'Прибыль ФАКТ', k: 'buyRub', t: 'Выручка, ₽', kind: 'rub', dir: 1, fin: true, key: true, v: S => (S.finAny ? S.buyRub : null) },
+  { g: 'Прибыль ФАКТ', k: 'profit', t: 'Чистая прибыль, ₽', kind: 'rub', dir: 1, fin: true, tip: true, strong: true, key: true, v: S => (S.finAny ? S.profit : null) },
+  { g: 'Прибыль ФАКТ', k: 'margin', t: 'Маржинальность, %', kind: 'pct', dir: 1, fin: true, tip: true, key: true, v: S => (S.finAny ? pc(S.profit, S.buyRub + S.nsSale) : null) },
+  { g: 'Прибыль ФАКТ', k: 'payA', t: 'Ср. поступ. на счёт ФАКТ, ₽', h: 'Средняя сумма поступления на счёт за один выкуп по начислениям Ozon: к перечислению / выкупы', kind: 'rub', dir: 1, fin: true, key: true, strong: true, v: S => (S.finAny && S.buyQty > 0 ? S.payout / S.buyQty : null) },
 ];
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
 const fmt = (v, kind) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : kind === 'pct' ? fmtPct(v) : fmtInt(v));
@@ -181,7 +181,7 @@ function heat(vals, dir, skip) {
   return vals.map((v, i) => {
     if (v === null || !Number.isFinite(v)) return null;
     // Без «лучше/хуже» (расход, остаток, СПП…) — один цвет, ярче там, где значение больше.
-    if (!dir) { const t = mx - mn < 1e-9 ? 0.5 : (v - mn) / (mx - mn); return `color-mix(in srgb, var(--a-accent) ${Math.round(6 + t * 22)}%, transparent)`; }
+    if (!dir) { const t = mx - mn < 1e-9 ? 0.5 : (v - mn) / (mx - mn); return `color-mix(in srgb, var(--a-warn) ${Math.round(8 + t * 22)}%, transparent)`; }
     // Красный — хуже, жёлтый — средне, зелёный — лучше (относительно остальных дней строки).
     let t = mx - mn < 1e-9 ? 0.5 : (v - mn) / (mx - mn); if (dir < 0) t = 1 - t;
     const c = t < 0.4 ? '--a-bad' : t > 0.6 ? '--a-good' : '--a-warn';
@@ -243,7 +243,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
     getAdsTransit(cabinet).then(r => setTransit(r.data.data || {})).catch(() => {});
   }, [cabinet]);
   useEffect(() => {
-    const days = Math.min(400, dayjs().diff(dayjs(dates[0]), 'day') + 2);
+    const days = Math.min(400, dayjs().diff(dayjs(prevDates && prevDates[0] ? prevDates[0] : dates[0]), 'day') + 2);
     getPriceDynamics(cabinet, days).then(r => setPrices(r.data.data)).catch(() => setPrices(false));
   }, [cabinet, dates[0]]); // eslint-disable-line react-hooks/exhaustive-deps
   const priceOf = useMemo(() => {
@@ -260,6 +260,17 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
       cache.set(o, out); return out;
     };
   }, [prices, dates, L]);
+  // Цены прошлого периода по артикулу: суммы [цена до СПП, после СПП, дней с ценой].
+  const pricePrev = useMemo(() => {
+    if (!prices || !prevDates || !prevDates.length) return null;
+    const f0 = dayjs(prices.from), idx = prevDates.map(d => dayjs(d).diff(f0, 'day'));
+    return o => {
+      const pts = prices.items[o]; if (!pts || !pts.length) return null;
+      let j = 0, cur = null, pS = 0, cS = 0, n = 0;
+      for (const t of idx) { while (j < pts.length && pts[j][0] <= t) { cur = pts[j]; j++; } if (cur && cur[1]) { pS += cur[1]; cS += cur[2] || cur[1]; n++; } }
+      return n ? [pS, cS, n] : null;
+    };
+  }, [prices, prevDates]);
 
   const F = useMemo(() => finByDay(fin, dates), [fin, dates]);
   // Самовыкупы по дню заказа (уже вычтены из заказов): ai → { d: [шт, ₽] }.
@@ -273,14 +284,25 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
     const PL = prevDates ? prevDates.length : 0;
     for (const a of arts) {
       const p = a.prev; const P = Object.fromEntries(KEYS.map(k => [k, 0]));
-      if (p) { P.views = p.views; P.pdp = p.pdpViews; P.cart = p.cart; P.orders = p.orders; P.revenue = p.revenue; P.spend = p.spend; P.adOrders = p.adOrders; P.has = 1; }
+      if (p) {
+        P.views = p.views; P.pdp = p.pdpViews; P.cart = p.cart; P.orders = p.orders; P.revenue = p.revenue; P.spend = p.spend; P.adOrders = p.adOrders; P.has = 1;
+        // Выкуп (модель) и прогноз прибыли — по итогам прошлого периода.
+        const k0 = coefOf ? coefOf(a.o) : null;
+        if (k0 && p.orders > 0) { P.bW = k0.buyout * 100 * p.orders; P.bN = p.orders; }
+        if (forecast && prevDates && (p.orders > 0 || p.spend > 0)) {
+          const r = forecast(a.o, prevDates.at(-1), p.revenue, p.orders, p.spend);
+          if (r) { P.fProfit = r.profit; P.fRev = r.expRev; P.fAny = 1; P.fPay = r.expRev - r.comm - r.logi - r.acq - r.other - (r.ads || 0) - (r.selfCost || 0); P.fQty = r.expQty || 0; }
+        }
+      }
+      const pp = pricePrev ? pricePrev(a.o) : null;
+      if (pp) { P.pS = pp[0]; P.cS = pp[1]; P.pN = pp[2]; }
       const x = Fp && Fp.m.get(a.o);
       let D = null;
       if (x) { D = {}; for (const k of KEYS) D[k] = new Float64Array(PL); for (let d = 0; d < PL; d++) finDay(D, x, Fp, d, a.o, prevDates, { shareAt, coefOf }); }
       m.set(a.o, { P, D });
     }
     return m;
-  }, [arts, Fp, prevDates, shareAt, coefOf]);
+  }, [arts, Fp, prevDates, shareAt, coefOf, forecast, pricePrev]);
 
   // Дерево: категории или группы «Рекламы».
   const tree = useMemo(() => {
@@ -321,13 +343,14 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
     const D = {}; for (const k of KEYS) D[k] = new Float64Array(PL);
     for (const o of list) {
       const p = prevOf.get(o); if (!p) continue;
-      for (const k of ['views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'adOrders']) P[k] += p.P[k] || 0;
+      for (const k of ['views', 'pdp', 'cart', 'orders', 'revenue', 'spend', 'adOrders', 'bW', 'bN', 'fProfit', 'fRev', 'fPay', 'fQty', 'pS', 'cS', 'pN']) P[k] += p.P[k] || 0;
+      P.fAny = P.fAny || p.P.fAny || 0;
       has |= p.P.has || 0;
       if (p.D) { addInto(D, p.D); hasFin = 1; }
     }
     if (hasFin) {
       const F2 = bucketSum(D, Array.from({ length: PL }, (_, i) => i), tax);
-      for (const k of ['buyQty', 'buyRub', 'profit', 'finAny']) P[k] = F2[k];
+      for (const k of ['buyQty', 'buyRub', 'profit', 'finAny', 'payout', 'nsSale']) P[k] = F2[k];
     }
     return { P, has, hasFin };
   };
@@ -356,11 +379,13 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
 
   // Подсказка с раскладкой прибыли.
   const [tip, setTip] = useState(null);
-  const showTip = (e, S, title) => {
+  const showTip = (e, S, title, key) => {
     if (!S || !S.finAny) return;
     const r = e.currentTarget.getBoundingClientRect();
-    setTip({ x: Math.min(window.innerWidth - 360, r.right + 8), y: Math.max(8, Math.min(window.innerHeight - 440, r.top - 120)), S, title });
+    setTip({ x: Math.min(window.innerWidth - 360, r.right + 8), y: Math.max(8, Math.min(window.innerHeight - 440, r.top - 120)), S, title, key });
   };
+  // Окно раскладки закрывается кликом в любом другом месте.
+  useEffect(() => { if (!tip) return undefined; const on = () => setTip(null); document.addEventListener('click', on); return () => document.removeEventListener('click', on); }, [tip]);
 
   const shownMets = METRICS.filter(m => mets.includes(m.k));
   const fullL = L || 1;
@@ -393,19 +418,21 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
     const hs = heat(vals, m.dir, skip);
     const vTot = m.k === 'transit' ? (tr || null) : m.k === 'cover' ? (tot.stockN && perDayTot > 0 ? tot.stock / perDayTot : null) : m.v(tot, { perDay: perDayTot });
     const prevOk = m.fin ? hasFin : has;
-    const vPrev = !prevOk || ['stock', 'cover', 'transit', 'price', 'client', 'spp', 'buyout', 'drrB', 'adCtr', 'profitF', 'marginF', 'selfQ', 'selfR'].includes(m.k) ? null : m.v(P, { perDay: 0 });
+    // Остаток и «хватит на» — состояние на конец периода: остатков прошлого периода страница не загружает.
+    const vPrev = !prevOk || ['stock', 'cover', 'transit', 'adCtr', 'selfQ', 'selfR'].includes(m.k) ? null : m.v(P, { perDay: 0 });
     const finMissing = m.fin && !fin;
     return (
       <React.Fragment key={m.k}>
-      <tr className={`${m.strong ? 'rnp-strong' : ''} ${last && !(m.k === 'profit' && profOpen) ? 'rnp-last' : ''} ${m.k === 'profit' ? 'rnp-click' : ''}`}
-        onClick={m.k === 'profit' ? () => setProfOpen(v => !v) : undefined} title={m.k === 'profit' ? 'Нажмите — раскладка по статьям в ₽ и в %' : undefined}>
-        <td className="rnp-m">{m.k === 'profit' && <span className={`rnp-mini ${profOpen ? 'on' : ''}`}>▶</span>}{m.t}</td>
+      <tr className={`${m.strong ? 'rnp-strong' : ''} ${last && !(m.k === 'profit' && profOpen) ? 'rnp-last' : ''}`}>
+        <td className={`rnp-m ${m.k === 'profit' ? 'rnp-click' : ''}`} onClick={m.k === 'profit' ? () => setProfOpen(v => !v) : undefined}
+          title={m.k === 'profit' ? 'Нажмите — раскладка по статьям в ₽ и в %' : m.h || m.t}>{m.k === 'profit' && <span className={`rnp-mini ${profOpen ? 'on' : ''}`}>▶</span>}{m.t}</td>
         <td className="n r rnp-tot">{finMissing ? '…' : fmt(vTot, m.kind)}</td>
         <td className="n r rnp-prev">{m.now || finMissing ? '' : fmt(vPrev, m.kind)}</td>
         <td className="n r rnp-dyn">{m.now || finMissing ? '' : <Delta cur={vTot} prev={vPrev} kind={m.kind} dir={m.dir} />}</td>
         {cells.map((S, i) => (
           <td key={i} className={`n r ${m.tip ? 'rnp-tipc' : ''}`} style={hs[i] ? { background: hs[i] } : undefined}
-            onMouseEnter={m.tip ? e => showTip(e, S, `${title} · ${bLabel(buckets[i]).t}`) : undefined} onMouseLeave={m.tip ? () => setTip(null) : undefined}>
+            onClick={m.tip ? e => { e.stopPropagation(); if (tip && tip.key === m.k + i) setTip(null); else showTip(e, S, `${title} · ${bLabel(buckets[i]).t}`, m.k + i); } : undefined}
+            title={m.tip ? 'Нажмите — раскладка прибыли' : undefined}>
             {m.now ? '' : finMissing ? '…' : fmt(vals[i], m.kind)}
           </td>
         ))}
