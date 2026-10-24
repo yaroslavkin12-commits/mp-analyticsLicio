@@ -7,7 +7,7 @@ const B = ['sale', 'return', 'commission', 'acquiring', 'logistics', 'storage', 
 const COST_KEYS = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other'];
 const SEP = ' / ';
 
-export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null } = {}) {
+export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withDays = false } = {}) {
   const n = data.dates.length;
   const per = data.articles.map(() => null);
   const get = ai => per[ai] || (per[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n), self: new Float64Array(n) });
@@ -51,6 +51,7 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null } = {}
       (data.adNoSku || []).forEach((a, d) => { v.adsRaw[d] += a * shD[d]; });
     }
     const T = { revenue: 0, ozonX: 0, ads: 0, cost: 0, tax: 0, profit: 0, qty: 0, payout: 0 };
+    if (withDays) T.days = [];
     for (let i = 0; i < n; i++) {
       const rev = v.sale[i] + v.return[i];
       const ozX = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
@@ -58,6 +59,7 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null } = {}
       const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
       T.revenue += rev; T.ozonX += ozX; T.ads += ad; T.cost -= v.costRaw[i]; T.tax += t; T.qty += v.qty[i];
       T.payout += rev + ozX + ad; T.profit += rev + ozX + ad - v.costRaw[i] + t;
+      if (withDays) T.days.push({ date: data.dates[i], qty: v.qty[i], payout: rev + ozX + ad });
     }
     return T;
   };

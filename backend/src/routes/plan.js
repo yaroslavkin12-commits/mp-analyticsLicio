@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../db');
+router.use('/ozon', require('./ozonPlan'));
 
 // План месяца: { 'Все': {revenue, orders, profit, sales}, 'Чехлы': {...}, 'Чехлы / Чехлы на сиденья': {...} }
 // Хранится в app_settings под ключом plan:<кабинет>:<ГГГГ-ММ>.

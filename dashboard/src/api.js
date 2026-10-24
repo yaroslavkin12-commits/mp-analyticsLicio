@@ -141,6 +141,11 @@ export const previewDigest = cabinet => api.get('/digest/preview', { params: { c
 export const sendDigestNow = cabinet => api.post('/digest/send', { cabinet }, { timeout: 60000 });
 export const getPlan = (cabinet, month) => api.get('/plan', { params: { cabinet, month } });
 export const savePlan = (cabinet, month, plan) => api.post('/plan', { cabinet, month, plan });
+export const getOzonPlan = month => api.get('/plan/ozon', { params: { month } });
+export const getOzonPlanBasis = params => api.get('/plan/ozon/basis', { params, timeout: 180000 });
+export const previewOzonPlan = data => api.post('/plan/ozon/preview', data, { timeout: 180000 });
+export const fixOzonPlan = data => api.post('/plan/ozon/fix', data);
+export const getOzonPlanExecution = params => api.get('/plan/ozon/execution', { params, timeout: 180000 });
 export const getQueries = (cabinet, p) => api.get('/queries/data', { params: { cabinet, ...p }, timeout: 90000 });
 export const getQuerySeries = (cabinet, offerId, q, days) => api.get('/queries/series', { params: { cabinet, offerId, query: q, days } });
 export const getSeason = cabinet => api.get('/queries/season', { params: { cabinet }, timeout: 90000 });

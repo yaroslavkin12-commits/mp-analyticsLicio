@@ -70,10 +70,9 @@ async function meta(cabinet) {
 // GET /api/finance/coefs?cabinet= — средние за последние 30 дней по каждому
 // артикулу: суммы из финансов, выкуп, комиссия/эквайринг из карточки,
 // себестоимость. Коэффициенты (с подстраховкой по категории) считает страница.
-router.get('/coefs', async (req, res) => {
-  try {
+async function loadCoefs(params = {}) {
     await ensureFinTables();
-    const cabinet = req.query.cabinet || 'defly';
+    const cabinet = params.cabinet || 'defly';
     const since = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
     // Выкуп — за 90 дней, кончая 7 днями назад (как в калькуляторе): по свежим заказам он ещё не известен.
     const bFrom = dayjs().subtract(90, 'day').format('YYYY-MM-DD'), bTo = dayjs().subtract(7, 'day').format('YYYY-MM-DD');
@@ -135,21 +134,23 @@ router.get('/coefs', async (req, res) => {
     for (const r of costs) if ((!r.cabinet || familyOf(r.cabinet) === familyOf(cabinet)) && known.has(r.article)) get(m.art(r.article))[14] = num(r.cost_price);
     const coefs = [...C.entries()].map(([ai, v]) => [ai, ...v.map(x => (x === null ? null : r2(x)))]);
     const totalSale = coefs.reduce((s, c) => s + (c[1] > 0 ? c[1] : 0), 0);
-    res.json({ success: true, data: {
+    return {
       articles: m.articles, coefs, noSku: Object.fromEntries(Object.entries(noSku).map(([k, v]) => [k, r2(v)])), totalSale: r2(totalSale),
       names: names.map(r => [r.name, bucketOf(r.name), r2(num(r.a))]), since, order: ORDER[cabinet] || [], fbsDays,
-    } });
-  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+    };
+}
+router.get('/coefs', async (req, res) => {
+  try { res.json({ success: true, data: await loadCoefs(req.query) }); }
+  catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
 // GET /api/finance/pnl?cabinet=&dateFrom=&dateTo= — фактические начисления по
 // дням: [ai, di, bucketIdx, amount, qty]; без SKU — отдельно по дням; реклама
 // — по дню списания (оплата за клик — день расхода, за заказ — день выкупа).
-router.get('/pnl', async (req, res) => {
-  try {
+async function loadPnl(params = {}) {
     await ensureFinTables();
-    const cabinet = req.query.cabinet || 'defly';
-    const { from, to, dates } = period(req.query);
+    const cabinet = params.cabinet || 'defly';
+    const { from, to, dates } = period(params);
     const m = await meta(cabinet);
     const [fin, adRows, skuRows, cpoRows, campaigns, campSkus, costs, range] = await Promise.all([
       query(`SELECT date::text d, sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, sku, name`, [cabinet, from, to]),
@@ -208,11 +209,14 @@ router.get('/pnl', async (req, res) => {
         if (d !== undefined && o && q) self.push([m.art(o), d, q]);
       }
     }
-    res.json({ success: true, data: {
+    return {
       dates, articles: m.articles, buckets: BUCKET_KEYS, rows, noSku, ads: adRowsOut, adNoSku: adNoSku.map(r2), self,
       cost: m.articles.map(a => (cost.has(a.o) ? cost.get(a.o) : null)), available: range[0] || null, order: ORDER[cabinet] || [],
-    } });
-  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+    };
+}
+router.get('/pnl', async (req, res) => {
+  try { res.json({ success: true, data: await loadPnl(req.query) }); }
+  catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
 // GET /api/finance/ops?cabinet=&dateFrom=&dateTo=&bucket=storage — из чего состоит статья
@@ -443,3 +447,6 @@ router.post('/buyer-share/delete', async (req, res) => {
 module.exports = router;
 module.exports.bucketOf = bucketOf;
 module.exports.meta = meta;
+
+module.exports.loadPnl = loadPnl;
+module.exports.loadCoefs = loadCoefs;

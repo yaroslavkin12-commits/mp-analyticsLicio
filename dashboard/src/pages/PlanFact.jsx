@@ -1,269 +1,223 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, getPlan, savePlan } from '../api';
-import { fmtInt } from './AdsStats2';
-import { useCats, useGroups, pct1, SEP } from './finShared';
+import { getOzonPlan, getOzonPlanBasis, previewOzonPlan, fixOzonPlan, getOzonPlanExecution } from '../api';
+import { SHOPS } from '../lib/cabinets';
 import './ads2.css';
-import './sales.css';
+import './plan.css';
 
-// ─────────────────────────────────────────────────────────────────────────
-// «План / факт» на месяц. План задаётся на весь кабинет, категории,
-// подкатегории и свои группы (группы «Рекламы»): штуки и средняя сумма
-// поступления на счёт за выкуп. Сверху — сводка с полосами выполнения,
-// ниже — по дням выбранной строки: план, факт, выполнение.
-//   Штуки: план дня = план месяца / дней в месяце; «к темпу» — факт к плану
-//   на прошедшие дни. Поступление — средняя величина: план = целевое значение.
-// Набор метрик — конструктор: потом сюда добавятся чистая прибыль и маржа.
-// ─────────────────────────────────────────────────────────────────────────
-
-const METRICS = [
-  { k: 'salesQty', t: 'Выкупы, шт', short: 'Выкупы', fin: true, sum: true },
-  { k: 'orders', t: 'Заказы, шт', short: 'Заказы', sum: true },
-  { k: 'payout', t: 'Ср. поступ. на счёт за выкуп, ₽', short: 'Ср. поступ. на счёт', fin: true, rub: true },
-  { k: 'profit', t: 'Чистая прибыль, ₽', soon: true },
-  { k: 'margin', t: 'Маржинальность, %', soon: true },
-];
-const MD = Object.fromEntries(METRICS.map(m => [m.k, m]));
-const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other', 'ads'];
-const ALL = 'Все';
-const LS = 'mp-plan-mets';
-const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
-const num = v => { const n = Number(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(n) ? n : null; };
-
-export default function PlanFact({ cabinet }) {
-  const today = dayjs();
-  const [month, setMonth] = useState(today.format('YYYY-MM'));
-  const [mets, setMets] = useState(() => { try { const v = JSON.parse(localStorage.getItem(LS)); if (Array.isArray(v) && v.length) return v.filter(k => MD[k] && !MD[k].soon); } catch (e) { /* ignore */ } return ['salesQty', 'payout']; });
-  useEffect(() => { try { localStorage.setItem(LS, JSON.stringify(mets)); } catch (e) { /* ignore */ } }, [mets]);
-  const [sales, setSales] = useState(null);
-  const [pnl, setPnl] = useState(null);
-  const [plan, setPlanState] = useState({});
-  const [error, setError] = useState(null);
-  const [saved, setSaved] = useState('');
-  const [open, setOpen] = useState(() => new Set());
-  const [selKey, setSelKey] = useState(ALL);
-  const [pick, setPick] = useState(false);
-  const saveTimer = useRef(null);
-  const grp = useGroups(cabinet);
-
-  const mStart = dayjs(month + '-01'), mEnd = mStart.endOf('month');
-  const isCur = month === today.format('YYYY-MM');
-  const D = mEnd.date();
-  const elapsed = isCur ? Math.max(0.5, today.date() - 1 + today.hour() / 24) : (month < today.format('YYYY-MM') ? D : 0);
+const SH = SHOPS.filter(s => s.platform === 'ozon');
+const SEP = ' / ';
+const fmt = (v, digits = 0) => v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toLocaleString('ru-RU', { maximumFractionDigits: digits });
+const rub = v => v === null || v === undefined ? '—' : `${fmt(v, 2)} ₽`;
+const pct = v => v === null || v === undefined ? '—' : `${fmt(v, 1)}%`;
+const errorText = e => e.response?.data?.error || e.message;
+const stamp = v => v ? new Date(v).toLocaleString('ru-RU') : '—';
+const readDraft = month => { try { return JSON.parse(localStorage.getItem(`mp-ozon-plan-draft:${month}`)); } catch { return null; } };
+const number = v => typeof v === 'string' ? Number(v.replace(/\s/g, '').replace(',', '.')) : Number(v);
+const inPath = (p, parent) => !parent || p === parent || p.startsWith(parent + SEP);
+function total(rows, shop = '') {
+  const items = rows.map(r => shop ? r.shops.find(s => s.id === shop) : r).filter(Boolean);
+  const qty = items.reduce((s, r) => s + r.qty, 0), amount = items.reduce((s, r) => s + r.amount, 0);
+  return { qty, amount, mean: qty > 0 ? amount / qty : null };
+}
+function draftRows(targets) {
+  return Object.entries(targets).filter(([, t]) => t.qty !== '' && t.mean !== '' && t.qty !== undefined && t.mean !== undefined && Number.isFinite(number(t.qty)) && Number.isFinite(number(t.mean))).map(([path, t]) => ({ path, qty: number(t.qty), mean: number(t.mean), amount: number(t.qty) * number(t.mean) }));
+}
+function actual(fact, rows, shop = '', path = '', date = '') {
+  const paths = new Set(rows.filter(r => inPath(r.path, path)).map(r => r.path));
+  let qty = 0, payout = 0, knownShops = 0;
+  const issues = [];
+  for (const s of SH.filter(s => !shop || s.id === shop)) {
+    const f = fact?.shops?.[s.id];
+    if (!f || f.error || f.partial) issues.push(`${s.label}: ${f?.error || 'неполный период финансов'}`);
+    if (!f || f.error) continue;
+    knownShops++;
+    for (const p of paths) {
+      const r = f.byPath[p]; if (!r) continue;
+      const v = date ? r.days.find(d => d.date === date) : r;
+      if (v) { qty += v.qty; payout += v.payout; }
+    }
+  }
+  return { qty: knownShops ? qty : null, payout: knownShops ? payout : null, mean: qty > 0 ? payout / qty : null, issues, complete: !issues.length && !fact?.future };
+}
+function Input({ value, onChange, label, ...rest }) {
+  return <input className="op-input n" aria-label={label} inputMode="decimal" value={value ?? ''} onChange={e => onChange(e.target.value)} {...rest} />;
+}
+function Progress({ value }) {
+  return <div className="op-progress"><i style={{ width: `${Math.min(100, Math.max(0, value || 0))}%` }} /><span>{pct(value)}</span></div>;
+}
+export default function PlanFact({ active = true }) {
+  const [month, setMonth] = useState(dayjs().format('YYYY-MM'));
+  const [mode, setMode] = useState('plan');
+  const [state, setState] = useState(null), [loadError, setLoadError] = useState('');
+  const [targets, setTargets] = useState({});
+  const [period, setPeriod] = useState({ from: '', to: '' });
+  const [source, setSource] = useState('fact');
+  const [basis, setBasis] = useState(null), [basisError, setBasisError] = useState(''), [basisBusy, setBasisBusy] = useState(false);
+  const [preview, setPreview] = useState(null), [previewBusy, setPreviewBusy] = useState(false);
+  const [actionError, setActionError] = useState(''), [notice, setNotice] = useState('');
+  const [ack, setAck] = useState(false), [note, setNote] = useState(''), [saving, setSaving] = useState(false);
+  const [manual, setManual] = useState('');
+  const [version, setVersion] = useState('');
+  const [fact, setFact] = useState(null), [factBusy, setFactBusy] = useState(false), [factError, setFactError] = useState('');
+  const [shop, setShop] = useState(''), [path, setPath] = useState('');
+  const [refresh, setRefresh] = useState(0), [basisRefresh, setBasisRefresh] = useState(0);
+  const [showArchive, setShowArchive] = useState(false);
+  const fingerprint = JSON.stringify({ month, targets, period, source, revision: state?.revision });
+  const currentInput = useRef(fingerprint); currentInput.current = fingerprint;
+  const fixed = state?.versions.find(v => v.id === state.activeId);
+  const viewed = state?.versions.find(v => v.id === (version || state.activeId));
 
   useEffect(() => {
-    setSales(null); setPnl(null); setError(null);
-    const from = mStart.format('YYYY-MM-DD'), to = (isCur ? today : mEnd).format('YYYY-MM-DD');
-    Promise.all([getSalesData(cabinet, { dateFrom: from, dateTo: to }), getPlan(cabinet, month)])
-      .then(([s, p]) => { setSales(s.data.data); setPlanState(p.data.data || {}); })
-      .catch(e => setError(e.response?.data?.error || e.message));
-    getFinancePnl(cabinet, { dateFrom: from, dateTo: to }).then(r => setPnl(r.data.data)).catch(() => setPnl(false));
-  }, [cabinet, month]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!active) return;
+    let off = false;
+    setState(null); setLoadError(''); setPreview(null); setActionError(''); setNotice(''); setFact(null); setVersion(''); setPath('');
+    getOzonPlan(month).then(r => {
+      if (off) return;
+      const s = r.data.data, v = s.versions.find(x => x.id === s.activeId), draft = readDraft(month);
+      setTargets(draft?.targets || Object.fromEntries((v?.targets || []).map(t => [t.path, { ...t }])));
+      setPeriod(draft?.period || (v ? { from: v.basis.from, to: v.basis.to } : s.defaultPeriod));
+      setSource(draft?.source || v?.basis.source || 'fact');
+      if (draft && draft.revision !== s.revision) setNotice('На сервере есть новая версия. Локальный черновик сохранён; перед фиксацией сравните его с действующим планом.');
+      setState(s);
+    }).catch(e => { if (!off) setLoadError(errorText(e)); });
+    return () => { off = true; };
+  }, [month, active]);
+  useEffect(() => {
+    if (!active || !state || state.month !== month) return;
+    try { localStorage.setItem(`mp-ozon-plan-draft:${month}`, JSON.stringify({ revision: state.revision, targets, period, source })); } catch { /* Черновик остаётся в памяти. */ }
+  }, [targets, period, source, state, month, active]);
+  useEffect(() => {
+    if (!active || !state || state.month !== month || !period.from || !period.to) return;
+    let off = false;
+    setBasis(null); setBasisError(''); setBasisBusy(true); setPreview(null);
+    getOzonPlanBasis({ month, ...period, source, refresh: basisRefresh }).then(r => { if (!off) setBasis(r.data.data); })
+      .catch(e => { if (!off) setBasisError(errorText(e)); }).finally(() => { if (!off) setBasisBusy(false); });
+    return () => { off = true; };
+  }, [active, state?.month, month, period.from, period.to, source, basisRefresh]);
+  useEffect(() => {
+    if (!active || !state || state.month !== month || mode !== 'actual') return;
+    let off = false;
+    setFact(null); setFactError(''); setFactBusy(true);
+    getOzonPlanExecution({ month, version: version || undefined, refresh }).then(r => { if (!off) setFact(r.data.data); })
+      .catch(e => { if (!off) setFactError(errorText(e)); }).finally(() => { if (!off) setFactBusy(false); });
+    return () => { off = true; };
+  }, [active, state?.revision, mode, month, version, refresh]);
 
-  const cats = useCats(sales?.articles, sales?.order);
-  const byOffer = useMemo(() => new Map(cats.arts.map(a => [a.o, a.i])), [cats.arts]);
-
-  // Факт по дням месяца для каждого артикула: { metric: { n: [ai][d], q: [ai][d] } } (q — знаменатель средних).
-  const fact = useMemo(() => {
-    if (!sales) return null;
-    const N = cats.arts.length, mk = () => Array.from({ length: N }, () => new Float64Array(D));
-    const out = { orders: { n: mk() }, salesQty: { n: mk() }, payout: { n: mk(), q: mk() } };
-    for (const r of sales.rows) { const d = dayjs(sales.dates[r[1]]).date() - 1; if (d >= 0 && d < D) out.orders.n[r[0]][d] += r[5]; }
-    if (pnl) {
-      const S = mk(), saleDay = new Float64Array(D), noSkuDay = new Float64Array(D);
-      for (const [pai, pd, b, a, q] of pnl.rows) {
-        const k = pnl.buckets[b], ai = byOffer.get(pnl.articles[pai]?.o), d = dayjs(pnl.dates[pd]).date() - 1;
-        if (ai === undefined || d < 0 || d >= D) continue;
-        if (k === 'sale' || k === 'return') {
-          const qty = (k === 'return' ? -1 : 1) * Math.abs(q || 0);
-          out.salesQty.n[ai][d] += qty; out.payout.q[ai][d] += qty;
-          out.payout.n[ai][d] += a; S[ai][d] += a; saleDay[d] += a;
-        } else if (OZ.includes(k)) out.payout.n[ai][d] += a;
-      }
-      // Удержания без артикула — по доле выкупов дня (как в «P&L»).
-      for (const [pd, b, a] of pnl.noSku || []) { const d = dayjs(pnl.dates[pd]).date() - 1; if (d >= 0 && d < D && OZ.includes(pnl.buckets[b])) noSkuDay[d] += a; }
-      for (let i = 0; i < N; i++) for (let d = 0; d < D; d++) if (saleDay[d] > 0 && S[i][d] > 0) out.payout.n[i][d] += noSkuDay[d] * S[i][d] / saleDay[d];
-    }
-    return out;
-  }, [sales, pnl, cats.arts, byOffer, D]);
-
-  // Строки: весь кабинет → категории → подкатегории; отдельно — свои группы.
-  const nodes = useMemo(() => {
-    const out = [{ key: ALL, name: 'Весь кабинет', depth: 0, arts: cats.arts }];
-    const tops = [...cats.topCats].sort((x, y) => (y === 'Чехлы') - (x === 'Чехлы'));
-    for (const t of tops) {
-      const kids = cats.childrenOf(t);
-      out.push({ key: t, name: t, depth: 1, kids: kids.length, arts: cats.arts.filter(a => a.parts[0] === t) });
-      for (const k of kids) out.push({ key: t + SEP + k, name: k, depth: 2, parent: t, arts: cats.arts.filter(a => a.parts[0] === t && a.parts[1] === k) });
-    }
-    const groups = (grp.list || []).map(g => ({ key: 'g:' + g.id, name: g.name, depth: 1, group: true, arts: cats.arts.filter(a => String(grp.members[a.o] || '') === String(g.id)) })).filter(g => g.arts.length);
-    return { cats: out, groups };
-  }, [cats, grp.list, grp.members]);
-
-  const lastFull = isCur ? today.date() - 1 : D;
-  const calc = useCallback((node, k) => {
-    const m = MD[k], F = fact?.[k];
-    const day = new Float64Array(D), den = new Float64Array(D);
-    if (F) for (const a of node.arts) { const s = F.n[a.i]; for (let i = 0; i < D; i++) day[i] += s[i]; if (F.q) { const q = F.q[a.i]; for (let i = 0; i < D; i++) den[i] += q[i]; } }
-    const planned = plan[node.key]?.[k] ?? null;
-    if (!m.sum) {
-      const sn = day.reduce((s, v) => s + v, 0), sd = den.reduce((s, v) => s + v, 0);
-      const f = sd > 0 ? sn / sd : null;
-      return { day, den, fact: f, planned, done: planned && f !== null ? f / planned * 100 : null, pace: planned && f !== null ? f / planned * 100 : null };
-    }
-    const f = day.reduce((s, v) => s + v, 0);
-    const w = Math.min(7, lastFull);
-    const rate = w > 0 ? day.slice(lastFull - w, lastFull).reduce((s, v) => s + v, 0) / w : 0;
-    const forecast = isCur ? day.slice(0, lastFull).reduce((s, v) => s + v, 0) + rate * Math.max(0, D - lastFull) : f;
-    return {
-      day, fact: f, planned, forecast, perDay: planned ? planned / D : null,
-      done: planned ? f / planned * 100 : null, pace: planned && elapsed > 0 ? f / (planned * elapsed / D) * 100 : null,
-      fc: planned ? forecast / planned * 100 : null, need: planned && isCur && D - elapsed > 0 ? Math.max(0, (planned - f) / (D - elapsed)) : null,
-    };
-  }, [fact, plan, D, lastFull, isCur, elapsed]);
-
-  const setPlan = (key, k, v) => {
-    const n = num(v);
-    const next = { ...plan, [key]: { ...(plan[key] || {}) } };
-    if (v === '' || n === null) delete next[key][k]; else next[key][k] = n;
-    setPlanState(next); setSaved('сохраняю…');
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => savePlan(cabinet, month, next).then(() => setSaved('сохранено')).catch(e => setSaved(`ошибка: ${e.message}`)), 700);
+  const paths = useMemo(() => [...new Set([...(basis?.paths || []), ...Object.keys(targets), ...(fixed?.targets.map(t => t.path) || [])])].sort((a, b) => (b.startsWith('Чехлы') - a.startsWith('Чехлы')) || a.localeCompare(b, 'ru')), [basis, targets, fixed]);
+  const tops = [...new Set(paths.map(p => p.split(SEP)[0]))];
+  const filled = draftRows(targets), draftTotal = total(filled);
+  const update = (p, field, value) => { setTargets(t => ({ ...t, [p]: { ...(t[p] || {}), [field]: value } })); setPreview(null); setActionError(''); };
+  const override = (p, field, id, value) => { setTargets(t => ({ ...t, [p]: { ...(t[p] || {}), [field]: { ...(t[p]?.[field] || {}), [id]: value } } })); setPreview(null); };
+  const copy = async () => {
+    try {
+      const s = (await getOzonPlan(dayjs(month + '-01').subtract(1, 'month').format('YYYY-MM'))).data.data;
+      const v = s.versions.find(x => x.id === s.activeId);
+      if (!v) { setNotice('В прошлом месяце нет общего плана. Старые планы кабинетов доступны в архиве.'); return; }
+      setTargets(Object.fromEntries(v.targets.map(t => [t.path, { ...t, weights: {}, means: {} }]))); setPreview(null);
+      setNotice('Цели прошлого месяца скопированы в черновик. Распределение нужно проверить и зафиксировать заново.');
+    } catch (e) { setActionError(errorText(e)); }
   };
-  const copyPrev = () => getPlan(cabinet, mStart.subtract(1, 'month').format('YYYY-MM')).then(r => {
-    const p = r.data.data || {};
-    if (!Object.keys(p).length) { setSaved('в прошлом месяце плана нет'); return; }
-    setPlanState(p); savePlan(cabinet, month, p).then(() => setSaved('скопировано из прошлого месяца'));
-  });
-
-  if (error && !sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить: {error}</div></div>;
-  if (!sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
-
-  const shown = mets.map(k => MD[k]).filter(Boolean);
-  const fmtV = (m, v) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : m.rub ? `${fmtInt(v)} ₽` : fmtInt(v));
-  const cls = p => (p === null || p === undefined ? '' : p >= 100 ? 'g' : p >= 90 ? 'w' : 'b');
-  const months = []; for (let i = -3; i <= 2; i++) months.push(today.add(i, 'month').format('YYYY-MM'));
-  const finWait = shown.some(m => m.fin) && pnl === null;
-
-  // Полоса выполнения: заливка — факт / план месяца, риска — где нужно быть сегодня.
-  const Bar = ({ m, c }) => {
-    if (!c.planned) return <span className="muted">план не задан</span>;
-    const p = m.sum ? c.done : c.pace;
-    const mark = m.sum && isCur ? Math.min(100, elapsed / D * 100) : null;
-    const tipText = m.sum ? `Выполнено ${pct1(c.done)} плана месяца · к темпу ${pct1(c.pace)}${c.need !== null && c.need !== undefined ? ` · нужно ${fmtInt(c.need)} в день` : ''} · прогноз на конец месяца ${fmtInt(c.forecast)} (${pct1(c.fc)})` : `Факт ${fmtV(m, c.fact)} при плане ${fmtV(m, c.planned)}`;
-    return (
-      <div className="pf-bar" title={tipText}>
-        <div className="pf-track"><i className={cls(m.sum ? c.pace : p)} style={{ width: `${Math.min(100, Math.max(0, p || 0))}%` }} />{mark !== null && <b style={{ left: `${mark}%` }} />}</div>
-        <span className={`pf-pct ${cls(m.sum ? c.pace : p)}`}>{pct1(m.sum ? c.pace : p)}</span>
-      </div>
-    );
+  const buildPreview = async () => {
+    const inputAtStart = currentInput.current;
+    setPreviewBusy(true); setActionError(''); setAck(false);
+    try {
+      const entered = Object.entries(targets).filter(([, t]) => (t.qty !== '' && t.qty !== undefined) || (t.mean !== '' && t.mean !== undefined)).map(([p, t]) => ({ ...t, path: p, qty: t.qty === '' || t.qty === undefined ? '' : number(t.qty), mean: t.mean === '' || t.mean === undefined ? '' : number(t.mean), weights: Object.fromEntries(Object.entries(t.weights || {}).map(([k, v]) => [k, v === '' ? '' : number(v)])), means: Object.fromEntries(Object.entries(t.means || {}).map(([k, v]) => [k, v === '' ? '' : number(v)])) }));
+      const result = (await previewOzonPlan({ month, ...period, source, targets: entered, expectedRevision: state.revision })).data.data;
+      if (currentInput.current === inputAtStart) setPreview(result);
+      else setNotice('Черновик изменился во время расчёта. Постройте предпросмотр ещё раз.');
+    } catch (e) { setActionError(errorText(e)); }
+    finally { setPreviewBusy(false); }
   };
-
-  const row = n => (
-    <tr key={n.key} className={`pf-r d${n.depth} ${selKey === n.key ? 'on' : ''}`}>
-      <td className="pf-name" onClick={() => setSelKey(n.key)} title="Показать по дням">
-        <span style={{ paddingLeft: n.depth === 2 ? 22 : 0 }}>
-          {n.depth === 1 && n.kids > 0 && <button type="button" className={`pf-chev ${open.has(n.key) ? 'on' : ''}`} onClick={e => { e.stopPropagation(); setOpen(s => { const x = new Set(s); x.has(n.key) ? x.delete(n.key) : x.add(n.key); return x; }); }}>▶</button>}
-          {n.group && <span className="pf-dot" style={{ background: grp.colors?.[n.key.slice(2)] || 'var(--a-accent)' }} />}
-          {n.name}<small>{n.arts.length} арт.</small>
-        </span>
-      </td>
-      {shown.map(m => { const c = calc(n, m.k); return (
-        <React.Fragment key={m.k}>
-          <td className="pf-in"><input inputMode="decimal" value={plan[n.key]?.[m.k] ?? ''} placeholder="план" onChange={e => setPlan(n.key, m.k, e.target.value)} onClick={e => e.stopPropagation()} /></td>
-          <td className="n r pf-fact">{finWait && m.fin ? '…' : fmtV(m, c.fact)}</td>
-          <td className="pf-barc">{finWait && m.fin ? '' : <Bar m={m} c={c} />}</td>
-        </React.Fragment>
-      ); })}
-    </tr>
-  );
-
-  const sel = [...nodes.cats, ...nodes.groups].find(n => n.key === selKey) || nodes.cats[0];
-  const days = Array.from({ length: D }, (_, i) => mStart.add(i, 'day'));
-  const isFuture = i => isCur ? i >= today.date() : month > today.format('YYYY-MM');
-
-  return (
-    <div className="mpui sa-page">
-      <div className="page-sticky">
-        <div className="a-top">
-          <h1>План / факт</h1>
-          <span className="a-seg">{months.map(m => <button key={m} type="button" className={month === m ? 'on' : ''} onClick={() => setMonth(m)}>{dayjs(m + '-01').format('MMM YY')}</button>)}</span>
-          <span className="tb-tplwrap">
-            <button type="button" className="a-btn" onClick={() => setPick(p => !p)}>Метрики · {shown.length} ▾</button>
-            {pick && (
-              <div className="tb-tplpop" style={{ minWidth: 280 }} onMouseLeave={() => setPick(false)}>
-                {METRICS.map(m => (
-                  <label key={m.k} className="tb-chk" style={{ display: 'flex', padding: '3px 0', opacity: m.soon ? 0.5 : 1 }} title={m.soon ? 'Добавим позже' : undefined}>
-                    <input type="checkbox" disabled={m.soon} checked={mets.includes(m.k)} onChange={e => setMets(x => (e.target.checked ? METRICS.map(y => y.k).filter(k => x.includes(k) || k === m.k) : x.filter(k => k !== m.k)))} />
-                    {m.t}{m.soon ? <small className="muted" style={{ marginLeft: 6 }}>скоро</small> : null}
-                  </label>
-                ))}
-              </div>
-            )}
-          </span>
-          <button type="button" className="a-btn ghost" onClick={copyPrev}>Скопировать план прошлого месяца</button>
-          {saved && <span className="a-hint" style={{ margin: 0 }}>{saved}</span>}
-        </div>
-      </div>
-
-      <div className="a-card" style={{ padding: 0 }}>
-        <div className="a-scroll">
-          <table className="a-t pf-t no-sh">
-            <thead>
-              <tr>
-                <th className="l" rowSpan={2}>Категория / группа</th>
-                {shown.map(m => <th key={m.k} colSpan={3} className="pf-mh">{m.t}</th>)}
-              </tr>
-              <tr>
-                {shown.map(m => (
-                  <React.Fragment key={m.k}>
-                    <th className="r">План {m.sum ? 'на месяц' : ''}</th>
-                    <th className="r">Факт {m.sum ? (isCur ? 'на сегодня' : 'за месяц') : ''}</th>
-                    <th className="l" title={m.sum ? 'Полоса — доля плана месяца; риска — где нужно быть сегодня; число — выполнение к темпу' : 'Факт к плану'}>{m.sum ? 'Выполнение · к темпу' : 'Выполнение'}</th>
-                  </React.Fragment>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {nodes.cats.filter(n => n.depth < 2 || open.has(n.parent)).map(row)}
-              {nodes.groups.length > 0 && <tr className="pf-sep"><td colSpan={1 + shown.length * 3}>Свои группы (из «Рекламы»)</td></tr>}
-              {nodes.groups.map(row)}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div className="a-hint" style={{ margin: '6px 2px 14px' }}>
-        Впишите план в ячейки — сохраняется сам. Штуки — на весь месяц, поступление — целевая средняя сумма на счёт за один выкуп. Нажмите на название — ниже откроется по дням.
-        {shown.some(m => m.fin) ? ' Выкупы и поступление — по начислениям Ozon (по дню выкупа), за последние 1–2 дня они ещё неполные.' : ''}
-      </div>
-
-      <div className="a-card" style={{ padding: 0 }}>
-        <div className="a-bar" style={{ padding: '12px 14px 8px' }}><b style={{ fontSize: 14 }}>По дням · {sel.name}</b><span className="a-hint">план дня = план месяца / {D} дн.; факт подсвечен: зелёный — план дня выполнен, жёлтый — 90–100%, красный — меньше</span></div>
-        <div className="a-scroll pf-days">
-          <table className="a-t pf-dt no-sh">
-            <thead><tr>
-              <th className="l pf-dm">Метрика</th><th className="r pf-dtot">Месяц</th>
-              {days.map((d, i) => <th key={i} className={`r ${d.day() === 0 || d.day() === 6 ? 'we' : ''} ${isCur && i === today.date() - 1 ? 'today' : ''}`}><div>{d.format('DD')}</div><small>{WD[d.day()]}</small></th>)}
-            </tr></thead>
-            {shown.map(m => {
-              const c = calc(sel, m.k);
-              const dayPlan = m.sum ? c.perDay : c.planned;
-              const dayFact = i => (m.sum ? c.day[i] : c.den[i] > 0 ? c.day[i] / c.den[i] : null);
-              const dayPct = i => { const f = dayFact(i); return dayPlan && f !== null ? f / dayPlan * 100 : null; };
-              return (
-                <tbody key={m.k} className="pf-blk">
-                  <tr className="pf-bh"><td colSpan={2 + D}>{m.t}</td></tr>
-                  <tr><td className="pf-dm">План</td><td className="n r pf-dtot">{fmtV(m, c.planned)}</td>{days.map((_, i) => <td key={i} className="n r muted">{fmtV(m, dayPlan)}</td>)}</tr>
-                  <tr className="pf-factr"><td className="pf-dm">Факт</td><td className="n r pf-dtot">{fmtV(m, c.fact)}</td>
-                    {days.map((_, i) => { const p = dayPct(i); const fut = isFuture(i); return <td key={i} className={`n r ${fut ? 'muted' : `pf-c ${cls(p)}`}`}>{fut ? '' : finWait && m.fin ? '…' : fmtV(m, dayFact(i))}</td>; })}</tr>
-                  <tr><td className="pf-dm">Выполнение</td><td className={`n r pf-dtot pf-pct ${cls(m.sum ? c.pace : c.done)}`}>{m.sum ? (c.planned ? `${pct1(c.done)} · темп ${pct1(c.pace)}` : '—') : pct1(c.done)}</td>
-                    {days.map((_, i) => { const p = dayPct(i); return <td key={i} className={`n r pf-pct ${cls(p)}`}>{isFuture(i) ? '' : pct1(p)}</td>; })}</tr>
-                </tbody>
-              );
-            })}
-          </table>
-        </div>
-      </div>
-    </div>
-  );
+  const fix = async () => {
+    setSaving(true); setActionError('');
+    try {
+      const s = (await fixOzonPlan({ month, previewId: preview.id, acknowledgeWarnings: ack, note })).data.data;
+      setState(prev => ({ ...prev, ...s })); setPreview(null); setNote(''); setNotice('Распределение зафиксировано на месяц. Обновления факта его не изменят.'); setMode('actual'); setVersion(''); setRefresh(x => x + 1);
+    } catch (e) { setActionError(errorText(e)); }
+    finally { setSaving(false); }
+  };
+  const preset = kind => {
+    const to = state.cutoff;
+    if (kind === '30') setPeriod({ from: dayjs(to).subtract(29, 'day').format('YYYY-MM-DD'), to });
+    else if (kind === 'previous') { const p = dayjs(month + '-01').subtract(1, 'month'); setPeriod({ from: p.startOf('month').format('YYYY-MM-DD'), to: p.endOf('month').format('YYYY-MM-DD') }); }
+    else setPeriod(state.defaultPeriod);
+    setPreview(null);
+  };
+  if (!state || state.month !== month) return <div className="mpui op-page"><h1>План / факт · Ozon</h1><div className={loadError ? 'op-alert bad' : 'a-empty'}>{loadError || 'Загружаем общий план…'}</div>{loadError && <button className="a-btn" onClick={() => window.location.reload()}>Обновить страницу</button>}</div>;
+  const rows = viewed?.rows || [];
+  const selectedRows = rows.filter(r => inPath(r.path, path));
+  const planned = total(selectedRows, shop), performance = actual(fact, rows, shop, path);
+  const daysInMonth = dayjs(month + '-01').daysInMonth();
+  const elapsed = fact?.to ? dayjs(fact.to).date() : 0;
+  const completed = performance.complete && planned.qty > 0 ? performance.qty / planned.qty * 100 : null;
+  const pace = performance.complete && planned.qty > 0 && elapsed > 0 ? performance.qty / (planned.qty * elapsed / daysInMonth) * 100 : null;
+  const unplanned = paths.filter(p => !rows.some(r => r.path === p));
+  const gapMean = performance.complete && performance.mean !== null && planned.mean !== null ? performance.mean - planned.mean : null;
+  const displayRows = [];
+  for (const top of tops) {
+    const children = paths.filter(p => p.startsWith(top + SEP));
+    if (children.length) displayRows.push({ path: top, parent: true, children });
+    for (const p of paths.filter(p => p === top || p.startsWith(top + SEP))) displayRows.push({ path: p, parent: false });
+  }
+  return <div className="mpui op-page">
+    <div className="op-heading"><div><h1>План / факт <span>Ozon</span></h1><p>Один план на Defly, NABauto, Alex, Fullgas и Accent Line</p></div><label className="op-month">Месяц<input type="month" value={month} onChange={e => { if (e.target.value) setMonth(e.target.value); }} /></label></div>
+    <div className="op-toolbar"><div className="a-seg"><button className={mode === 'plan' ? 'on' : ''} onClick={() => setMode('plan')}>Планирование</button><button className={mode === 'actual' ? 'on' : ''} onClick={() => setMode('actual')}>Выполнение</button></div><span className="op-state">{fixed ? `Зафиксирован · версия ${state.versions.length} · ${stamp(fixed.createdAt)}` : 'План ещё не зафиксирован'}</span></div>
+    {notice && <div className="op-alert" role="status">{notice}<button className="op-close" aria-label="Скрыть сообщение" onClick={() => setNotice('')}>×</button></div>}
+    {actionError && <div className="op-alert bad" role="alert">{actionError}</div>}
+    {mode === 'plan' ? <>
+      <section className="a-card op-section"><div className="op-section-head"><div><h2>1. Общие цели на месяц</h2><p>Заполняйте подкатегории. Родительские итоги появятся сразу, даже если остальные строки пусты.</p></div><button className="a-btn" onClick={copy}>Взять цели прошлого месяца</button></div>
+        <div className="op-summary"><span><b>{fmt(draftTotal.qty)}</b> выкупов</span><span><b>{rub(draftTotal.mean)}</b> за выкуп</span><small>План задан: {filled.length} из {paths.length} категорий · черновик сохраняется в этом браузере</small></div>
+        {!paths.length && <p className="op-muted">{basisBusy ? 'Загружаем категории пяти магазинов…' : 'Категории появятся после загрузки базы распределения.'}</p>}
+        {!!paths.length && <div className="op-scroll"><table className="op-table op-targets"><thead><tr><th>Категория / подкатегория</th><th>Выкупы за месяц, шт.</th><th>Поступление за выкуп, ₽</th><th>Распределение</th></tr></thead><tbody>{displayRows.map((r, idx) => {
+          const t = targets[r.path] || {}, children = filled.filter(x => inPath(x.path, r.path)), sum = total(children);
+          return <React.Fragment key={r.path + idx}><tr className={r.parent ? 'op-parent' : ''}><td className="op-name" style={{ paddingLeft: r.path.includes(SEP) ? 28 : 14 }}>{r.path.split(SEP).at(-1)}{r.parent && <small>План задан: {r.children.filter(p => filled.some(x => x.path === p)).length} из {r.children.length}</small>}</td>
+            <td>{r.parent ? <b className="n">{children.length ? fmt(sum.qty) : '—'}</b> : <Input label={`Выкупы: ${r.path}`} value={t.qty} onChange={v => update(r.path, 'qty', v)} placeholder="Не задан" />}</td>
+            <td>{r.parent ? <b className="n">{rub(sum.mean)}</b> : <Input label={`Поступление: ${r.path}`} value={t.mean} onChange={v => update(r.path, 'mean', v)} placeholder="Не задано" />}</td>
+            <td>{!r.parent && <button className="op-link" onClick={() => setManual(manual === r.path ? '' : r.path)}>{manual === r.path ? 'Скрыть настройки' : 'Доли и база'}</button>}</td></tr>
+            {!r.parent && manual === r.path && <tr><td colSpan={4}><div className="op-manual"><b>{r.path} · исходные значения и ручные поправки</b><p>Пустые поля используют историю. Ручные доли — относительные веса: сервис нормирует их до 100%. При отсутствии данных укажите долю явно, включая 0 для исключения магазина.</p><table className="op-table"><thead><tr><th>Магазин</th><th>Выкупы базы</th><th>Факт за выкуп</th><th>Прогноз за выкуп</th><th>Доля вручную</th><th>База поступления вручную, ₽</th></tr></thead><tbody>{SH.map(s => {
+              const b = basis?.shops[s.id], v = b?.byPath[r.path], all = SH.reduce((n, x) => n + Math.max(0, basis?.shops[x.id]?.byPath[r.path]?.qty || 0), 0);
+              return <tr key={s.id}><td>{s.label}{(b?.error || b?.partial) && <small className="op-bad">{b.error || 'Неполный период'}</small>}</td><td className="n">{b?.error ? '—' : fmt(v?.qty ?? 0)}</td><td>{rub(v?.qty > 0 ? v.payout / v.qty : null)}</td><td>{source === 'forecast' ? rub(v?.forecast?.qty > 0 ? v.forecast.payout / v.forecast.qty : null) : 'Выберите источник «Прогноз»'}</td><td><Input label={`Доля ${s.label}: ${r.path}`} value={t.weights?.[s.id]} placeholder={all > 0 ? fmt(Math.max(0, v?.qty || 0) / all * 100, 2) : 'нет базы'} onChange={v => override(r.path, 'weights', s.id, v)} /></td><td><Input label={`База ${s.label}: ${r.path}`} value={t.means?.[s.id]} placeholder="Из источника" onChange={v => override(r.path, 'means', s.id, v)} /></td></tr>;
+            })}</tbody></table></div></td></tr>}
+          </React.Fragment>;
+        })}</tbody></table></div>}
+      </section>
+      <section className="a-card op-section"><div className="op-section-head"><div><h2>2. База распределения</h2><p>Доли штук — по выкупам этой категории за вычетом возвратов. Цели поступления сохраняют соотношение средних магазинов.</p></div></div>
+        <div className="op-controls"><label>С<input type="date" value={period.from} onChange={e => setPeriod(p => ({ ...p, from: e.target.value }))} /></label><label>По<input type="date" max={state.cutoff} value={period.to} onChange={e => setPeriod(p => ({ ...p, to: e.target.value }))} /></label><button className="a-btn" onClick={() => preset('30')}>Последние 30 полных дней</button><button className="a-btn" onClick={() => preset('previous')}>Прошлый месяц</button><label>База поступления<select value={source} onChange={e => setSource(e.target.value)}><option value="fact">Фактическое поступление</option><option value="forecast">Прогноз из аналитики продаж</option></select></label><button className="a-btn" onClick={() => { setBasisRefresh(x => x + 1); setPreview(null); }}>Обновить базу</button></div>
+        <p className="op-muted">Даты Ozon — по Москве. Последние три дня исключены из базы и оценки выполнения из-за задержек начислений. Прогноз использует модель и текущие коэффициенты «Аналитики продаж»; это ориентир, а не гарантия дохода.</p>
+        {basisBusy && <div className="op-alert" role="status">Собираем базу пяти магазинов… Это может занять до трёх минут.</div>}
+        {basisError && <div className="op-alert bad" role="alert">{basisError}</div>}
+        {basis && <div className="op-sources">{SH.map(s => { const b = basis.shops[s.id]; return <div key={s.id}><i style={{ background: s.color }} /><b>{s.label}</b><span className={b.error || b.partial ? 'op-bad' : 'op-muted'}>{b.error || (b.partial ? 'Неполный диапазон финансов' : 'Диапазон финансов покрывает период')}</span><small>Сбор: {stamp(b.updatedAt)}{b.forecastError ? ` · Прогноз недоступен: ${b.forecastError}` : ''}</small></div>; })}</div>}
+        <div className="op-actions"><button className="a-btn primary" disabled={!basis || basisBusy || previewBusy || saving} onClick={buildPreview}>{previewBusy ? 'Рассчитываем…' : fixed ? 'Предпросмотр нового распределения' : 'Предпросмотр распределения'}</button><span className="op-muted">Фиксация — отдельным действием после проверки.</span></div>
+      </section>
+      {preview && <section className="a-card op-section" aria-label="Предпросмотр распределения"><h2>3. Предпросмотр распределения</h2><p className="op-muted">{period.from} — {period.to} · {source === 'fact' ? 'по факту' : 'по прогнозу'} · исходные данные на {stamp(preview.basis.asOf)}</p>
+        {!!preview.errors.length && <div className="op-alert bad" role="alert"><b>Распределение пока нельзя зафиксировать</b><ul>{preview.errors.map(x => <li key={x}>{x}</li>)}</ul><p>Откройте «Доли и база» у соответствующей категории и уточните исходные значения.</p></div>}
+        {preview.rows.map(r => <div className="op-preview-row" key={r.path}><h3>{r.path} <small>{fmt(r.qty)} шт. · {rub(r.mean)} за выкуп · коэффициент {fmt(r.factor, 4)}</small></h3><div className="op-scroll"><table className="op-table"><thead><tr><th>Магазин</th><th>Доля</th><th>План, шт.</th><th>База, ₽/выкуп</th><th>Цель, ₽/выкуп</th><th>Всего к поступлению</th></tr></thead><tbody>{r.shops.map(s => <tr key={s.id}><td>{s.label}{(s.manualWeight || s.manualMean) && <small>Ручная настройка</small>}</td><td>{pct(s.share * 100)}</td><td className="n">{fmt(s.qty)}</td><td>{rub(s.baseMean)}</td><td>{rub(s.mean)}</td><td>{rub(s.amount)}</td></tr>)}<tr className="op-parent"><td>Итого Ozon</td><td>{r.qty ? '100%' : '—'}</td><td>{fmt(r.qty)}</td><td /><td>{rub(r.qty ? r.shops.reduce((s, x) => s + x.amount, 0) / r.qty : null)}</td><td>{rub(r.amount)}</td></tr></tbody></table></div></div>)}
+        {!!preview.warnings.length && <div className="op-alert warn"><ul>{preview.warnings.map(x => <li key={x}>{x}</li>)}</ul><label className="op-check"><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} />Учёл предупреждения, распределение подходит</label></div>}
+        <p className="op-muted">Штуки округлены с сохранением общего плана. Средние хранятся с полной точностью; округление до копеек используется только на экране.</p>
+        <div className="op-controls"><label className="op-note">Комментарий к версии<input value={note} maxLength={300} onChange={e => setNote(e.target.value)} placeholder="Например: план после изменения цен" /></label><button className="a-btn primary" disabled={!!preview.errors.length || saving || (preview.warnings.length > 0 && !ack)} onClick={fix}>{saving ? 'Сохраняем…' : 'Зафиксировать на месяц'}</button></div>
+        {fixed && <p className="op-muted">Появится новая версия. Предыдущее распределение останется в истории.</p>}
+      </section>}
+    </> : <>
+      <section className="a-card op-section"><div className="op-controls"><label>Магазины<select value={shop} onChange={e => setShop(e.target.value)}><option value="">Весь Ozon</option>{SH.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label>Категория<select value={path} onChange={e => setPath(e.target.value)}><option value="">Все запланированные</option>{[...new Set(rows.flatMap(r => [r.path.split(SEP)[0], r.path]))].map(p => <option key={p} value={p}>{p}</option>)}</select></label><label>Версия<select value={version || state.activeId || ''} onChange={e => setVersion(e.target.value)}>{!state.versions.length && <option value="">План не задан</option>}{state.versions.map((v, i) => <option key={v.id} value={v.id}>{i + 1} · {stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</option>)}</select></label><button className="a-btn" disabled={factBusy} onClick={() => setRefresh(x => x + 1)}>Обновить факт</button></div></section>
+      {!viewed && <div className="op-alert">Общий план ещё не зафиксирован. Заполните цели в «Планировании» и проверьте распределение.</div>}
+      {factBusy && <div className="op-alert" role="status">Загружаем фактические результаты пяти магазинов…</div>}
+      {factError && <div className="op-alert bad" role="alert">Не удалось загрузить факт: {factError}. Нулевые результаты не подставлены.</div>}
+      {fact && viewed && <>
+        {fact.future ? <div className="op-alert">Для этого месяца ещё нет полных финансовых дней с учётом задержки начислений.</div> : <p className="op-muted">Факт по {fact.to} включительно · обновлён {stamp(fact.asOf)}. Сравнение охватывает только запланированные подкатегории.</p>}
+        {!!performance.issues.length && !fact.future && <div className="op-alert warn"><b>Факт неполный. Проценты выполнения и темпа скрыты.</b><ul>{performance.issues.map(x => <li key={x}>{x}</li>)}</ul></div>}
+        <div className="op-kpis"><div className="a-kpi"><span className="lbl">Выкупы, шт.</span><b className="val n">{fact.future ? '—' : fmt(performance.qty)} <small>/ {fmt(planned.qty)}</small></b><span className="sub">{performance.complete ? 'Факт / план месяца' : 'Известный факт / план месяца'}</span></div><div className="a-kpi"><span className="lbl">Выполнение месяца</span><b className="val n">{pct(completed)}</b><Progress value={completed} /></div><div className="a-kpi"><span className="lbl">К темпу на {fact.to || '—'}</span><b className={`val n ${pace !== null && pace < 90 ? 'op-bad' : ''}`}>{pct(pace)}</b><span className="sub">Ожидалось {elapsed ? fmt(planned.qty * elapsed / daysInMonth, 1) : '—'} шт. к этой дате</span></div><div className="a-kpi"><span className="lbl">Поступление за выкуп</span><b className="val n">{fact.future ? '—' : rub(performance.mean)}</b><span className="sub">Цель {rub(planned.mean)} · отклонение {gapMean !== null && gapMean > 0 ? '+' : ''}{rub(gapMean)}</span></div></div>
+        <section className="a-card op-section"><h2>Результат по категориям</h2><p className="op-muted">В родительских строках учитываются только подкатегории с планом. Пустая категория не считается нулевым планом.</p><div className="op-scroll"><table className="op-table"><thead><tr><th>Категория</th><th>План, шт.</th><th>Факт, шт.</th><th>Месяц</th><th>К темпу</th><th>Цель за выкуп</th><th>Факт за выкуп</th></tr></thead><tbody>{[...new Set(rows.map(r => r.path.split(SEP)[0]))].filter(p => !path || inPath(path, p) || inPath(p, path)).flatMap(p => {
+          const children = rows.filter(r => inPath(r.path, p) && inPath(r.path, path));
+          const out = children.length > 1 || children[0]?.path !== p ? [{ key: p, children, parent: true }, ...children.map(r => ({ key: r.path, children: [r] }))] : children.map(r => ({ key: r.path, children: [r] }));
+          return out.map(r => { const t = total(r.children, shop), f = actual(fact, r.children, shop), done = f.complete && t.qty > 0 ? f.qty / t.qty * 100 : null; return <tr key={r.key} className={r.parent ? 'op-parent' : ''}><td className="op-name"><button className="op-link" onClick={() => setPath(r.key)}>{r.parent ? r.key : r.key.split(SEP).at(-1)}</button>{r.parent && <small>План задан: {r.children.length} из {paths.filter(x => inPath(x, r.key)).length}</small>}</td><td>{fmt(t.qty)}</td><td>{fact.future ? '—' : fmt(f.qty)}{!f.complete && !fact.future && <small>неполный факт</small>}</td><td>{pct(done)}</td><td>{pct(done !== null && elapsed ? done / (elapsed / daysInMonth) : null)}</td><td>{rub(t.mean)}</td><td>{fact.future ? '—' : rub(f.mean)}</td></tr>; });
+        })}</tbody></table></div></section>
+        <section className="a-card op-section"><h2>Распределение и результат по магазинам</h2><div className="op-scroll"><table className="op-table"><thead><tr><th>Магазин</th><th>План, шт.</th><th>Факт, шт.</th><th>Выполнение месяца</th><th>Цель за выкуп</th><th>Факт за выкуп</th></tr></thead><tbody>{SH.filter(s => !shop || s.id === shop).map(s => { const t = total(selectedRows, s.id), f = actual(fact, selectedRows, s.id); return <tr key={s.id}><td>{s.label}<small>{fact.shops[s.id]?.error || (fact.shops[s.id]?.partial ? 'Неполный период' : `Сбор ${stamp(fact.shops[s.id]?.updatedAt)}`)}</small></td><td>{fmt(t.qty)}</td><td>{fact.future ? '—' : fmt(f.qty)}</td><td>{pct(f.complete && t.qty > 0 ? f.qty / t.qty * 100 : null)}</td><td>{rub(t.mean)}</td><td>{fact.future ? '—' : rub(f.mean)}</td></tr>; })}</tbody></table></div></section>
+        {!!unplanned.length && <details className="a-card op-section"><summary>Без плана · {unplanned.length} категорий — исключены из выполнения</summary><p>{unplanned.join(' · ')}</p></details>}
+        <section className="a-card op-section"><h2>По дням · {path || 'Запланированные категории'} · {shop ? SH.find(s => s.id === shop)?.label : 'Весь Ozon'}</h2><p className="op-muted">Дневной план штук равномерный. Среднее поступление не суммируется по дням.</p><div className="op-scroll"><table className="op-table op-days"><thead><tr><th>Показатель</th>{Array.from({ length: daysInMonth }, (_, i) => <th key={i}>{i + 1}.{month.slice(5)}</th>)}</tr></thead><tbody>{['План выкупов, шт.', 'Факт выкупов, шт.', 'Выполнение дня', 'Цель за выкуп, ₽', 'Факт за выкуп, ₽'].map((label, k) => <tr key={label}><td>{label}</td>{Array.from({ length: daysInMonth }, (_, i) => { const date = `${month}-${String(i + 1).padStart(2, '0')}`, f = actual(fact, selectedRows, shop, '', date), available = fact.to && date <= fact.to, dayPlan = planned.qty / daysInMonth; const v = k === 0 ? fmt(dayPlan, 1) : k === 1 ? fmt(f.qty) : k === 2 ? pct(f.complete && dayPlan > 0 ? f.qty / dayPlan * 100 : null) : k === 3 ? rub(planned.mean) : rub(f.mean); return <td key={date} className={k === 2 && available && f.complete ? (f.qty >= dayPlan ? 'op-good' : 'op-bad') : ''}>{k === 0 || k === 3 || available ? v : '—'}</td>; })}</tr>)}</tbody></table></div></section>
+      </>}
+    </>}
+    <details className="a-card op-section"><summary>История общего плана · {state.versions.length} версий</summary>{!state.versions.length && <p className="op-muted">Версии появятся после первой фиксации.</p>}{state.versions.slice().reverse().map(v => <div className="op-history" key={v.id}><div><b>{stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</b><small>{v.basis.from} — {v.basis.to} · {v.basis.source === 'fact' ? 'факт' : 'прогноз'} · {v.targets.length} категорий{v.note ? ` · ${v.note}` : ''}</small></div><button className="a-btn" onClick={() => { setVersion(v.id); setMode('actual'); }}>Посмотреть выполнение</button><button className="a-btn" onClick={() => { setTargets(Object.fromEntries(v.targets.map(t => [t.path, { ...t }]))); setPeriod({ from: v.basis.from, to: v.basis.to }); setSource(v.basis.source); setPreview(null); setMode('plan'); setNotice('Цели выбранной версии открыты как черновик. Действующая версия не изменена.'); }}>Взять в черновик</button></div>)}</details>
+    <details className="a-card op-section" open={showArchive} onToggle={e => setShowArchive(e.currentTarget.open)}><summary>Прежние планы кабинетов · {state.legacy?.length || 0} · сохранены без изменений</summary><p className="op-muted">Это независимые планы старой страницы. Они не складываются с общим планом автоматически. Для другого месяца измените месяц вверху.</p>{state.legacy?.map(x => <div key={x.shop}><h3>{SH.find(s => s.id === x.shop)?.label || x.shop}</h3><div className="op-scroll"><table className="op-table"><thead><tr><th>Строка</th><th>Выкупы, шт.</th><th>Поступление за выкуп</th><th>Другие сохранённые метрики</th></tr></thead><tbody>{Object.entries(x.plan).map(([p, t]) => <tr key={p}><td>{p}</td><td>{fmt(t.salesQty)}</td><td>{rub(t.payout)}</td><td>{Object.entries(t).filter(([k]) => !['salesQty', 'payout'].includes(k)).map(([k, v]) => `${({ orders: 'Заказы, шт.', revenue: 'Заказы, ₽', sales: 'Выкупы, ₽', profit: 'Прибыль, ₽', margin: 'Маржа, %' })[k] || k}: ${fmt(v)}`).join(' · ')}</td></tr>)}</tbody></table></div></div>)}</details>
+  </div>;
 }

@@ -130,14 +130,13 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
 }
 
 // GET /api/sales/data?cabinet=defly&dateFrom=&dateTo=&compare=1
-router.get('/data', async (req, res) => {
-  try {
+async function loadSales(params = {}, onTiming) {
     await ensureSchema();
-    const cabinet = req.query.cabinet || 'defly';
-    const { from, to } = period(req.query);
+    const cabinet = params.cabinet || 'defly';
+    const { from, to } = period(params);
     const dates = [];
     for (let d = dayjs(from); !d.isAfter(to, 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
-    const compare = req.query.compare === '1';
+    const compare = params.compare === '1';
     const pFrom = dayjs(from).subtract(dates.length, 'day').format('YYYY-MM-DD');
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
     const adFrom = compare ? pFrom : from;
@@ -302,21 +301,18 @@ router.get('/data', async (req, res) => {
       prev = [...acc.values()].map(p => p.map((v, i) => (i === 5 || i === 6) ? r2(v) : v));
     }
 
-    res.set('Server-Timing', `queries;dur=${tQ - t0}, compute;dur=${Date.now() - tQ}`);
-    res.json({
-      success: true,
-      data: {
+    onTiming?.(`queries;dur=${tQ - t0}, compute;dur=${Date.now() - tQ}`);
+    return {
         dates, articles, rows: outRows, stock, prev,
         // Самовыкупы по дню заказа: [ai, di, шт, ₽] (уже вычтены из заказов).
         self: selfRows.map(x => { const o = offerOf(x); const d = di.get(x.date); return o && idx.has(o) && d !== undefined ? [idx.get(o), d, x.q, r2(x.r)] : null; }).filter(Boolean),
         unallocated: { cur: r2(unallocatedCur), prev: r2(unallocatedPrev), byDate: unallocatedByDate },
         order: ORDER[cabinet] || [],
-      },
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ success: false, error: e.message });
-  }
+    };
+}
+router.get('/data', async (req, res) => {
+  try { res.json({ success: true, data: await loadSales(req.query, timing => res.set('Server-Timing', timing)) }); }
+  catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
 // GET /api/sales/summary?dateFrom=&dateTo= — заказы по магазинам Ozon (без самовыкупов):
@@ -603,3 +599,5 @@ router.post('/costs', async (req, res) => {
 
 module.exports = router;
 module.exports.allocateAds = allocateAds;
+
+module.exports.loadSales = loadSales;
