@@ -1,271 +1,269 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinanceCoefs, getFinancePnl, getPlan, savePlan } from '../api';
-import { fmtInt, CAT_COLORS, useTip } from './AdsStats2';
-import { unitCoefs, unitProfit } from './unitModel';
-import { useCats, Kpi, pct1, useTax, useBuyerShare, SEP, OTHER } from './finShared';
+import { getSalesData, getFinancePnl, getPlan, savePlan } from '../api';
+import { fmtInt } from './AdsStats2';
+import { useCats, useGroups, pct1, SEP } from './finShared';
 import './ads2.css';
 import './sales.css';
 
 // ─────────────────────────────────────────────────────────────────────────
-// «План / факт» по месяцу: план задаётся на весь кабинет и на категории
-// (два уровня), по метрикам: заказы ₽, заказы шт, выкупы ₽, прибыль
-// (прогноз от заказов — как в «Юнит-экономике»).
-//   Темп — факт к плану, пропорциональному прошедшим дням месяца.
-//   Прогноз на конец месяца — факт + средний день последних 7 дней ×
-//   оставшиеся дни. «Нужно в день» — чтобы выйти на план.
+// «План / факт» на месяц. План задаётся на весь кабинет, категории,
+// подкатегории и свои группы (группы «Рекламы»): штуки и средняя сумма
+// поступления на счёт за выкуп. Сверху — сводка с полосами выполнения,
+// ниже — по дням выбранной строки: план, факт, выполнение.
+//   Штуки: план дня = план месяца / дней в месяце; «к темпу» — факт к плану
+//   на прошедшие дни. Поступление — средняя величина: план = целевое значение.
+// Набор метрик — конструктор: потом сюда добавятся чистая прибыль и маржа.
 // ─────────────────────────────────────────────────────────────────────────
 
-const METRICS = [['revenue', 'Заказы, ₽'], ['orders', 'Заказы, шт'], ['sales', 'Выкупы, ₽'], ['salesQty', 'Выкупы, шт'], ['payout', 'Ср. поступление на 1 выкуп, ₽'], ['profit', 'Прогнозируемая прибыль, ₽']];
-const FIN = ['sales', 'salesQty', 'payout']; // метрики из финансового отчёта Ozon (по дню выкупа)
-const RATIO = { payout: true }; // средние величины: не суммируются, план — целевое значение
-const QTY = { orders: true, salesQty: true };
+const METRICS = [
+  { k: 'salesQty', t: 'Выкупы, шт', short: 'Выкупы', fin: true, sum: true },
+  { k: 'orders', t: 'Заказы, шт', short: 'Заказы', sum: true },
+  { k: 'payout', t: 'Ср. поступ. на счёт за выкуп, ₽', short: 'Ср. поступ. на счёт', fin: true, rub: true },
+  { k: 'profit', t: 'Чистая прибыль, ₽', soon: true },
+  { k: 'margin', t: 'Маржинальность, %', soon: true },
+];
+const MD = Object.fromEntries(METRICS.map(m => [m.k, m]));
 const OZ = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other', 'ads'];
 const ALL = 'Все';
+const LS = 'mp-plan-mets';
+const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+const num = v => { const n = Number(String(v ?? '').replace(/\s/g, '').replace(',', '.')); return Number.isFinite(n) ? n : null; };
 
 export default function PlanFact({ cabinet }) {
-  const [month, setMonth] = useState(dayjs().format('YYYY-MM'));
-  const [metric, setMetric] = useState('revenue');
+  const today = dayjs();
+  const [month, setMonth] = useState(today.format('YYYY-MM'));
+  const [mets, setMets] = useState(() => { try { const v = JSON.parse(localStorage.getItem(LS)); if (Array.isArray(v) && v.length) return v.filter(k => MD[k] && !MD[k].soon); } catch (e) { /* ignore */ } return ['salesQty', 'payout']; });
+  useEffect(() => { try { localStorage.setItem(LS, JSON.stringify(mets)); } catch (e) { /* ignore */ } }, [mets]);
   const [sales, setSales] = useState(null);
   const [pnl, setPnl] = useState(null);
-  const [coefs, setCoefs] = useState(null);
   const [plan, setPlanState] = useState({});
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState('');
   const [open, setOpen] = useState(() => new Set());
-  const [tax] = useTax(cabinet);
-  const tip = useTip();
+  const [selKey, setSelKey] = useState(ALL);
+  const [pick, setPick] = useState(false);
   const saveTimer = useRef(null);
+  const grp = useGroups(cabinet);
 
   const mStart = dayjs(month + '-01'), mEnd = mStart.endOf('month');
-  const today = dayjs();
   const isCur = month === today.format('YYYY-MM');
   const D = mEnd.date();
+  const elapsed = isCur ? Math.max(0.5, today.date() - 1 + today.hour() / 24) : (month < today.format('YYYY-MM') ? D : 0);
 
-  const load = useCallback(() => {
-    setLoading(true); setError(null);
-    const to = (isCur ? today : mEnd).format('YYYY-MM-DD');
-    Promise.all([
-      getSalesData(cabinet, { dateFrom: mStart.format('YYYY-MM-DD'), dateTo: to }),
-      getPlan(cabinet, month),
-    ]).then(([s, p]) => { setSales(s.data.data); setPlanState(p.data.data || {}); })
-      .catch(e => setError(e.response?.data?.error || e.message))
-      .finally(() => setLoading(false));
-  }, [cabinet, month]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => { if (metric === 'profit' && !coefs) getFinanceCoefs(cabinet).then(r => setCoefs(r.data.data)).catch(() => {}); }, [metric, cabinet, coefs]);
   useEffect(() => {
-    if (!FIN.includes(metric)) return;
-    const to = (isCur ? today : mEnd).format('YYYY-MM-DD');
-    getFinancePnl(cabinet, { dateFrom: mStart.format('YYYY-MM-DD'), dateTo: to }).then(r => setPnl(r.data.data)).catch(() => {});
-  }, [metric, cabinet, month]); // eslint-disable-line react-hooks/exhaustive-deps
+    setSales(null); setPnl(null); setError(null);
+    const from = mStart.format('YYYY-MM-DD'), to = (isCur ? today : mEnd).format('YYYY-MM-DD');
+    Promise.all([getSalesData(cabinet, { dateFrom: from, dateTo: to }), getPlan(cabinet, month)])
+      .then(([s, p]) => { setSales(s.data.data); setPlanState(p.data.data || {}); })
+      .catch(e => setError(e.response?.data?.error || e.message));
+    getFinancePnl(cabinet, { dateFrom: from, dateTo: to }).then(r => setPnl(r.data.data)).catch(() => setPnl(false));
+  }, [cabinet, month]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cats = useCats(sales?.articles, sales?.order);
-  const bs = useBuyerShare(cabinet, cats.arts);
-  const K = useMemo(() => (coefs ? unitCoefs(coefs, cats.arts, bs.shareOf) : null), [coefs, cats.arts, bs.shareOf]);
+  const byOffer = useMemo(() => new Map(cats.arts.map(a => [a.o, a.i])), [cats.arts]);
 
-  // Факт по дням месяца для каждого артикула и выбранной метрики.
-  const dayIdx = useMemo(() => { const m = new Map(); (sales?.dates || []).forEach(d => m.set(d, dayjs(d).date() - 1)); return m; }, [sales]);
-  const perArt = useMemo(() => {
-    if (!sales) return [];
-    const P = cats.arts.map(() => new Float64Array(D));
-    if (FIN.includes(metric)) {
-      if (!pnl) return P;
-      const byOffer = new Map(cats.arts.map(a => [a.o, a.i]));
-      // payout: P — поступления (выкупы + удержания Ozon), Q — выкупленные штуки.
-      const Q = metric === 'payout' ? cats.arts.map(() => new Float64Array(D)) : null;
-      const S = metric === 'payout' ? cats.arts.map(() => new Float64Array(D)) : null;
-      const saleDay = new Float64Array(D), noSkuDay = new Float64Array(D);
+  // Факт по дням месяца для каждого артикула: { metric: { n: [ai][d], q: [ai][d] } } (q — знаменатель средних).
+  const fact = useMemo(() => {
+    if (!sales) return null;
+    const N = cats.arts.length, mk = () => Array.from({ length: N }, () => new Float64Array(D));
+    const out = { orders: { n: mk() }, salesQty: { n: mk() }, payout: { n: mk(), q: mk() } };
+    for (const r of sales.rows) { const d = dayjs(sales.dates[r[1]]).date() - 1; if (d >= 0 && d < D) out.orders.n[r[0]][d] += r[5]; }
+    if (pnl) {
+      const S = mk(), saleDay = new Float64Array(D), noSkuDay = new Float64Array(D);
       for (const [pai, pd, b, a, q] of pnl.rows) {
-        const k = pnl.buckets[b];
-        const ai = byOffer.get(pnl.articles[pai]?.o), d = dayjs(pnl.dates[pd]).date() - 1;
+        const k = pnl.buckets[b], ai = byOffer.get(pnl.articles[pai]?.o), d = dayjs(pnl.dates[pd]).date() - 1;
         if (ai === undefined || d < 0 || d >= D) continue;
-        const sign = k === 'return' ? -1 : 1;
         if (k === 'sale' || k === 'return') {
-          if (metric === 'sales') P[ai][d] += a;
-          else if (metric === 'salesQty') P[ai][d] += sign * Math.abs(q || 0);
-          else { P[ai][d] += a; S[ai][d] += a; Q[ai][d] += sign * Math.abs(q || 0); saleDay[d] += a; }
-        } else if (metric === 'payout' && OZ.includes(k)) P[ai][d] += a;
+          const qty = (k === 'return' ? -1 : 1) * Math.abs(q || 0);
+          out.salesQty.n[ai][d] += qty; out.payout.q[ai][d] += qty;
+          out.payout.n[ai][d] += a; S[ai][d] += a; saleDay[d] += a;
+        } else if (OZ.includes(k)) out.payout.n[ai][d] += a;
       }
-      if (metric === 'payout') {
-        // Удержания без артикула — пропорционально выкупам дня.
-        for (const [pd, b, a] of pnl.noSku || []) { const d = dayjs(pnl.dates[pd]).date() - 1; if (d >= 0 && d < D && OZ.includes(pnl.buckets[b])) noSkuDay[d] += a; }
-        for (let i = 0; i < cats.arts.length; i++) for (let d = 0; d < D; d++) {
-          if (saleDay[d] > 0 && S[i][d] > 0) P[i][d] += noSkuDay[d] * S[i][d] / saleDay[d];
-        }
-        P.den = Q;
-      }
-      return P;
-    }
-    for (const r of sales.rows) {
-      const d = dayIdx.get(sales.dates[r[1]]); if (d === undefined) continue;
-      if (metric === 'revenue') P[r[0]][d] += r[6];
-      else if (metric === 'orders') P[r[0]][d] += r[5];
-      else if (metric === 'profit' && K) P[r[0]][d] += unitProfit(K[r[0]], { ordRub: r[6], ordQty: r[5], ads: (r[7] || 0) + (r[8] || 0) }, tax).profit;
-    }
-    return P;
-  }, [sales, pnl, cats.arts, metric, K, tax, D, dayIdx]);
-
-  // Узлы: Все → категории → подкатегории.
-  const nodes = useMemo(() => {
-    const out = [{ key: ALL, name: 'Весь кабинет', depth: 0, arts: cats.arts }];
-    for (const t of cats.topCats) {
-      out.push({ key: t, name: t, depth: 1, top: t, arts: cats.arts.filter(a => a.parts[0] === t) });
-      for (const k of cats.childrenOf(t)) out.push({ key: t + SEP + k, name: k, depth: 2, top: t, parent: t, arts: cats.arts.filter(a => a.parts[0] === t && a.parts[1] === k) });
+      // Удержания без артикула — по доле выкупов дня (как в «P&L»).
+      for (const [pd, b, a] of pnl.noSku || []) { const d = dayjs(pnl.dates[pd]).date() - 1; if (d >= 0 && d < D && OZ.includes(pnl.buckets[b])) noSkuDay[d] += a; }
+      for (let i = 0; i < N; i++) for (let d = 0; d < D; d++) if (saleDay[d] > 0 && S[i][d] > 0) out.payout.n[i][d] += noSkuDay[d] * S[i][d] / saleDay[d];
     }
     return out;
-  }, [cats]);
+  }, [sales, pnl, cats.arts, byOffer, D]);
 
-  const elapsed = isCur ? Math.max(0.5, today.date() - 1 + today.hour() / 24) : (month < today.format('YYYY-MM') ? D : 0);
-  const lastFull = isCur ? today.date() - 1 : D; // полных дней прошло
-  const calc = useCallback(node => {
-    const day = new Float64Array(D);
-    for (const a of node.arts) { const s = perArt[a.i]; if (s) for (let i = 0; i < D; i++) day[i] += s[i]; }
-    if (RATIO[metric]) {
-      // Средняя величина: факт — среднее за прошедшие дни, прогноз = факт.
-      const den = new Float64Array(D);
-      for (const a of node.arts) { const q = perArt.den?.[a.i]; if (q) for (let i = 0; i < D; i++) den[i] += q[i]; }
-      const sn = day.reduce((s, v) => s + v, 0), sd = den.reduce((s, v) => s + v, 0);
-      const fact = sd > 0 ? sn / sd : null;
-      const p = plan[node.key]?.[metric];
-      const planned = p !== undefined ? p : null;
-      const r = planned && fact !== null ? fact / planned * 100 : null;
-      return { ratio: true, day, den, fact, forecast: fact, rate: fact, planned, pace: r, done: r, fc: r, need: null };
+  // Строки: весь кабинет → категории → подкатегории; отдельно — свои группы.
+  const nodes = useMemo(() => {
+    const out = [{ key: ALL, name: 'Весь кабинет', depth: 0, arts: cats.arts }];
+    const tops = [...cats.topCats].sort((x, y) => (y === 'Чехлы') - (x === 'Чехлы'));
+    for (const t of tops) {
+      const kids = cats.childrenOf(t);
+      out.push({ key: t, name: t, depth: 1, kids: kids.length, arts: cats.arts.filter(a => a.parts[0] === t) });
+      for (const k of kids) out.push({ key: t + SEP + k, name: k, depth: 2, parent: t, arts: cats.arts.filter(a => a.parts[0] === t && a.parts[1] === k) });
     }
-    const fact = day.reduce((s, v) => s + v, 0);
+    const groups = (grp.list || []).map(g => ({ key: 'g:' + g.id, name: g.name, depth: 1, group: true, arts: cats.arts.filter(a => String(grp.members[a.o] || '') === String(g.id)) })).filter(g => g.arts.length);
+    return { cats: out, groups };
+  }, [cats, grp.list, grp.members]);
+
+  const lastFull = isCur ? today.date() - 1 : D;
+  const calc = useCallback((node, k) => {
+    const m = MD[k], F = fact?.[k];
+    const day = new Float64Array(D), den = new Float64Array(D);
+    if (F) for (const a of node.arts) { const s = F.n[a.i]; for (let i = 0; i < D; i++) day[i] += s[i]; if (F.q) { const q = F.q[a.i]; for (let i = 0; i < D; i++) den[i] += q[i]; } }
+    const planned = plan[node.key]?.[k] ?? null;
+    if (!m.sum) {
+      const sn = day.reduce((s, v) => s + v, 0), sd = den.reduce((s, v) => s + v, 0);
+      const f = sd > 0 ? sn / sd : null;
+      return { day, den, fact: f, planned, done: planned && f !== null ? f / planned * 100 : null, pace: planned && f !== null ? f / planned * 100 : null };
+    }
+    const f = day.reduce((s, v) => s + v, 0);
     const w = Math.min(7, lastFull);
-    const rate = w > 0 ? day.slice(lastFull - w, lastFull).reduce((s, v) => s + v, 0) / w : (elapsed > 0 ? fact / elapsed : 0);
-    const factFull = day.slice(0, lastFull).reduce((s2, v) => s2 + v, 0);
-    const forecast = isCur ? factFull + rate * Math.max(0, D - lastFull) : fact;
-    const p = plan[node.key]?.[metric];
-    const planned = p !== undefined ? p : null;
-    const pace = planned ? fact / (planned * elapsed / D) * 100 : null;
-    const need = planned && isCur && D - elapsed > 0 ? Math.max(0, (planned - fact) / (D - elapsed)) : null;
-    return { day, fact, forecast, rate, planned, pace, done: planned ? fact / planned * 100 : null, fc: planned ? forecast / planned * 100 : null, need };
-  }, [perArt, plan, metric, D, elapsed, lastFull, isCur, today]);
+    const rate = w > 0 ? day.slice(lastFull - w, lastFull).reduce((s, v) => s + v, 0) / w : 0;
+    const forecast = isCur ? day.slice(0, lastFull).reduce((s, v) => s + v, 0) + rate * Math.max(0, D - lastFull) : f;
+    return {
+      day, fact: f, planned, forecast, perDay: planned ? planned / D : null,
+      done: planned ? f / planned * 100 : null, pace: planned && elapsed > 0 ? f / (planned * elapsed / D) * 100 : null,
+      fc: planned ? forecast / planned * 100 : null, need: planned && isCur && D - elapsed > 0 ? Math.max(0, (planned - f) / (D - elapsed)) : null,
+    };
+  }, [fact, plan, D, lastFull, isCur, elapsed]);
 
-  const rows = useMemo(() => nodes.map(n => ({ ...n, ...calc(n) })), [nodes, calc]);
-  const total = rows[0];
-
-  const setPlan = (k, v) => {
-    const next = { ...plan, [k]: { ...(plan[k] || {}), [metric]: v === '' ? undefined : Number(String(v).replace(/\s/g, '').replace(',', '.')) } };
-    if (v === '') delete next[k][metric];
+  const setPlan = (key, k, v) => {
+    const n = num(v);
+    const next = { ...plan, [key]: { ...(plan[key] || {}) } };
+    if (v === '' || n === null) delete next[key][k]; else next[key][k] = n;
     setPlanState(next); setSaved('сохраняю…');
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => savePlan(cabinet, month, next).then(() => setSaved('сохранено')).catch(e => setSaved(`ошибка: ${e.message}`)), 700);
   };
-  const copyPrev = () => {
-    getPlan(cabinet, mStart.subtract(1, 'month').format('YYYY-MM')).then(r => {
-      const p = r.data.data || {};
-      if (!Object.keys(p).length) { setSaved('в прошлом месяце плана нет'); return; }
-      setPlanState(p); savePlan(cabinet, month, p).then(() => setSaved('скопировано из прошлого месяца'));
-    });
-  };
-  // Раскидать план «Весь кабинет» по категориям пропорционально факту месяца.
-  const spread = () => {
-    const tp = plan[ALL]?.[metric]; if (!tp || !total.fact) return;
-    const next = { ...plan };
-    // Средняя величина (поступление на 1 выкуп) — та же цель для всех категорий.
-    for (const r of rows) if (r.depth > 0) next[r.key] = { ...(next[r.key] || {}), [metric]: RATIO[metric] ? tp : Math.round(tp * r.fact / total.fact) };
-    setPlanState(next); savePlan(cabinet, month, next).then(() => setSaved('распределено по доле факта'));
-  };
+  const copyPrev = () => getPlan(cabinet, mStart.subtract(1, 'month').format('YYYY-MM')).then(r => {
+    const p = r.data.data || {};
+    if (!Object.keys(p).length) { setSaved('в прошлом месяце плана нет'); return; }
+    setPlanState(p); savePlan(cabinet, month, p).then(() => setSaved('скопировано из прошлого месяца'));
+  });
 
-  if (loading && !sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
-  if (error && !sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
+  if (error && !sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить: {error}</div></div>;
+  if (!sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
 
-  const fmtM = v => (v === null || v === undefined || !Number.isFinite(v) ? '—' : QTY[metric] ? fmtInt(v) : `${fmtInt(v)} ₽`);
-  const pill = v => (v === null ? <span className="muted">—</span> : <span className={`pill ${v >= 100 ? 'g' : v >= 90 ? 'w' : 'b'}`}>{pct1(v)}</span>);
+  const shown = mets.map(k => MD[k]).filter(Boolean);
+  const fmtV = (m, v) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : m.rub ? `${fmtInt(v)} ₽` : fmtInt(v));
+  const cls = p => (p === null || p === undefined ? '' : p >= 100 ? 'g' : p >= 90 ? 'w' : 'b');
   const months = []; for (let i = -3; i <= 2; i++) months.push(today.add(i, 'month').format('YYYY-MM'));
-  const shownRows = rows.filter(r => r.depth < 2 || open.has(r.parent));
-  const loadingMetric = (FIN.includes(metric) && !pnl) || (metric === 'profit' && !coefs);
+  const finWait = shown.some(m => m.fin) && pnl === null;
+
+  // Полоса выполнения: заливка — факт / план месяца, риска — где нужно быть сегодня.
+  const Bar = ({ m, c }) => {
+    if (!c.planned) return <span className="muted">план не задан</span>;
+    const p = m.sum ? c.done : c.pace;
+    const mark = m.sum && isCur ? Math.min(100, elapsed / D * 100) : null;
+    const tipText = m.sum ? `Выполнено ${pct1(c.done)} плана месяца · к темпу ${pct1(c.pace)}${c.need !== null && c.need !== undefined ? ` · нужно ${fmtInt(c.need)} в день` : ''} · прогноз на конец месяца ${fmtInt(c.forecast)} (${pct1(c.fc)})` : `Факт ${fmtV(m, c.fact)} при плане ${fmtV(m, c.planned)}`;
+    return (
+      <div className="pf-bar" title={tipText}>
+        <div className="pf-track"><i className={cls(m.sum ? c.pace : p)} style={{ width: `${Math.min(100, Math.max(0, p || 0))}%` }} />{mark !== null && <b style={{ left: `${mark}%` }} />}</div>
+        <span className={`pf-pct ${cls(m.sum ? c.pace : p)}`}>{pct1(m.sum ? c.pace : p)}</span>
+      </div>
+    );
+  };
+
+  const row = n => (
+    <tr key={n.key} className={`pf-r d${n.depth} ${selKey === n.key ? 'on' : ''}`}>
+      <td className="pf-name" onClick={() => setSelKey(n.key)} title="Показать по дням">
+        <span style={{ paddingLeft: n.depth === 2 ? 22 : 0 }}>
+          {n.depth === 1 && n.kids > 0 && <button type="button" className={`pf-chev ${open.has(n.key) ? 'on' : ''}`} onClick={e => { e.stopPropagation(); setOpen(s => { const x = new Set(s); x.has(n.key) ? x.delete(n.key) : x.add(n.key); return x; }); }}>▶</button>}
+          {n.group && <span className="pf-dot" style={{ background: grp.colors?.[n.key.slice(2)] || 'var(--a-accent)' }} />}
+          {n.name}<small>{n.arts.length} арт.</small>
+        </span>
+      </td>
+      {shown.map(m => { const c = calc(n, m.k); return (
+        <React.Fragment key={m.k}>
+          <td className="pf-in"><input inputMode="decimal" value={plan[n.key]?.[m.k] ?? ''} placeholder="план" onChange={e => setPlan(n.key, m.k, e.target.value)} onClick={e => e.stopPropagation()} /></td>
+          <td className="n r pf-fact">{finWait && m.fin ? '…' : fmtV(m, c.fact)}</td>
+          <td className="pf-barc">{finWait && m.fin ? '' : <Bar m={m} c={c} />}</td>
+        </React.Fragment>
+      ); })}
+    </tr>
+  );
+
+  const sel = [...nodes.cats, ...nodes.groups].find(n => n.key === selKey) || nodes.cats[0];
+  const days = Array.from({ length: D }, (_, i) => mStart.add(i, 'day'));
+  const isFuture = i => isCur ? i >= today.date() : month > today.format('YYYY-MM');
 
   return (
     <div className="mpui sa-page">
-      <div className="page-sticky"><div className="a-top">
-        <h1>План / факт</h1>
-        <span className="a-seg">{months.map(m => <button key={m} type="button" className={month === m ? 'on' : ''} onClick={() => setMonth(m)}>{dayjs(m + '-01').format('MMM YY')}</button>)}</span>
-        <span className="a-seg">{METRICS.map(([k, l]) => <button key={k} type="button" className={metric === k ? 'on' : ''} onClick={() => setMetric(k)}>{l}</button>)}</span>
-        {loading || loadingMetric ? <span className="a-hint">обновляем…</span> : saved && <span className="a-hint">{saved}</span>}
-      </div></div>
-
-      <div className="a-kpis s-kpis">
-        <Kpi label={total.ratio ? 'План (среднее за месяц)' : 'План на месяц'} value={fmtM(total.planned)} sub={total.ratio ? 'целевое значение' : total.planned ? `${D} дн · ${fmtM(total.planned / D)} в день` : 'задайте план в таблице ниже'} />
-        <Kpi label={`Факт за ${Math.floor(elapsed)} из ${D} дн`} value={fmtM(total.fact)} sub={<span>выполнено {pill(total.done)}</span>} />
-        <Kpi label="Темп" value={total.pace === null ? '—' : pct1(total.pace)} sub={total.ratio ? 'факт к цели' : 'факт к плану на сегодняшний день месяца'} />
-        <Kpi label="Прогноз на конец месяца" value={fmtM(total.forecast)} sub={<span>{total.planned ? <>{pill(total.fc)} плана · </> : null}{total.ratio ? 'среднее за прошедшие дни' : total.need !== null ? `нужно ${fmtM(total.need)} в день` : `средний день ${fmtM(total.rate)}`}</span>} />
-      </div>
-
-      <div className="a-card s-card">
-        <div className="a-bar" style={{ marginBottom: 6 }}><b style={{ fontSize: 14 }}>{total.ratio ? 'Среднее с начала месяца' : 'Нарастающим итогом'}</b><span className="a-hint">{total.ratio ? 'среднее поступление на 1 выкуп с начала месяца и цель' : 'факт, план (ровно по дням) и прогноз по темпу последних 7 дней'}</span></div>
-        <Cumulative row={total} D={D} elapsed={elapsed} isCur={isCur} fmtM={fmtM} tip={tip} month={mStart} />
-      </div>
-
-      <div className="a-card">
-        <div className="a-bar" style={{ padding: '12px 14px 4px' }}>
-          <b style={{ fontSize: 14 }}>План по категориям</b>
-          <span className="a-hint">введите план в колонке «План» — сохраняется сам</span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-            <button type="button" className="a-btn ghost" onClick={copyPrev}>Скопировать прошлый месяц</button>
-            <button type="button" className="a-btn ghost" onClick={spread} disabled={!plan[ALL]?.[metric]} title="План «Весь кабинет» раскидать по категориям пропорционально их доле в факте месяца">Распределить по категориям</button>
+      <div className="page-sticky">
+        <div className="a-top">
+          <h1>План / факт</h1>
+          <span className="a-seg">{months.map(m => <button key={m} type="button" className={month === m ? 'on' : ''} onClick={() => setMonth(m)}>{dayjs(m + '-01').format('MMM YY')}</button>)}</span>
+          <span className="tb-tplwrap">
+            <button type="button" className="a-btn" onClick={() => setPick(p => !p)}>Метрики · {shown.length} ▾</button>
+            {pick && (
+              <div className="tb-tplpop" style={{ minWidth: 280 }} onMouseLeave={() => setPick(false)}>
+                {METRICS.map(m => (
+                  <label key={m.k} className="tb-chk" style={{ display: 'flex', padding: '3px 0', opacity: m.soon ? 0.5 : 1 }} title={m.soon ? 'Добавим позже' : undefined}>
+                    <input type="checkbox" disabled={m.soon} checked={mets.includes(m.k)} onChange={e => setMets(x => (e.target.checked ? METRICS.map(y => y.k).filter(k => x.includes(k) || k === m.k) : x.filter(k => k !== m.k)))} />
+                    {m.t}{m.soon ? <small className="muted" style={{ marginLeft: 6 }}>скоро</small> : null}
+                  </label>
+                ))}
+              </div>
+            )}
           </span>
+          <button type="button" className="a-btn ghost" onClick={copyPrev}>Скопировать план прошлого месяца</button>
+          {saved && <span className="a-hint" style={{ margin: 0 }}>{saved}</span>}
         </div>
+      </div>
+
+      <div className="a-card" style={{ padding: 0 }}>
         <div className="a-scroll">
-          <table className="a-t s-tree">
-            <thead><tr><th>Категория</th><th className="r">План</th><th className="r">Факт</th><th className="r">Выполнено</th><th className="r">Темп</th><th className="r">Прогноз</th><th className="r">Прогноз к плану</th><th className="r">Нужно в день</th></tr></thead>
+          <table className="a-t pf-t no-sh">
+            <thead>
+              <tr>
+                <th className="l" rowSpan={2}>Категория / группа</th>
+                {shown.map(m => <th key={m.k} colSpan={3} className="pf-mh">{m.t}</th>)}
+              </tr>
+              <tr>
+                {shown.map(m => (
+                  <React.Fragment key={m.k}>
+                    <th className="r">План {m.sum ? 'на месяц' : ''}</th>
+                    <th className="r">Факт {m.sum ? (isCur ? 'на сегодня' : 'за месяц') : ''}</th>
+                    <th className="l" title={m.sum ? 'Полоса — доля плана месяца; риска — где нужно быть сегодня; число — выполнение к темпу' : 'Факт к плану'}>{m.sum ? 'Выполнение · к темпу' : 'Выполнение'}</th>
+                  </React.Fragment>
+                ))}
+              </tr>
+            </thead>
             <tbody>
-              {shownRows.map(r => (
-                <tr key={r.key} className={`row ${r.depth === 0 ? 's-total' : r.depth === 1 ? 's-cat d0' : ''} ${open.has(r.key) ? 'open' : ''}`}>
-                  <td>
-                    <div className="a-art" style={{ paddingLeft: r.depth === 2 ? 26 : 0, cursor: r.depth === 1 ? 'pointer' : 'default' }}
-                      onClick={() => r.depth === 1 && setOpen(p => { const n = new Set(p); n.has(r.key) ? n.delete(r.key) : n.add(r.key); return n; })}>
-                      {r.depth === 1 && <span className="a-chev">▶</span>}
-                      {r.depth > 0 && <i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(r.top)] || OTHER }} />}
-                      <span className={r.depth < 2 ? 's-cname' : ''}>{r.name}</span>
-                    </div>
-                  </td>
-                  <td className="r"><input className="pf-in" inputMode="decimal" value={r.planned ?? ''} placeholder="—" onChange={e => setPlan(r.key, e.target.value)} /></td>
-                  <td className="n r">{fmtM(r.fact)}</td>
-                  <td className="r">{pill(r.done)}</td>
-                  <td className="r">{pill(r.pace)}</td>
-                  <td className="n r">{fmtM(r.forecast)}</td>
-                  <td className="r">{pill(r.fc)}</td>
-                  <td className="n r">{r.need !== null ? fmtM(r.need) : '—'}</td>
-                </tr>
-              ))}
+              {nodes.cats.filter(n => n.depth < 2 || open.has(n.parent)).map(row)}
+              {nodes.groups.length > 0 && <tr className="pf-sep"><td colSpan={1 + shown.length * 3}>Свои группы (из «Рекламы»)</td></tr>}
+              {nodes.groups.map(row)}
             </tbody>
           </table>
         </div>
       </div>
-      {tip.node}
-    </div>
-  );
-}
+      <div className="a-hint" style={{ margin: '6px 2px 14px' }}>
+        Впишите план в ячейки — сохраняется сам. Штуки — на весь месяц, поступление — целевая средняя сумма на счёт за один выкуп. Нажмите на название — ниже откроется по дням.
+        {shown.some(m => m.fin) ? ' Выкупы и поступление — по начислениям Ozon (по дню выкупа), за последние 1–2 дня они ещё неполные.' : ''}
+      </div>
 
-function Cumulative({ row, D, elapsed, isCur, fmtM, tip, month }) {
-  const w = 900, h = 230, pl = 64, pr = 14, pt = 12, pb = 24;
-  const cum = []; let s = 0, sd = 0; const last = isCur ? Math.ceil(elapsed) : D;
-  // Для средних величин — среднее с начала месяца, план — ровная линия.
-  for (let i = 0; i < D; i++) { s += row.day[i]; if (row.ratio) sd += row.den[i]; cum.push(i < last ? (row.ratio ? (sd > 0 ? s / sd : null) : s) : null); }
-  const fcEnd = row.ratio ? null : row.forecast;
-  const max = Math.max(1, row.planned || 0, fcEnd || 0, ...cum.filter(v => v !== null));
-  const x = i => pl + (i + 1) / D * (w - pl - pr), y = v => pt + (1 - v / max) * (h - pt - pb);
-  const factPath = cum.map((v, i) => (v === null ? '' : `${i === 0 || cum[i - 1] === null ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`)).join('');
-  const lastI = cum.reduce((m, v, i) => (v !== null ? i : m), -1);
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => t * max);
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 'auto', display: 'block' }} onMouseLeave={tip.hide}>
-      {ticks.map(v => <g key={v}><line x1={pl} x2={w - pr} y1={y(v)} y2={y(v)} stroke="var(--a-grid)" /><text x={pl - 6} y={y(v) + 3.5} textAnchor="end" fontSize="10" fill="var(--a-ink3)">{fmtInt(v)}</text></g>)}
-      {row.planned ? <line x1={pl} y1={y(row.ratio ? row.planned : 0)} x2={x(D - 1)} y2={y(row.planned)} stroke="var(--a-ink3)" strokeDasharray="5 4" strokeWidth="1.5" /> : null}
-      {row.planned ? <text x={x(D - 1)} y={y(row.planned) - 6} textAnchor="end" fontSize="11" fill="var(--a-ink2)">план {fmtM(row.planned)}</text> : null}
-      {isCur && !row.ratio && lastI >= 0 && <line x1={x(lastI)} y1={y(cum[lastI])} x2={x(D - 1)} y2={y(fcEnd)} stroke="var(--a-spend)" strokeDasharray="3 3" strokeWidth="2" />}
-      {isCur && !row.ratio && lastI >= 0 && <text x={x(D - 1)} y={y(fcEnd) + 14} textAnchor="end" fontSize="11" fill="var(--a-spend)">прогноз {fmtM(fcEnd)}</text>}
-      <path d={factPath} fill="none" stroke="var(--a-rev)" strokeWidth="2.5" />
-      {cum.map((v, i) => v === null ? null : (
-        <rect key={i} x={x(i) - (w - pl - pr) / D / 2} y={pt} width={(w - pl - pr) / D} height={h - pt - pb} fill="transparent"
-          onMouseMove={e => tip.show(e, <div><b>{month.date(i + 1).format('DD.MM')}</b>{row.ratio ? <div>среднее с начала месяца: {fmtM(v)}</div> : <><div>за день: {fmtM(row.day[i])}</div><div>с начала месяца: {fmtM(v)}</div></>}{row.planned ? <div className="muted">{row.ratio ? `цель: ${fmtM(row.planned)}` : `план к этому дню: ${fmtM(row.planned * (i + 1) / D)}`}</div> : null}</div>)} />
-      ))}
-      {[1, 8, 15, 22, D].map(d => <text key={d} x={x(d - 1)} y={h - 6} textAnchor="middle" fontSize="10" fill="var(--a-ink3)">{String(d).padStart(2, '0')}.{month.format('MM')}</text>)}
-    </svg>
+      <div className="a-card" style={{ padding: 0 }}>
+        <div className="a-bar" style={{ padding: '12px 14px 8px' }}><b style={{ fontSize: 14 }}>По дням · {sel.name}</b><span className="a-hint">план дня = план месяца / {D} дн.; факт подсвечен: зелёный — план дня выполнен, жёлтый — 90–100%, красный — меньше</span></div>
+        <div className="a-scroll pf-days">
+          <table className="a-t pf-dt no-sh">
+            <thead><tr>
+              <th className="l pf-dm">Метрика</th><th className="r pf-dtot">Месяц</th>
+              {days.map((d, i) => <th key={i} className={`r ${d.day() === 0 || d.day() === 6 ? 'we' : ''} ${isCur && i === today.date() - 1 ? 'today' : ''}`}><div>{d.format('DD')}</div><small>{WD[d.day()]}</small></th>)}
+            </tr></thead>
+            {shown.map(m => {
+              const c = calc(sel, m.k);
+              const dayPlan = m.sum ? c.perDay : c.planned;
+              const dayFact = i => (m.sum ? c.day[i] : c.den[i] > 0 ? c.day[i] / c.den[i] : null);
+              const dayPct = i => { const f = dayFact(i); return dayPlan && f !== null ? f / dayPlan * 100 : null; };
+              return (
+                <tbody key={m.k} className="pf-blk">
+                  <tr className="pf-bh"><td colSpan={2 + D}>{m.t}</td></tr>
+                  <tr><td className="pf-dm">План</td><td className="n r pf-dtot">{fmtV(m, c.planned)}</td>{days.map((_, i) => <td key={i} className="n r muted">{fmtV(m, dayPlan)}</td>)}</tr>
+                  <tr className="pf-factr"><td className="pf-dm">Факт</td><td className="n r pf-dtot">{fmtV(m, c.fact)}</td>
+                    {days.map((_, i) => { const p = dayPct(i); const fut = isFuture(i); return <td key={i} className={`n r ${fut ? 'muted' : `pf-c ${cls(p)}`}`}>{fut ? '' : finWait && m.fin ? '…' : fmtV(m, dayFact(i))}</td>; })}</tr>
+                  <tr><td className="pf-dm">Выполнение</td><td className={`n r pf-dtot pf-pct ${cls(m.sum ? c.pace : c.done)}`}>{m.sum ? (c.planned ? `${pct1(c.done)} · темп ${pct1(c.pace)}` : '—') : pct1(c.done)}</td>
+                    {days.map((_, i) => { const p = dayPct(i); return <td key={i} className={`n r pf-pct ${cls(p)}`}>{isFuture(i) ? '' : pct1(p)}</td>; })}</tr>
+                </tbody>
+              );
+            })}
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -450,3 +450,41 @@
 .mpui .f-drill-t tr.f-drill-sub td { font-size: 12px; color: var(--a-ink2); padding-left: 30px; background: var(--a-panel2); }
 .mpui .f-drill-t tfoot td { font-weight: 600; border-bottom: 0; }
 .mpui .f-chev { display: inline-block; width: 16px; font-size: 9px; color: var(--a-ink3); }
+/* План / факт */
+.mpui table.a-t.pf-t { min-width: 0; }
+.mpui .pf-t th.pf-mh { text-align: center; border-left: 1px solid var(--a-line); color: var(--a-ink); }
+.mpui .pf-t td, .mpui .pf-t th { padding: 7px 10px; }
+.mpui .pf-t td.pf-in, .mpui .pf-t th + th { border-left: 1px solid var(--a-line); }
+.mpui .pf-name { cursor: pointer; white-space: nowrap; }
+.mpui .pf-name small { color: var(--a-ink3); margin-left: 8px; font-size: 11.5px; }
+.mpui tr.pf-r.d0 td { font-weight: 700; background: var(--a-panel2); }
+.mpui tr.pf-r.d1 .pf-name { font-weight: 600; }
+.mpui tr.pf-r.d2 .pf-name { color: var(--a-ink2); }
+.mpui tr.pf-r.on td.pf-name { box-shadow: inset 3px 0 0 var(--a-ink2); }
+.mpui .pf-chev { border: 0; background: var(--a-panel2); color: var(--a-ink2); width: 18px; height: 18px; border-radius: 5px; font-size: 8px; cursor: pointer; margin-right: 6px; transition: transform .12s; }
+.mpui .pf-chev.on { transform: rotate(90deg); }
+.mpui .pf-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 7px; }
+.mpui .pf-in input { width: 92px; text-align: right; padding: 4px 7px; border: 1px solid var(--a-line2); border-radius: 6px; background: var(--a-panel); color: var(--a-ink); font: 600 12.5px var(--a-num); }
+.mpui .pf-in input::placeholder { font-weight: 400; color: var(--a-ink3); }
+.mpui .pf-fact { font-weight: 600; }
+.mpui .pf-barc { min-width: 170px; }
+.mpui .pf-bar { display: flex; align-items: center; gap: 8px; }
+.mpui .pf-track { position: relative; flex: 1; height: 10px; border-radius: 5px; background: var(--a-panel2); overflow: visible; min-width: 90px; }
+.mpui .pf-track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; background: var(--a-ink3); }
+.mpui .pf-track i.g { background: var(--a-good); } .mpui .pf-track i.w { background: var(--a-warn); } .mpui .pf-track i.b { background: var(--a-bad); }
+.mpui .pf-track b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--a-ink); border-radius: 1px; }
+.mpui .pf-pct { font: 600 12px var(--a-num); min-width: 52px; text-align: right; }
+.mpui .pf-pct.g { color: var(--a-good); } .mpui .pf-pct.w { color: var(--a-warn); } .mpui .pf-pct.b { color: var(--a-bad); }
+.mpui tr.pf-sep td { background: var(--a-panel2); color: var(--a-ink3); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 7px 10px; }
+.mpui table.a-t.pf-dt { min-width: 0; width: max-content; font-size: 12px; border-collapse: separate; border-spacing: 0; }
+.mpui .pf-dt td, .mpui .pf-dt th { padding: 4px 8px; white-space: nowrap; }
+.mpui .pf-dt th small { display: block; font-weight: 400; color: var(--a-ink3); font-size: 10.5px; }
+.mpui .pf-dt th.we div, .mpui .pf-dt th.we small { color: var(--a-bad); }
+.mpui .pf-dt th.today div { color: var(--a-accent); }
+.mpui .pf-dt .pf-dm { position: sticky; left: 0; z-index: 2; background: var(--a-panel); min-width: 110px; border-right: 1px solid var(--a-line); text-align: left; }
+.mpui .pf-dt .pf-dtot { position: sticky; left: 110px; z-index: 2; background: var(--a-panel2); min-width: 120px; font-weight: 600; border-right: 2px solid var(--a-line2); }
+.mpui .pf-dt tr.pf-bh td { background: var(--a-panel2); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--a-ink2); padding: 7px 10px; position: sticky; left: 0; }
+.mpui .pf-dt tr.pf-factr td { font-weight: 700; }
+.mpui .pf-dt td.pf-c.g { background: color-mix(in srgb, var(--a-good) 26%, transparent); }
+.mpui .pf-dt td.pf-c.w { background: color-mix(in srgb, var(--a-warn) 26%, transparent); }
+.mpui .pf-dt td.pf-c.b { background: color-mix(in srgb, var(--a-bad) 24%, transparent); }
