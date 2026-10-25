@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { getOzonPlan, getOzonPlanBasis, previewOzonPlan, fixOzonPlan, getOzonPlanExecution } from '../api';
 import { SHOPS } from '../lib/cabinets';
+import { planTotal as total } from '../lib/planEvaluation';
+import PlanExecution from './PlanExecution';
 import './ads2.css';
 import './plan.css';
 
@@ -15,36 +17,11 @@ const stamp = v => v ? new Date(v).toLocaleString('ru-RU') : '—';
 const readDraft = month => { try { return JSON.parse(localStorage.getItem(`mp-ozon-plan-draft:${month}`)); } catch { return null; } };
 const number = v => typeof v === 'string' ? Number(v.replace(/\s/g, '').replace(',', '.')) : Number(v);
 const inPath = (p, parent) => !parent || p === parent || p.startsWith(parent + SEP);
-function total(rows, shop = '') {
-  const items = rows.map(r => shop ? r.shops.find(s => s.id === shop) : r).filter(Boolean);
-  const qty = items.reduce((s, r) => s + r.qty, 0), amount = items.reduce((s, r) => s + r.amount, 0);
-  return { qty, amount, mean: qty > 0 ? amount / qty : null };
-}
 function draftRows(targets) {
   return Object.entries(targets).filter(([, t]) => t.qty !== '' && t.mean !== '' && t.qty !== undefined && t.mean !== undefined && Number.isFinite(number(t.qty)) && Number.isFinite(number(t.mean))).map(([path, t]) => ({ path, qty: number(t.qty), mean: number(t.mean), amount: number(t.qty) * number(t.mean) }));
 }
-function actual(fact, rows, shop = '', path = '', date = '') {
-  const paths = new Set(rows.filter(r => inPath(r.path, path)).map(r => r.path));
-  let qty = 0, payout = 0, knownShops = 0;
-  const issues = [];
-  for (const s of SH.filter(s => !shop || s.id === shop)) {
-    const f = fact?.shops?.[s.id];
-    if (!f || f.error || f.partial) issues.push(`${s.label}: ${f?.error || 'неполный период финансов'}`);
-    if (!f || f.error) continue;
-    knownShops++;
-    for (const p of paths) {
-      const r = f.byPath[p]; if (!r) continue;
-      const v = date ? r.days.find(d => d.date === date) : r;
-      if (v) { qty += v.qty; payout += v.payout; }
-    }
-  }
-  return { qty: knownShops ? qty : null, payout: knownShops ? payout : null, mean: qty > 0 ? payout / qty : null, issues, complete: !issues.length && !fact?.future };
-}
 function Input({ value, onChange, label, ...rest }) {
   return <input className="op-input n" aria-label={label} inputMode="decimal" value={value ?? ''} onChange={e => onChange(e.target.value)} {...rest} />;
-}
-function Progress({ value }) {
-  return <div className="op-progress"><i style={{ width: `${Math.min(100, Math.max(0, value || 0))}%` }} /><span>{pct(value)}</span></div>;
 }
 export default function PlanFact({ active = true }) {
   const [month, setMonth] = useState(dayjs().format('YYYY-MM'));
@@ -146,14 +123,6 @@ export default function PlanFact({ active = true }) {
   };
   if (!state || state.month !== month) return <div className="mpui op-page"><h1>План / факт · Ozon</h1><div className={loadError ? 'op-alert bad' : 'a-empty'}>{loadError || 'Загружаем общий план…'}</div>{loadError && <button className="a-btn" onClick={() => window.location.reload()}>Обновить страницу</button>}</div>;
   const rows = viewed?.rows || [];
-  const selectedRows = rows.filter(r => inPath(r.path, path));
-  const planned = total(selectedRows, shop), performance = actual(fact, rows, shop, path);
-  const daysInMonth = dayjs(month + '-01').daysInMonth();
-  const elapsed = fact?.to ? dayjs(fact.to).date() : 0;
-  const completed = performance.complete && planned.qty > 0 ? performance.qty / planned.qty * 100 : null;
-  const pace = performance.complete && planned.qty > 0 && elapsed > 0 ? performance.qty / (planned.qty * elapsed / daysInMonth) * 100 : null;
-  const unplanned = paths.filter(p => !rows.some(r => r.path === p));
-  const gapMean = performance.complete && performance.mean !== null && planned.mean !== null ? performance.mean - planned.mean : null;
   const displayRows = [];
   for (const top of tops) {
     const children = paths.filter(p => p.startsWith(top + SEP));
@@ -203,19 +172,7 @@ export default function PlanFact({ active = true }) {
       {!viewed && <div className="op-alert">Общий план ещё не зафиксирован. Заполните цели в «Планировании» и проверьте распределение.</div>}
       {factBusy && <div className="op-alert" role="status">Загружаем фактические результаты пяти магазинов…</div>}
       {factError && <div className="op-alert bad" role="alert">Не удалось загрузить факт: {factError}. Нулевые результаты не подставлены.</div>}
-      {fact && viewed && <>
-        {fact.future ? <div className="op-alert">Для этого месяца ещё нет полных финансовых дней с учётом задержки начислений.</div> : <p className="op-muted">Факт по {fact.to} включительно · обновлён {stamp(fact.asOf)}. Сравнение охватывает только запланированные подкатегории.</p>}
-        {!!performance.issues.length && !fact.future && <div className="op-alert warn"><b>Факт неполный. Проценты выполнения и темпа скрыты.</b><ul>{performance.issues.map(x => <li key={x}>{x}</li>)}</ul></div>}
-        <div className="op-kpis"><div className="a-kpi"><span className="lbl">Выкупы, шт.</span><b className="val n">{fact.future ? '—' : fmt(performance.qty)} <small>/ {fmt(planned.qty)}</small></b><span className="sub">{performance.complete ? 'Факт / план месяца' : 'Известный факт / план месяца'}</span></div><div className="a-kpi"><span className="lbl">Выполнение месяца</span><b className="val n">{pct(completed)}</b><Progress value={completed} /></div><div className="a-kpi"><span className="lbl">К темпу на {fact.to || '—'}</span><b className={`val n ${pace !== null && pace < 90 ? 'op-bad' : ''}`}>{pct(pace)}</b><span className="sub">Ожидалось {elapsed ? fmt(planned.qty * elapsed / daysInMonth, 1) : '—'} шт. к этой дате</span></div><div className="a-kpi"><span className="lbl">Поступление за выкуп</span><b className="val n">{fact.future ? '—' : rub(performance.mean)}</b><span className="sub">Цель {rub(planned.mean)} · отклонение {gapMean !== null && gapMean > 0 ? '+' : ''}{rub(gapMean)}</span></div></div>
-        <section className="a-card op-section"><h2>Результат по категориям</h2><p className="op-muted">В родительских строках учитываются только подкатегории с планом. Пустая категория не считается нулевым планом.</p><div className="op-scroll"><table className="op-table"><thead><tr><th>Категория</th><th>План, шт.</th><th>Факт, шт.</th><th>Месяц</th><th>К темпу</th><th>Цель за выкуп</th><th>Факт за выкуп</th></tr></thead><tbody>{[...new Set(rows.map(r => r.path.split(SEP)[0]))].filter(p => !path || inPath(path, p) || inPath(p, path)).flatMap(p => {
-          const children = rows.filter(r => inPath(r.path, p) && inPath(r.path, path));
-          const out = children.length > 1 || children[0]?.path !== p ? [{ key: p, children, parent: true }, ...children.map(r => ({ key: r.path, children: [r] }))] : children.map(r => ({ key: r.path, children: [r] }));
-          return out.map(r => { const t = total(r.children, shop), f = actual(fact, r.children, shop), done = f.complete && t.qty > 0 ? f.qty / t.qty * 100 : null; return <tr key={r.key} className={r.parent ? 'op-parent' : ''}><td className="op-name"><button className="op-link" onClick={() => setPath(r.key)}>{r.parent ? r.key : r.key.split(SEP).at(-1)}</button>{r.parent && <small>План задан: {r.children.length} из {paths.filter(x => inPath(x, r.key)).length}</small>}</td><td>{fmt(t.qty)}</td><td>{fact.future ? '—' : fmt(f.qty)}{!f.complete && !fact.future && <small>неполный факт</small>}</td><td>{pct(done)}</td><td>{pct(done !== null && elapsed ? done / (elapsed / daysInMonth) : null)}</td><td>{rub(t.mean)}</td><td>{fact.future ? '—' : rub(f.mean)}</td></tr>; });
-        })}</tbody></table></div></section>
-        <section className="a-card op-section"><h2>Распределение и результат по магазинам</h2><div className="op-scroll"><table className="op-table"><thead><tr><th>Магазин</th><th>План, шт.</th><th>Факт, шт.</th><th>Выполнение месяца</th><th>Цель за выкуп</th><th>Факт за выкуп</th></tr></thead><tbody>{SH.filter(s => !shop || s.id === shop).map(s => { const t = total(selectedRows, s.id), f = actual(fact, selectedRows, s.id); return <tr key={s.id}><td>{s.label}<small>{fact.shops[s.id]?.error || (fact.shops[s.id]?.partial ? 'Неполный период' : `Сбор ${stamp(fact.shops[s.id]?.updatedAt)}`)}</small></td><td>{fmt(t.qty)}</td><td>{fact.future ? '—' : fmt(f.qty)}</td><td>{pct(f.complete && t.qty > 0 ? f.qty / t.qty * 100 : null)}</td><td>{rub(t.mean)}</td><td>{fact.future ? '—' : rub(f.mean)}</td></tr>; })}</tbody></table></div></section>
-        {!!unplanned.length && <details className="a-card op-section"><summary>Без плана · {unplanned.length} категорий — исключены из выполнения</summary><p>{unplanned.join(' · ')}</p></details>}
-        <section className="a-card op-section"><h2>По дням · {path || 'Запланированные категории'} · {shop ? SH.find(s => s.id === shop)?.label : 'Весь Ozon'}</h2><p className="op-muted">Дневной план штук равномерный. Среднее поступление не суммируется по дням.</p><div className="op-scroll"><table className="op-table op-days"><thead><tr><th>Показатель</th>{Array.from({ length: daysInMonth }, (_, i) => <th key={i}>{i + 1}.{month.slice(5)}</th>)}</tr></thead><tbody>{['План выкупов, шт.', 'Факт выкупов, шт.', 'Выполнение дня', 'Цель за выкуп, ₽', 'Факт за выкуп, ₽'].map((label, k) => <tr key={label}><td>{label}</td>{Array.from({ length: daysInMonth }, (_, i) => { const date = `${month}-${String(i + 1).padStart(2, '0')}`, f = actual(fact, selectedRows, shop, '', date), available = fact.to && date <= fact.to, dayPlan = planned.qty / daysInMonth; const v = k === 0 ? fmt(dayPlan, 1) : k === 1 ? fmt(f.qty) : k === 2 ? pct(f.complete && dayPlan > 0 ? f.qty / dayPlan * 100 : null) : k === 3 ? rub(planned.mean) : rub(f.mean); return <td key={date} className={k === 2 && available && f.complete ? (f.qty >= dayPlan ? 'op-good' : 'op-bad') : ''}>{k === 0 || k === 3 || available ? v : '—'}</td>; })}</tr>)}</tbody></table></div></section>
-      </>}
+      {fact && viewed && <PlanExecution month={month} viewed={viewed} paths={paths} fact={fact} shop={shop} path={path} setPath={setPath} />}
     </>}
     <details className="a-card op-section"><summary>История общего плана · {state.versions.length} версий</summary>{!state.versions.length && <p className="op-muted">Версии появятся после первой фиксации.</p>}{state.versions.slice().reverse().map(v => <div className="op-history" key={v.id}><div><b>{stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</b><small>{v.basis.from} — {v.basis.to} · {v.basis.source === 'fact' ? 'факт' : 'прогноз'} · {v.targets.length} категорий{v.note ? ` · ${v.note}` : ''}</small></div><button className="a-btn" onClick={() => { setVersion(v.id); setMode('actual'); }}>Посмотреть выполнение</button><button className="a-btn" onClick={() => { setTargets(Object.fromEntries(v.targets.map(t => [t.path, { ...t }]))); setPeriod({ from: v.basis.from, to: v.basis.to }); setSource(v.basis.source); setPreview(null); setMode('plan'); setNotice('Цели выбранной версии открыты как черновик. Действующая версия не изменена.'); }}>Взять в черновик</button></div>)}</details>
     <details className="a-card op-section" open={showArchive} onToggle={e => setShowArchive(e.currentTarget.open)}><summary>Прежние планы кабинетов · {state.legacy?.length || 0} · сохранены без изменений</summary><p className="op-muted">Это независимые планы старой страницы. Они не складываются с общим планом автоматически. Для другого месяца измените месяц вверху.</p>{state.legacy?.map(x => <div key={x.shop}><h3>{SH.find(s => s.id === x.shop)?.label || x.shop}</h3><div className="op-scroll"><table className="op-table"><thead><tr><th>Строка</th><th>Выкупы, шт.</th><th>Поступление за выкуп</th><th>Другие сохранённые метрики</th></tr></thead><tbody>{Object.entries(x.plan).map(([p, t]) => <tr key={p}><td>{p}</td><td>{fmt(t.salesQty)}</td><td>{rub(t.payout)}</td><td>{Object.entries(t).filter(([k]) => !['salesQty', 'payout'].includes(k)).map(([k, v]) => `${({ orders: 'Заказы, шт.', revenue: 'Заказы, ₽', sales: 'Выкупы, ₽', profit: 'Прибыль, ₽', margin: 'Маржа, %' })[k] || k}: ${fmt(v)}`).join(' · ')}</td></tr>)}</tbody></table></div></div>)}</details>

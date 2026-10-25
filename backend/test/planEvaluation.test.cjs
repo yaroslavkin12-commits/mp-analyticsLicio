@@ -1,0 +1,41 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const model = import('../../dashboard/src/lib/planEvaluation.js');
+const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} != ${b}`);
+test('783 из 1000 по 21 октября: темп штук, среднее и общая сумма различаются', async () => {
+  const { evaluatePlan, resultTone } = await model;
+  const p = { qty: 1000, mean: 7300, amount: 7300000 };
+  const f = { qty: 783, mean: 7039.46, payout: 783 * 7039.46, complete: true };
+  const v = evaluatePlan(p, f, 21, 31);
+  near(v.qtyMonth, 78.3); near(v.qtyPace, 115.58571428571429);
+  near(v.qtyForecast, 1155.857142857143); near(v.meanRatio, 96.43095890410959); near(v.meanDelta, -260.54);
+  near(v.amountExpected, 7300000 * 21 / 31); near(v.amountPace, f.payout / (7300000 * 21 / 31) * 100);
+  near(v.amountForecast, f.payout / 21 * 31);
+  assert.equal(resultTone(v.qtyPace), 'op-good'); assert.equal(resultTone(v.meanRatio), 'op-bad');
+  assert.equal(resultTone(v.amountPace), 'op-good');
+  assert.equal(evaluatePlan(p, f, 1, 31).meanRatio, v.meanRatio, 'Среднее не зависит от доли прошедших дней');
+});
+test('100% зелёный, ниже красный; отсутствие данных, нулевой план и будущие дни нейтральны', async () => {
+  const { evaluatePlan, resultTone } = await model;
+  assert.equal(resultTone(100), 'op-good'); assert.equal(resultTone(99.9), 'op-bad');
+  const p = { qty: 0, amount: 0, mean: null }, f = { qty: 0, payout: 0, mean: null, complete: true };
+  const zero = evaluatePlan(p, f, 21, 31);
+  for (const key of ['qtyMonth','qtyPace','meanRatio','amountPace','amountForecast']) assert.equal(zero[key], null);
+  const missing = evaluatePlan({ qty: 100, amount: 1000, mean: 10 }, { ...f, complete: false }, 21, 31);
+  for (const key of ['qtyMonth','qtyPace','meanRatio','amountPace','amountForecast']) assert.equal(missing[key], null);
+  assert.equal(resultTone(null), ''); assert.equal(resultTone(NaN), '');
+  const future = evaluatePlan({ qty: 100, amount: 1000, mean: 10 }, { ...f, complete: false }, 0, 31);
+  assert.equal(future.qtyExpected, null); assert.equal(future.amountForecast, null);
+  const noSales = evaluatePlan({ qty: 100, amount: 1000, mean: 10 }, f, 1, 31);
+  assert.equal(resultTone(noSales.qtyPace), 'op-bad'); assert.equal(resultTone(noSales.meanRatio), '');
+});
+test('Суммы агрегируются только по плановым листьям/кабинетам, факт без плана не добавляется', async () => {
+  const { planTotal, planActual, evaluatePlan } = await model;
+  const rows = [{path:'Чехлы / Сиденья',qty:100,mean:10,amount:1000,shops:[{id:'defly',qty:90,amount:900},{id:'alex',qty:10,amount:100}]},{path:'Чехлы / Подлокотник',qty:10,mean:20,amount:200,shops:[{id:'defly',qty:10,amount:200},{id:'alex',qty:0,amount:0}]}];
+  const p = planTotal(rows); assert.equal(p.qty,110); assert.equal(p.amount,1200); near(p.mean,1200/110);
+  assert.equal(planTotal(rows,'defly').amount,1100); assert.equal(planTotal(rows,'alex').amount,100);
+  const fact = { shops:Object.fromEntries(['defly','nabauto','alex','fullgas','accent'].map(s=>[s,{byPath:s==='defly'?{'Чехлы / Сиденья':{qty:50,payout:450,days:[]},'Другая категория':{qty:10000,payout:1e7,days:[]}}:{}}])) };
+  const f=planActual(fact,rows);assert.equal(f.qty,50);assert.equal(f.payout,450);assert.equal(f.complete,true);
+  const v=evaluatePlan(p,f,15,30);near(v.amountExpected,600);near(v.amountPace,75);
+  assert.equal(evaluatePlan(p,f,30,30).amountForecast,450);
+});

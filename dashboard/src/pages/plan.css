@@ -19,3 +19,29 @@
 .op-page summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--a-ink2)}.op-page details[open]>summary{margin-bottom:14px}.op-history{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--a-line);padding:12px 0;font-size:12px}.op-history>div{flex:1;min-width:220px}.op-history small{display:block;color:var(--a-ink3);font-size:11px;margin-top:4px}.op-page details p{margin-top:12px}
 @media(max-width:1100px){.op-sources{grid-template-columns:repeat(3,minmax(120px,1fr))}.op-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.mpui.op-page{padding:16px 12px 28px;gap:12px}.op-page .op-section{padding:14px 12px}.op-page h1{font-size:22px}.op-heading{align-items:flex-start}.op-summary{gap:12px}.op-summary small{margin-left:0;width:100%}.op-sources{grid-template-columns:repeat(2,minmax(110px,1fr))}.op-controls{gap:9px}.op-kpis .val{font-size:20px}.op-state{font-size:10.5px}.op-page .op-month input{max-width:170px}}
+/* Результаты: месячная доля нейтральна; цвет определяется планом на дату
+   или прямым сравнением среднего за выкуп со своей целью. */
+.op-page .a-kpi.op-result.op-good,.op-page .op-table .op-result.op-good{background:var(--a-good-soft);color:var(--a-good)}
+.op-page .a-kpi.op-result.op-bad,.op-page .op-table .op-result.op-bad{background:var(--a-bad-soft);color:var(--a-bad)}
+.op-page .op-table .op-result small{color:inherit;font-weight:400;line-height:1.45}
+.op-page .a-kpi.op-result .sub{color:var(--a-ink2)}
+.op-page .op-progress.op-bad i{background:var(--a-bad)}
+.op-page .op-progress:not(.op-good):not(.op-bad) i{background:var(--a-ink3)}
+.op-page .op-money-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.op-money-kpis .val{font-size:22px;white-space:normal}.op-money-kpis .sub{font-size:11.5px;line-height:1.5}
+.op-page .op-evaluation-note{background:var(--a-panel2)}.op-evaluation-note p{margin:6px 0}.op-evaluation-note small{color:var(--a-ink3)}
+.op-page .op-evaluation-help{margin:0;line-height:1.6}.op-page table.op-results{min-width:1350px}.op-results th{max-width:160px;white-space:normal}.op-results td small{max-width:190px}
+/* Горизонтальная прокрутка: значения всегда позади непрозрачной колонки.
+   Hover не заменяет её фон полупрозрачным --a-hover. */
+.op-page .op-day-scroll{isolation:isolate;padding:0;margin:0;background:var(--a-panel);border:1px solid var(--a-line);border-radius:8px}
+.op-page table.op-days{--op-day-label:220px;--op-day-cell:112px;table-layout:fixed;border-collapse:separate;border-spacing:0;width:calc(var(--op-day-label) + var(--op-days-count) * var(--op-day-cell));min-width:100%}
+.op-page .op-days col:first-child{width:var(--op-day-label)}.op-page .op-days col:not(:first-child){width:var(--op-day-cell)}
+.op-page .op-days th,.op-page .op-days td{position:relative;z-index:0;min-width:0;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere;background-clip:padding-box}
+.op-page .op-days thead th{background:var(--a-panel2)}
+.op-page .op-days tr>th:first-child{position:sticky;left:0;z-index:3;width:var(--op-day-label);min-width:var(--op-day-label);max-width:var(--op-day-label);background:var(--a-panel);color:var(--a-ink2);text-align:left;font-family:var(--a-ui);font-weight:500;border-right:1px solid var(--a-line2);box-shadow:1px 0 0 var(--a-line2);padding:10px 12px;border-bottom:1px solid var(--a-line)}
+.op-page .op-days thead tr>th:first-child{z-index:5;background:var(--a-panel2);font-weight:600}
+.op-page .op-days tbody tr:hover>th:first-child{background:var(--a-panel2)}
+.op-page .op-days tbody tr:last-child>th{border-bottom:0}
+.op-page .op-days td small{max-width:none;font-size:10px;line-height:1.4;margin-top:4px}
+@media(max-width:1100px){.op-page .op-money-kpis{grid-template-columns:1fr 1fr}.op-page .op-money-kpis>.a-kpi:last-child{grid-column:1 / -1}}
+@media(max-width:760px){.op-page table.op-days{--op-day-label:184px;--op-day-cell:108px}.op-page .op-money-kpis{grid-template-columns:1fr}.op-page .op-money-kpis .val{font-size:21px}}
