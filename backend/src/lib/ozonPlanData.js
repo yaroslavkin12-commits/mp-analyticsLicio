@@ -8,7 +8,9 @@ const { loadSales } = require('../routes/sales');
 const { SHOPS, taxonomy, leafPath } = require('./ozonPlan');
 const models = Promise.all([import('../../../dashboard/src/lib/pnlCalc.js'), import('../../../dashboard/src/pages/unitModel.js')]);
 const today = () => dayjs().tz('Europe/Moscow').startOf('day');
-const cutoff = () => today().subtract(3, 'day').format('YYYY-MM-DD');
+// База распределения использует полные дни по вчера. Выполнение ниже включает
+// и сегодня: новые начисления уточняют результат при каждом обновлении.
+const cutoff = () => today().subtract(1, 'day').format('YYYY-MM-DD');
 const validDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '') && dayjs(v).isValid() && dayjs(v).format('YYYY-MM-DD') === v;
 function validMonth(m) { return /^\d{4}-(0[1-9]|1[0-2])$/.test(m || ''); }
 function defaultPeriod(month) {
@@ -18,7 +20,7 @@ function defaultPeriod(month) {
 }
 function checkPeriod(from, to) {
   if (!validDate(from) || !validDate(to) || from > to || dayjs(to).diff(from, 'day') > 91) throw new Error('Период базы: от 1 до 92 дней');
-  if (to > cutoff()) throw new Error(`Для базы доступны полные дни по ${cutoff()} (три дня на задержку начислений)`);
+  if (to > cutoff()) throw new Error(`Для базы доступны полные дни по ${cutoff()}; текущий день используется в выполнении предварительно`);
 }
 async function catalogs() {
   const out = {}, errors = {};
@@ -28,7 +30,7 @@ async function catalogs() {
   }
   return { out, errors };
 }
-async function report(shop, from, to, tax, source, frozen) {
+async function report(shop, from, to, tax, source, frozen, openDay = false) {
   const label = CABINETS[shop].label;
   if (!isConnected(shop)) return { label, error: 'магазин не подключён', byPath: {} };
   try {
@@ -38,7 +40,8 @@ async function report(shop, from, to, tax, source, frozen) {
     const result = pnlTotals(data, { tax: 0, groupOf: pathOf, withDays: true });
     const byPath = result.byGroup;
     const available = data.available || {};
-    const partial = !available.mn || available.mn > from || !available.mx || available.mx < to;
+    const requiredTo = openDay ? cutoff() : to;
+    const partial = !available.mn || available.mn > from || !available.mx || available.mx < requiredTo;
     const [job] = await query(`SELECT last_success_at, last_error FROM ad_job_status WHERE cabinet = $1 AND job = 'finance'`, [shop]);
     let forecastError = null;
     if (source === 'forecast') {
@@ -83,11 +86,15 @@ async function basis(from, to, source, force = false) {
   return promise;
 }
 async function loadExecution(month, snapshot) {
-  const from = month + '-01', end = dayjs(from).endOf('month').format('YYYY-MM-DD'), to = end < cutoff() ? end : cutoff();
+  const now = dayjs().tz('Europe/Moscow'), current = now.format('YYYY-MM-DD');
+  const from = month + '-01', end = dayjs(from).endOf('month').format('YYYY-MM-DD'), to = end < current ? end : current;
   if (to < from) return { from, to: null, shops: {}, future: true };
   const cat = await catalogs(), tax = taxonomy(cat.out, snapshot?.targets.map(t => t.path) || []), shops = {};
-  for (const shop of SHOPS) shops[shop] = await report(shop, from, to, tax, 'fact', snapshot?.taxonomy?.[shop]);
-  return { from, to, shops, asOf: new Date().toISOString(), future: false };
+  const provisional = to === current;
+  for (const shop of SHOPS) shops[shop] = await report(shop, from, to, tax, 'fact', snapshot?.taxonomy?.[shop], provisional);
+  const fraction = (now.hour() * 3600 + now.minute() * 60 + now.second()) / 86400;
+  const elapsedDays = provisional ? now.date() - 1 + fraction : dayjs(to).date();
+  return { from, to, shops, asOf: now.toISOString(), future: false, provisional, elapsedDays, evaluatedAtMoscow: now.format('HH:mm') };
 }
 const execution = (month, snapshot) => serial(() => loadExecution(month, snapshot));
 module.exports = { today, cutoff, validMonth, defaultPeriod, checkPeriod, catalogs, basis, execution };

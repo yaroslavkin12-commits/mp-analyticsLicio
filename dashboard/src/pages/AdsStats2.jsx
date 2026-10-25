@@ -1,3 +1,4 @@
+import { barSignals } from '../lib/chartSignals';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
@@ -307,14 +308,15 @@ export function AreaSpark({ values, color }) {
     </svg>
   );
 }
-export function SparkBars({ values, w = 96, h = 24 }) {
+export function SparkBars({ values, w = 96, h = 24, dates = [], metric = 'orders', trafficLight = true }) {
+  const signals = barSignals(values, {dates,metric,pending:dates.map(d=>d>=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'}))});
   const n = values.length || 1, max = Math.max(1, ...values), bw = w / n;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true" style={{ display: 'block', marginLeft: 'auto' }}>
       {values.map((v, i) => {
         const bh = v ? Math.max(2, v / max * (h - 2)) : 1;
         return <rect key={i} x={(i * bw + 0.4).toFixed(1)} y={(h - bh).toFixed(1)} width={Math.max(1, bw - 1.4).toFixed(1)}
-          height={bh.toFixed(1)} rx="1" fill={v ? 'var(--a-accent)' : 'var(--a-line2)'} opacity={i >= n - 7 ? 1 : 0.55} />;
+          height={bh.toFixed(1)} rx="1" fill={trafficLight ? signals[i].color : v ? 'var(--a-accent)' : 'var(--a-line2)'} opacity={i >= n - 7 ? 1 : 0.55} />;
       })}
     </svg>
   );
@@ -409,6 +411,7 @@ function useWidth(ref, fallback) {
 
 export function ChartPane({ dates, series, events, tip, height, showX, onHover, hoverIdx }) {
   // series: [{ key, label, fmt, color, kind: 'bar'|'line', side: 'left'|'right', values, scale }]
+  series = series.map(s => s.kind === 'bar' && s.signals === undefined ? {...s, signals:barSignals(s.values,{dates,metric:s.key,direction:s.good,pending:dates.map(d=>/^\d{4}-\d{2}-\d{2}$/.test(d) && d>=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'}))})} : s);
   const boxRef = useRef(null);
   const w = useWidth(boxRef, 680), h = height, pl = 48, pr = series.some(s => s.side === 'right') ? 48 : 12, pt = 26, pb = showX ? 22 : 8;
   const iw = w - pl - pr, ih = h - pt - pb, n = dates.length || 1, bw = iw / n;
@@ -436,7 +439,7 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
         if (v === null || v === undefined || !v) return null;
         const y0 = yOf(s, Math.max(0, s.scale.lo)), y1 = yOf(s, v);
         const width = Math.max(1, (bw - 4) / bars.length);
-        return <rect key={s.key + i} x={pl + i * bw + 2 + bi * width} y={Math.min(y0, y1)} width={width} height={Math.abs(y0 - y1)} rx="3" fill={s.color} opacity=".8" />;
+        return <rect key={s.key + i} x={pl + i * bw + 2 + bi * width} y={Math.min(y0, y1)} width={width} height={Math.abs(y0 - y1)} rx="3" fill={s.signals?.[i]?.color || s.color} opacity=".9"><title>{s.label}: {fmtBy(v,s.fmt)} · {s.signals?.[i]?.text || ''}</title></rect>;
       }))}
       {series.filter(s => s.kind === 'line').map(s => {
         let d = '', pen = false;
@@ -485,7 +488,7 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
             tip.show(e, (
               <div>
                 <div style={{ color: 'var(--a-ink3)', marginBottom: 3 }}>{dayjs(d).format('DD.MM.YYYY')}</div>
-                {series.map(s => <div key={s.key}><span style={{ color: s.color }}>●</span> {s.label}: <b>{fmtBy(s.values[i], s.fmt)}</b></div>)}
+                {series.map(s => <div key={s.key}><span style={{ color: s.kind === 'bar' ? s.signals?.[i]?.color || s.color : s.color }}>●</span> {s.label}: <b>{fmtBy(s.values[i], s.fmt)}</b>{s.kind === 'bar' && s.signals?.[i] && <div style={{fontSize:11,color:'var(--a-ink3)',maxWidth:260}}>{s.signals[i].text}</div>}</div>)}
                 {(evByDate[d] || []).map(e => <div key={e.id} style={{ marginTop: 4, color: 'var(--a-accent)' }}>● {e.text}</div>)}
               </div>
             ));
@@ -496,13 +499,13 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
   );
 }
 
-export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults }) {
+export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults, remember = true, singleMetric, trafficLight = true, gran = 'day', hideControls = false }) {
   const [cfg, setCfg] = useState(() => {
-    try { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}), ...JSON.parse(localStorage.getItem(storeKey) || '{}') }; }
-    catch (e) { return { left: 'revenue', right: 'spend', type: 'combo' }; }
+    try { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}), ...(remember ? JSON.parse(localStorage.getItem(storeKey) || '{}') : {}) }; }
+    catch (e) { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}) }; }
   });
   const [hover, setHover] = useState(null);
-  useEffect(() => { try { localStorage.setItem(storeKey, JSON.stringify(cfg)); } catch (e) { /* ignore */ } }, [cfg, storeKey]);
+  useEffect(() => { try { if (remember) localStorage.setItem(storeKey, JSON.stringify(cfg)); } catch (e) { /* ignore */ } }, [cfg, storeKey]);
   const metrics = (metricsList || CHART_METRICS).filter(m => !(mode === 'ads' && (m.key === 'position')));
   const mk = (key, side) => {
     const m = metrics.find(x => x.key === key) || metrics[0];
@@ -510,13 +513,14 @@ export function DualChart({ dates, byDate, events, tip, mode, metricsList, store
     const nums = values.filter(v => v !== null && Number.isFinite(v));
     return {
       ...m, side, values,
+      signals: trafficLight ? barSignals(values, { dates, gran, metric: m.key, direction: m.good, durations: dates.map(d => byDate[d]?.[['buyoutRub','buyoutQty','payout','profitActual'].includes(m.key) ? '_actualDays' : '_days'] || 1), pending: dates.map(d => byDate[d]?._provisional ?? d >= new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'})) }) : null,
       color: side === 'left' ? 'var(--a-rev)' : 'var(--a-spend)',
-      kind: cfg.type === 'combo' && side === 'left' ? 'bar' : 'line',
+      kind: (singleMetric || cfg.type === 'combo') && side === 'left' ? 'bar' : 'line',
       scale: niceScale(nums.length ? Math.min(...nums) : 0, nums.length ? Math.max(...nums) : 1, m.free),
     };
   };
-  const L = mk(cfg.left, 'left');
-  const R = cfg.right ? mk(cfg.right, 'right') : null;
+  const L = mk(singleMetric || cfg.left, 'left');
+  const R = !singleMetric && cfg.right ? mk(cfg.right, 'right') : null;
   const pick = (side) => (
     <select className="a-sel" value={cfg[side] || ''} onChange={e => setCfg(c => ({ ...c, [side]: e.target.value || null }))}
       style={{ borderColor: side === 'left' ? 'var(--a-rev)' : 'var(--a-spend)', padding: '4px 8px', fontSize: 12.5 }}>
@@ -526,7 +530,7 @@ export function DualChart({ dates, byDate, events, tip, mode, metricsList, store
   );
   return (
     <div>
-      <div className="a-bar" style={{ marginBottom: 8, gap: 8 }}>
+      {!hideControls && <div className="a-bar" style={{ marginBottom: 8, gap: 8 }}>
         <span className="a-hint">Слева</span>{pick('left')}
         <span className="a-hint">справа</span>{pick('right')}
         <span className="a-seg" style={{ marginLeft: 'auto' }}>
@@ -535,6 +539,7 @@ export function DualChart({ dates, byDate, events, tip, mode, metricsList, store
           ))}
         </span>
       </div>
+      }
       {cfg.type === 'split' && R ? (
         <>
           <ChartPane dates={dates} series={[{ ...L, kind: 'bar' }]} events={events} tip={tip} height={130} showX={false} onHover={setHover} hoverIdx={hover} />
@@ -846,7 +851,7 @@ function AssociatedTable({ associated, dates }) {
 }
 
 // ── Раскрытая строка артикула (или группы целиком) ───────────────────────
-function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAddNote, onDeleteNote, groups, currentGroupId, onAssignGroup, tip, showAssoc, associated, activeGroupId }) {
+function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAddNote, onDeleteNote, groups, currentGroupId, onAssignGroup, tip, showAssoc, associated, activeGroupId, trafficLight = true }) {
   const [editMode, setEditMode] = useState(false);
   const [showCampaigns, setShowCampaigns] = useState(false);
   const model = useMemo(() => buildModel(articles, dates, mode), [articles, dates, mode, UNIT_CTX.k]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -968,7 +973,7 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
         <h4>Динамика по дням
           <span className="a-legend"><span><i style={{ background: 'var(--a-accent)', borderRadius: '50%' }} />запись журнала</span></span>
         </h4>
-        <DualChart dates={dates} byDate={model.byDate} events={myEvents} tip={tip} mode={mode} />
+        <DualChart dates={dates} byDate={model.byDate} events={myEvents} tip={tip} mode={mode} trafficLight={trafficLight} />
       </div>
       <div className="a-box wide">
         <h4 style={{ cursor: 'pointer', marginBottom: showCampaigns ? 10 : 0 }} onClick={() => setShowCampaigns(v => !v)}>
@@ -1509,7 +1514,7 @@ export default function AdsStats2({ cabinet }) {
               )}
             </div>
           </td>
-          <td><SparkBars values={dates.map(d => m.byDate[d]?.orders || 0)} w={78} /></td>
+          <td><SparkBars trafficLight={cabinet !== 'licio'} dates={dates} values={dates.map(d => m.byDate[d]?.orders || 0)} w={78} /></td>
           <td className="n">{fmtInt(m.totals.revenue)}{showAssoc && assocLine(a.associated, 'revenue', m.totals.revenue)}</td>
           <td className="n">{fmtInt(m.totals.orders)}{showAssoc && assocLine(a.associated, 'orders', m.totals.orders)}</td>
           <td>
@@ -1542,7 +1547,7 @@ export default function AdsStats2({ cabinet }) {
         </tr>
         {isOpen && (
           <tr className="a-detail"><td colSpan={COLS.length}>
-            <Detail articles={[a]} dates={dates} mode={mode} events={events} onManualSave={manualSave} onAddNote={addNote} onDeleteNote={deleteNote}
+            <Detail trafficLight={cabinet !== 'licio'} articles={[a]} dates={dates} mode={mode} events={events} onManualSave={manualSave} onAddNote={addNote} onDeleteNote={deleteNote}
               groups={groups} currentGroupId={members[a.offerId]} onAssignGroup={assignGroup} tip={tip}
               showAssoc={showAssoc} associated={a.associated || []} activeGroupId={isGroup ? tab : null} />
           </td></tr>
@@ -1746,7 +1751,7 @@ export default function AdsStats2({ cabinet }) {
                 </tr>
                 {open.has(aggKey) && (
                   <tr className="a-detail"><td colSpan={COLS.length}>
-                    <Detail articles={rows} dates={dates} mode={mode} events={events} isAggregate onAddNote={addNote} onDeleteNote={deleteNote} tip={tip}
+                    <Detail trafficLight={cabinet !== 'licio'} articles={rows} dates={dates} mode={mode} events={events} isAggregate onAddNote={addNote} onDeleteNote={deleteNote} tip={tip}
                       showAssoc={showAssoc} associated={assocForRows} />
                   </td></tr>
                 )}

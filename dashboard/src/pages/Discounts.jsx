@@ -1,3 +1,4 @@
+import { barSignals } from '../lib/chartSignals';
 import React, { useState, useEffect, useCallback } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import SoinvestCats from './SoinvestCats';
@@ -235,11 +236,12 @@ function ArticleHistory({ history }) {
   );
 }
 
-function SummaryChart({ summary, loading }) {
+function SummaryChart({ summary, loading, trafficLight = true }) {
   if (loading) return <div style={{ padding: 32, textAlign: 'center', color: 'var(--text2)' }}>Загрузка…</div>;
   const series = summary?.series || [];
   if (!series.length) return <div style={{ padding: 32, textAlign: 'center', color: 'var(--text3)' }}>Нет данных за выбранный период</div>;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = trafficLight ? new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'}) : new Date().toISOString().slice(0,10);
+  const signals = barSignals(series.map(s=>s.avgPct),{dates:series.map(s=>s.day),metric:'avgPct',pending:series.map(s=>s.day>=today)});
   return (
     <ResponsiveContainer width="100%" height={220}>
       <BarChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -250,7 +252,7 @@ function SummaryChart({ summary, loading }) {
           tickFormatter={v => `${v}%`} domain={['dataMin - 2', 'dataMax + 2']} />
         <Tooltip content={<SummaryTooltip />} cursor={{ fill: 'var(--surface2)' }} />
         <Bar dataKey="avgPct" radius={[4, 4, 0, 0]}>
-          {series.map((s, i) => <Cell key={i} fill={s.day === today ? 'var(--accent-oz-light, #93c5fd)' : 'var(--accent-oz)'} />)}
+          {series.map((s, i) => <Cell key={i} fill={trafficLight ? signals[i].color : s.day === today ? 'var(--accent-oz-light, #93c5fd)' : 'var(--accent-oz)'} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -365,7 +367,7 @@ function ArticlesTab({ cabinet, days, setDays }) {
 
       <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 10 }}>Средняя скидка покупателя</div>
-        <SummaryChart summary={summary} loading={summaryLoading} />
+        <SummaryChart summary={summary} loading={summaryLoading} trafficLight={cabinet!=='licio'} />
       </div>
 
       <div style={{ fontSize: 12.5, color: 'var(--text3)', marginBottom: 12, lineHeight: 1.5 }}>

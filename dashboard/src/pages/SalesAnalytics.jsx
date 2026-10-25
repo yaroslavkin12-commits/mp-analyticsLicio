@@ -1,3 +1,5 @@
+import { barSignals, isRateMetric } from '../lib/chartSignals';
+import { enrichSalesChart, FIN_CHART_METRICS } from '../lib/salesChartModel';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
@@ -30,7 +32,7 @@ const SEP = ' / ';
 const CAT_COLORS = ['var(--s-c1)', 'var(--s-c2)', 'var(--s-c3)', 'var(--s-c4)', 'var(--s-c5)', 'var(--s-c6)'];
 const OTHER_COLOR = 'var(--a-ink3)';
 const HIDE_DAY_ROWS = ['avgCpcSearch', 'avgCpcRec'];
-const SALES_CHART_METRICS = CHART_METRICS.filter(m => !['avgCpcSearch', 'avgCpcRec'].includes(m.key));
+const SALES_CHART_METRICS = [...CHART_METRICS.filter(m => !/^avgCpc(Search|Rec|Cir|Auto|Top)$/.test(m.key)), ...FIN_CHART_METRICS];
 
 const fmtShort = v => {
   if (v === null || v === undefined || !Number.isFinite(v)) return '—';
@@ -101,14 +103,14 @@ function aggregate(list, n) {
 // Модель в формате компонентов «Рекламы» (byDate, totals, prev), с
 // разбивкой по дням, неделям или месяцам.
 export function bucketsOf(dates, gran) {
-  if (gran === 'day') return dates.map((d, i) => ({ key: d, idx: [i] }));
+  if (gran === 'day') return dates.map((d, i) => ({ key: d, idx: [i], last: d }));
   const map = new Map();
   dates.forEach((d, i) => {
     const key = gran === 'week' ? dayjs(d).subtract((dayjs(d).day() + 6) % 7, 'day').format('YYYY-MM-DD') : d.slice(0, 8) + '01';
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(i);
   });
-  return [...map.entries()].map(([key, idx]) => ({ key, idx }));
+  return [...map.entries()].map(([key, idx]) => ({ key, idx, last: dates[idx[idx.length-1]] }));
 }
 function toModel(ag, buckets) {
   const byDate = {};
@@ -171,10 +173,7 @@ function stockDaysOf(ag, dates) {
 }
 
 // ── График «по категориям»: столбцы с разбивкой по подкатегориям ─────────
-const STACK_METRICS = [
-  { key: 'revenue', label: 'Заказано, ₽' }, { key: 'orders', label: 'Заказы, шт' },
-  { key: 'views', label: 'Показы' }, { key: 'spend', label: 'Расход на рекламу, ₽' },
-];
+const STACK_METRICS = SALES_CHART_METRICS;
 export function StackChart({ buckets, groups, metric, tip, gran, normalize, labels }) {
   const boxRef = useRef(null);
   const [w, setW] = useState(680);
@@ -188,11 +187,13 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize, labe
   const h = 250, pl = 52, pr = 12, pt = labels ? 22 : 14, pb = 22;
   const iw = w - pl - pr, ih = h - pt - pb, n = buckets.length || 1, bw = iw / n;
   const val = (g, b) => {
+    if (g.model) return g.model.byDate[b.key]?.[metric] ?? null;
     let v = 0;
     for (const i of b.idx) v += metric === 'spend' ? g.ag.s.spendCpc[i] + g.ag.s.spendCpo[i] : g.ag.s[metric][i];
     return v;
   };
   const raw = buckets.map(b => groups.map(g => val(g, b)));
+  const signals = barSignals(raw.map(c => c.every(v => v === null) ? null : c.reduce((a,b)=>a+(b||0),0)), {dates:buckets.map(b=>b.key),gran,metric,durations:buckets.map(b=>b.idx.length),pending:buckets.map(b=>groups.some(g=>g.model?.byDate[b.key]?._provisional) || ((b.last || b.key) >= new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'})))});
   // normalize — каждый столбец 100%: видно, как менялась доля, а не объём.
   const cols = normalize ? raw.map(c => { const t = c.reduce((s, v) => s + v, 0); return c.map(v => t ? v / t * 100 : 0); }) : raw;
   const max = normalize ? 100 : Math.max(1, ...cols.map(c => c.reduce((s, v) => s + v, 0)));
@@ -229,13 +230,14 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize, labe
           const x0 = pl + i * bw + Math.min(3, bw * 0.12), width = Math.max(1, bw - Math.min(6, bw * 0.24));
           return (
             <g key={b.key} opacity={hover === null || hover === i ? 1 : 0.55}>
+              {groups.length > 1 && <rect x={x0} y={y(totals[i])-4} width={width} height={3} fill={signals[i].color} />}
               {groups.map((g, gi) => {
                 const v = cols[i][gi];
                 if (!v) return null;
                 const y1 = y(acc + v), y0 = y(acc);
                 acc += v;
                 // 2px зазор между сегментами — цветом фона.
-                return <rect key={g.key} x={x0} y={y1} width={width} height={Math.max(0.5, y0 - y1 - 1)} fill={g.color} rx={gi === groups.length - 1 ? 2 : 0} />;
+                return <rect key={g.key} x={x0} y={y1} width={width} height={Math.max(0.5, y0 - y1 - 1)} fill={groups.length === 1 ? signals[i].color : g.color} rx={gi === groups.length - 1 ? 2 : 0} />;
               })}
             </g>
           );
@@ -258,7 +260,7 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize, labe
                   {groups.map((g, gi) => cols[i][gi] ? (
                     <div key={g.key}><span style={{ color: g.color }}>■</span> {g.name}: <b>{fmtInt(raw[i][gi])}</b> <span style={{ color: 'var(--a-ink3)' }}>{total ? (raw[i][gi] / total * 100).toFixed(1).replace('.', ',') : 0}%</span></div>
                   ) : null)}
-                  <div style={{ marginTop: 3 }}>Всего: <b>{fmtInt(total)}</b></div>
+                  <div style={{ marginTop: 3 }}>Всего: <b>{fmtInt(total)}</b></div><div style={{fontSize:11,maxWidth:260}}>{signals[i].text}</div>
                 </div>
               ));
             }} />
@@ -375,8 +377,8 @@ function SharesCard({ node, kids, colorNode, brandRank, dates, buckets, gran, ti
 }
 
 // ── Карточка артикула ────────────────────────────────────────────────────
-function ArticleDetail({ a, dates, buckets, gran, tip, leafPaths, onMoveCategory }) {
-  const model = useMemo(() => toModel(aggregate([a], dates.length), buckets), [a, dates.length, buckets]);
+function ArticleDetail({ a, dates, buckets, gran, tip, leafPaths, onMoveCategory, pnl, forecast, shareAt, tax }) {
+  const model = useMemo(() => enrichSalesChart([a],dates,buckets,toModel(aggregate([a], dates.length), buckets),{pnl,forecast,shareAt,tax}), [a, dates, buckets,pnl,forecast,shareAt,tax]);
   const [custom, setCustom] = useState('');
   const sd = stockDaysOf(aggregate([a], dates.length), dates);
   return (
@@ -384,7 +386,7 @@ function ArticleDetail({ a, dates, buckets, gran, tip, leafPaths, onMoveCategory
       <div className="a-box wide">
         <h4>Динамика {gran !== 'day' && <span className="a-hint">по {gran === 'week' ? 'неделям' : 'месяцам'}</span>}</h4>
         <DualChart dates={buckets.map(b => b.key)} byDate={model.byDate} events={[]} tip={tip} mode="all"
-          metricsList={SALES_CHART_METRICS} storeKey="mp-sales-art-chart" defaults={{ left: 'revenue', right: 'stock' }} />
+          metricsList={SALES_CHART_METRICS} storeKey="mp-sales-art-chart" defaults={{ left: 'revenue', right: null }} remember={false} gran={gran} />
       </div>
       <div className="a-box">
         <h4>Воронка за период</h4>
@@ -493,7 +495,7 @@ const FINDER_HINT = {
 };
 
 // ═════════════════════════════════════════════════════════════════════════
-export default function SalesAnalytics({ cabinet, view }) {
+export default function SalesAnalytics({ cabinet, view, active = true }) {
   const today = dayjs().format('YYYY-MM-DD');
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(today);
@@ -506,9 +508,9 @@ export default function SalesAnalytics({ cabinet, view }) {
   const [gran, setGran] = useState('day');
   const [chartMode, setChartMode] = useState('cats');
   // Тумблер: столбцы целиком (итог) или с разбивкой по категориям.
-  const [split, setSplitState] = useState(() => { try { return localStorage.getItem('mp-sales-split') === '1'; } catch (e) { return false; } });
-  const setSplit = v => { setSplitState(v); try { localStorage.setItem('mp-sales-split', v ? '1' : '0'); } catch (e) { /* ignore */ } };
+  const [split, setSplit] = useState(false);
   const [stackMetric, setStackMetric] = useState('revenue');
+  useEffect(() => { if (active) { setChartMode('cats'); setStackMetric('revenue'); setSplit(false); } }, [active,cabinet]);
   const [sort, setSort] = useState({ key: 'revenue', dir: -1 });
   const [open, setOpen] = useState(() => new Set());
   const [openArt, setOpenArt] = useState(null);
@@ -659,10 +661,11 @@ export default function SalesAnalytics({ cabinet, view }) {
   const agOf = useCallback(list => aggregate(list, N), [N]);
   const ag = useMemo(() => agOf(node.arts), [node, agOf]);
   const model = useMemo(() => toModel(ag, buckets), [ag, buckets]);
+  const chartModel = useMemo(() => enrichSalesChart(node.arts,dates,buckets,model,{pnl:fin?.pnl,forecast:builderForecast,shareAt:builderShareAt,tax}), [node,dates,buckets,model,fin?.pnl,builderForecast,builderShareAt,tax]);
   const dayModel = useMemo(() => (gran === 'day' ? model : toModel(ag, bucketsOf(dates, 'day'))), [ag, model, gran, dates]);
   // Кэш тяжёлых сумм: всплывашки на графиках перерисовывают страницу на
   // каждое движение мыши — пересчитывать 1800 артикулов каждый раз нельзя.
-  const cache = useMemo(() => new Map(), [filtered, buckets]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cache = useMemo(() => new Map(), [filtered, buckets, fin?.pnl, builderForecast, builderShareAt, tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const cached = (k, fn) => { if (!cache.has(k)) cache.set(k, fn()); return cache.get(k); };
 
   // prevMode — прошлый период: финансы прошлого периода и заказы артикула за него (a.prev).
@@ -769,7 +772,7 @@ export default function SalesAnalytics({ cabinet, view }) {
       : [{ key: node.path || 'all', name: node.name, arts: node.arts, slot: 0 }];
     const main = list.filter(g => g.slot < CAT_COLORS.length).map(g => ({ ...g, ag: agOf(g.arts), color: CAT_COLORS[g.slot] }));
     const rest = list.filter(g => g.slot >= CAT_COLORS.length);
-    if (rest.length) main.push({ key: '__other', name: `Прочее (${rest.length})`, ag: agOf(rest.flatMap(g => g.arts)), color: OTHER_COLOR });
+    if (rest.length) main.push({ key: '__other', name: `Прочее (${rest.length})`, arts: rest.flatMap(g => g.arts), ag: agOf(rest.flatMap(g => g.arts)), color: OTHER_COLOR });
     return main;
   });
 
@@ -807,7 +810,7 @@ export default function SalesAnalytics({ cabinet, view }) {
     const daysCls = st.g.stockNow === null ? '' : st.sd !== null && st.sd < 7 ? 'b' : st.sd !== null && st.sd < 14 ? 'w' : '';
     return (
       <>
-        <td><SparkBars values={st.spark} /></td>
+        <td><SparkBars values={st.spark} dates={dates} /></td>
         <td className="n r">{fmtInt(t.revenue)}</td>
         <td className="r"><Delta value={st.p ? changePct(t.revenue, st.p.revenue) : null} /></td>
         <td className="r" title={base !== undefined && shareAll !== null ? `${fmtPct(shareAll)} от всего выбранного` : ''}><span className="s-part"><i style={{ width: `${Math.min(100, share || 0)}%` }} /><b className="n">{share === null ? '—' : fmtPct(share)}</b></span></td>
@@ -869,7 +872,7 @@ export default function SalesAnalytics({ cabinet, view }) {
       if (isArt) treeRows.push(
         <tr key={'d' + a.o} className="a-detail"><td colSpan={COLS.length}>
           <div style={{ position: 'sticky', left: 0, width: treeW }}>
-            <ArticleDetail a={a} dates={dates} buckets={buckets} gran={gran} tip={tip} leafPaths={leafPaths} onMoveCategory={moveCategory} />
+            <ArticleDetail a={a} dates={dates} buckets={buckets} gran={gran} tip={tip} leafPaths={leafPaths} onMoveCategory={moveCategory} pnl={fin?.pnl} forecast={builderForecast} shareAt={builderShareAt} tax={tax} />
           </div>
         </td></tr>
       );
@@ -1175,13 +1178,13 @@ export default function SalesAnalytics({ cabinet, view }) {
               <button key={v} type="button" className={chartMode === v ? 'on' : ''} onClick={() => setChartMode(v)}>{l}</button>
             ))}
           </span>
-          {chartMode === 'cats' && kids.length > 0 && (
+          {chartMode === 'cats' && kids.length > 0 && !isRateMetric(stackMetric) && !FIN_CHART_METRICS.some(m => m.key === stackMetric) && (
             <label className="sw" title="Показать, из каких категорий складывается каждый столбец">
               <input type="checkbox" checked={split} onChange={e => setSplit(e.target.checked)} /><i />разбивка по категориям
             </label>
           )}
           {chartMode === 'cats' && (
-            <select className="a-sel" value={stackMetric} onChange={e => setStackMetric(e.target.value)} style={{ padding: '4px 8px', fontSize: 12.5 }}>
+            <select aria-label="Показатель столбчатого графика" className="a-sel" value={stackMetric} onChange={e => setStackMetric(e.target.value)} style={{ padding: '4px 8px', fontSize: 12.5 }}>
               {STACK_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
             </select>
           )}
@@ -1191,10 +1194,11 @@ export default function SalesAnalytics({ cabinet, view }) {
             ))}
           </span>
         </div>
-        {chartMode === 'cats'
-          ? <StackChart buckets={buckets} groups={split && kids.length ? stackGroups : [{ key: 'total', name: sel ? node.name : 'Все товары', ag, color: 'var(--a-rev)' }]} metric={stackMetric} tip={tip} gran={gran} labels />
-          : <DualChart dates={buckets.map(b => b.key)} byDate={model.byDate} events={[]} tip={tip} mode="all"
-              metricsList={SALES_CHART_METRICS} storeKey="mp-sales-chart" defaults={{ left: 'revenue', right: 'orders' }} />}
+        {chartMode === 'cats' && split && kids.length && !isRateMetric(stackMetric) && !FIN_CHART_METRICS.some(m => m.key === stackMetric)
+          ? <StackChart buckets={buckets} groups={cached(`chartgroups|${sel}`, () => stackGroups.map(g => ({...g, model: enrichSalesChart(g.arts || node.arts,dates,buckets,toModel(g.ag,buckets),{pnl:fin?.pnl,forecast:builderForecast,shareAt:builderShareAt,tax})})))} metric={stackMetric} tip={tip} gran={gran} labels />
+          : <DualChart dates={buckets.map(b => b.key)} byDate={chartModel.byDate} events={[]} tip={tip} mode="all" gran={gran}
+              metricsList={SALES_CHART_METRICS} storeKey="mp-sales-chart" remember={false} defaults={{ left: 'revenue', right: null }} singleMetric={chartMode === 'cats' ? stackMetric : undefined} hideControls={chartMode === 'cats'} />}
+        <div className="a-hint" style={{marginTop:8}}>Цвет динамики: зелёный — улучшение более 5%, жёлтый — в пределах ±5%, красный — ухудшение. Дни сравниваются с тем же днём прошлой недели, при короткой истории — с предыдущим днём; недели и месяцы — с предыдущим периодом в среднем за день. Незавершённые периоды — серые. При разбивке по категориям оценка показана полоской над столбцом.</div>
       </div>
 
       <SharesCard node={node} kids={kids} colorNode={colorNode} brandRank={brandRank} dates={dates} buckets={buckets} gran={gran} tip={tip}

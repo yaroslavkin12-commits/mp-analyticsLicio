@@ -44,3 +44,14 @@ test('Проверка периодов не пропускает невозмо
   assert.throws(() => data.checkPeriod(data.cutoff(), realDayjs(data.cutoff()).add(1, 'day').format('YYYY-MM-DD')));
   assert.equal(data.validMonth('2026-13'), false);
 });
+
+test('Выполнение включает сегодняшний день, база — вчера, три последних дня не исключаются', async () => {
+  disconnected = false;
+  const now = realDayjs().tz('Europe/Moscow');
+  assert.equal(data.cutoff(), now.subtract(1,'day').format('YYYY-MM-DD'));
+  const e = await data.execution(now.format('YYYY-MM'), null);
+  assert.equal(e.to, now.format('YYYY-MM-DD'));
+  assert.equal(e.provisional, true);
+  assert.ok(e.elapsedDays >= now.date()-1 && e.elapsedDays <= now.date());
+  assert.equal(e.shops.defly.partial, false);
+});

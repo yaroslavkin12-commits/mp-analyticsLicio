@@ -59,7 +59,7 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
       const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
       T.revenue += rev; T.ozonX += ozX; T.ads += ad; T.cost -= v.costRaw[i]; T.tax += t; T.qty += v.qty[i];
       T.payout += rev + ozX + ad; T.profit += rev + ozX + ad - v.costRaw[i] + t;
-      if (withDays) T.days.push({ date: data.dates[i], qty: v.qty[i], payout: rev + ozX + ad });
+      if (withDays) T.days.push({ date: data.dates[i], qty: v.qty[i], payout: rev + ozX + ad, revenue: rev, profit: rev + ozX + ad - v.costRaw[i] + t });
     }
     return T;
   };

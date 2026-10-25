@@ -1,3 +1,4 @@
+import SetMark from '../components/SetMark';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
 import { getCalcBase, refreshPrices, getFinanceCoefs, getFinancePnl } from '../api';
@@ -262,7 +263,7 @@ export default function Margin({ cabinet }) {
   }), [baseRows, priceOver, target]);
 
   const q = search.trim().toLowerCase();
-  const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a) && !pinSet.has(r.a.o));
+  const base = rows.filter(r => inPath(r.a, sel) && matchQ(r.a, q) && grp.test(r.a));
   const pinRows = pinned.map(o => rows.find(r => r.a.o === o)).filter(Boolean);
   const counts = Object.fromEntries(FILTERS.map(([k]) => [k, base.filter(r => r.status === k).length]));
   const GET = {
@@ -377,8 +378,8 @@ export default function Margin({ cabinet }) {
           {(full || pinnedMode ? list : list.slice(0, 150)).map(row => (
             <tr key={row.a.i} className={row.status === 'loss' ? 's-hole' : ''}>
               <td className="m-prod"><span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>{pinnedMode
-                ? <button type="button" className="m-pinb" title="Вернуть в общую таблицу" onClick={() => unpin(row.a.o)}>✕</button>
-                : <button type="button" className="m-pinb" title="Перенести в набор для репрайсера (вниз)" onClick={() => pin([row.a.o])}>📌</button>}<i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(row.a.parts[0])] || OTHER }} />
+                ? <button type="button" className="m-pinb" title="Убрать из набора (исходная таблица сохраняется)" onClick={() => unpin(row.a.o)}>✕</button>
+                : <SetMark on={pinSet.has(row.a.o)} onClick={() => pinSet.has(row.a.o) ? unpin(row.a.o) : pin([row.a.o])} title={pinSet.has(row.a.o) ? 'Уже в наборе — убрать из набора' : 'Добавить в набор ниже, оставив в этой таблице'} />}<i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(row.a.parts[0])] || OTHER }} />
                 <span title={`${row.a.n}\n${row.a.cat.split(SEP).join(' › ')}`}><b>{row.a.o}</b><small className="m-sub">{row.a.short} · {row.scheme.toUpperCase()} {pct1(row.v.commission)}</small></span></span></td>
               {colOn.map(k => CELL[k](row))}
 
@@ -457,7 +458,7 @@ export default function Margin({ cabinet }) {
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             {shown.some(r => r.priceEd) && <button type="button" className="a-btn" onClick={() => exportXlsx(shown.filter(r => r.priceEd))} title="Строки таблицы, где вписана новая цена">⬇ Excel: с новой ценой ({shown.filter(r => r.priceEd).length})</button>}
             <button type="button" className="a-btn ghost" onClick={() => exportXlsx(shown)} title="Все строки таблицы с учётом фильтров; где новая цена не вписана — текущая">⬇ все в таблице ({shown.length})</button>
-            <button type="button" className="a-btn ghost" onClick={() => pin(shown.map(r => r.a.o))} title="Перенести все показанные строки в набор ниже">📌 все показанные</button>
+            <button type="button" className="a-btn ghost" onClick={() => pin(shown.map(r => r.a.o))} title="Добавить все показанные строки в набор ниже">＋ все показанные</button>
             {Object.keys(priceOver).length > 0 && <button type="button" className="tt-reset" onClick={() => { if (window.confirm(`Стереть все вписанные новые цены (${Object.keys(priceOver).length})?`)) setPriceOver({}); }}>стереть новые цены ({Object.keys(priceOver).length})</button>}
             <ResetCtl ctl={ctl} />
           </span>
@@ -468,10 +469,10 @@ export default function Margin({ cabinet }) {
       <div className="a-card m-pinned">
         <div className="a-bar m-tools">
           <b style={{ fontSize: 14 }}>Набор для репрайсера</b>
-          <span className="a-hint" style={{ margin: 0 }}>{pinRows.length ? `${pinRows.length} арт. · новых цен ${pinRows.filter(r => r.priceEd).length}` : 'нажмите 📌 у строки — она перенесётся сюда; так можно собрать цены по разным артикулам и выгрузить одним файлом'}</span>
+          <span className="a-hint" style={{ margin: 0 }}>{pinRows.length ? `${pinRows.length} арт. · новых цен ${pinRows.filter(r => r.priceEd).length}` : 'нажмите ＋ у строки — она добавится сюда и останется в исходной таблице; так можно собрать цены по разным артикулам и выгрузить одним файлом'}</span>
           {pinRows.length > 0 && <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
             <button type="button" className="a-btn" onClick={() => exportXlsx(pinRows)} title="Артикул и новая цена; где не вписана — текущая">⬇ Excel ({pinRows.length})</button>
-            <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Вернуть все строки из набора в общую таблицу? Вписанные цены сохранятся.')) setPinned([]); }}>вернуть все</button>
+            <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Убрать все строки из набора? Вписанные цены сохранятся.')) setPinned([]); }}>убрать все из набора</button>
             <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Очистить набор и стереть вписанные в нём новые цены?')) { setPriceOver(m => { const n = { ...m }; for (const o of pinned) delete n[o]; return n; }); setPinned([]); } }}>очистить</button>
           </span>}
         </div>
