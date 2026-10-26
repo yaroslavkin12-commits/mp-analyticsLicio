@@ -155,15 +155,15 @@ const JOBS = [
       () => collectClicks(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncStatsFromSheet(c)) },
   // Выкуп, цены/комиссии и финансы (юнит-экономика, P&L, % выкупа) — только из таблицы.
-  { id: 'finance', every: 1 * HOUR, hard: 170 * 1000, run: c => withTimeout(syncFinanceFromSheet(c), 160000, 'finance(таблица)') },
+  { id: 'finance', every: 1 * HOUR, hard: 170 * 1000, run: c => withTimeout(syncFinanceFromSheet(c, { coreOnly: c === 'licio' }), 160000, 'finance(таблица)') },
   { id: 'analytics_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'analytics_full',
       () => collectProductAnalytics(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncAnalyticsFromSheet(c)) },
 ];
 
-// Для Licio восстанавливаем только данные страницы «Реклама». Большой импорт
-// Finance/Buyout/Queries не требуется этой странице и раньше перегружал сервер.
-function jobsForCabinet(cabinet) { return cabinet === 'licio' ? JOBS.filter(j => j.id !== 'finance') : JOBS; }
+// Licio использует ту же финансовую модель, но импортирует только нужные
+// для аналитики, P&L и юнит-экономики вкладки (см. coreOnly выше).
+function jobsForCabinet() { return JOBS; }
 
 // Уведомления о новых заказах (вкладка «Уведомления») — для ВСЕХ кабинетов
 // (Licio и Defly), заказы берутся из вкладки Orders Google-таблицы (её
@@ -188,8 +188,8 @@ function adsCabinets() {
   return Object.entries(CABINETS)
     // Данные идут через Google-таблицу (скрипт собирает оба кабинета), поэтому
     // ключи Ozon на Render не обязательны. Licio подключён к рекламе с 11.10.2026.
-    // Licio: возвращён сбор рекламы; тяжёлая загрузка финансов исключена
-    // в jobsForCabinet. Достаточно таблицы, ключи Ozon на сервере не нужны.
+    // Все магазины обновляются из таблиц, включая аналитику и финансы Licio.
+    // Ключи Ozon на сервере не нужны.
     .filter(([id, cfg]) => cfg.sheetOnly ? isConnected(id) : !!(sheetId(id) || cfg.ozonClientId || cfg.ozonPerfClientId))
     .map(([id]) => id);
 }

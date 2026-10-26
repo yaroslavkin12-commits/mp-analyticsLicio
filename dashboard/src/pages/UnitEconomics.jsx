@@ -256,7 +256,7 @@ export default function UnitEconomics({ cabinet }) {
         <Kpi label="Поступление на счёт с 1 выкупа" value={money(payUnit)}
           sub={<><Delta value={dP(payUnit, prevT?.payUnit)} /> к прошлому периоду</>} />
       </div>
-      {noCost > 0 && <div className="c-msg bad">У {noCost} арт. ({pct1(T.ordRub ? noCostRub / T.ordRub * 100 : null)} заказов) нет себестоимости — прибыль по ним завышена. Заполните во вкладке «Себестоимость».</div>}
+      {noCost > 0 && <div className="c-msg bad">У {noCost} арт. ({pct1(T.ordRub ? noCostRub / T.ordRub * 100 : null)} заказов) нет себестоимости — прибыль по ним завышена. {cabinet === 'licio' ? 'Заполните в «Настройки → Себестоимость».' : 'Заполните во вкладке «Себестоимость».'}</div>}
 
       <div className={`a-card s-card ${loading ? 'a-loading' : ''}`}>
         <DualChart dates={dates} byDate={byDate} tip={tip} events={[]} metricsList={METRICS} storeKey="mp-unit-chart" defaults={{ left: 'ordRub', right: 'profit', type: 'combo' }} />

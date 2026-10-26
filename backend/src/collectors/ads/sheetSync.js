@@ -691,43 +691,47 @@ async function importPrices(cabinet) {
 }
 
 let whCleanDay = null;
-async function syncFinanceFromSheet(cabinet) {
+async function syncFinanceFromSheet(cabinet, { coreOnly = false } = {}) {
   // Отдельная задача 'finance' раз в час (см. jobs.js) — со своим, более
   // длинным таймаутом: вкладки большие (Finance ~30 тыс. строк).
   await ensureFinTables();
   let total = 0;
-  total += (await syncGeoFromSheet(cabinet)).rows || 0;
-  // Поисковые запросы по дням.
-  total += await syncQueriesIncremental(cabinet);
-  // Продажи по месяцам (сезонность).
-  const mon = await fetchSheetRows('AnalyticsMonthly', cabinet);
-  if (mon) {
-    const out = mon.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}/.test(String(r.month)))
-      .map(r => [cabinet, String(r.month).slice(0, 7), num(r.sku), num(r.revenue), Math.round(num(r.orders))]);
-    if (out.length) total += await bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku'], undefined, { diff: `monthly:${cabinet}` });
-  }
-  // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
-  const wh = await fetchSheetRows('StocksWh', cabinet);
-  if (wh) {
-    const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
-    const map = new Map();
-    for (const r of wh) {
-      if (r.cabinet !== cabinet || !r.offer_id) continue;
-      const w = String(r.warehouse || r.cluster || '—').slice(0, 160);
-      const key = r.offer_id + '|' + w;
-      const cur = map.get(key);
-      const row = [cabinet, today, r.offer_id, w, String(r.cluster || clusterOfWarehouse(r.warehouse)).slice(0, 160), r.sku ? num(r.sku) || null : null,
-        Math.round(num(r.available)), Math.round(num(r.transit)), Math.round(num(r.reserved)), r.ads === '' ? null : num(r.ads), r.idc === '' ? null : num(r.idc)];
-      if (cur) { cur[6] += row[6]; cur[7] += row[7]; cur[8] += row[8]; } else map.set(key, row);
+  // Licio: для аналитики, P&L и юнит-экономики нужны только выкупы, цены
+  // и начисления. Не загружаем географию, запросы и складские кластеры.
+  if (!coreOnly) {
+    total += (await syncGeoFromSheet(cabinet)).rows || 0;
+    // Поисковые запросы по дням.
+    total += await syncQueriesIncremental(cabinet);
+    // Продажи по месяцам (сезонность).
+    const mon = await fetchSheetRows('AnalyticsMonthly', cabinet);
+    if (mon) {
+      const out = mon.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}/.test(String(r.month)))
+        .map(r => [cabinet, String(r.month).slice(0, 7), num(r.sku), num(r.revenue), Math.round(num(r.orders))]);
+      if (out.length) total += await bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku'], undefined, { diff: `monthly:${cabinet}` });
     }
-    if (map.size) {
-      // Старше 120 дней — чистим раз в сутки, не каждый час.
-      if (whCleanDay !== today) {
-        await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date < $2`, [cabinet, new Date(Date.now() - 120 * 86400e3).toISOString().slice(0, 10)]);
-        whCleanDay = today;
+    // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
+    const wh = await fetchSheetRows('StocksWh', cabinet);
+    if (wh) {
+      const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+      const map = new Map();
+      for (const r of wh) {
+        if (r.cabinet !== cabinet || !r.offer_id) continue;
+        const w = String(r.warehouse || r.cluster || '—').slice(0, 160);
+        const key = r.offer_id + '|' + w;
+        const cur = map.get(key);
+        const row = [cabinet, today, r.offer_id, w, String(r.cluster || clusterOfWarehouse(r.warehouse)).slice(0, 160), r.sku ? num(r.sku) || null : null,
+          Math.round(num(r.available)), Math.round(num(r.transit)), Math.round(num(r.reserved)), r.ads === '' ? null : num(r.ads), r.idc === '' ? null : num(r.idc)];
+        if (cur) { cur[6] += row[6]; cur[7] += row[7]; cur[8] += row[8]; } else map.set(key, row);
       }
-      total += await replaceRange('stock_cluster_daily', cabinet, [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
-        ['cabinet', 'date', 'offer_id', 'warehouse']);
+      if (map.size) {
+        // Старше 120 дней — чистим раз в сутки, не каждый час.
+        if (whCleanDay !== today) {
+          await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date < $2`, [cabinet, new Date(Date.now() - 120 * 86400e3).toISOString().slice(0, 10)]);
+          whCleanDay = today;
+        }
+        total += await replaceRange('stock_cluster_daily', cabinet, [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
+          ['cabinet', 'date', 'offer_id', 'warehouse']);
+      }
     }
   }
   const buy = await fetchSheetRows('Buyout', cabinet);

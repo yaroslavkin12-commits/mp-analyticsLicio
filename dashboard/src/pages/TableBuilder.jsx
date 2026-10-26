@@ -1,3 +1,4 @@
+import { familyOf } from '../lib/cabinets';
 import SetMark from '../components/SetMark';
 import React, { useState, useEffect, useMemo, useCallback, useRef, createContext, useContext } from 'react';
 import { compute, priceFor } from './Calculator';
@@ -170,9 +171,9 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   const needYAll = cfg.cols.some(c => c.m === 'yAll') || (setCols || []).some(c => c.m === 'yAll');
   const [season, setSeason] = useState(null);
   const [prodYear, setProdYear] = useState(null);
-  useEffect(() => { setSeason(null); }, [cabinet]);
+  useEffect(() => { setSeason(null); setProdYear(null); }, [cabinet]);
   useEffect(() => { if (needY12 && !season) getSeason(cabinet).then(r => setSeason(r.data.data)).catch(() => setSeason(false)); }, [needY12, season, cabinet]);
-  useEffect(() => { if (needYAll && !prodYear) getProduction('defly').then(r => setProdYear(r.data.data)).catch(() => setProdYear(false)); }, [needYAll, prodYear]);
+  useEffect(() => { if (needYAll && !prodYear) getProduction(familyOf(cabinet)).then(r => setProdYear(r.data.data)).catch(() => setProdYear(false)); }, [needYAll, prodYear, cabinet]);
   const yInfo = useMemo(() => {
     if (!season) return null;
     const now = dayjs(), want = [];

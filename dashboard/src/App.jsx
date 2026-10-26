@@ -55,13 +55,13 @@ class PageBoundary extends React.Component {
 const PAGES = { summary: ShopsSummary, sales: SalesAnalytics, rnp: RnpPage, orders: OrdersFeed, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Products, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
-// страницы вообще доступны в каждом кабинете (Defly пока видит только
-// вкладку "Реклама"). "Соинвест" — общий Seller API Ozon, доступен обоим.
+// страницы доступны в каждом кабинете. Аналитика, P&L и юнит-экономика
+// используют Ozon-данные выбранного магазина.
 // "Калькулятор" — чистый клиентский инструмент, не завязан на кабинет.
 // "Уведомления" — отслеживание артикулов + Telegram-алерты о новых заказах,
 // пока только для Licio (там же идёт общий сбор заказов WB/Ozon).
 const PAGES_BY_CABINET_RAW = {
-  licio: ['dashboard', 'ads', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
+  licio: ['sales', 'ads', 'unit', 'pnl', 'stocks', 'discounts', 'notifications', 'calculator', 'settings'],
   defly: ['sales', 'summary', 'rnp', 'orders', 'plan', 'ads', 'search', 'inventory', 'production', 'pricelog', 'geo', 'check', 'abc', 'season', 'unit', 'margin', 'pnl', 'recon', 'buyout', 'discounts', 'notifications', 'calculator', 'costs'],
 };
 // Магазины семейства Defly видят те же разделы.
@@ -204,6 +204,7 @@ export default function App() {
                 position:'absolute', inset:0, overflow:'auto',
                 visibility: on ? 'visible' : 'hidden', zIndex: on ? 1 : 0, pointerEvents: on ? 'auto' : 'none',
               }}>
+                {cabinet === 'licio' && ['sales', 'unit', 'pnl'].includes(id) && <div style={{padding:'8px 20px 0',fontSize:12,color:'var(--text2)'}}>Ozon · данные кабинета Licio</div>}
                 <PageBoundary>
                   <P platform={platform} cabinet={SHARED_PAGES[id] && isDeflyLike(cabinet) ? SHARED_PAGES[id] : cabinet} active={on}/>
                 </PageBoundary>

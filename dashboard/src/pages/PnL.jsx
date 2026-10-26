@@ -314,7 +314,7 @@ export default function PnL({ cabinet }) {
             <Kpi label="Реклама" value={money(-T.ads)} sub={`${pct1(T.drr)} от выручки`} />
             <Kpi label="Прибыль" value={<span className={T.profit < 0 ? 's-down' : ''}>{money(T.profit)}</span>} sub={`маржа ${pct1(T.margin)} · ROI ${pct1(T.roi)}`} />
           </div>
-          {noCost > 0 && <div className="c-msg bad">У {noCost} арт. с выкупами нет себестоимости — прибыль по ним завышена. Заполните во вкладке «Себестоимость».</div>}
+          {noCost > 0 && <div className="c-msg bad">У {noCost} арт. с выкупами нет себестоимости — прибыль по ним завышена. {cabinet === 'licio' ? 'Заполните в «Настройки → Себестоимость».' : 'Заполните во вкладке «Себестоимость».'}</div>}
           {filtered && <div className="a-hint">Начисления без артикула (хранение, подписки и т. п.) распределены пропорционально выкупам, реклама без привязки к товару — по расходу рекламного кабинета: на выбранное — {pct1(shareOf(list.arts) * 100)}.</div>}
 
           {T.revenue > 0 && strip.length > 0 && (

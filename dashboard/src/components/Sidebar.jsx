@@ -10,7 +10,7 @@ const ICONS = { summary: Store, sales: TrendingUp, rnp: Activity, orders: Shoppi
   buyout: PackageCheck, unit: Layers, margin: Tag, pricelog: NotebookPen, pnl: Wallet, recon: ScanSearch, notifications: Bell, calculator: Calculator, costs: Boxes };
 
 const NAV_BY_CABINET = {
-  licio: [['dashboard','📊','Дашборд'],['ads','📣','Реклама'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
+  licio: [['sales','📊','Аналитика продаж'],['ads','📣','Реклама'],['unit','📐','Юнит-экономика'],['pnl','💰','P&L'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
   // Разделы меню Defly: заголовок раздела — ['__h', 'Название'].
   defly: [
     ['__h','Продажи'],['summary','🏬','Сводка по магазинам'],['sales','📈','Аналитика продаж'],['rnp','🩺','РНП'],['orders','🛒','Лента заказов'],['plan','🎯','План / факт'],['check','🧾','Средний чек'],['abc','🔤','ABC-анализ'],['season','🍂','Сезонность'],['geo','🗺️','География продаж'],
