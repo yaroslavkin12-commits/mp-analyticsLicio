@@ -6,7 +6,7 @@ const { autoPath } = require('../lib/categories');
 const dayjs = require('dayjs');
 const { query } = require('../db');
 const { listCabinets } = require('../config/cabinets');
-const { requestRefresh, currentJob, getStatus, JOBS } = require('../collectors/ads/jobs');
+const { requestRefresh, currentJob, getStatus, jobsForCabinet, adsCabinets } = require('../collectors/ads/jobs');
 const { getAssociatedOfferIds, ASSOCIATED_ARTICLES } = require('../config/associatedArticles');
 
 // GET /api/ads/cabinets — список кабинетов и что для них настроено (видно
@@ -169,7 +169,8 @@ router.get('/data-status', async (req, res) => {
     const st = await getStatus(cabinet);
     res.json({ success: true, data: {
       running: currentJob(cabinet),
-      jobs: JOBS.map(j => {
+      automatic: adsCabinets().includes(cabinet),
+      jobs: jobsForCabinet(cabinet).map(j => {
         const r = st.get(j.id) || {};
         return { job: j.id, everyMin: Math.round(j.every / 60000), lastSuccessAt: r.last_success_at || null,
           lastErrorAt: r.last_error_at || null, lastError: r.last_error || null, lastWarning: r.last_warning || null,
