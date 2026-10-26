@@ -161,6 +161,10 @@ const JOBS = [
       () => syncAnalyticsFromSheet(c)) },
 ];
 
+// Для Licio восстанавливаем только данные страницы «Реклама». Большой импорт
+// Finance/Buyout/Queries не требуется этой странице и раньше перегружал сервер.
+function jobsForCabinet(cabinet) { return cabinet === 'licio' ? JOBS.filter(j => j.id !== 'finance') : JOBS; }
+
 // Уведомления о новых заказах (вкладка «Уведомления») — для ВСЕХ кабинетов
 // (Licio и Defly), заказы берутся из вкладки Orders Google-таблицы (её
 // каждые 5 минут обновляет Google-скрипт, функция syncOrders).
@@ -184,8 +188,9 @@ function adsCabinets() {
   return Object.entries(CABINETS)
     // Данные идут через Google-таблицу (скрипт собирает оба кабинета), поэтому
     // ключи Ozon на Render не обязательны. Licio подключён к рекламе с 11.10.2026.
-    // Licio временно отключён: с ним сервер (512 МБ) падал по памяти (11.10.2026).
-    .filter(([id, cfg]) => id !== 'licio' && (cfg.sheetOnly ? isConnected(id) : (cfg.ozonClientId || cfg.ozonPerfClientId)))
+    // Licio: возвращён сбор рекламы; тяжёлая загрузка финансов исключена
+    // в jobsForCabinet. Достаточно таблицы, ключи Ozon на сервере не нужны.
+    .filter(([id, cfg]) => cfg.sheetOnly ? isConnected(id) : !!(sheetId(id) || cfg.ozonClientId || cfg.ozonPerfClientId))
     .map(([id]) => id);
 }
 
@@ -365,9 +370,17 @@ async function runJob(cabinet, job, runFn) {
 const busy = new Map();       // cabinet -> id текущей задачи
 const forced = new Map();     // cabinet -> { days } запрос ручного обновления
 
-async function tickCabinet(cabinet) {
-  if (busy.has(cabinet)) return;
+// Общая очередь распространяется и на ручное обновление: два больших
+// импорта таблиц разных магазинов не должны идти одновременно на 512 МБ.
+let cabinetTail = Promise.resolve();
+function tickCabinet(cabinet) {
+  if (busy.has(cabinet)) return Promise.resolve();
   busy.set(cabinet, 'start');
+  const run = cabinetTail.then(() => runCabinet(cabinet));
+  cabinetTail = run.catch(() => {});
+  return run;
+}
+async function runCabinet(cabinet) {
   try {
     // Ручное обновление с кнопки — все основные задачи сразу, за нужный период.
     const force = forced.get(cabinet);
@@ -404,7 +417,7 @@ async function tickCabinet(cabinet) {
     // почти не меняются, а база в это время может поспать.
     const h = (new Date(now).getUTCHours() + 3) % 24;
     const night = h >= 1 && h < 7;
-    for (const job of JOBS) {
+    for (const job of jobsForCabinet(cabinet)) {
       const j = night && job.every < HOUR ? { ...job, every: HOUR } : job;
       // Каталога у кабинета нет (новый магазин) — пробуем каждые 10 мин, а не раз в 6 ч.
       const noCat = job.id === 'catalog' && !(await hasCatalog(cabinet));
@@ -450,4 +463,4 @@ function startAdsJobs() {
   console.log(`⏰ Соинвест/СПП (${discountCabinets().join(', ') || 'нет'}): проверка каждые 5 мин`);
 }
 
-module.exports = { forgetStatus, startAdsJobs, requestRefresh, currentJob, getStatus, JOBS, adsCabinets, discountCabinets };
+module.exports = { forgetStatus, startAdsJobs, requestRefresh, currentJob, getStatus, JOBS, jobsForCabinet, adsCabinets, discountCabinets };
