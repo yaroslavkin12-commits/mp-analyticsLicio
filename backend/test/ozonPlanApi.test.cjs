@@ -60,3 +60,14 @@ test('API: предупреждения требуют явного подтве
   assert.equal((await call('post', '/fix', { month: '2026-11', previewId: preview.id })).status, 400);
   assert.equal((await call('post', '/fix', { month: '2026-11', previewId: preview.id, acknowledgeWarnings: true })).status, 200);
 });
+test('API: план Licio хранится отдельно, предпросмотр нельзя зафиксировать в другой области',async()=>{
+ basis.shops.licio={label:'Licio',byPath:{[p]:{qty:100,payout:100000}},available:{mn:'2026-01-01',mx:'2026-10-20'}};
+ const common=store.get('plan:ozon:v2:2026-11');
+ const preview=await call('post','/preview',{...input(0),scope:'licio'});
+ assert.equal(preview.success,true);assert.deepEqual(preview.data.rows[0].shops.map(x=>x.id),['licio']);
+ assert.equal((await call('post','/fix',{month:'2026-11',previewId:preview.data.id})).status,400);
+ const fixed=await call('post','/fix',{month:'2026-11',scope:'licio',previewId:preview.data.id});
+ assert.equal(fixed.success,true);assert.ok(store.has('plan:licio:v2:2026-11'));assert.equal(store.get('plan:ozon:v2:2026-11'),common);
+ const state=await call('get','/',{},{month:'2026-11',scope:'licio'});assert.equal(state.data.activeId,preview.data.id);
+ assert.equal((await call('get','/',{},{month:'2026-11',scope:'wrong'})).status,400);
+});

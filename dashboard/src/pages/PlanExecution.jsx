@@ -2,7 +2,7 @@ import React from 'react';
 import dayjs from 'dayjs';
 import { SHOPS } from '../lib/cabinets';
 import { planTotal, planActual, inPlanPath, evaluatePlan, resultTone, resultLabel } from '../lib/planEvaluation';
-const SH = SHOPS.filter(s => s.platform === 'ozon');
+const DEFAULT_SH = SHOPS.filter(s => s.platform === 'ozon');
 const SEP = ' / ';
 const fmt = (v, digits = 0) => v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toLocaleString('ru-RU', { maximumFractionDigits: digits });
 const rub = v => v === null || v === undefined ? '—' : `${fmt(v, 2)} ₽`;
@@ -32,7 +32,7 @@ function ResultCells({ t, f, score, future, end }) {
 function Headers({ first }) {
   return <tr><th scope="col">{first}</th><th scope="col">План, шт.</th><th scope="col">Факт, шт.</th><th scope="col">Выполнено за месяц</th><th scope="col">К плану на дату, шт.</th><th scope="col">Цель за выкуп</th><th scope="col">Факт за выкуп</th><th scope="col">Поступило / план месяца</th><th scope="col">К плану суммы на дату</th></tr>;
 }
-export default function PlanExecution({ month, viewed, paths, fact, shop, path, setPath }) {
+export default function PlanExecution({ shops: SH = DEFAULT_SH, groupLabel = 'Весь Ozon', month, viewed, paths, fact, shop, path, setPath }) {
   const rows = viewed.rows;
   const selected = rows.filter(r => inPlanPath(r.path, path));
   const t = planTotal(selected, shop), f = planActual(fact, rows, shop, path);
@@ -80,6 +80,6 @@ export default function PlanExecution({ month, viewed, paths, fact, shop, path, 
     })}</tbody></table></div></section>
     <section className="a-card op-section"><h2>Распределение и результат по магазинам</h2><div className="op-scroll"><table className="op-table op-results"><thead><Headers first="Магазин" /></thead><tbody>{SH.filter(s => !shop || s.id === shop).map(s => { const t = planTotal(selected, s.id), f = planActual(fact, selected, s.id); return <tr key={s.id}><td>{s.label}<small>{fact.shops[s.id]?.error || (fact.shops[s.id]?.partial ? 'Неполный период' : `Сбор ${stamp(fact.shops[s.id]?.updatedAt)}`)}</small></td><ResultCells t={t} f={f} score={evaluatePlan(t, f, elapsed, days)} future={fact.future} end={end} /></tr>; })}</tbody></table></div></section>
     {!!unplanned.length && <details className="a-card op-section"><summary>Без плана · {unplanned.length} категорий — исключены из выполнения</summary><p>{unplanned.join(' · ')}</p></details>}
-    <section className="a-card op-section"><h2>По дням · {path || 'Запланированные категории'} · {shop ? SH.find(s => s.id === shop)?.label : 'Весь Ozon'}</h2><p className="op-muted">План штук и общей суммы равномерный по дням. Среднее за выкуп сравнивается с полной целью. Текущий день предварительный и не получает цветовую оценку; будущие дни не оцениваются.</p><div className="op-scroll op-day-scroll" tabIndex={0} role="region" aria-label="Показатели по дням, горизонтальная прокрутка"><table className="op-table op-days" style={{ '--op-days-count': days }}><colgroup><col className="op-day-label" /><col span={days} /></colgroup><thead><tr><th scope="col">Показатель</th>{dayItems.map(d => <th scope="col" key={d.date}>{dayjs(d.date).format('DD.MM')}</th>)}</tr></thead><tbody>{dayRows.map(row => <tr key={row.label}><th scope="row">{row.label}</th>{dayItems.map(d => { const tone = !row.planned && d.available && row.tone ? row.tone(d) : null; return <td key={d.date} className={cellTone(tone)}>{row.planned || d.available ? <>{row.value(d)}{row.detail && <small>{row.detail(d)}</small>}</> : '—'}</td>; })}</tr>)}</tbody></table></div></section>
+    <section className="a-card op-section"><h2>По дням · {path || 'Запланированные категории'} · {shop ? SH.find(s => s.id === shop)?.label : groupLabel}</h2><p className="op-muted">План штук и общей суммы равномерный по дням. Среднее за выкуп сравнивается с полной целью. Текущий день предварительный и не получает цветовую оценку; будущие дни не оцениваются.</p><div className="op-scroll op-day-scroll" tabIndex={0} role="region" aria-label="Показатели по дням, горизонтальная прокрутка"><table className="op-table op-days" style={{ '--op-days-count': days }}><colgroup><col className="op-day-label" /><col span={days} /></colgroup><thead><tr><th scope="col">Показатель</th>{dayItems.map(d => <th scope="col" key={d.date}>{dayjs(d.date).format('DD.MM')}</th>)}</tr></thead><tbody>{dayRows.map(row => <tr key={row.label}><th scope="row">{row.label}</th>{dayItems.map(d => { const tone = !row.planned && d.available && row.tone ? row.tone(d) : null; return <td key={d.date} className={cellTone(tone)}>{row.planned || d.available ? <>{row.value(d)}{row.detail && <small>{row.detail(d)}</small>}</> : '—'}</td>; })}</tr>)}</tbody></table></div></section>
   </>;
 }

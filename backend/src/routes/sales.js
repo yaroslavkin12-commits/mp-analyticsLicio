@@ -325,7 +325,7 @@ router.get('/summary', async (req, res) => {
     const { from, to } = period(req.query);
     const len = dayjs(to).diff(from, 'day') + 1;
     const pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD'), pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
-    const shops = listCabinets().filter(c => c.platform === 'ozon' && c.connected);
+    const shops = listCabinets().filter(c => req.query.cabinet === 'licio' ? c.id === 'licio' : c.platform === 'ozon' && c.connected);
     const out = [];
     for (const c of shops) {
       const cab = c.id;

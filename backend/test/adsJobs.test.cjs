@@ -17,12 +17,12 @@ function scheduler(){
  return{...module.exports,calls,max:()=>maxActive};
 }
 async function idle(s,ids){for(let i=0;i<300;i++){if(ids.every(c=>!s.currentJob(c)))return;await new Promise(r=>setTimeout(r,5))}throw Error('Очередь не завершилась')}
-test('Licio включён в автообновление из таблицы без серверных ключей; финансы используют облегчённый импорт',async()=>{
+test('Licio включён в автообновление из таблицы без серверных ключей; финансы и новые разделы используют полный импорт',async()=>{
  const s=scheduler();assert.deepEqual(Array.from(s.adsCabinets()),['licio','defly','nabauto']);
  assert.ok(s.jobsForCabinet('licio').some(j=>j.id==='finance'));assert.ok(s.jobsForCabinet('defly').some(j=>j.id==='finance'));
  s.requestRefresh('licio',30);await idle(s,['licio']);
  for(const name of ['syncCatalogFromSheet','syncStatsFromSheet','syncAnalyticsFromSheet','syncStocksFromSheet','syncAdDetailsFromSheet'])assert.ok(s.calls.some(([c,n])=>c==='licio'&&n===name),name);
- assert.ok(s.calls.some(([c,n,o])=>c==='licio'&&n==='syncFinanceFromSheet'&&o.coreOnly===true));
+ assert.ok(s.calls.some(([c,n,o])=>c==='licio'&&n==='syncFinanceFromSheet'&&o.coreOnly===false));
 });
 test('Одновременные ручные обновления магазинов выполняются по очереди; Defly сохраняет финансовый импорт',async()=>{
  const s=scheduler();s.requestRefresh('licio',30);s.requestRefresh('defly',30);await idle(s,['licio','defly']);

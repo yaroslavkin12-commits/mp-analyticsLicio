@@ -155,14 +155,14 @@ const JOBS = [
       () => collectClicks(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncStatsFromSheet(c)) },
   // Выкуп, цены/комиссии и финансы (юнит-экономика, P&L, % выкупа) — только из таблицы.
-  { id: 'finance', every: 1 * HOUR, hard: 170 * 1000, run: c => withTimeout(syncFinanceFromSheet(c, { coreOnly: c === 'licio' }), 160000, 'finance(таблица)') },
+  { id: 'finance', every: 1 * HOUR, hard: 170 * 1000, run: c => withTimeout(syncFinanceFromSheet(c, { coreOnly: false }), 160000, 'finance(таблица)') },
   { id: 'analytics_full', every: 20 * HOUR, run: c => withSheetFallback(c, 'analytics_full',
       () => collectProductAnalytics(c, { dateFrom: mskDate(59), dateTo: mskDate(0) }),
       () => syncAnalyticsFromSheet(c)) },
 ];
 
-// Licio использует ту же финансовую модель, но импортирует только нужные
-// для аналитики, P&L и юнит-экономики вкладки (см. coreOnly выше).
+// Все магазины используют полный импорт для аналитики, финансов,
+// географии, поисковых запросов и складов; задачи идут в общей очереди.
 function jobsForCabinet() { return JOBS; }
 
 // Уведомления о новых заказах (вкладка «Уведомления») — для ВСЕХ кабинетов

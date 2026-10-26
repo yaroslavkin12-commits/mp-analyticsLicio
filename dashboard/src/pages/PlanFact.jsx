@@ -7,14 +7,16 @@ import PlanExecution from './PlanExecution';
 import './ads2.css';
 import './plan.css';
 
-const SH = SHOPS.filter(s => s.platform === 'ozon');
+const DEFAULT_SH = SHOPS.filter(s => s.platform === 'ozon');
+const LICIO_SH = SHOPS.filter(s => s.id === 'licio');
+const draftKey = (month, scope) => `${scope === 'licio' ? 'mp-licio-plan-draft' : 'mp-ozon-plan-draft'}:${month}`;
 const SEP = ' / ';
 const fmt = (v, digits = 0) => v === null || v === undefined || !Number.isFinite(v) ? '—' : v.toLocaleString('ru-RU', { maximumFractionDigits: digits });
 const rub = v => v === null || v === undefined ? '—' : `${fmt(v, 2)} ₽`;
 const pct = v => v === null || v === undefined ? '—' : `${fmt(v, 1)}%`;
 const errorText = e => e.response?.data?.error || e.message;
 const stamp = v => v ? new Date(v).toLocaleString('ru-RU') : '—';
-const readDraft = month => { try { return JSON.parse(localStorage.getItem(`mp-ozon-plan-draft:${month}`)); } catch { return null; } };
+const readDraft = (month, scope) => { try { return JSON.parse(localStorage.getItem(draftKey(month, scope))); } catch { return null; } };
 const number = v => typeof v === 'string' ? Number(v.replace(/\s/g, '').replace(',', '.')) : Number(v);
 const inPath = (p, parent) => !parent || p === parent || p.startsWith(parent + SEP);
 function draftRows(targets) {
@@ -23,7 +25,10 @@ function draftRows(targets) {
 function Input({ value, onChange, label, ...rest }) {
   return <input className="op-input n" aria-label={label} inputMode="decimal" value={value ?? ''} onChange={e => onChange(e.target.value)} {...rest} />;
 }
-export default function PlanFact({ active = true }) {
+export default function PlanFact({ active = true, cabinet }) {
+  const scope = cabinet === 'licio' ? 'licio' : undefined;
+  const SH = scope ? LICIO_SH : DEFAULT_SH;
+  const groupLabel = scope ? 'Licio' : 'Весь Ozon';
   const [month, setMonth] = useState(dayjs().format('YYYY-MM'));
   const [mode, setMode] = useState('plan');
   const [state, setState] = useState(null), [loadError, setLoadError] = useState('');
@@ -49,9 +54,9 @@ export default function PlanFact({ active = true }) {
     if (!active) return;
     let off = false;
     setState(null); setLoadError(''); setPreview(null); setActionError(''); setNotice(''); setFact(null); setVersion(''); setPath('');
-    getOzonPlan(month).then(r => {
+    getOzonPlan(month, scope).then(r => {
       if (off) return;
-      const s = r.data.data, v = s.versions.find(x => x.id === s.activeId), draft = readDraft(month);
+      const s = r.data.data, v = s.versions.find(x => x.id === s.activeId), draft = readDraft(month, scope);
       setTargets(draft?.targets || Object.fromEntries((v?.targets || []).map(t => [t.path, { ...t }])));
       setPeriod(draft?.period || (v ? { from: v.basis.from, to: v.basis.to } : s.defaultPeriod));
       setSource(draft?.source || v?.basis.source || 'fact');
@@ -62,13 +67,13 @@ export default function PlanFact({ active = true }) {
   }, [month, active]);
   useEffect(() => {
     if (!active || !state || state.month !== month) return;
-    try { localStorage.setItem(`mp-ozon-plan-draft:${month}`, JSON.stringify({ revision: state.revision, targets, period, source })); } catch { /* Черновик остаётся в памяти. */ }
+    try { localStorage.setItem(draftKey(month, scope), JSON.stringify({ revision: state.revision, targets, period, source })); } catch { /* Черновик остаётся в памяти. */ }
   }, [targets, period, source, state, month, active]);
   useEffect(() => {
     if (!active || !state || state.month !== month || !period.from || !period.to) return;
     let off = false;
     setBasis(null); setBasisError(''); setBasisBusy(true); setPreview(null);
-    getOzonPlanBasis({ month, ...period, source, refresh: basisRefresh }).then(r => { if (!off) setBasis(r.data.data); })
+    getOzonPlanBasis({ scope, month, ...period, source, refresh: basisRefresh }).then(r => { if (!off) setBasis(r.data.data); })
       .catch(e => { if (!off) setBasisError(errorText(e)); }).finally(() => { if (!off) setBasisBusy(false); });
     return () => { off = true; };
   }, [active, state?.month, month, period.from, period.to, source, basisRefresh]);
@@ -76,7 +81,7 @@ export default function PlanFact({ active = true }) {
     if (!active || !state || state.month !== month || mode !== 'actual') return;
     let off = false;
     setFact(null); setFactError(''); setFactBusy(true);
-    getOzonPlanExecution({ month, version: version || undefined, refresh }).then(r => { if (!off) setFact(r.data.data); })
+    getOzonPlanExecution({ scope, month, version: version || undefined, refresh }).then(r => { if (!off) setFact(r.data.data); })
       .catch(e => { if (!off) setFactError(errorText(e)); }).finally(() => { if (!off) setFactBusy(false); });
     return () => { off = true; };
   }, [active, state?.revision, mode, month, version, refresh]);
@@ -88,7 +93,7 @@ export default function PlanFact({ active = true }) {
   const override = (p, field, id, value) => { setTargets(t => ({ ...t, [p]: { ...(t[p] || {}), [field]: { ...(t[p]?.[field] || {}), [id]: value } } })); setPreview(null); };
   const copy = async () => {
     try {
-      const s = (await getOzonPlan(dayjs(month + '-01').subtract(1, 'month').format('YYYY-MM'))).data.data;
+      const s = (await getOzonPlan(dayjs(month + '-01').subtract(1, 'month').format('YYYY-MM'), scope)).data.data;
       const v = s.versions.find(x => x.id === s.activeId);
       if (!v) { setNotice('В прошлом месяце нет общего плана. Старые планы кабинетов доступны в архиве.'); return; }
       setTargets(Object.fromEntries(v.targets.map(t => [t.path, { ...t, weights: {}, means: {} }]))); setPreview(null);
@@ -100,7 +105,7 @@ export default function PlanFact({ active = true }) {
     setPreviewBusy(true); setActionError(''); setAck(false);
     try {
       const entered = Object.entries(targets).filter(([, t]) => (t.qty !== '' && t.qty !== undefined) || (t.mean !== '' && t.mean !== undefined)).map(([p, t]) => ({ ...t, path: p, qty: t.qty === '' || t.qty === undefined ? '' : number(t.qty), mean: t.mean === '' || t.mean === undefined ? '' : number(t.mean), weights: Object.fromEntries(Object.entries(t.weights || {}).map(([k, v]) => [k, v === '' ? '' : number(v)])), means: Object.fromEntries(Object.entries(t.means || {}).map(([k, v]) => [k, v === '' ? '' : number(v)])) }));
-      const result = (await previewOzonPlan({ month, ...period, source, targets: entered, expectedRevision: state.revision })).data.data;
+      const result = (await previewOzonPlan({ scope, month, ...period, source, targets: entered, expectedRevision: state.revision })).data.data;
       if (currentInput.current === inputAtStart) setPreview(result);
       else setNotice('Черновик изменился во время расчёта. Постройте предпросмотр ещё раз.');
     } catch (e) { setActionError(errorText(e)); }
@@ -109,7 +114,7 @@ export default function PlanFact({ active = true }) {
   const fix = async () => {
     setSaving(true); setActionError('');
     try {
-      const s = (await fixOzonPlan({ month, previewId: preview.id, acknowledgeWarnings: ack, note })).data.data;
+      const s = (await fixOzonPlan({ scope, month, previewId: preview.id, acknowledgeWarnings: ack, note })).data.data;
       setState(prev => ({ ...prev, ...s })); setPreview(null); setNote(''); setNotice('Распределение зафиксировано на месяц. Обновления факта его не изменят.'); setMode('actual'); setVersion(''); setRefresh(x => x + 1);
     } catch (e) { setActionError(errorText(e)); }
     finally { setSaving(false); }
@@ -130,14 +135,14 @@ export default function PlanFact({ active = true }) {
     for (const p of paths.filter(p => p === top || p.startsWith(top + SEP))) displayRows.push({ path: p, parent: false });
   }
   return <div className="mpui op-page">
-    <div className="op-heading"><div><h1>План / факт <span>Ozon</span></h1><p>Один план на Defly, NABauto, Alex, Fullgas и Accent Line</p></div><label className="op-month">Месяц<input type="month" value={month} onChange={e => { if (e.target.value) setMonth(e.target.value); }} /></label></div>
+    <div className="op-heading"><div><h1>План / факт <span>Ozon</span></h1><p>{scope ? 'Отдельный план кабинета Licio' : 'Один план на Defly, NABauto, Alex, Fullgas и Accent Line'}</p></div><label className="op-month">Месяц<input type="month" value={month} onChange={e => { if (e.target.value) setMonth(e.target.value); }} /></label></div>
     <div className="op-toolbar"><div className="a-seg"><button className={mode === 'plan' ? 'on' : ''} onClick={() => setMode('plan')}>Планирование</button><button className={mode === 'actual' ? 'on' : ''} onClick={() => setMode('actual')}>Выполнение</button></div><span className="op-state">{fixed ? `Зафиксирован · версия ${state.versions.length} · ${stamp(fixed.createdAt)}` : 'План ещё не зафиксирован'}</span></div>
     {notice && <div className="op-alert" role="status">{notice}<button className="op-close" aria-label="Скрыть сообщение" onClick={() => setNotice('')}>×</button></div>}
     {actionError && <div className="op-alert bad" role="alert">{actionError}</div>}
     {mode === 'plan' ? <>
       <section className="a-card op-section"><div className="op-section-head"><div><h2>1. Общие цели на месяц</h2><p>Заполняйте подкатегории. Родительские итоги появятся сразу, даже если остальные строки пусты.</p></div><button className="a-btn" onClick={copy}>Взять цели прошлого месяца</button></div>
         <div className="op-summary"><span><b>{fmt(draftTotal.qty)}</b> выкупов</span><span><b>{rub(draftTotal.mean)}</b> за выкуп</span><small>План задан: {filled.length} из {paths.length} категорий · черновик сохраняется в этом браузере</small></div>
-        {!paths.length && <p className="op-muted">{basisBusy ? 'Загружаем категории пяти магазинов…' : 'Категории появятся после загрузки базы распределения.'}</p>}
+        {!paths.length && <p className="op-muted">{basisBusy ? (scope ? 'Загружаем категории Licio…' : 'Загружаем категории пяти магазинов…') : 'Категории появятся после загрузки базы распределения.'}</p>}
         {!!paths.length && <div className="op-scroll"><table className="op-table op-targets"><thead><tr><th>Категория / подкатегория</th><th>Выкупы за месяц, шт.</th><th>Поступление за выкуп, ₽</th><th>Распределение</th></tr></thead><tbody>{displayRows.map((r, idx) => {
           const t = targets[r.path] || {}, children = filled.filter(x => inPath(x.path, r.path)), sum = total(children);
           return <React.Fragment key={r.path + idx}><tr className={r.parent ? 'op-parent' : ''}><td className="op-name" style={{ paddingLeft: r.path.includes(SEP) ? 28 : 14 }}>{r.path.split(SEP).at(-1)}{r.parent && <small>План задан: {r.children.filter(p => filled.some(x => x.path === p)).length} из {r.children.length}</small>}</td>
@@ -168,11 +173,11 @@ export default function PlanFact({ active = true }) {
         {fixed && <p className="op-muted">Появится новая версия. Предыдущее распределение останется в истории.</p>}
       </section>}
     </> : <>
-      <section className="a-card op-section"><div className="op-controls"><label>Магазины<select value={shop} onChange={e => setShop(e.target.value)}><option value="">Весь Ozon</option>{SH.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label>Категория<select value={path} onChange={e => setPath(e.target.value)}><option value="">Все запланированные</option>{[...new Set(rows.flatMap(r => [r.path.split(SEP)[0], r.path]))].map(p => <option key={p} value={p}>{p}</option>)}</select></label><label>Версия<select value={version || state.activeId || ''} onChange={e => setVersion(e.target.value)}>{!state.versions.length && <option value="">План не задан</option>}{state.versions.map((v, i) => <option key={v.id} value={v.id}>{i + 1} · {stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</option>)}</select></label><button className="a-btn" disabled={factBusy} onClick={() => setRefresh(x => x + 1)}>Обновить факт</button></div></section>
+      <section className="a-card op-section"><div className="op-controls"><label>Магазины<select value={shop} onChange={e => setShop(e.target.value)}><option value="">{groupLabel}</option>{SH.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label><label>Категория<select value={path} onChange={e => setPath(e.target.value)}><option value="">Все запланированные</option>{[...new Set(rows.flatMap(r => [r.path.split(SEP)[0], r.path]))].map(p => <option key={p} value={p}>{p}</option>)}</select></label><label>Версия<select value={version || state.activeId || ''} onChange={e => setVersion(e.target.value)}>{!state.versions.length && <option value="">План не задан</option>}{state.versions.map((v, i) => <option key={v.id} value={v.id}>{i + 1} · {stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</option>)}</select></label><button className="a-btn" disabled={factBusy} onClick={() => setRefresh(x => x + 1)}>Обновить факт</button></div></section>
       {!viewed && <div className="op-alert">Общий план ещё не зафиксирован. Заполните цели в «Планировании» и проверьте распределение.</div>}
       {factBusy && <div className="op-alert" role="status">Загружаем фактические результаты пяти магазинов…</div>}
       {factError && <div className="op-alert bad" role="alert">Не удалось загрузить факт: {factError}. Нулевые результаты не подставлены.</div>}
-      {fact && viewed && <PlanExecution month={month} viewed={viewed} paths={paths} fact={fact} shop={shop} path={path} setPath={setPath} />}
+      {fact && viewed && <PlanExecution shops={SH} groupLabel={groupLabel} month={month} viewed={viewed} paths={paths} fact={fact} shop={shop} path={path} setPath={setPath} />}
     </>}
     <details className="a-card op-section"><summary>История общего плана · {state.versions.length} версий</summary>{!state.versions.length && <p className="op-muted">Версии появятся после первой фиксации.</p>}{state.versions.slice().reverse().map(v => <div className="op-history" key={v.id}><div><b>{stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</b><small>{v.basis.from} — {v.basis.to} · {v.basis.source === 'fact' ? 'факт' : 'прогноз'} · {v.targets.length} категорий{v.note ? ` · ${v.note}` : ''}</small></div><button className="a-btn" onClick={() => { setVersion(v.id); setMode('actual'); }}>Посмотреть выполнение</button><button className="a-btn" onClick={() => { setTargets(Object.fromEntries(v.targets.map(t => [t.path, { ...t }]))); setPeriod({ from: v.basis.from, to: v.basis.to }); setSource(v.basis.source); setPreview(null); setMode('plan'); setNotice('Цели выбранной версии открыты как черновик. Действующая версия не изменена.'); }}>Взять в черновик</button></div>)}</details>
     <details className="a-card op-section" open={showArchive} onToggle={e => setShowArchive(e.currentTarget.open)}><summary>Прежние планы кабинетов · {state.legacy?.length || 0} · сохранены без изменений</summary><p className="op-muted">Это независимые планы старой страницы. Они не складываются с общим планом автоматически. Для другого месяца измените месяц вверху.</p>{state.legacy?.map(x => <div key={x.shop}><h3>{SH.find(s => s.id === x.shop)?.label || x.shop}</h3><div className="op-scroll"><table className="op-table"><thead><tr><th>Строка</th><th>Выкупы, шт.</th><th>Поступление за выкуп</th><th>Другие сохранённые метрики</th></tr></thead><tbody>{Object.entries(x.plan).map(([p, t]) => <tr key={p}><td>{p}</td><td>{fmt(t.salesQty)}</td><td>{rub(t.payout)}</td><td>{Object.entries(t).filter(([k]) => !['salesQty', 'payout'].includes(k)).map(([k, v]) => `${({ orders: 'Заказы, шт.', revenue: 'Заказы, ₽', sales: 'Выкупы, ₽', profit: 'Прибыль, ₽', margin: 'Маржа, %' })[k] || k}: ${fmt(v)}`).join(' · ')}</td></tr>)}</tbody></table></div></div>)}</details>

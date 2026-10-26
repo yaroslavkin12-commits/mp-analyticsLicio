@@ -1,27 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SHOPS, shopOf, isDeflyLike } from '../lib/cabinets';
+import { navOf, navLabel } from '../lib/navigation';
+export { navLabel };
 import { getAdsCabinets } from '../api';
 import { Store, TrendingUp, Activity, ShoppingCart, Target, Receipt, ChartColumn, CalendarRange, Map as MapIcon, Megaphone, Search, BadgePercent,
   Warehouse, Scissors, PackageCheck, Layers, Tag, NotebookPen, Wallet, ScanSearch, Bell, Calculator, Boxes, Sun, Moon, ChevronsLeft, ChevronsRight } from 'lucide-react';
 
-// Значки разделов меню (Lucide — один стиль, перекрашиваются вместе с темой). Licio — как было, эмодзи.
+// Значки разделов меню в одном стиле для всех кабинетов.
 const ICONS = { summary: Store, sales: TrendingUp, rnp: Activity, orders: ShoppingCart, plan: Target, check: Receipt, abc: ChartColumn,
   season: CalendarRange, geo: MapIcon, ads: Megaphone, search: Search, discounts: BadgePercent, inventory: Warehouse, production: Scissors,
   buyout: PackageCheck, unit: Layers, margin: Tag, pricelog: NotebookPen, pnl: Wallet, recon: ScanSearch, notifications: Bell, calculator: Calculator, costs: Boxes };
-
-const NAV_BY_CABINET = {
-  licio: [['sales','📊','Аналитика продаж'],['ads','📣','Реклама'],['unit','📐','Юнит-экономика'],['pnl','💰','P&L'],['stocks','🏪','Остатки'],['discounts','💸','Соинвест'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['settings','⚙️','Настройки']],
-  // Разделы меню Defly: заголовок раздела — ['__h', 'Название'].
-  defly: [
-    ['__h','Продажи'],['summary','🏬','Сводка по магазинам'],['sales','📈','Аналитика продаж'],['rnp','🩺','РНП'],['orders','🛒','Лента заказов'],['plan','🎯','План / факт'],['check','🧾','Средний чек'],['abc','🔤','ABC-анализ'],['season','🍂','Сезонность'],['geo','🗺️','География продаж'],
-    ['__h','Реклама и поиск'],['ads','📣','Реклама'],['search','🔍','Позиции в поиске'],['discounts','💸','Соинвест'],
-    ['__h','Склад'],['inventory','🏬','Остатки'],['production','🧵','Производство'],['buyout','📦','% выкупа'],
-    ['__h','Деньги'],['unit','🧩','Юнит-экономика'],['margin','🏷️','Цены и маржа'],['pricelog','📝','Журнал цен'],['pnl','💰','P&L'],['recon','🔎','Сверка с Ozon'],
-    ['__h','Инструменты'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Товары'],
-  ],
-};
-const navOf = c => NAV_BY_CABINET[c] || (isDeflyLike(c) ? NAV_BY_CABINET.defly : NAV_BY_CABINET.licio);
-export const navLabel = (cabinet, page) => (navOf(cabinet).find(([id]) => id === page) || [])[2] || '';
 
 // Значок магазина: логотип /logos/<id>.png (квадратный), пока его нет — цветной круг с буквой.
 function ShopMark({ shop, size = 28 }) {
@@ -48,7 +36,7 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
   const shop = shopOf(cabinet);
   const cabinetLabel = shop?.label || cabinet;
   const nav = navOf(cabinet);
-  const lucide = isDeflyLike(cabinet);
+  const lucide = true;
   // Какие магазины уже подключены (есть своя Google-таблица на сервере).
   const [conn, setConn] = useState(null);
   useEffect(() => { if (open && !conn) getAdsCabinets().then(r => setConn(Object.fromEntries((r.data.data || []).map(c => [c.id, c.connected !== false])))).catch(() => setConn({})); }, [open, conn]);

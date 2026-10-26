@@ -119,9 +119,9 @@ function collectMulti(aoa, start, cols, num) {
   return { fmt: 'multi', byCab, items: Object.assign({}, ...Object.values(byCab)) };
 }
 
-function parsePrices(aoa) {
+function parsePrices(aoa, cabinet) {
   const num = v => (typeof v === 'number' ? v : v === '' || v === null || v === undefined ? NaN : Number(String(v).replace(/\s/g, '').replace(',', '.')));
-  const multi = parseMulti(aoa, num);
+  const multi = cabinet === 'licio' ? null : parseMulti(aoa, num);
   if (multi) return multi;
   for (let r = 0; r < Math.min(aoa.length, 6); r++) {
     const row = aoa[r].map(c => String(c).toLowerCase());
@@ -152,7 +152,7 @@ function parsePrices(aoa) {
   }
   let col = 1, start = 0;
   for (let r = 0; r < Math.min(aoa.length, 6); r++) {
-    const i = aoa[r].findIndex(c => /дефлай|defly/i.test(String(c)));
+    const i = aoa[r].findIndex(c => (cabinet === 'licio' ? /licio|лисио/i : /дефлай|defly/i).test(String(c)));
     if (i > 0) { col = i; start = r + 1; break; }
   }
   const items = {};
@@ -433,7 +433,7 @@ export default function PriceLog({ cabinet }) {
         const wb = XLSX.read(await f.arrayBuffer());
         const sh = pickSheet(wb);
         const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sh], { header: 1, raw: true, defval: '' });
-        const p = parsePrices(aoa);
+        const p = parsePrices(aoa, cabinet);
         p.rules = parseRuleCol(aoa);
         const n = Object.keys(p.items).length;
         const date = files.length === 1 ? upDate : dateFromName(f.name, year);

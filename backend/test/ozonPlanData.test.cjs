@@ -6,7 +6,7 @@ const p = 'Чехлы / Чехлы на сиденья';
 let concurrent = 0, maxConcurrent = 0, disconnected = false;
 const arts = [{ o: 'A', cat: p + ' / Жаккард' }];
 require.cache[require.resolve('../src/db')] = { exports: { query: async () => [{ last_success_at: '2026-10-20T00:00:00Z' }] } };
-require.cache[require.resolve('../src/config/cabinets')] = { exports: { CABINETS: Object.fromEntries(SHOPS.map(id => [id, { label: id }])), isConnected: id => !(disconnected && id === 'accent') } };
+require.cache[require.resolve('../src/config/cabinets')] = { exports: { CABINETS: Object.fromEntries([...SHOPS,'licio'].map(id => [id, { label: id }])), isConnected: id => !(disconnected && id === 'accent') } };
 require.cache[require.resolve('../src/routes/finance')] = { exports: {
   meta: async () => ({ articles: arts }),
   loadCoefs: async () => ({ articles: arts, coefs: [], noSku: {}, totalSale: 0, fbsDays: [] }),
@@ -54,4 +54,10 @@ test('Выполнение включает сегодняшний день, б�
   assert.equal(e.provisional, true);
   assert.ok(e.elapsedDays >= now.date()-1 && e.elapsedDays <= now.date());
   assert.equal(e.shops.defly.partial, false);
+});
+
+test('Адаптер плана Licio не загружает финансы или каталог других магазинов',async()=>{
+ const b=await data.basis('2026-09-01','2026-09-30','fact',true,['licio']);
+ assert.deepEqual(Object.keys(b.shops),['licio']);assert.deepEqual(Object.keys(b.taxonomy),['licio']);
+ const e=await data.execution('2026-09',null,['licio']);assert.deepEqual(Object.keys(e.shops),['licio']);assert.equal(e.shops.licio.byPath[p].qty,1);
 });

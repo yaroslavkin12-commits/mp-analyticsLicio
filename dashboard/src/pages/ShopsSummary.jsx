@@ -17,7 +17,8 @@ import './sales.css';
 // магазина). Магазин раскрывается до категорий; клик по названию — открыть его.
 // ─────────────────────────────────────────────────────────────────────────
 
-const OZON = SHOPS.filter(s => s.platform === 'ozon');
+const DEFAULT_OZON = SHOPS.filter(s => s.platform === 'ozon');
+const LICIO = SHOPS.filter(s => s.id === 'licio');
 const taxOf = cab => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cab}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } };
 const SEP = ' / ';
 const top = a => String(a.cat || 'Без категории').split(SEP)[0];
@@ -36,7 +37,9 @@ function Delta({ cur, prev, pp }) {
   return <small className={`ss-d ${d > 0 ? 's-up' : 's-down'}`}>{d > 0 ? '+' : '−'}{Math.abs(d) >= 100 ? Math.round(Math.abs(d)) : Math.abs(d).toFixed(0)}%</small>;
 }
 
-export default function ShopsSummary({ active }) {
+export default function ShopsSummary({ active, cabinet }) {
+  const OZON = cabinet === 'licio' ? LICIO : DEFAULT_OZON;
+  const catKey = cabinet === 'licio' ? 'mp-ss-licio-cat' : 'mp-ss-cat';
   const today = dayjs().format('YYYY-MM-DD');
   const [from, setFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [to, setTo] = useState(today);
@@ -56,7 +59,7 @@ export default function ShopsSummary({ active }) {
     setOrders(null); setFin({}); setErr('');
     const len = dayjs(to).diff(dayjs(from), 'day') + 1;
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD');
-    getSalesSummary(from, to).then(r => { if (!off) setOrders(r.data.data); }).catch(e => { if (!off) setErr(e.response?.data?.error || e.message); });
+    getSalesSummary(from, to, cabinet === 'licio' ? 'licio' : undefined).then(r => { if (!off) setOrders(r.data.data); }).catch(e => { if (!off) setErr(e.response?.data?.error || e.message); });
     (async () => {
       for (const s of OZON) {
         try {
@@ -84,8 +87,8 @@ export default function ShopsSummary({ active }) {
 
   const shops = useMemo(() => (orders?.shops || []).map(o => ({ ...o, shop: OZON.find(s => s.id === o.id) || { id: o.id, label: o.label, color: '#888' }, fin: fin[o.id] })), [orders, fin]);
   // Категория сверху: «Все» — магазины целиком, иначе — только эта категория.
-  const [cat, setCat] = useState(() => { try { return localStorage.getItem('mp-ss-cat') || ''; } catch (e) { return ''; } });
-  useEffect(() => { try { localStorage.setItem('mp-ss-cat', cat); } catch (e) { /* ignore */ } }, [cat]);
+  const [cat, setCat] = useState(() => { try { return localStorage.getItem(catKey) || ''; } catch (e) { return ''; } });
+  useEffect(() => { try { localStorage.setItem(catKey, cat); } catch (e) { /* ignore */ } }, [cat]);
   const catList = useMemo(() => {
     const m = new Map();
     for (const s of orders?.shops || []) for (const [k, v] of Object.entries(s.cur.byCat)) m.set(k, (m.get(k) || 0) + v[1]);
