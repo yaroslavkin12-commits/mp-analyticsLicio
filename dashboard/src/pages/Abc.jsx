@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
+import { shopOf } from '../lib/cabinets';
 import { getSalesData, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
 import { fmtInt, Delta, CAT_COLORS, SparkBars } from './AdsStats2';
 import { unitCoefs, unitProfit } from './unitModel';
@@ -59,6 +60,8 @@ export default function Abc({ cabinet }) {
   const [thA, setThA] = useState(80);
   const [thB, setThB] = useState(95);
   const [cell, setCell] = useState(null); // 'A', 'AX' …
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState('');
   const [tax] = useTax(cabinet);
   const grp = useGroups(cabinet);
 
@@ -72,7 +75,7 @@ export default function Abc({ cabinet }) {
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
   // Выкупы и прибыль — по требованию.
-  useEffect(() => { if (metric === 'sales') { const ok = latestOnly('abcpnl:' + cabinet); getFinancePnl(cabinet, { dateFrom, dateTo }).then(ok(r => setPnl(r.data.data))).catch(() => {}); } }, [metric, cabinet, dateFrom, dateTo]);
+  useEffect(() => { if (metric === 'sales') { setPnl(null); const ok = latestOnly('abcpnl:' + cabinet); getFinancePnl(cabinet, { dateFrom, dateTo }).then(ok(r => setPnl(r.data.data))).catch(() => {}); } }, [metric, cabinet, dateFrom, dateTo]);
   useEffect(() => { if (metric === 'profit' && !coefs) getFinanceCoefs(cabinet).then(r => setCoefs(r.data.data)).catch(() => {}); }, [metric, cabinet, coefs]);
 
   const cats = useCats(sales?.articles, sales?.order);
@@ -146,6 +149,33 @@ export default function Abc({ cabinet }) {
   const moved = items.filter(x => x.prevCls && x.prevCls !== '—' && x.prevCls !== x.cls);
   const fmtV = v => (metric === 'orders' ? fmtInt(v) : `${fmtInt(v)} ₽`);
   const mLabel = METRICS.find(m => m[0] === metric)[1];
+  const metricPending = (metric === 'sales' && !pnl) || (metric === 'profit' && !coefs);
+  async function exportTable() {
+    if (!shown.length || loading || metricPending || exportBusy) return;
+    setExportBusy(true); setExportError('');
+    try {
+      // Берём готовую выборку и её порядок; экранное ограничение 500 строк не применяется.
+      const headers = ['Рейтинг', level === 'art' ? 'Артикул' : LEVELS.find(l => l[0] === level)[1], 'Название', 'Категории', 'Артикулов', 'ABC', 'XYZ', 'Класс в прошлом периоде', mLabel, 'Изменение к прошлому периоду, %', 'Доля, %', 'Накопленная доля, %', 'Заказы, шт', 'Артикулы', ...weeks.map(ix => `Заказы ${dayjs(sales.dates[ix[0]]).format('DD.MM')}–${dayjs(sales.dates[ix.at(-1)]).format('DD.MM')}, шт`)];
+      const rows = shown.map(x => [items.indexOf(x) + 1, x.key, level === 'art' ? x.name : x.label, [...new Set(x.arts.map(a => a.cat))].join('; '), x.n, x.cls, x.xyz.cls, x.prevCls || '', x.v, x.delta === null ? null : x.delta / 100, x.share / 100, x.cum / 100, x.orders, x.arts.map(a => a.o).join('; '), ...x.week]);
+      const colLabels = { rank: 'Рейтинг', name: 'Название', v: mLabel, delta: 'Изменение, %', share: 'Доля, %', cum: 'Накопленная доля, %', orders: 'Заказы, шт' };
+      const params = [['Параметр', 'Значение'], ['Магазин', shopOf(cabinet)?.label || cabinet], ['Период с', dateFrom], ['Период по', dateTo], ['Показатель', mLabel], ['Уровень', LEVELS.find(l => l[0] === level)[1]], ['Порог A, %', thA], ['Порог B, %', thB], ['Категория', sel || 'Все'], ['Группа', grp.list.find(g => g.id === grp.sel)?.name || 'Все'], ['Поиск', search], ['Класс ABC / XYZ', cell || 'Все'], ['Строк', rows.length], ['Сортировка', ctl.sort ? `${colLabels[ctl.sort.k]} · ${ctl.sort.dir < 0 ? 'по убыванию' : 'по возрастанию'}` : 'По вкладу в показатель']];
+      for (const [key, f] of Object.entries(ctl.filters)) params.push([`Фильтр: ${colLabels[key] || key}`, `от ${f.min ?? ''} до ${f.max ?? ''}`]);
+      const XLSX = await import('xlsx');
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      ws['!cols'] = headers.map((_, i) => ({ wch: [2, 3, 13].includes(i) ? 44 : i === 1 ? 24 : 18 }));
+      ws['!autofilter'] = { ref: ws['!ref'] };
+      for (let r = 1; r <= rows.length; r++) {
+        for (const c of [9, 10, 11]) { const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell) cell.z = '0.0%'; }
+        const value = ws[XLSX.utils.encode_cell({ r, c: 8 })]; if (value) value.z = metric === 'orders' ? '#,##0' : '#,##0.00" ₽"';
+      }
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'ABC-анализ');
+      const ps = XLSX.utils.aoa_to_sheet(params); ps['!cols'] = [{ wch: 30 }, { wch: 70 }];
+      XLSX.utils.book_append_sheet(wb, ps, 'Параметры');
+      XLSX.writeFile(wb, `ABC_${cabinet}_${dateFrom}_${dateTo}.xlsx`);
+    } catch { setExportError('Не удалось скачать таблицу. Попробуйте ещё раз.'); }
+    finally { setExportBusy(false); }
+  }
 
   if (loading && !sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
   if (error && !sales) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
@@ -162,7 +192,7 @@ export default function Abc({ cabinet }) {
         </label>
       </FinHeader>
 
-      {(metric === 'sales' && !pnl) || (metric === 'profit' && !coefs) ? <div className="a-hint">Загружаем данные для метрики…</div> : null}
+      {metricPending ? <div className="a-hint">Загружаем данные для метрики…</div> : null}
 
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         {stats.map(s => (
@@ -206,8 +236,11 @@ export default function Abc({ cabinet }) {
           <b style={{ fontSize: 14 }}>{LEVELS.find(l => l[0] === level)[1]}</b>
           {cell && <span className="pill w">{cell} · {shown.length} <button type="button" className="a-btn ghost" style={{ padding: '0 4px' }} onClick={() => setCell(null)}>×</button></span>}
           <span className="a-hint">{mLabel}; рядом — изменение к прошлому периоду той же длины</span>
-          <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
+          <button type="button" className="a-btn" style={{ marginLeft: 'auto' }} onClick={exportTable} disabled={exportBusy || loading || metricPending || !shown.length} title="Скачать все строки с выбранными фильтрами и сортировкой">{exportBusy ? 'Подготавливаем…' : `Скачать Excel (${shown.length})`}</button>
+          <ResetCtl ctl={ctl} />
         </div>
+        {exportError && <div className="c-msg bad" role="alert">{exportError}</div>}
+        {shown.length > 500 && <div className="a-hint" style={{ padding: '4px 14px' }}>Показаны первые 500 из {shown.length} строк. В Excel попадут все строки выбранной выборки.</div>}
         <div className="a-scroll">
           <table className="a-t s-slice">
             <thead><tr><ThCtl ctl={ctl} k="rank" filter={false}>#</ThCtl><ThCtl ctl={ctl} k="name" className="" filter={false}>{LEVELS.find(l => l[0] === level)[1].replace(/ы$/, '').replace(/и$/, 'я')}</ThCtl>
