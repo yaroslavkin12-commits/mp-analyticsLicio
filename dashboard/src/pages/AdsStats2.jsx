@@ -1032,6 +1032,7 @@ const MATRIX_METRICS = [
   { key: 'cart', label: 'Корзины', fmt: 'int', good: 'up' },
   { key: 'ctr', label: 'CTR', fmt: 'pct', good: 'up' },
   { key: 'crToOrder', label: 'CR в заказ', fmt: 'pct', good: 'up' },
+  { key: 'position', label: 'Ср. позиция', fmt: 'pos', good: 'down', total: 'avg' },
   { key: 'stock', label: 'Остаток', fmt: 'int', good: 'up' },
 ];
 function Matrix({ rows, dates, mode, cabinet }) {
@@ -1044,7 +1045,7 @@ function Matrix({ rows, dates, mode, cabinet }) {
   const vals = [];
   for (const { m } of models) for (const d of dates) { const v = m.byDate[d]?.[metric]; if (v !== null && v !== undefined && Number.isFinite(v)) vals.push(v); }
   const min = vals.length ? Math.min(...vals) : 0, max = vals.length ? Math.max(...vals) : 0;
-  const totalOf = m => metric === 'stock' ? m.stockNow : m.totals[metric];
+  const totalOf = m => metric === 'stock' ? m.stockNow : rowTotal(cfg, m.byDate, dates, m.totals);
   if (!rows.length) return null;
   return (
     <div className="a-card" style={{ padding: 14 }}>
