@@ -78,6 +78,7 @@ function SppChart({ hist, list, tip }) {
 export default function SoinvestCats({ cabinet }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [sel, setSel] = useState('');
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(() => new Set());
@@ -93,7 +94,8 @@ export default function SoinvestCats({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true);
-    getDiscountOverview(cabinet).then(r => setData(r.data.data)).catch(() => setData({ items: [] })).finally(() => setLoading(false));
+    setError('');
+    getDiscountOverview(cabinet).then(r => setData(r.data.data)).catch(e => setError(e.response?.data?.error || e.message || 'Не удалось связаться с сервером')).finally(() => setLoading(false));
   }, [cabinet]);
   useEffect(() => { load(); }, [load]);
 
@@ -114,14 +116,22 @@ export default function SoinvestCats({ cabinet }) {
 
   const last = data?.lastCheckedAt ? dayjs(data.lastCheckedAt) : null;
   const ageH = last ? dayjs().diff(last, 'minute') / 60 : null;
+  const loadError = error && <div className="a-card" role="alert" style={{ padding: 16, marginBottom: 12 }}>
+    <b>Не удалось загрузить Соинвест с сервера.</b>
+    <div style={{ margin: '6px 0', color: 'var(--a-ink3)' }}>{error}</div>
+    <div style={{ marginBottom: 10 }}>Расширение на этом компьютере не требуется. Данные хранятся на сервере; проверьте соединение и блокировщики запросов.</div>
+    <button type="button" className="a-btn" onClick={load} disabled={loading}>{loading ? 'Загрузка…' : 'Повторить загрузку'}</button>
+  </div>;
   if (!items.length) {
+    if (error) return <div className="mpui">{loadError}</div>;
     return (
       <div className="mpui">
         <div className="a-card" style={{ padding: 22, lineHeight: 1.6 }}>
           <b>Данных о Соинвесте по этому кабинету пока нет.</b><br />
           Цену на витрине с учётом Соинвеста Ozon отдаёт только кабинет продавца, а запросы с серверов Ozon блокирует.
           Поэтому цены собирает маленькое расширение браузера «Соинвест Ozon» — в том браузере, где вы вошли в seller.ozon.ru.
-          Оно раз в час берёт цены по всем товарам Licio и Defly и присылает сюда. Как поставить — в файле README рядом с расширением.
+          Оно раз в час собирает цены доступных магазинов и сохраняет их на сервере. Сохранённые цены доступны с любого компьютера — устанавливать расширение для просмотра не нужно. Как поставить — в файле README рядом с расширением.
+          <div style={{ marginTop: 10 }}><button type="button" className="a-btn" onClick={load} disabled={loading}>{loading ? 'Загрузка…' : 'Обновить данные'}</button></div>
         </div>
       </div>
     );
@@ -196,12 +206,14 @@ export default function SoinvestCats({ cabinet }) {
 
   return (
     <div className="mpui">
+      {loadError}
       <div className="a-bar">
         <span className="a-fresh" style={{ marginLeft: 0 }}>
           <span className={`a-dot ${ageH === null ? 'bad' : ageH > 6 ? 'bad' : ageH > 2 ? 'warn' : ''}`} />
           {last ? `Цены обновлены ${last.format('DD.MM HH:mm')}` : 'Цены ещё не собирались'}
           {ageH !== null && ageH > 2 && ' — проверьте, что браузер с расширением открыт и вы вошли в seller.ozon.ru'}
         </span>
+        <button type="button" className="a-btn" onClick={load} disabled={loading} title="Загрузить сохранённые на сервере цены; расширение на этом компьютере не требуется">{loading ? 'Загрузка…' : 'Обновить данные'}</button>
         <ArtSearch value={search} onChange={setSearch} options={items} style={{ marginLeft: 'auto', minWidth: 220 }} />
       </div>
       <div className="a-bar">
