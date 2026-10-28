@@ -52,6 +52,12 @@ export function heatColor(v, min, max, direction) {
   t = Math.max(0, Math.min(1, t));
   return `hsla(${120 * t}, 62%, 42%, 0.32)`;
 }
+function positionHeatColor(v) {
+  if (!Number.isFinite(v) || v <= 0) return 'transparent';
+  // Постоянные ориентиры: выбросы не сжимают цвета позиций в первых десятках.
+  const hue = v <= 10 ? 120 : v <= 30 ? 120 - (v - 10) * 3 : Math.max(0, 60 - (v - 30) * 2);
+  return `hsla(${hue}, 62%, 42%, 0.32)`;
+}
 export function naturalCompare(a, b) {
   const re = /(\d+)|(\D+)/g;
   const pa = String(a || '').match(re) || [], pb = String(b || '').match(re) || [];
@@ -1057,6 +1063,10 @@ function Matrix({ rows, dates, mode, cabinet }) {
           ))}
         </span>
       </div>
+      {metric === 'position' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }} title="Цветовая шкала постоянная и не зависит от периода, фильтров и крайних значений. Между ориентирами цвет меняется плавно.">
+        <span>Цвет позиции:</span>
+        {[[10, '1–10'], [30, '30'], [60, '60 и выше']].map(([v, label]) => <span key={v}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: positionHeatColor(v) }} />{label}</span>)}
+      </div>}
       <div className="a-days" ref={ref}>
         <table className={`a-dt a-matrix${cabinet === 'licio' ? '' : ' a-matrix-row-hover'}`}>
           <thead><tr><th className="lbl">Артикул</th><th className="tot">Итого</th><th className="stk">Остаток</th>{dates.map(d => <th key={d}>{d.slice(8)}.{d.slice(5, 7)}</th>)}</tr></thead>
@@ -1068,7 +1078,7 @@ function Matrix({ rows, dates, mode, cabinet }) {
                 <td className="stk">{fmtInt(m.stockNow)}</td>
                 {dates.map(d => {
                   const v = m.byDate[d]?.[metric];
-                  return <td key={d} style={{ background: heatColor(v, min, max, cfg.good) }}>{fmtBy(v, cfg.fmt)}</td>;
+                  return <td key={d} style={{ background: metric === 'position' ? positionHeatColor(v) : heatColor(v, min, max, cfg.good) }}>{fmtBy(v, cfg.fmt)}</td>;
                 })}
               </tr>
             ))}
