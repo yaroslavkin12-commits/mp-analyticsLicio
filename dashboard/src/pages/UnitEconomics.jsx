@@ -71,7 +71,7 @@ export default function UnitEconomics({ cabinet }) {
   const [error, setError] = useState(null);
   const [sel, setSel] = useState('');
   const [search, setSearch] = useState('');
-  const [tax, setTax] = useTax(cabinet);
+  const [tax] = useTax(cabinet);
   const [showNames, setShowNames] = useState(false);
   const tip = useTip();
   // «На 1 выкуп»: суммы таблицы делятся на ожидаемое число выкупов (за день / за период).
@@ -235,7 +235,7 @@ export default function UnitEconomics({ cabinet }) {
     <div className="mpui sa-page">
       <FinHeader grp={grp} title="Юнит-экономика" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
         dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} loading={loading}>
-        <TaxInput tax={tax} setTax={setTax} />
+        <TaxInput tax={tax} cabinet={cabinet} />
       </FinHeader>
 
       {(finMissing || buyMissing) && (

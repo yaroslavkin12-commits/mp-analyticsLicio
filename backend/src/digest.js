@@ -43,7 +43,7 @@ async function saveDigestSettings(cabinet, s) {
 }
 
 async function buildMorningDigest(cabinet) {
-  const settings = await getDigestSettings(cabinet);
+  const taxSettings = await require('./lib/taxSettings').getTaxSettings(cabinet);
   const msk = dayjs().tz ? dayjs().tz('Europe/Moscow') : dayjs().add(3, 'hour');
   const Y = msk.subtract(1, 'day').format('YYYY-MM-DD'), D2 = msk.subtract(2, 'day').format('YYYY-MM-DD');
   const f7 = msk.subtract(8, 'day').format('YYYY-MM-DD'), f30 = msk.subtract(31, 'day').format('YYYY-MM-DD');
@@ -85,7 +85,7 @@ async function buildMorningDigest(cabinet) {
   }
   const b = buy[0] && num(buy[0].d) + num(buy[0].c) > 0 ? num(buy[0].d) / (num(buy[0].d) + num(buy[0].c)) : 0.8;
   const ozRate = sale > 0 ? -oz / sale : 0.4, costRate = sale > 0 ? costSum / sale : 0;
-  const tax = (settings.tax ?? 6) / 100;
+  const tax = (taxSettings.configured ? taxSettings.effectiveRate : (await getDigestSettings(cabinet)).tax ?? 6) / 100;
   const expRev = y.r * b;
   const profit = expRev * (1 - ozRate - costRate - tax) - spendY;
 

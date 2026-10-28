@@ -9,11 +9,10 @@ router.get('/settings', async (req, res) => {
 });
 router.post('/settings', async (req, res) => {
   try {
-    const { cabinet = 'defly', enabled, time, tax } = req.body || {};
+    const { cabinet = 'defly', enabled, time } = req.body || {};
     const s = {};
     if (enabled !== undefined) s.enabled = !!enabled;
     if (time && /^\d{1,2}:\d{2}$/.test(time)) s.time = time;
-    if (tax !== undefined && Number.isFinite(Number(tax))) s.tax = Number(tax);
     res.json({ success: true, data: await saveDigestSettings(cabinet, s) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import RestockTab from './RestockTab';
+import { useTax } from '../lib/taxSettings';
 import { getDigestSettings, saveDigestSettings, previewDigest, sendDigestNow } from '../api';
 import {
   getTrackedArticles, getTrackedArticlesFeed, addTrackedArticle, removeTrackedArticle,
@@ -46,6 +47,7 @@ function HealthBar({ cabinet }) {
 
 // Утренний дайджест: итоги вчерашнего дня в Telegram в заданное время.
 function DigestBar({ cabinet }) {
+  const [tax] = useTax(cabinet);
   const [s, setS] = useState(null);
   const [msg, setMsg] = useState('');
   const [preview, setPreview] = useState(null);
@@ -61,7 +63,7 @@ function DigestBar({ cabinet }) {
         <b style={{ color: 'var(--text)' }}>☀️ Утренний дайджест</b>
         <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!s.enabled} onChange={e => save({ enabled: e.target.checked })} />присылать каждый день</label>
         <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>в <input type="time" value={s.time} onChange={e => save({ time: e.target.value })} style={inp} /> по Москве</label>
-        <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>налог <input type="number" min="0" max="30" value={s.tax ?? 6} onChange={e => save({ tax: Number(e.target.value) })} style={{ ...inp, width: 56 }} />%</label>
+        <span>налог {tax}% · настройка в «Товары → Налог»</span>
         <span style={{ color: 'var(--text3)' }}>заказы и ДРР за вчера, оценка прибыли, рост/падение, остатки</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button type="button" style={btn} onClick={() => { setMsg('Собираю…'); previewDigest(cabinet).then(r => { setPreview(r.data.data.text || 'Нет данных за вчера'); setMsg(''); }).catch(e => setMsg(`Ошибка: ${e.message}`)); }}>Предпросмотр</button>

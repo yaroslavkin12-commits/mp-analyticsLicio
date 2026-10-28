@@ -4,6 +4,7 @@ import { unitCoefs } from './unitModel';
 import { fmtInt, naturalCompare, shortModel, CAT_COLORS } from './AdsStats2';
 import { pct1 } from './finShared';
 import { useBuyerShare } from './buyerShare';
+import { useTaxSettings } from '../lib/taxSettings';
 import './ads2.css';
 import './sales.css';
 
@@ -158,6 +159,7 @@ function Row({ label, value, sub, strong, neg, hint }) {
 }
 
 export default function Calculator({ cabinet }) {
+  const taxSettings = useTaxSettings(cabinet);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [scheme, setScheme] = useState('fbo');
@@ -239,7 +241,7 @@ export default function Calculator({ cabinet }) {
       other: pick('other', SF),
       // Реклама: у выбранного товара — только его собственный ДРР (не рекламировался — 0);
       // средний по категории — лишь для нового товара.
-      drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [6, 'УСН 6%'],
+      drr: pick('drr', SF), defect: [0, ''], oper: [0, ''], tax: [taxSettings.enabled ? taxSettings.rate : 0, 'Товары → Налог'],
     };
     // Выбранный товар — коэффициенты единой модели: так расчёт совпадает с «Цены и маржа» и «Юнит-экономикой».
     const k = own ? K?.get(arts[own[0]]?.o) : null;
@@ -277,13 +279,14 @@ export default function Calculator({ cabinet }) {
     }
     if (own && (own[12] === null)) out.cost = [null, 'нет себестоимости — заполните во вкладке «Себестоимость»'];
     return { out, bCat, bOwn, bAll };
-  }, [data, cat, art, scheme, volume, arts, rowsByArt, ship, bs.shareOf, K]);
+  }, [data, cat, art, scheme, volume, arts, rowsByArt, ship, bs.shareOf, K, taxSettings.enabled, taxSettings.rate]);
 
   const auto = k => base?.out[k]?.[0];
   const valRaw = k => (vals[k] !== undefined ? vals[k] : (auto(k) !== null && auto(k) !== undefined ? String(r1(auto(k)) ?? '') : ''));
   // Цена клиента (после СПП): если её ввели вручную — цена реализации считается из неё
   // при текущей СПП (репрайсер держит именно цену клиента).
   const val = k => {
+    if (k === 'tax' && !taxSettings.enabled) return '0';
     if (k === 'price' && vals.client !== undefined && vals.client !== '') {
       const c = n0(vals.client), sp = n0(valRaw('spp'));
       if (c > 0 && sp < 100) return String(Math.round(c / (1 - sp / 100) * 100) / 100);
@@ -447,11 +450,11 @@ export default function Calculator({ cabinet }) {
               <div className="k-two">
                 <label className="k-field">
                   <span className="k-lbl">Система налогообложения</span>
-                  <span className="k-inp"><select value={taxMode} onChange={e => { setTaxMode(e.target.value); set('tax', e.target.value === 'usn_profit' ? '15' : '6'); }}>
+                  <span className="k-inp"><select value={taxMode} disabled={!taxSettings.enabled} onChange={e => { setTaxMode(e.target.value); set('tax', e.target.value === 'usn_profit' ? '15' : String(taxSettings.rate)); }}>
                     <option value="usn_income">УСН «Доходы»</option><option value="usn_profit">УСН «Доходы − расходы»</option>
                   </select></span>
                 </label>
-                {field('tax')}{field('oper')}
+                {taxSettings.enabled ? field('tax') : <span className="a-hint">Налог отключён в «Товары → Налог»</span>}{field('oper')}
               </div>
             </div>
           </div>

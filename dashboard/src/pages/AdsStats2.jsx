@@ -1,4 +1,5 @@
 import { barSignals } from '../lib/chartSignals';
+import { useTax } from '../lib/taxSettings';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
@@ -860,7 +861,7 @@ function AssociatedTable({ associated, dates }) {
 function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAddNote, onDeleteNote, groups, currentGroupId, onAssignGroup, tip, showAssoc, associated, activeGroupId, trafficLight = true }) {
   const [editMode, setEditMode] = useState(false);
   const [showCampaigns, setShowCampaigns] = useState(false);
-  const model = useMemo(() => buildModel(articles, dates, mode), [articles, dates, mode, UNIT_CTX.k]); // eslint-disable-line react-hooks/exhaustive-deps
+  const model = useMemo(() => buildModel(articles, dates, mode), [articles, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const a = articles[0];
   const offerId = isAggregate ? null : a?.offerId;
   const campaigns = useMemo(() => articles.flatMap(x => x.campaigns), [articles]);
@@ -1046,8 +1047,8 @@ function Matrix({ rows, dates, mode, cabinet }) {
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length, rows.length]);
   const cfg = MATRIX_METRICS.find(m => m.key === metric);
-  const models = useMemo(() => rows.map(a => ({ a, m: buildModel([a], dates, mode) })), [rows, dates, mode, UNIT_CTX.k]); // eslint-disable-line react-hooks/exhaustive-deps
-  const all = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, UNIT_CTX.k]); // eslint-disable-line react-hooks/exhaustive-deps
+  const models = useMemo(() => rows.map(a => ({ a, m: buildModel([a], dates, mode) })), [rows, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
+  const all = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const vals = [];
   for (const { m } of models) for (const d of dates) { const v = m.byDate[d]?.[metric]; if (v !== null && v !== undefined && Number.isFinite(v)) vals.push(v); }
   const min = vals.length ? Math.min(...vals) : 0, max = vals.length ? Math.max(...vals) : 0;
@@ -1176,7 +1177,7 @@ export default function AdsStats2({ cabinet }) {
     const t = a.totals || {};
     return unitProfit(k, { ordRub: (mode === 'ads' ? t.adRevenue : t.revenue) || 0, ordQty: (mode === 'ads' ? t.adOrders : t.orders) || 0, ads: t.spend || 0, selfRub: t.selfR || 0, selfFbs: t.selfFbs || 0 }, taxPct);
   }
-  const taxPct = (() => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cabinet}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } })();
+  const [taxPct] = useTax(cabinet);
   UNIT_CTX.k = unitK; UNIT_CTX.tax = taxPct;
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
@@ -1316,9 +1317,9 @@ export default function AdsStats2({ cabinet }) {
       });
     }
     return { rows: list, hiddenByFilter: before - list.length };
-  }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK, transit]);
+  }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK, taxPct, transit]);
 
-  const total = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, unitK]); // eslint-disable-line react-hooks/exhaustive-deps
+  const total = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, unitK, taxPct]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── действия ──
   async function handleCollect() {

@@ -127,7 +127,7 @@ export default function PnL({ cabinet }) {
   const [error, setError] = useState(null);
   const [sel, setSel] = useState('');
   const [search, setSearch] = useState('');
-  const [tax, setTax] = useTax(cabinet);
+  const [tax] = useTax(cabinet);
   const tip = useTip();
   // «На 1 выкуп»: все суммы таблицы делятся на число выкупленных штук (за день / за период).
   const [perUnit, setPerUnitRaw] = useState(() => { try { return localStorage.getItem('mp-pnl-perunit') === '1'; } catch (e) { return false; } });
@@ -297,7 +297,7 @@ export default function PnL({ cabinet }) {
     <div className="mpui sa-page">
       <FinHeader grp={grp} title="P&L" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
         dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} loading={loading}>
-        <TaxInput tax={tax} setTax={setTax} />
+        <TaxInput tax={tax} cabinet={cabinet} />
       </FinHeader>
 
       {!data.rows.length && !data.noSku.length ? (

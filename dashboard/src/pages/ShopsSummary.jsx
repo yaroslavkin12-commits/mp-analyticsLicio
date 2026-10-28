@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import dayjs from 'dayjs';
 import { getFinancePnl, getBuyerShare, getSalesSummary } from '../api';
+import { loadTaxSettings, watchTaxCabinets } from '../lib/taxSettings';
 import DateRangePicker from '../components/DateRangePicker';
 import { pnlTotals } from '../lib/pnlCalc';
 import { makeShareAt } from './buyerShare';
@@ -19,7 +20,6 @@ import './sales.css';
 
 const DEFAULT_OZON = SHOPS.filter(s => s.platform === 'ozon');
 const LICIO = SHOPS.filter(s => s.id === 'licio');
-const taxOf = cab => { try { const v = parseFloat(localStorage.getItem(`mp-tax-${cab}`)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } };
 const SEP = ' / ';
 const top = a => String(a.cat || 'Без категории').split(SEP)[0];
 const pre = d => a => String(a.cat || 'Без категории').split(SEP).slice(0, d).join(SEP);
@@ -49,6 +49,9 @@ export default function ShopsSummary({ active, cabinet }) {
   const [fin, setFin] = useState({}); // cab → { cur, prev } (итоги и по категориям)
   const [open, setOpen] = useState(new Set());
   const [err, setErr] = useState('');
+  const [taxVersion, setTaxVersion] = useState(0);
+  useEffect(() => { if (active) return watchTaxCabinets(OZON.map(s => s.id)); return undefined; }, [active, cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const update = () => setTaxVersion(v => v + 1); window.addEventListener('mp-tax-changed', update); window.addEventListener('focus', update); return () => { window.removeEventListener('mp-tax-changed', update); window.removeEventListener('focus', update); }; }, []);
   // Тяжёлая страница (начисления всех магазинов) — грузим только когда её открыли, не в фоне.
   const [armed, setArmed] = useState(!!active);
   useEffect(() => { if (active) setArmed(true); }, [active]);
@@ -63,15 +66,16 @@ export default function ShopsSummary({ active, cabinet }) {
     (async () => {
       for (const s of OZON) {
         try {
-          const [cur, prev, bs] = await Promise.all([
+          const [cur, prev, bs, taxSettings] = await Promise.all([
             getFinancePnl(s.id, { dateFrom: from, dateTo: to }).then(r => r.data.data),
             getFinancePnl(s.id, { dateFrom: pFrom, dateTo: pTo }).then(r => r.data.data).catch(() => null),
             getBuyerShare(s.id).then(r => r.data.data).catch(() => null),
+            loadTaxSettings(s.id),
           ]);
           if (off) return;
           const arts = cur.articles.map(a => ({ o: a.o, parts: String(a.cat || 'Без категории').split(SEP) }));
           const shareAt = makeShareAt(bs, arts);
-          const tax = taxOf(s.id);
+          const tax = taxSettings.effectiveRate;
           const c = pnlTotals(cur, { tax, shareAt, groupOf: top });
           c.byPath = byPathOf(cur, { tax, shareAt });
           // Прошлый период — только если начисления за него есть целиком.
@@ -83,7 +87,7 @@ export default function ShopsSummary({ active, cabinet }) {
       }
     })();
     return () => { off = true; };
-  }, [from, to, armed]);
+  }, [from, to, armed, cabinet, taxVersion]);
 
   const shops = useMemo(() => (orders?.shops || []).map(o => ({ ...o, shop: OZON.find(s => s.id === o.id) || { id: o.id, label: o.label, color: '#888' }, fin: fin[o.id] })), [orders, fin]);
   // Категория сверху: «Все» — магазины целиком, иначе — только эта категория.

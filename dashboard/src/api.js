@@ -1,5 +1,7 @@
 import axios from 'axios';
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
+export const getTaxSettings = cabinet => api.get('/settings/tax', { params: { cabinet } });
+export const saveTaxSettings = (cabinet, settings) => api.post('/settings/tax', { cabinet, ...settings });
 // Счётчик запросов в полёте: фоновая подгрузка разделов ждёт, пока сеть
 // освободится, — открытая страница получает данные первой.
 let pending = 0;

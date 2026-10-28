@@ -3,6 +3,17 @@ const router = express.Router();
 const { query } = require('../db');
 const { runAll, runWB, runOzon } = require('../scheduler');
 const dayjs = require('dayjs');
+const { getTaxSettings, saveTaxSettings } = require('../lib/taxSettings');
+
+router.get('/tax', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try { res.json({ success: true, data: await getTaxSettings(req.query.cabinet || 'defly') }); }
+  catch (e) { res.status(e.status || 500).json({ success: false, error: e.message }); }
+});
+router.post('/tax', async (req, res) => {
+  try { res.json({ success: true, data: await saveTaxSettings(req.body?.cabinet, req.body || {}) }); }
+  catch (e) { res.status(e.status || 500).json({ success: false, error: e.message }); }
+});
 
 router.get('/costs', async (req, res) => {
   try {

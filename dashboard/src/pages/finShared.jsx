@@ -211,20 +211,13 @@ export function Empty({ children }) {
 
 export const money = v => (v === null || v === undefined || !Number.isFinite(v)) ? '—' : `${fmtInt(v)} ₽`;
 
-// Налог (% от выручки) — у каждого свой режим, храним в браузере.
-export function useTax(cabinet) {
-  const key = `mp-tax-${cabinet}`;
-  const [tax, setTaxState] = React.useState(() => { try { const v = parseFloat(localStorage.getItem(key)); return Number.isFinite(v) ? v : 6; } catch (e) { return 6; } });
-  const setTax = v => { setTaxState(v); try { localStorage.setItem(key, String(v)); } catch (e) { /* ignore */ } };
-  return [tax, setTax];
-}
-export function TaxInput({ tax, setTax }) {
+export { useTax } from '../lib/taxSettings';
+export function TaxInput({ tax, cabinet }) {
   return (
-    <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      налог
-      <input className="a-input" type="number" min="0" max="30" step="0.5" value={tax} onChange={e => setTax(Math.max(0, parseFloat(e.target.value) || 0))} style={{ width: 64, padding: '4px 8px' }} />
-      <span title="Налог считается от суммы, которую заплатил покупатель (цена после скидки Ozon): письмо ФНС от 02.09.2026 № СД-35-3/11693@. Доля берётся из отчёта «Начисления», загруженного в «Сверку с Ozon».">% от оплаты покупателя</span>
-    </label>
+    <span className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      Налог {tax}%
+      <button type="button" className="tt-reset" onClick={() => { try { localStorage.setItem('mp-products-tab', 'tax'); } catch { /* ignore */ } window.dispatchEvent(new CustomEvent('mp-open', { detail: { cabinet, page: 'costs', productTab: 'tax' } })); }}>настроить в «Товары»</button>
+    </span>
   );
 }
 
