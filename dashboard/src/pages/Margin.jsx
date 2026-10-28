@@ -85,6 +85,28 @@ function ColPicker({ cols, setCols, target }) {
   );
 }
 
+function ExportPicker({ options, selected, setSelected, visible, count, busy, error, onClose, onDownload }) {
+  const ref = useRef(null);
+  useEffect(() => { ref.current.showModal(); }, []);
+  return <dialog ref={ref} className="mpui" aria-labelledby="margin-export-title" onCancel={e => { e.preventDefault(); if (!busy) onClose(); }} style={{ width: 530, maxWidth: '90vw', maxHeight: '85vh', overflow: 'auto', padding: 22, border: '1px solid var(--a-line2)', borderRadius: 12, background: 'var(--a-panel)', color: 'var(--a-ink)' }}>
+    <h3 id="margin-export-title" style={{ margin: '0 0 8px' }}>Колонки для скачивания Excel</h3>
+    <div className="a-hint">Строк: {count}. Артикул включён всегда. Выбор колонок сохраняется в этом браузере.</div>
+    <div className="a-bar" style={{ margin: '14px 0' }}>
+      <button type="button" className="a-btn ghost" disabled={busy} onClick={() => setSelected(options.map(c => c.key))}>Все колонки</button>
+      <button type="button" className="a-btn ghost" disabled={busy} onClick={() => setSelected(visible)}>Как в таблице</button>
+      <button type="button" className="a-btn ghost" disabled={busy} onClick={() => setSelected(['o', 'set'])}>Для репрайсера</button>
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 18 }}>
+      {options.map(c => <label key={c.key} style={{ display: 'flex', gap: 7, alignItems: 'center' }}><input type="checkbox" checked={selected.includes(c.key)} disabled={busy || c.key === 'o'} onChange={() => setSelected(prev => prev.includes(c.key) ? prev.filter(k => k !== c.key) : [...prev, c.key])} />{c.label}</label>)}
+    </div>
+    {error && <div role="alert" style={{ color: 'var(--a-bad)', marginBottom: 12 }}>{error}</div>}
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+      <button type="button" className="a-btn ghost" disabled={busy} onClick={onClose}>Отмена</button>
+      <button type="button" className="a-btn" disabled={busy || !count} onClick={onDownload}>{busy ? 'Скачивание…' : 'Скачать Excel'}</button>
+    </div>
+  </dialog>;
+}
+
 export default function Margin({ cabinet }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -108,6 +130,11 @@ export default function Margin({ cabinet }) {
   useEffect(() => { try { localStorage.setItem(pinKey, JSON.stringify(pinned)); } catch (e) { /* ignore */ } }, [pinKey, pinned]);
   const [cols, setCols] = useState(() => { try { const v = JSON.parse(localStorage.getItem('mp-margin-cols') || 'null'); return Array.isArray(v) ? v : DEF_COLS; } catch (e) { return DEF_COLS; } });
   useEffect(() => { try { localStorage.setItem('mp-margin-cols', JSON.stringify(cols)); } catch (e) { /* ignore */ } }, [cols]);
+  const [exportRows, setExportRows] = useState(null);
+  const [exportCols, setExportCols] = useState(() => { try { const v = JSON.parse(localStorage.getItem('mp-margin-export-cols') || 'null'); return Array.isArray(v) ? [...new Set(['o', ...v])] : ['o', 'set']; } catch (e) { return ['o', 'set']; } });
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState('');
+  useEffect(() => { try { localStorage.setItem('mp-margin-export-cols', JSON.stringify(exportCols)); } catch (e) { /* ignore */ } }, [exportCols]);
   const [withAds, setWithAds] = useState(true);
   const [allArts, setAllArts] = useState(false); // показывать и товары без заказов за 30 дней
   const [ready, setReady] = useState(false);
@@ -292,13 +319,27 @@ export default function Margin({ cabinet }) {
     if (r.po.m === setMode) return r.po.v;
     return Math.round(setMode === 'client' ? r.po.v * r.sppK : r.po.v / (r.sppK || 1));
   };
-  async function exportXlsx(list) {
+  function openExport(list) {
     if (!list.length) return;
-    const XLSX = await import('xlsx');
-    const aoa = [['Артикул', 'Новая цена'], ...list.map(r => [r.a.o, Math.round(newIn(r))])];
-    const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 18 }, { wch: 12 }];
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Цены');
-    XLSX.writeFile(wb, `Новые цены (${setMode === 'client' ? 'цена клиента' : 'цена реализации'}) ${dayjs().format('DD.MM.YYYY')}.xlsx`);
+    setExportError('');
+    setExportRows(list);
+  }
+  async function exportXlsx() {
+    if (!exportRows?.length || exportBusy) return;
+    setExportBusy(true); setExportError('');
+    try {
+      const XLSX = await import('xlsx');
+      const selected = exportOptions.filter(c => exportCols.includes(c.key));
+      const repricer = selected.length === 2 && selected[1].key === 'set';
+      const ws = XLSX.utils.aoa_to_sheet([selected.map(c => repricer && c.key === 'set' ? 'Новая цена' : c.label), ...exportRows.map(r => selected.map(c => c.value(r) ?? null))]);
+      ws['!cols'] = selected.map(c => ({ wch: Math.min(42, Math.max(18, c.label.length + 2)) }));
+      selected.forEach((c, ci) => { if (c.format) for (let ri = 1; ri <= exportRows.length; ri++) { const cell = ws[XLSX.utils.encode_cell({ r: ri, c: ci })]; if (cell?.t === 'n') cell.z = c.format; } });
+      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Цены');
+      const title = repricer ? 'Новые цены' : 'Цены и маржа';
+      XLSX.writeFile(wb, `${title} (${setMode === 'client' ? 'цена клиента' : 'цена реализации'}) ${dayjs().format('DD.MM.YYYY')}.xlsx`);
+      setExportRows(null);
+    } catch (e) { setExportError(`Не удалось скачать файл: ${e.message}`); }
+    finally { setExportBusy(false); }
   }
   const tot = per === 'total';
   const mul = r => (tot ? r.units : 1);
@@ -325,6 +366,27 @@ export default function Margin({ cabinet }) {
     rev: ['Заказы 30 дн', 'Заказы за 30 дней: сумма, ниже — штуки'],
     set: [`Установить цену (${setMode === 'client' ? 'клиента' : 'реализации'})`, 'Впишите новую цену — пересчитаются все колонки строки. Переключатель «новая цена —» над таблицей: в какой цене вписывать и выгружать. Пустая — в файл уйдёт текущая'],
   };
+  const exportValue = (r, k) => {
+    if (k === 'price') return r.curPrice;
+    if (k === 'client') return r.curClient;
+    if (k === 'set') return Math.round(newIn(r));
+    if (k === 'fact') return r.pf ? (tot ? r.pf.profit : r.pf.qty > 0 ? r.pf.profit / r.pf.qty : null) : null;
+    const values = { cost: r.v.cost || null, drr: r.v.drr, comm: r.r.commission, logi: r.r.logistics, ads: r.r.ads, tax: r.r.tax, pay: r.r.payout, profit: r.r.profit, margin: r.r.margin, buyout: r.v.buyout, spp: r.v.spp, be: r.be, tp: r.tp, rev: r.rev };
+    const v = values[k];
+    return v == null ? null : MONEY.has(k) ? v * mul(r) : v;
+  };
+  const pctKeys = new Set(['drr', 'margin', 'buyout', 'spp']);
+  const exportOptions = [
+    { key: 'o', label: 'Артикул', value: r => r.a.o },
+    { key: 'name', label: 'Название', value: r => r.a.n },
+    { key: 'category', label: 'Категория', value: r => r.a.cat },
+    ...COL_LIST.map(([key]) => ({ key, label: key === 'set' ? `Новая цена (${setMode === 'client' ? 'клиента' : 'реализации'})` : H[key][0], value: r => { const v = exportValue(r, key); return pctKeys.has(key) && v != null ? v / 100 : v; }, format: pctKeys.has(key) ? '0.0%' : '#,##0.00' })),
+    { key: 'roi', label: 'ROI', value: r => r.r.roi == null ? null : r.r.roi / 100, format: '0.0%' },
+    { key: 'qty', label: 'Заказы 30 дн, шт', value: r => r.orders, format: '#,##0' },
+    { key: 'factQty', label: 'Выкупы факт 30 дн, шт', value: r => r.pf?.qty ?? null, format: '#,##0' },
+    { key: 'beClient', label: 'Безубыток — цена клиента', value: r => r.be ? r.be * r.sppK : null, format: '#,##0.00' },
+    { key: 'tpClient', label: `Цена клиента для ${target}%`, value: r => r.tpc, format: '#,##0.00' },
+  ];
   const why = (v, maxM) => `Даже при очень высокой цене маржа не выше ${pct1(maxM)}: комиссия ${pct1(v.commission)}, реклама ${pct1(v.drr)}, эквайринг ${pct1(v.acquiring)}, прочее ${pct1(v.other)}, налог ${pct1(v.tax)} от оплаты покупателя`;
   // Рекомендованная цена: сверху — реализации, ниже — клиента; нажатие подставляет её в «Установить цену»
   // (в той цене, что выбрана переключателем «новая цена —»), округлив вверх до рубля.
@@ -367,6 +429,7 @@ export default function Margin({ cabinet }) {
     </td>),
   };
   const colOn = COL_LIST.filter(([k]) => cols.includes(k)).map(([k]) => k);
+  const visibleExportCols = ['o', ...colOn, ...(colOn.includes('margin') ? ['roi'] : []), ...(colOn.includes('rev') ? ['qty'] : []), ...(colOn.includes('be') ? ['beClient'] : []), ...(colOn.includes('tp') ? ['tpClient'] : [])];
   const renderTable = (list, pinnedMode) => (
     <div className="a-scroll">
       <table className="a-t s-slice m-tbl">
@@ -456,8 +519,8 @@ export default function Margin({ cabinet }) {
             <button type="button" className={setMode === 'real' ? 'on' : ''} onClick={() => setSetMode('real')}>цена реализации</button>
           </span>
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            {shown.some(r => r.priceEd) && <button type="button" className="a-btn" onClick={() => exportXlsx(shown.filter(r => r.priceEd))} title="Строки таблицы, где вписана новая цена">⬇ Excel: с новой ценой ({shown.filter(r => r.priceEd).length})</button>}
-            <button type="button" className="a-btn ghost" onClick={() => exportXlsx(shown)} title="Все строки таблицы с учётом фильтров; где новая цена не вписана — текущая">⬇ все в таблице ({shown.length})</button>
+            {shown.some(r => r.priceEd) && <button type="button" className="a-btn" onClick={() => openExport(shown.filter(r => r.priceEd))} title="Строки таблицы, где вписана новая цена">⬇ Excel: с новой ценой ({shown.filter(r => r.priceEd).length})</button>}
+            <button type="button" className="a-btn ghost" onClick={() => openExport(shown)} disabled={!shown.length} title="Все строки таблицы с учётом фильтров; где новая цена не вписана — текущая">⬇ все в таблице ({shown.length})</button>
             <button type="button" className="a-btn ghost" onClick={() => pin(shown.map(r => r.a.o))} title="Добавить все показанные строки в набор ниже">＋ все показанные</button>
             {Object.keys(priceOver).length > 0 && <button type="button" className="tt-reset" onClick={() => { if (window.confirm(`Стереть все вписанные новые цены (${Object.keys(priceOver).length})?`)) setPriceOver({}); }}>стереть новые цены ({Object.keys(priceOver).length})</button>}
             <ResetCtl ctl={ctl} />
@@ -471,13 +534,14 @@ export default function Margin({ cabinet }) {
           <b style={{ fontSize: 14 }}>Набор для репрайсера</b>
           <span className="a-hint" style={{ margin: 0 }}>{pinRows.length ? `${pinRows.length} арт. · новых цен ${pinRows.filter(r => r.priceEd).length}` : 'нажмите ＋ у строки — она добавится сюда и останется в исходной таблице; так можно собрать цены по разным артикулам и выгрузить одним файлом'}</span>
           {pinRows.length > 0 && <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
-            <button type="button" className="a-btn" onClick={() => exportXlsx(pinRows)} title="Артикул и новая цена; где не вписана — текущая">⬇ Excel ({pinRows.length})</button>
+            <button type="button" className="a-btn" onClick={() => openExport(pinRows)} title="Выбрать колонки для скачивания набора">⬇ Excel ({pinRows.length})</button>
             <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Убрать все строки из набора? Вписанные цены сохранятся.')) setPinned([]); }}>убрать все из набора</button>
             <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Очистить набор и стереть вписанные в нём новые цены?')) { setPriceOver(m => { const n = { ...m }; for (const o of pinned) delete n[o]; return n; }); setPinned([]); } }}>очистить</button>
           </span>}
         </div>
         {pinRows.length > 0 && renderTable(pinRows, true)}
       </div>
+      {exportRows && <ExportPicker options={exportOptions} selected={exportCols} setSelected={setExportCols} visible={visibleExportCols} count={exportRows.length} busy={exportBusy} error={exportError} onClose={() => setExportRows(null)} onDownload={exportXlsx} />}
     </div>
   );
 }
