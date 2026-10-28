@@ -608,7 +608,7 @@ function SettingsTab({ cabinet }) {
   );
 }
 
-export default function Discounts({ cabinet }) {
+export default function Discounts({ cabinet, active = true }) {
   const [tab, setTab] = useState('cats');
   const [days, setDays] = useState('30');
 
@@ -627,7 +627,7 @@ export default function Discounts({ cabinet }) {
         </div>
       </div></div>
 
-      {tab === 'cats' && <SoinvestCats cabinet={cabinet} />}
+      {tab === 'cats' && <SoinvestCats cabinet={cabinet} active={active} />}
       {tab === 'articles' && <ArticlesTab cabinet={cabinet} days={days} setDays={setDays} />}
       {tab === 'feed' && <FeedTab cabinet={cabinet} days={days} setDays={setDays} />}
       {tab === 'settings' && <SettingsTab cabinet={cabinet} />}

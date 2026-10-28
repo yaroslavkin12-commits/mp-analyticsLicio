@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getDiscountOverview, getDiscountHistory, getAdsGroups, addAdsGroup, assignAdsGroup } from '../api';
@@ -75,7 +75,7 @@ function SppChart({ hist, list, tip }) {
   );
 }
 
-export default function SoinvestCats({ cabinet }) {
+export default function SoinvestCats({ cabinet, active = true }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -88,16 +88,32 @@ export default function SoinvestCats({ cabinet }) {
   const [groupsData, setGroupsData] = useState({ groups: [], members: {} });
   const [group, setGroup] = useState('');
   const [newGroup, setNewGroup] = useState(null);
+  const requestId = useRef(0);
   const tip = useTip();
   useEffect(() => { setHist(null); getDiscountHistory(cabinet, histDays).then(r => setHist(r.data.data)).catch(() => setHist({ dates: [], rows: [], base: [] })); }, [cabinet, histDays]);
   useEffect(() => { getAdsGroups(cabinet).then(r => setGroupsData(r.data.data || { groups: [], members: {} })).catch(() => {}); }, [cabinet]);
 
   const load = useCallback(() => {
+    const id = ++requestId.current;
     setLoading(true);
     setError('');
-    getDiscountOverview(cabinet).then(r => setData(r.data.data)).catch(e => setError(e.response?.data?.error || e.message || 'Не удалось связаться с сервером')).finally(() => setLoading(false));
+    setData(prev => prev?.cabinet === cabinet ? prev : null);
+    getDiscountOverview(cabinet).then(r => {
+      if (id !== requestId.current) return;
+      const payload = r.data?.data;
+      if (r.data?.success !== true || !Array.isArray(payload?.items) || payload.cabinet !== cabinet) {
+        throw new Error('Сервер вернул некорректный ответ. Нажмите «Повторить загрузку».');
+      }
+      setData(payload);
+    }).catch(e => { if (id === requestId.current) setError(e.response?.data?.error || e.message || 'Не удалось связаться с сервером'); })
+      .finally(() => { if (id === requestId.current) setLoading(false); });
   }, [cabinet]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    // Раздел остаётся в памяти при переходах: загружаем при каждом открытии,
+    // чтобы результат фоновой попытки не оставался на странице навсегда.
+    if (active) load();
+    return () => { requestId.current++; };
+  }, [load, active]);
 
   const items = useMemo(() => (data?.items || []).map(a => ({ ...a, parts: a.cat.split(SEP), short: shortModel(a.n) || a.n })), [data]);
   const filtered = useMemo(() => {
