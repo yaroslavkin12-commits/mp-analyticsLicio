@@ -15,13 +15,15 @@ const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } cat
 export function useTableCtl(storeKey, defaultSort = null) {
   const key = storeKey ? `mp-tbl-${storeKey}` : null;
   const init = (key && load(key)) || {};
-  const [sort, setSortRaw] = useState(init.sort !== undefined ? init.sort : defaultSort); // { k, dir: -1|1 } | null
+  // null — исходный порядок (defaultSort); sort — выбранная пользователем
+  // сортировка. Иначе на колонке исходного порядка цикл застревает на ↑.
+  const [sort, setSortRaw] = useState(() => init.sort && (init.sortVersion === 2 || JSON.stringify(init.sort) !== JSON.stringify(defaultSort)) ? init.sort : null); // { k, dir: -1|1 } | null
   const [filters, setFilters] = useState(init.filters || {}); // k -> { min, max }
-  useEffect(() => { if (key) save(key, { sort, filters }); }, [key, sort, filters]);
+  useEffect(() => { if (key) save(key, { sort, filters, sortVersion: 2 }); }, [key, sort, filters]);
 
   const cycleSort = useCallback(k => {
-    setSortRaw(s => (!s || s.k !== k) ? { k, dir: -1 } : s.dir === -1 ? { k, dir: 1 } : defaultSort);
-  }, [defaultSort]);
+    setSortRaw(s => (!s || s.k !== k) ? { k, dir: -1 } : s.dir === -1 ? { k, dir: 1 } : null);
+  }, []);
   const setSort = useCallback(v => setSortRaw(v), []);
   const setFilter = useCallback((k, f) => setFilters(prev => {
     const n = { ...prev };
@@ -29,8 +31,8 @@ export function useTableCtl(storeKey, defaultSort = null) {
     else n[k] = f;
     return n;
   }), []);
-  const reset = useCallback(() => { setSortRaw(defaultSort); setFilters({}); }, [defaultSort]);
-  const changed = Object.keys(filters).length > 0 || JSON.stringify(sort) !== JSON.stringify(defaultSort);
+  const reset = useCallback(() => { setSortRaw(null); setFilters({}); }, []);
+  const changed = Object.keys(filters).length > 0 || sort !== null;
 
   // Применить к строкам: get(row, k) → число (или null).
   const apply = useCallback((rows, get) => {
@@ -46,8 +48,9 @@ export function useTableCtl(storeKey, defaultSort = null) {
         return true;
       }));
     }
-    if (sort) {
-      const { k, dir } = sort;
+    const effectiveSort = sort || defaultSort;
+    if (effectiveSort) {
+      const { k, dir } = effectiveSort;
       out = [...out].sort((a, b) => {
         const x = get(a, k), y = get(b, k);
         const xn = x === null || x === undefined || Number.isNaN(x), yn = y === null || y === undefined || Number.isNaN(y);
@@ -57,7 +60,7 @@ export function useTableCtl(storeKey, defaultSort = null) {
       });
     }
     return out;
-  }, [sort, filters]);
+  }, [sort, filters, defaultSort]);
 
   return { sort, setSort, cycleSort, filters, setFilter, reset, changed, apply };
 }
