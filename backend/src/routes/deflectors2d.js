@@ -1,10 +1,10 @@
 const express = require('express');
 const { createHash } = require('crypto');
 const { query, getPool } = require('../db');
-const { autoPath, OV_SQL, overrideArgs } = require('../lib/categories');
+const { catalog2d, demand2d } = require('../lib/deflectorsDemand');
 const router = express.Router();
 const KEY = 'prod:defly:deflectors2d:v1';
-const empty = () => ({ revision: 0, draft: { settings: { multiple: 10, periodDays: 7, salesDays: 30, total: 140, fill: false }, rows: [] }, journal: [] });
+const empty = () => ({ revision: 0, draft: { settings: { multiple: 10, periodDays: 7, salesDays: 30, total: 140, fill: false, source: 'ozon' }, rows: [] }, journal: [] });
 const model = () => import('../../../dashboard/src/lib/deflectors2d.mjs');
 const wrap = fn => async (req, res) => {
   try {
@@ -14,19 +14,25 @@ const wrap = fn => async (req, res) => {
   } catch (e) { res.status(e.status || 400).json({ success: false, error: e.message }); }
 };
 router.get('/', wrap(async () => { const r = await query('SELECT value FROM app_settings WHERE key = $1', [KEY]); return r[0] ? JSON.parse(r[0].value) : empty(); }));
-router.get('/catalog', wrap(async () => {
-  const [catalog, overrides] = await Promise.all([
-    query(`SELECT DISTINCT ON (offer_id) offer_id, product_name FROM ad_product_catalog
-      WHERE cabinet = ANY($1::text[]) AND platform = 'ozon' ORDER BY offer_id, updated_at DESC NULLS LAST, cabinet`, [['defly', 'nabauto', 'alex', 'fullgas', 'accent']]),
-    query(OV_SQL, overrideArgs('defly')),
-  ]);
-  const paths = new Map(overrides.map(r => [r.offer_id, r.path]));
-  return catalog.filter(r => (paths.get(r.offer_id) || autoPath('defly', r.product_name, r.offer_id).join(' / ')).split(' / ').includes('2D')).map(r => ({ offer: r.offer_id, name: r.product_name || '' }));
-}));
+router.get('/catalog', wrap(async () => (await catalog2d()).articles));
+router.get('/demand', wrap(req => demand2d(req.query.refresh === '1')));
 async function mutate(req, journal) {
   const { validate2d, calculate2d } = await model();
   const draft = validate2d(req.body.draft);
-  const calculated = calculate2d(draft);
+  // Повтор уже сохранённого запроса возвращается даже после обновления продаж.
+  const requestHash = journal ? createHash('sha256').update(JSON.stringify({ draft, offers: req.body.offers, requestId: req.body.requestId, columns: req.body.columns, date: req.body.date, note: req.body.note, demandVersion: req.body.demandVersion })).digest('hex') : null;
+  if (journal) {
+    const r = await query('SELECT value FROM app_settings WHERE key = $1', [KEY]);
+    const current = r[0] ? JSON.parse(r[0].value) : empty();
+    const existing = current.journal.find(j => j.id === req.body.requestId);
+    if (existing?.requestHash) {
+      if (existing.requestHash !== requestHash) throw Object.assign(new Error('Этот запрос уже сохранён с другим содержимым'), { status: 409 });
+      return { ...current, savedId: existing.id };
+    }
+  }
+  const demand = journal && (draft.settings.source === 'ozon' || req.body.demandVersion) ? await demand2d(true) : null;
+  if (demand && demand.version !== req.body.demandVersion) throw Object.assign(new Error('Продажи Ozon обновились. Обновите продажи в таблице и проверьте подсорт перед записью.'), { status: 409 });
+  const calculated = calculate2d(draft, demand);
   const expected = req.body.revision;
   if (!Number.isSafeInteger(expected) || expected < 0) throw new Error('Не указана версия таблицы');
   let snapshot;
@@ -40,7 +46,7 @@ async function mutate(req, journal) {
     if (!items.length) throw new Error('Количество подсорта равно нулю');
     if (typeof req.body.requestId !== 'string' || !/^[\w-]{8,80}$/.test(req.body.requestId)) throw new Error('Не указан идентификатор сохранения');
     const columns = Array.isArray(req.body.columns) ? req.body.columns.filter(x => typeof x === 'string').slice(0, 30) : [];
-    snapshot = { id: req.body.requestId, date: String(req.body.date || '').slice(0, 10), note: String(req.body.note || '').slice(0, 500), settings: draft.settings, items, total: items.reduce((s, r) => s + r.quantity, 0), columns };
+    snapshot = { id: req.body.requestId, date: String(req.body.date || '').slice(0, 10), note: String(req.body.note || '').slice(0, 500), settings: draft.settings, annual: draft.annual ? { ...draft.annual, items: undefined } : null, demand: demand ? { version: demand.version, to: demand.to, loadedAt: demand.loadedAt, shops: demand.shops, ranges: demand.ranges } : null, requestHash, items, total: items.reduce((s, r) => s + r.quantity, 0), columns };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(snapshot.date) || Number.isNaN(Date.parse(snapshot.date)) || new Date(snapshot.date).toISOString().slice(0, 10) !== snapshot.date) throw new Error('Укажите дату подачи подсорта');
     snapshot.fingerprint = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
   }
@@ -52,7 +58,7 @@ async function mutate(req, journal) {
     const current = r.rows[0] ? JSON.parse(r.rows[0].value) : empty();
     const existing = snapshot && current.journal.find(x => x.id === snapshot.id);
     if (existing) {
-      if (existing.fingerprint !== snapshot.fingerprint) throw Object.assign(new Error('Этот запрос уже сохранён с другим содержимым'), { status: 409 });
+      if (existing.requestHash ? existing.requestHash !== requestHash : existing.fingerprint !== snapshot.fingerprint) throw Object.assign(new Error('Этот запрос уже сохранён с другим содержимым'), { status: 409 });
       await client.query('COMMIT'); return { ...current, savedId: existing.id };
     }
     if (current.revision !== expected) throw Object.assign(new Error('Таблица изменена на другом компьютере. Сохраните свои правки в файл и обновите данные перед записью.'), { status: 409 });

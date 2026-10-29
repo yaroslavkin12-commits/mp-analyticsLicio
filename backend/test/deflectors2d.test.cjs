@@ -62,3 +62,44 @@ test('Черновик и журнал отдельны от чехлов; ве�
   assert.equal((await call('/draft', { cabinet: 'licio', revision: 3, draft })).status, 400);
   assert.equal(store.get('prod:defly:master'), '{"unchanged":true}'); assert.equal(store.get('prod:defly:orders'), '[{"id":"old"}]');
 });
+
+test('Ozon: несколько кабинетов складываются, темп учитывает 7/14/30, динамика сравнивает равные периоды', async () => {
+  const { buildOzonDemand, calculate2d } = await model;
+  const to = '2026-10-28', shops = [{ id: 'defly' }, { id: 'alex' }], coverage = [], sales = [];
+  for (let i = 0; i < 400; i++) {
+    const date = new Date(Date.parse(to) - i * 86400000).toISOString().slice(0, 10);
+    for (const c of shops) { coverage.push({ cabinet: c.id, date }); sales.push({ cabinet: c.id, date, offer_id: 'A', orders_item: i < 7 ? 2 : 1 }); }
+  }
+  // Посторонний кабинет не может попасть в сумму.
+  sales.push({ cabinet: 'licio', date: to, offer_id: 'A', orders_item: 999 });
+  const d = buildOzonDemand({ to, articles: [{ offer: 'A' }], shops, sales, coverage });
+  const a = d.articles[0];
+  assert.equal(a.periods.d7.quantity, 28); assert.equal(a.periods.d14.quantity, 42); assert.equal(a.periods.d30.quantity, 74);
+  assert.equal(a.trend7, 100); assert.ok(Math.abs(a.rate - (4 * .5 + 3 * .3 + 74 / 30 * .2)) < 1e-9);
+  assert.equal(a.periods.d365.quantity, 744); assert.equal(a.periods.lastYear30.quantity, 60);
+  const draft = { settings: { ...settings, source: 'ozon' }, rows: [row('A', 999, 0)], annual: { from: '2025-10-29', to, file: '1c.xlsx', items: { a: 3650 } } };
+  const p = calculate2d(draft, d); assert.equal(p.rows[0].annual1c, 3650); assert.equal(p.rows[0].rate, a.rate); assert.equal(p.total, 30);
+  assert.equal(calculate2d(draft).rows[0].rate, null); assert.equal(calculate2d(draft).total, 0);
+});
+test('Ozon: пропуски не нули, неполный кабинет исключает период; веса нормализуются', async () => {
+  const { buildOzonDemand } = await model;
+  const to = '2026-10-28', shops = [{ id: 'defly' }, { id: 'nabauto' }], coverage = [], sales = [];
+  for (let i = 0; i < 30; i++) { const date = new Date(Date.parse(to) - i * 86400000).toISOString().slice(0, 10); for (const c of shops) { if (c.id === 'nabauto' && i === 10) continue; coverage.push({ cabinet: c.id, date }); sales.push({ cabinet: c.id, date, offer_id: 'A', orders_item: 1 }); } }
+  const d = buildOzonDemand({ to, shops, articles: [{ offer: 'A' }, { offer: 'B' }], sales, coverage });
+  assert.equal(d.articles[0].periods.d7.quantity, 14); assert.equal(d.articles[0].periods.d14.quantity, null); assert.equal(d.articles[0].periods.d30.quantity, null);
+  assert.equal(d.articles[0].rate, 2); assert.deepEqual(d.articles[0].ratePeriods, [7]); assert.equal(d.articles[0].trend7, null);
+  assert.equal(d.articles[1].periods.d7.quantity, 0); assert.equal(d.articles[1].rate, 0);
+  coverage.splice(coverage.findIndex(r => r.cabinet === 'nabauto' && r.date === to), 1);
+  const missing = buildOzonDemand({ to, shops, articles: [{ offer: 'A' }], sales, coverage }); assert.equal(missing.articles[0].rate, null);
+});
+test('1С: выбор колонок, объединение повторов, нули, ошибки и годовой период; Ozon не задваивается', async () => {
+  const { parseAnnual2d, validate2d, calculate2d } = await model;
+  const p = parseAnnual2d([['Название', 'Количество', 'Артикул'], ['Товар', '1 200', 'Ab'], ['Товар', '300', 'ab'], ['Товар', 0, 'C'], ['Итог', 1500, 'Итого']], 2, 1, 1);
+  assert.deepEqual({ ...p.items }, { ab: 1500, c: 0 }); assert.deepEqual(p.rejected, []);
+  assert.deepEqual(parseAnnual2d([['A', -1], ['B', ' '], ['C', '1,5'], ['D', 'x']], 0, 1).rejected, [1, 2, 3, 4]);
+  const annual = { from: '2025-10-29', to: '2026-10-28', file: '1c.xlsx', items: p.items };
+  const draft = { settings, rows: [row('Ab', 30, 0)], annual };
+  assert.equal(validate2d(draft).annual.days, 365); assert.equal(calculate2d(draft).rows[0].annual1c, 1500); assert.equal(calculate2d(draft).rows[0].rate, 1);
+  assert.throws(() => validate2d({ ...draft, annual: { ...annual, from: '2026-10-01' } }), /330/);
+  assert.throws(() => validate2d({ ...draft, annual: { ...annual, to: '2026-02-30' } }), /даты/);
+});

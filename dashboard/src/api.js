@@ -169,6 +169,7 @@ export function latestOnly(key) {
 // «Производство» — потребность в пошив
 export const getProduction = cabinet => api.get('/production', { params: { cabinet } });
 export const getDeflectors2d = () => api.get('/production/deflectors2d');
+export const getDeflectors2dDemand = (refresh = false) => api.get('/production/deflectors2d/demand', { params: { refresh: refresh ? '1' : undefined } });
 export const getDeflectors2dCatalog = () => api.get('/production/deflectors2d/catalog');
 export const saveDeflectors2d = data => api.post('/production/deflectors2d/draft', data);
 export const submitDeflectors2d = data => api.post('/production/deflectors2d/journal', data);
