@@ -17,7 +17,7 @@ export function enrichSalesChart(arts, dates, buckets, model, { pnl, forecast, t
     let qty = 0, revenue = 0, pay = 0, profit = 0, any = false;
     for (const a of arts) {
       if (!a.orders[i] && !a.spendCpc[i] && !a.spendCpo[i]) continue;
-      const r = forecast?.(a.o,date,a.revenue[i],a.orders[i],a.spendCpc[i]+a.spendCpo[i]);
+      const r = forecast?.(a.o,date,a.revenue[i],a.orders[i],a.spendCpc[i]+a.spendCpo[i]+(a.spendOther?.[i]??0));
       if (!r || (!a.orders[i] && !a.spendCpc[i] && !a.spendCpo[i])) continue;
       any = true; qty += r.expQty; revenue += r.expRev; profit += r.profit; pay += r.expRev-r.comm-r.logi-r.acq-r.other-r.ads;
     }
@@ -27,14 +27,14 @@ export function enrichSalesChart(arts, dates, buckets, model, { pnl, forecast, t
   for (const b of buckets) {
     const base = model.byDate[b.key] || {}, known = b.idx.filter(i => pnl?.available?.mn && dates[i]>=pnl.available.mn && dates[i]<=pnl.available.mx);
     const f = {qty:0,payout:0,revenue:0,profit:0};
-    for (const i of known) { const d=fd.get(dates[i]); if(d) for(const k of Object.keys(f)) f[k]+=d[k]||0; }
+    for (const i of known) { const d=fd.get(dates[i]); if(d) for(const k of Object.keys(f)) f[k]+=d[k] == null ? (['payout','profit'].includes(k)?NaN:0) : d[k]; }
     const e = {qty:0,revenue:0,pay:0,profit:0,any:false};
     for (const i of b.idx) { const d=expected[i]; for(const k of ['qty','revenue','pay','profit']) e[k]+=d[k]; e.any ||= d.any; }
     const hasFin = known.length>0;
     byDate[b.key]={...base, _days:b.idx.length, _actualDays:known.length, _provisional:b.idx.some(i=>dates[i]>=today),
-      buyoutRub:hasFin?f.revenue:null,buyoutQty:hasFin?f.qty:null,payout:hasFin?f.payout:null,
-      paySale:hasFin&&f.qty>0?f.payout/f.qty:null,avgBuyout:hasFin&&f.qty>0?f.revenue/f.qty:null,
-      avgOrder:base.orders>0?base.revenue/base.orders:null,adCpo:base.adOrders>0?base.spend/base.adOrders:null,drrB:e.revenue>0?base.spend/e.revenue*100:null,profitActual:hasFin?f.profit:null,marginActual:hasFin&&f.revenue>0?f.profit/f.revenue*100:null,
+      buyoutRub:hasFin?f.revenue:null,buyoutQty:hasFin?f.qty:null,payout:hasFin&&!pnl?._operational?f.payout:null,
+      paySale:hasFin&&!pnl?._operational&&f.qty>0?f.payout/f.qty:null,avgBuyout:hasFin&&f.qty>0?f.revenue/f.qty:null,
+      avgOrder:base.orders>0?base.revenue/base.orders:null,adCpo:base.adOrders>0?base.spend/base.adOrders:null,drrB:e.revenue>0?base.spend/e.revenue*100:null,profitActual:hasFin&&!pnl?._operational?f.profit:null,marginActual:hasFin&&!pnl?._operational&&f.revenue>0?f.profit/f.revenue*100:null,
       profitForecast:e.any?e.profit:null,marginForecast:e.revenue>0?e.profit/e.revenue*100:null,payForecast:e.qty>0?e.pay/e.qty:null,expectedBuyouts:e.any?e.qty:null};
   }
   return {...model,byDate};

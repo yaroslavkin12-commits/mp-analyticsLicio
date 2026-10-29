@@ -2,6 +2,7 @@ const express = require('express');
 const dayjs = require('dayjs');
 const bridge = require('../lib/wbBridge');
 const router = express.Router();
+router.use('/views', require('./wbViews'));
 router.post('/import', async (req, res) => {
   try { bridge.verify(req.wbRawBody, req.get('X-WB-Timestamp'), req.get('X-WB-Signature')); res.json({ success: true, data: await bridge.ingest(req.body) }); }
   catch (e) { res.status(e.status || 400).json({ success: false, error: e.message }); }

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SHOPS, shopOf, isDeflyLike } from '../lib/cabinets';
-import { navOf, navLabel } from '../lib/navigation';
+import { navOf, navLabel, unavailablePage } from '../lib/navigation';
 export { navLabel };
 import { getAdsCabinets } from '../api';
 import { Store, TrendingUp, Activity, ShoppingCart, Target, Receipt, ChartColumn, CalendarRange, Map as MapIcon, Megaphone, Search, BadgePercent,
@@ -109,7 +109,7 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
           mini ? <div key={'h' + icon} style={{ height:1, background:'var(--border)', margin:'8px 6px' }} title={icon} />
             : <div key={'h' + icon} style={{ fontSize:10.5, fontWeight:700, letterSpacing:'.06em', textTransform:'uppercase', color:'var(--text3)', padding:'10px 12px 4px' }}>{icon}</div>
         ) : (
-          <button key={id} onClick={() => setPage(id)} title={mini ? label : undefined} style={{
+          <button key={id} disabled={!!unavailablePage(cabinet, id)} onClick={() => setPage(id)} title={unavailablePage(cabinet, id) || (mini ? label : undefined)} style={{
             display:'flex', alignItems:'center', justifyContent: mini ? 'center' : 'flex-start', gap:9, width:'100%', padding: mini ? '7px 0' : '7px 12px', borderRadius:8,
             border:'none', marginBottom:2, background:page===id?'var(--surface2)':'transparent', position:'relative',
             color:page===id?'var(--text)':'var(--text2)', fontWeight:page===id?600:400, fontSize:13, textAlign:'left', transition:'all .12s', whiteSpace:'nowrap',

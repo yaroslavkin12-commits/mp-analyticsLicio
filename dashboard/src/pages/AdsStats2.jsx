@@ -146,6 +146,7 @@ export const STRATEGY = {
   MAX_CLICKS: { t: 'Вывод в ТОП', s: 'ТОП' },
 };
 export function stratOf(c) {
+  if (c.platform === 'wb') return { k: c.wbBidType === 'unified' ? 'WB_UNIFIED' : c.wbBidType === 'manual' ? 'WB_MANUAL' : 'WB_UNKNOWN', t: c.wbBidType === 'unified' ? 'Единая ставка' : c.wbBidType === 'manual' ? 'Ручная ставка' : 'Стратегия WB не получена', s: c.wbBidType === 'unified' ? 'единая ставка' : c.wbBidType === 'manual' ? 'ручная ставка' : 'стратегия —' };
   if (isCpoCampaign(c)) return { k: 'cpo', t: 'Оплата за заказ', s: 'за заказ' };
   const k = String(c.autopilotStrategy || '').toUpperCase();
   const st = STRATEGY[k] || (k && k !== 'NO_AUTO_STRATEGY' ? { t: k, s: k } : STRATEGY.TARGET_BIDS);
@@ -167,7 +168,7 @@ function cpoText(cpo) {
 export const drrClass = v => v === null || v === undefined || !Number.isFinite(v) ? 'm' : v < 15 ? 'g' : v <= 30 ? 'w' : 'b';
 
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
-const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'clicks', 'adViews', 'adOrders', 'adRevenue',
+const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'spendOther', 'clicks', 'adViews', 'adOrders', 'adRevenue',
   'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCir', 'clicksCir', 'spendAuto', 'clicksAuto', 'spendTop', 'clicksTop',
   'spendCpoUndated', 'expRev', 'profitF', 'selfQ', 'selfR', 'selfFbs'];
 // Коэффициенты юнит-экономики по артикулам (ставит страница «Реклама»): для ДРР
@@ -192,6 +193,7 @@ const zoneRaw = d => {
 // только то, что Ozon отнёс к рекламе (корзин в рекламной статистике нет).
 function dayRaw(day, mode) {
   const d = day || {};
+  if (d._strict) { const read = k => d[k] == null ? NaN : d[k]; return { _strict:true, views:read(mode === 'ads' ? 'adViews' : 'views'), pdpViews:read(mode === 'ads' ? 'clicks' : 'pdpViews'), cart:read(mode === 'ads' ? 'adToCart' : 'cart'), orders:read(mode === 'ads' ? 'adOrders' : 'orders'), revenue:read(mode === 'ads' ? 'adRevenue' : 'revenue'), spend:read('spend'), spendCpc:read('spendCpc'), spendCpo:read('spendCpo'), spendOther:read('spendOther'), clicks:read('clicks'), adViews:read('adViews'), adOrders:read('adOrders'), adRevenue:read('adRevenue'), selfQ:read('selfQ'),selfR:read('selfR'),selfFbs:read('selfFbs'), ...zoneRaw(d) }; }
   if (mode === 'ads') {
     return {
       views: d.adViews || 0, pdpViews: d.clicks || 0, cart: d.adToCart ?? null, orders: d.adOrders || 0, revenue: d.adRevenue || 0,
@@ -230,21 +232,23 @@ export function derive(r, mode) {
 function sumRaw(list) {
   const t = {};
   for (const k of RAW_KEYS) t[k] = 0;
-  let cartKnown = false;
+  let cartKnown = false; const strict = list.some(r => r._strict);
   for (const r of list) {
     for (const k of RAW_KEYS) {
+      if (strict && (r[k] == null || !Number.isFinite(r[k]))) { t[k] = NaN; if (k === 'cart') cartKnown = true; continue; }
       if (k === 'cart') { if (r.cart !== null && r.cart !== undefined) { t.cart += r.cart; cartKnown = true; } }
       else t[k] += r[k] || 0;
     }
   }
+  if (strict) t._strict = true;
   if (!cartKnown) t.cart = null;
   return t;
 }
 // Модель по набору артикулов: byDate (с производными), totals, prev.
-function buildModel(articles, dates, mode) {
+function buildModel(articles, dates, mode, unknown = false) {
   const byDate = {};
   for (const d of dates) {
-    const raw = sumRaw(articles.map(a => dayRaw(a.byDate[d], mode)));
+    const raw = sumRaw(unknown && !articles.length ? [dayRaw({_strict:true},mode)] : articles.map(a => dayRaw(a.byDate[d], mode)));
     let stock = 0, stockKnown = false, posSum = 0, posN = 0;
     for (const a of articles) {
       const s = a.byDate[d]?.stock;
@@ -274,11 +278,11 @@ function buildModel(articles, dates, mode) {
   const prevList = articles.filter(a => a.prevTotals).map(a => {
     const p = a.prevTotals;
     return mode === 'ads'
-      ? { views: p.adViews, pdpViews: p.clicks, cart: null, orders: p.adOrders, revenue: p.adRevenue, spend: p.spend, clicks: p.clicks }
-      : { views: p.views, pdpViews: p.pdpViews, cart: p.cart, orders: p.orders, revenue: p.revenue, spend: p.spend, clicks: p.clicks };
+      ? { _strict: !!p._strict, views: p.adViews, pdpViews: p.clicks, cart: null, orders: p.adOrders, revenue: p.adRevenue, spend: p.spend, clicks: p.clicks }
+      : { _strict: !!p._strict, views: p.views, pdpViews: p.pdpViews, cart: p.cart, orders: p.orders, revenue: p.revenue, spend: p.spend, clicks: p.clicks };
   });
   const prev = prevList.length ? derive(sumRaw(prevList), mode) : null;
-  const stockNow = articles.reduce((s, a) => s + (a.stock ? (a.stock.fboPresent || 0) + (a.stock.fbsPresent || 0) : 0), 0);
+  const stockNow = articles.reduce((s, a) => s + (a.stock ? (a._strict ? a.stock.fboPresent ?? NaN : a.stock.fboPresent || 0) + (a._strict ? a.stock.fbsPresent ?? NaN : a.stock.fbsPresent || 0) : 0), 0);
   const hasStock = articles.some(a => a.stock);
   return { byDate, totals, prev, stockNow: hasStock ? stockNow : null };
 }
@@ -317,7 +321,7 @@ export function AreaSpark({ values, color }) {
 }
 export function SparkBars({ values, w = 96, h = 24, dates = [], metric = 'orders', trafficLight = true }) {
   const signals = barSignals(values, {dates,metric,pending:dates.map(d=>d>=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'}))});
-  const n = values.length || 1, max = Math.max(1, ...values), bw = w / n;
+  const n = values.length || 1, max = Math.max(1, ...values.filter(Number.isFinite)), bw = w / n;
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true" style={{ display: 'block', marginLeft: 'auto' }}>
       {values.map((v, i) => {
@@ -612,6 +616,7 @@ const DAY_ROWS = [
   ...STRAT_PARTS.map(p => ({ key: 'avgCpc' + p.k, label: p.t, fmt: 'money2', good: 'down', sub: true, ratio: ['spend' + p.k, 'clicks' + p.k], clicks: 'clicks' + p.k, spendKey: 'spend' + p.k, hideEmpty: true,
     hint: p.k === 'Cir' ? 'Целевой расход: Ozon сам держит ставку так, чтобы ДРР кампании был около заданного. Цель ДРР — в списке кампаний артикула' : undefined })),
   { key: 'spend', label: 'Расход общий, ₽', fmt: 'money0', good: 'up', editable: true },
+  { key:'spendOther',label:'оплата за показы / прочее',fmt:'money0',good:'up',sub:true,onlyWhenNonZero:true },
   { key: 'spendCpc', label: 'оплата за клик', fmt: 'money0', good: 'up', sub: true },
   ...STRAT_PARTS.map(p => ({ key: 'spend' + p.k, label: p.t, fmt: 'money0', good: 'up', sub: 2, clicks: 'clicks' + p.k, hideEmpty: true })),
   { key: 'spendCpo', label: 'оплата за заказ', fmt: 'money0', good: 'up', sub: true, hint: 'Оплата за заказ стоит в дне заказа — так видно эффективность дня. Ozon списывает её позже, в день выкупа: в P&L и финансах эти суммы в других днях' },
@@ -666,6 +671,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
   const rows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
     // Строки стратегий — только если у товара за период был такой расход.
+    && !(r.onlyWhenNonZero && !dates.some(d => (model.byDate[d]?.[r.key] || 0) > 0))
     && !(r.hideEmpty && !dates.some(d => (model.byDate[d]?.[r.spendKey || r.key] || 0) > 0))
     // Самовыкупы — под «+» у строки заказов, чтобы не перегружать таблицу.
     && !(r.toggleOf && !openSub)));
@@ -812,7 +818,7 @@ function CampaignsTable({ campaigns }) {
             <tr key={c.campaignId}>
               <td>{c.title || c.campaignId}{c.splitAcross > 1 && <span className="a-approx" title={`Расход поделён поровну на ${c.splitAcross} артикула`}>÷{c.splitAcross}</span>}</td>
               <td><span className={`tag ${c.state === 'CAMPAIGN_STATE_RUNNING' ? 'on' : 'off'}`}>{c.state === 'CAMPAIGN_STATE_RUNNING' ? 'активна' : 'выкл.'}</span></td>
-              <td>{isCpoCampaign(c) ? 'за заказ' : <>за клик<small className="a-strat" style={{ display: 'block' }}>{stratOf(c).t}</small>{stratOf(c).k === 'TARGET_CIR' && <TargetInput c={c} />}</>}</td>
+              <td>{c.platform === 'wb' && c.paymentType !== 'CPC' ? (c.paymentType === 'CPM' ? 'за показы' : 'не получена') : isCpoCampaign(c) ? 'за заказ' : <>за клик<small className="a-strat" style={{ display: 'block' }}>{stratOf(c).t}</small>{stratOf(c).k === 'TARGET_CIR' && <TargetInput c={c} />}</>}</td>
               <td className="n">{fmtMoney2(c.avgCpc)}</td>
               <td className="n">{fmtInt(c.totalSpend)}</td>
               <td className="n" title={c.targetDrr ? `Цель стратегии: ${String(c.targetDrr).replace('.', ',')}%` : undefined}
@@ -1166,7 +1172,7 @@ export default function AdsStats2({ cabinet }) {
   const coefArts = useMemo(() => (coefsData ? coefsData.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(' / ') })) : []), [coefsData]);
   const bs = useBuyerShare(cabinet, coefArts);
   const unitK = useMemo(() => {
-    if (!coefsData) return null;
+    if (!coefsData || coefsData._metadataOnly) return null;
     const ks = unitCoefs(coefsData, coefArts, bs.shareOf);
     return new Map(coefArts.map((a, i) => [a.o, ks[i]]));
   }, [coefsData, coefArts, bs.shareOf]);
@@ -1273,7 +1279,7 @@ export default function AdsStats2({ cabinet }) {
       if (!onlyActive && !payFilter) return true;
       if (a.campaigns.length === 0) return tab !== 'all' && !isCat;
       return a.campaigns.some(c => (!onlyActive || c.state === 'CAMPAIGN_STATE_RUNNING')
-        && (!payFilter || (payFilter.startsWith('s:') ? !isCpoCampaign(c) && stratOf(c).k === payFilter.slice(2) : (payFilter === 'cpo') === isCpoCampaign(c))));
+        && (!payFilter || (payFilter === 'cpm' ? c.paymentType === 'CPM' : payFilter.startsWith('s:') ? stratOf(c).k === payFilter.slice(2) : cabinet === 'defly_wb' ? c.paymentType === payFilter.toUpperCase() : (payFilter === 'cpo') === isCpoCampaign(c))));
     });
     const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
     const valK = (a, k) => {
@@ -1319,7 +1325,7 @@ export default function AdsStats2({ cabinet }) {
     return { rows: list, hiddenByFilter: before - list.length };
   }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK, taxPct, transit]);
 
-  const total = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, unitK, taxPct]); // eslint-disable-line react-hooks/exhaustive-deps
+  const total = useMemo(() => buildModel(rows, dates, mode, !!data?._wb), [rows, dates, mode, unitK, taxPct, data?._wb]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── действия ──
   async function handleCollect() {
@@ -1532,7 +1538,7 @@ export default function AdsStats2({ cabinet }) {
           <td>
             <div className="a-stock">
               <span className="n">{fmtInt(st)}</span>
-              <span className={`d ${daysCls}`}>{st === null ? 'нет данных' : st === 0 ? 'нет в наличии' : a.stockDays === null ? 'нет продаж' : `≈ ${Math.round(a.stockDays)} дн`}</span>
+              <span className={`d ${daysCls}`}>{st === null ? 'нет данных' : st === 0 ? 'нет в наличии' : a.stockDays === null ? (cabinet === 'defly_wb' && !Number.isFinite(a.totals.orders) ? 'нет данных о темпе' : 'нет продаж') : `≈ ${Math.round(a.stockDays)} дн`}</span>
             </div>
           </td>
           <td className="n" onClick={e => e.stopPropagation()}><TransitCell value={transit[key]} onSave={p => saveTransit(key, p)} /></td>
@@ -1605,14 +1611,14 @@ export default function AdsStats2({ cabinet }) {
             <span className="val n">{fmtInt(T.orders)}</span>
             {showAssoc && <span className="a-withassoc"><small>со склейкой</small><b className="n">{fmtInt(T.orders + assocOrdersAll)}</b></span>}
           </div>
-          <span className="sub"><Delta value={P && changePct(T.orders, P.orders)} /> · ≈ {dates.length ? (T.orders / dates.length).toFixed(T.orders / dates.length < 10 ? 1 : 0).replace('.', ',') : '—'} в день</span>
+          <span className="sub"><Delta value={P && changePct(T.orders, P.orders)} /> · ≈ {dates.length && Number.isFinite(T.orders) ? (T.orders / dates.length).toFixed(T.orders / dates.length < 10 ? 1 : 0).replace('.', ',') : '—'} в день</span>
           {showAssoc && <span className="sub">+{fmtInt(assocOrdersAll)} шт по склейке</span>}
           <AreaSpark values={series('orders')} color="var(--a-good)" />
         </div>
         <div className="a-kpi">
           <span className="lbl">Остаток сейчас, шт</span>
           <span className="val n">{fmtInt(total.stockNow)}</span>
-          <span className="sub" style={{ color: lowStock ? 'var(--a-bad)' : undefined }}>{lowStock ? `${lowStock} арт. заканчиваются (< 7 дн)` : 'Запаса хватает'}</span>
+          <span className="sub" style={{ color: lowStock ? 'var(--a-bad)' : undefined }}>{lowStock ? `${lowStock} арт. заканчиваются (< 7 дн)` : cabinet === 'defly_wb' && !Number.isFinite(T.orders) ? 'Нет данных о темпе продаж' : 'Запаса хватает'}</span>
           <AreaSpark values={series('stock')} color="var(--a-ink3)" />
         </div>
         <div className="a-kpi">
@@ -1620,6 +1626,7 @@ export default function AdsStats2({ cabinet }) {
           <span className="val n">{fmtInt(T.spend)}</span>
           <div className="split">
             <span>За клик <b className="n">{fmtInt(T.spendCpc)}</b></span>
+            {cabinet === 'defly_wb' && <span>За показы / прочее <b className="n">{fmtInt(T.spendOther)}</b></span>}
             <span title="Оплата за заказ — в дне заказа. Ozon списывает её позже, в день выкупа: в P&L и финансах эти суммы в других днях">За заказ (по дню заказа) <b className="n">{T.spendCpo ? fmtInt(T.spendCpo) : '—'}</b></span>
           </div>
           <span className="sub"><Delta value={P && changePct(T.spend, P.spend)} goodWhen="neutral" /> к прошлому периоду</span>
@@ -1631,7 +1638,7 @@ export default function AdsStats2({ cabinet }) {
           <AreaSpark values={drrSeries} color="var(--a-spend)" />
         </div>
       </div>
-      <div className="a-hint" style={{ margin: '6px 2px 0' }}>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</div>
+      <div className="a-hint" style={{ margin: '6px 2px 0' }}>{cabinet === 'defly_wb' ? 'WB: недоступные данные показаны «—». CPM учтён отдельно от оплаты за клик. ДРР — расход / сумма заказов.' : <>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</>}</div>
 
       <div className="a-bar">
         <div className="a-tabs">
@@ -1708,9 +1715,9 @@ export default function AdsStats2({ cabinet }) {
         <select className="a-sel" value={payFilter} onChange={e => setPayFilter(e.target.value)}>
           <option value="">Все типы оплаты</option>
           <option value="cpc">Оплата за клик</option>
-          <option value="cpo">Оплата за заказ</option>
+          <option value="cpo">Оплата за заказ</option>{cabinet === 'defly_wb' && <option value="cpm">Оплата за показы</option>}
           <optgroup label="Стратегия оплаты за клик">
-            {Object.entries(STRATEGY).map(([k, v]) => <option key={k} value={`s:${k}`}>{v.t}</option>)}
+            {(cabinet === 'defly_wb' ? [['WB_UNIFIED',{t:'Единая ставка'}],['WB_MANUAL',{t:'Ручная ставка'}]] : Object.entries(STRATEGY)).map(([k,v]) => <option key={k} value={`s:${k}`}>{v.t}</option>)}
           </optgroup>
         </select>
         <button type="button" className="a-toggle" onClick={() => setShowAssoc(v => !v)} title="Добавить заказы по остальным артикулам склейки: отдельно и итогом">

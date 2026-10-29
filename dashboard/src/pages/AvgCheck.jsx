@@ -71,8 +71,8 @@ export default function AvgCheck({ cabinet }) {
   const per = useMemo(() => {
     if (!sales || !pnl) return [];
     const P = cats.arts.map(() => null);
-    const get = ai => P[ai] || (P[ai] = { oRub: new Float64Array(n), oQty: new Float64Array(n), sRub: new Float64Array(n), sQty: new Float64Array(n), oz: new Float64Array(n) });
-    for (const r of sales.rows) { if (!r[5] && !r[6]) continue; const x = get(r[0]); x.oQty[r[1]] += r[5]; x.oRub[r[1]] += r[6]; }
+    const get = ai => P[ai] || (P[ai] = { oRub: new Float64Array(n), oQty: new Float64Array(n), sRub: new Float64Array(n), sQty: new Float64Array(n), oz: new Float64Array(n).fill(pnl._operational ? NaN : 0) });
+    for (const r of sales.rows) { if (!sales._wb && !r[5] && !r[6]) continue; const x = get(r[0]); x.oQty[r[1]] += r[5]; x.oRub[r[1]] += r[6]; }
     const byOffer = new Map(cats.arts.map(a => [a.o, a.i]));
     const di = new Map(dates.map((d, i) => [d, i]));
     const pdi = pnl.dates.map(d => di.get(d));
@@ -94,6 +94,7 @@ export default function AvgCheck({ cabinet }) {
       const x = get(ai); x.ad = (x.ad || 0) + v;
       if (pd > lastFin) x.oz[pdi[pd]] -= v;
     }
+    if(pnl._operational) for(let ai=0;ai<cats.arts.length;ai++){const x=get(ai);for(let d=0;d<n;d++) if(!pnl.available?.mn||dates[d]<pnl.available.mn||dates[d]>pnl.available.mx){x.sRub[d]=NaN;x.sQty[d]=NaN;}}
     return P;
   }, [sales, pnl, cats.arts, n, dates]);
 
@@ -130,6 +131,8 @@ export default function AvgCheck({ cabinet }) {
   const metricsOf = (S, idx) => {
     let oRub = 0, oQty = 0, sRub = 0, sQty = 0, oz = 0;
     for (const i of idx) { oRub += S.oRub[i]; oQty += S.oQty[i]; sRub += S.sRub[i]; sQty += S.sQty[i]; oz += S.oz[i]; }
+    if(pnl?._operational && idx.some(i=>!pnl.available?.mn||dates[i]<pnl.available.mn||dates[i]>pnl.available.mx)){sRub=NaN;sQty=NaN;}
+    if(sales?._wb && !sales.availability?.orders && !per.some(Boolean)){oRub=NaN;oQty=NaN;}
     const pRub = sRub + oz;
     return { oRub, oQty, sRub, sQty, pRub, orders: oQty > 0 ? oRub / oQty : null, sales: sQty > 0 ? sRub / sQty : null, payout: sQty > 0 ? pRub / sQty : null, share: sRub > 0 ? pRub / sRub * 100 : null };
   };
@@ -194,8 +197,8 @@ export default function AvgCheck({ cabinet }) {
 
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         <Kpi label="Средний чек заказа" value={T.orders ? `${fmtInt(T.orders)} ₽` : '—'} sub={<span><Delta value={ch('orders')} /> последние 7 дн к 7 до них</span>} />
-        <Kpi label="Средний чек выкупа" value={T.sales ? `${fmtInt(T.sales)} ₽` : '—'} sub={<span><Delta value={ch('sales')} /> · цена реализации с баллами Ozon</span>} />
-        <Kpi label="Поступление на счёт за 1 выкуп" value={T.payout ? `${fmtInt(T.payout)} ₽` : '—'} sub={<span><Delta value={ch('payout')} /> · за вычетом удержаний Ozon</span>} />
+        <Kpi label="Средний чек выкупа" value={T.sales ? `${fmtInt(T.sales)} ₽` : '—'} sub={<span><Delta value={ch('sales')} /> · {pnl?._operational ? 'цена продавца WB' : 'цена реализации с баллами Ozon'}</span>} />
+        <Kpi label="Поступление на счёт за 1 выкуп" value={T.payout ? `${fmtInt(T.payout)} ₽` : '—'} sub={<span><Delta value={ch('payout')} /> · {pnl?._operational ? 'финансы пока не подключены' : 'за вычетом удержаний Ozon'}</span>} />
         <Kpi label="Доходит до счёта" value={pct1(T.share)} sub={`${fmtInt(T.pRub)} ₽ из ${fmtInt(T.sRub)} ₽ выручки`} />
       </div>
 

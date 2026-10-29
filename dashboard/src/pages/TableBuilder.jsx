@@ -284,11 +284,11 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     const l = Math.max(0, lo);
     for (let d = l; d <= hi; d++) {
       S.orders += a.orders[d]; S.revenue += a.revenue[d]; S.views += a.views[d]; S.pdp += a.pdpViews[d]; S.cart += a.cart[d];
-      S.spend += a.spendCpc[d] + a.spendCpo[d]; S.adOrders += a.adOrders[d];
+      S.spend += a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0); S.adOrders += a.adOrders[d];
       if (a.pos[d] !== null) { S.posSum += a.pos[d]; S.posCnt++; }
       // Прогноз с заказов дня — как «Прогнозируемая прибыль» страницы (юнит-экономика артикула).
-      if (forecast && (a.orders[d] > 0 || a.spendCpc[d] + a.spendCpo[d] > 0)) {
-        const r = forecast(a.o, data.dates[d], a.revenue[d], a.orders[d], a.spendCpc[d] + a.spendCpo[d]);
+      if (forecast && (a.orders[d] > 0 || a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0) > 0)) {
+        const r = forecast(a.o, data.dates[d], a.revenue[d], a.orders[d], a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0));
         if (r) { S.fProfit += r.profit; S.fRev += r.expRev; S.fAny = 1; }
       }
     }
@@ -321,6 +321,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       if (shareAt) { for (let d = l; d <= hi; d++) if (x.s[d]) base += x.s[d] * (shareAt(a.o, data.dates[d]) ?? 1); }
       else base = s * (shareOf ? shareOf(a.o) : 1);
       S.profit = pay - cost - base * (tax || 0) / 100;
+      if(fin?._operational){S.payout=NaN;S.cost=NaN;S.profit=NaN;}
     }
     return S;
   }, [finArt, shareOf, shareAt, forecast, data, tax, sewLc, prices, yInfo, yAllLc]);
@@ -931,7 +932,7 @@ function PriceSet({ cabinet, storeKey, rows, cols, setCols, cell, prices, coefOf
     const curClient = pr?.client && pr.client <= (cur || Infinity) ? pr.client : (cur ? cur * sppK : null);
     // ДРР — свой за последние 30 дней данных: реклама / (заказы × выкуп).
     let sp = 0, rv = 0;
-    for (let d = Math.max(0, L - 30); d < L; d++) { sp += a.spendCpc[d] + a.spendCpo[d]; rv += a.revenue[d]; }
+    for (let d = Math.max(0, L - 30); d < L; d++) { sp += a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0); rv += a.revenue[d]; }
     const v = k ? {
       spp: (1 - sppK) * 100, cost: k.cost || 0, buyout: k.buyout * 100, defect: 0, commission: k.comm * 100, acquiring: k.acq * 100,
       direct: k.direct ?? k.logi, ret: k.direct !== null && k.direct !== undefined ? k.ret : 0, other: k.other * 100, oper: 0, tax: tax || 0,

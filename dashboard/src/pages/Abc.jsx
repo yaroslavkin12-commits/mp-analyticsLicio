@@ -90,7 +90,7 @@ export default function Abc({ cabinet }) {
   const per = useMemo(() => {
     if (!sales) return [];
     const P = cats.arts.map(() => ({ revenue: 0, orders: 0, spend: 0, sales: 0, day: new Float64Array(n), prev: null }));
-    for (const r of sales.rows) { const x = P[r[0]]; x.orders += r[5]; x.revenue += r[6]; x.spend += (r[7] || 0) + (r[8] || 0); x.day[r[1]] += r[5]; }
+    for (const r of sales.rows) { const x = P[r[0]]; x.orders += r[5]; x.revenue += r[6]; x.spend += sales._wb ? r[7] + r[8] + r[14] : (r[7] || 0) + (r[8] || 0); x.day[r[1]] += r[5]; }
     for (const p of sales.prev || []) P[p[0]].prev = { orders: p[4], revenue: p[5], spend: p[6] };
     if (pnl) {
       const byOffer = new Map(cats.arts.map(a => [a.o, a.i]));
@@ -102,7 +102,7 @@ export default function Abc({ cabinet }) {
     return P;
   }, [sales, pnl, cats.arts, n]);
   const bs = useBuyerShare(cabinet, cats.arts);
-  const K = useMemo(() => (coefs ? unitCoefs(coefs, cats.arts.map(a => ({ o: a.o, parts: a.parts })), bs.shareOf) : null), [coefs, cats.arts, bs.shareOf]);
+  const K = useMemo(() => (coefs && !coefs._metadataOnly ? unitCoefs(coefs, cats.arts.map(a => ({ o: a.o, parts: a.parts })), bs.shareOf) : null), [coefs, cats.arts, bs.shareOf]);
   // Сопоставляем коэффициенты по артикулу (порядок articles у coefs свой).
   const kByOffer = useMemo(() => (K ? new Map(cats.arts.map((a, i) => [a.o, K[i]])) : null), [K, cats.arts]);
 
@@ -112,7 +112,7 @@ export default function Abc({ cabinet }) {
     if (metric === 'revenue') return src.revenue;
     if (metric === 'orders') return src.orders;
     if (metric === 'sales') return prev ? 0 : x.sales;
-    if (metric === 'profit') { const k = kByOffer?.get(a.o); return k ? unitProfit(k, { ordRub: src.revenue, ordQty: src.orders, ads: src.spend || 0 }, tax).profit : 0; }
+    if (metric === 'profit') { const k = kByOffer?.get(a.o); return k ? unitProfit(k, { ordRub: src.revenue, ordQty: src.orders, ads: src.spend || 0 }, tax).profit : NaN; }
     return 0;
   }, [metric, kByOffer, tax]);
 

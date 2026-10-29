@@ -22,7 +22,7 @@ const SCHEMES = [['all', 'Всё'], ['fbo', 'FBO'], ['fbs', 'FBS']];
 const VIEWS = [['goods', 'Товары'], ['clusters', 'Кластеры'], ['districts', 'Округа']];
 const daysTxt = v => (v === null || v === undefined) ? '—' : !Number.isFinite(v) ? '∞' : v >= 365 ? '365+' : String(Math.round(v));
 const STATUS = {
-  out: ['Закончился', 'b'], crit: ['< 7 дней', 'b'], low: ['7–14 дней', 'w'], ok: ['норма', 'g'], over: ['избыток', 'm'], dead: ['без продаж', 'm'], none: ['нет остатка', 'm'],
+  unknown: ['Нет данных','m'], out: ['Закончился', 'b'], crit: ['< 7 дней', 'b'], low: ['7–14 дней', 'w'], ok: ['норма', 'g'], over: ['избыток', 'm'], dead: ['без продаж', 'm'], none: ['нет остатка', 'm'],
 };
 const SIGNALS = [
   ['out', 'Закончились, но продаются', 'Остатка нет, а заказы за окно были — теряете продажи', 'b'],
@@ -126,7 +126,7 @@ export default function Inventory({ cabinet }) {
   const base = useMemo(() => per.filter(x => x.any && inPath(x.a, sel) && matchQ(x.a, q) && grp.test(x.a)), [per, sel, q, grp.test]);
   const rows = useMemo(() => base.map(x => {
     const { stock, v } = pick(x);
-    const st = statusOf(stock, v, x.sold30 > 0);
+    const st = !Number.isFinite(stock)||!Number.isFinite(v) ? 'unknown' : statusOf(stock, v, x.sold30 > 0);
     const cover = v > 0 ? stock / v : (stock > 0 ? Infinity : null);
     const sigs = new Set([st]);
     if (x.holes) sigs.add('holes');
@@ -240,7 +240,7 @@ export default function Inventory({ cabinet }) {
       </FinHeader>
 
       {noData ? (
-        <Empty><b>Остатков пока нет.</b><br />Остатки по складам собирает Google-скрипт (функция <code>syncStocksWh</code>, вкладка «StocksWh») — вставьте обновлённый скрипт, запустите <code>setupTriggers</code> и один раз <code>syncStocksWh</code>.</Empty>
+        <Empty><b>Остатков пока нет.</b><br />{data._wb ? <>Запустите <code>syncWbDaily</code> в таблице WB Defly.</> : <>Остатки по складам собирает Google-скрипт (функция <code>syncStocksWh</code>, вкладка «StocksWh») — вставьте обновлённый скрипт, запустите <code>setupTriggers</code> и один раз <code>syncStocksWh</code>.</>}</Empty>
       ) : (
         <>
           <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>

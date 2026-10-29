@@ -7,7 +7,6 @@ import { pagesOf } from './lib/navigation';
 import Sidebar, { navLabel } from './components/Sidebar';
 import { startStickyHeads } from './lib/stickyHeads';
 startStickyHeads();
-import Wildberries from './pages/Wildberries';
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
 import AdsStats from './pages/AdsStats2';
@@ -194,7 +193,7 @@ export default function App() {
 
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
           {allowed.filter(id => visited.has(id) && PAGES[id] && (!isMobile || id === page)).map(id => {
-            const P = shopOf(cabinet)?.platform === 'wb' && id !== 'production' ? Wildberries : PAGES[id];
+            const P = PAGES[id];
             const on = id === page;
             return (
               <div key={cabinet + ':' + id + ':' + (pageGen[id] || 0)} aria-hidden={!on} className="app-page" style={{

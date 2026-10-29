@@ -8,6 +8,17 @@ const COST_KEYS = ['commission', 'logistics', 'acquiring', 'storage', 'promo', '
 const SEP = ' / ';
 
 export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withDays = false } = {}) {
+  if (data._operational) {
+    const blank=()=>({revenue:0,qty:0,payout:null,profit:null,ozonX:null,ads:null,cost:null,tax:null,...(withDays?{days:data.dates.map(date=>({date,revenue:0,qty:0,payout:null,profit:null}))}:{})});
+    const total=blank(),byGroup={};
+    for(const a of data.articles) if(groupOf) byGroup[groupOf(a)] ||= blank();
+    for(const [ai,di,bi,rub,qty] of data.rows){
+      if(!['sale','return'].includes(data.buckets[bi]))continue;
+      const targets=[total];if(groupOf)targets.push(byGroup[groupOf(data.articles[ai])]);
+      for(const t of targets){t.revenue+=rub??NaN;t.qty+=qty??NaN;if(withDays){t.days[di].revenue+=rub??NaN;t.days[di].qty+=qty??NaN;}}
+    }
+    return {total,byGroup};
+  }
   const n = data.dates.length;
   const per = data.articles.map(() => null);
   const get = ai => per[ai] || (per[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n), self: new Float64Array(n) });

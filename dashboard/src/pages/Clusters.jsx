@@ -65,7 +65,7 @@ export default function Clusters({ cabinet, nav }) {
         <div className="cl-head">
           <b>{c.name}</b>
           <span className="muted">{c.members.length} арт. · {fmtInt(sumOrd(c.members))} заказов за 30 дн</span>
-          {c.src === 'manual' && <span className="cl-tag">принята на сайте — на Ozon не склеена</span>}
+          {c.src === 'manual' && <span className="cl-tag">принята на сайте — в кабинете не склеена</span>}
         </div>
         <div className="cl-arts">
           {c.members.map(o => (
@@ -158,14 +158,14 @@ export default function Clusters({ cabinet, nav }) {
         <div className="a-top">
           <h1>Товары</h1>
           {nav}
-          <span className="a-hint" style={{ margin: 0 }}>{d ? (d.source === 'ozon' ? 'склейки — объединённые карточки Ozon, обновляются раз в сутки' : 'склейки — из ручного списка; обновите скрипт в таблице, чтобы брать их с Ozon') : ''}</span>
+          <span className="a-hint" style={{ margin: 0 }}>{d ? (d.source === 'wb' ? 'склейки — объединённые карточки WB, обновляются из каталога' : d.source === 'ozon' ? 'склейки — объединённые карточки Ozon, обновляются раз в сутки' : 'склейки — из ручного списка; обновите скрипт в таблице, чтобы брать их с Ozon') : ''}</span>
         </div>
       </div>
       {err && <div className="c-msg bad" style={{ margin: '10px 0' }}>{err}</div>}
       {!d && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
       {d && (
         <>
-          {d.source !== 'ozon' && (
+          {!['ozon','wb'].includes(d.source) && (
             <div className="c-msg" style={{ margin: '12px 0 0' }}>
               Склейки пока не с Ozon, а из старого ручного списка (в нём только рекламируемые артикулы), поэтому «Проверить» показывает и то, что на Ozon уже склеено.
               Обновите скрипт в таблице Дефлая и запустите <b>syncDaily</b> — через 10–20 минут склейки придут с Ozon и лишнее отсюда уйдёт.

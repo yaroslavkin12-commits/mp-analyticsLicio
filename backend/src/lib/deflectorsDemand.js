@@ -45,8 +45,9 @@ async function collect() {
   const wbOrders = wbData.find(d => d.kind === 'orders');
   if (wbOrders) {
     cabinets.push({ id: 'defly_wb', label: 'Defly WB', platform: 'wb' });
+    const wbPrefs = await require('./wbViews').preferences();
     const wbCatalog = new Map((wbData.find(d => d.kind === 'catalog')?.rows || []).map(r => [String(r.nmId), r.offer]));
-    for (const r of wbOrders.rows) if (!r.cancelled) sales.push({ cabinet: 'defly_wb', date: r.date, offer_id: r.offer || wbCatalog.get(String(r.nmId)), orders_item: 1 });
+    for (const r of wbOrders.rows) if (!r.cancelled && !wbPrefs.self[`${r.srid || r.id}|${r.nmId}`]) sales.push({ cabinet: 'defly_wb', date: r.date, offer_id: r.offer || wbCatalog.get(String(r.nmId)), orders_item: 1 });
     for (let d = dayjs(wbOrders.meta.from > from ? wbOrders.meta.from : from); d.format('YYYY-MM-DD') <= to && d.format('YYYY-MM-DD') <= wbOrders.meta.to; d = d.add(1, 'day')) coverage.push({ cabinet: 'defly_wb', date: d.format('YYYY-MM-DD') });
   }
   const data = buildOzonDemand({ to, articles, shops: cabinets, sales, coverage });

@@ -73,6 +73,7 @@ export default function AdSpendCats({ data, cabinet, tip }) {
     };
     for (const a of data.articles || []) {
       const it = itemOf(a.offerId || '__none__', a.offerId, a.productName, a.cat);
+      if(data._wb){for(let i=0;i<N;i++){const d=a.byDate?.[dates[i]];it.cpc[i]=d?.spendCpc ?? NaN;it.cpo[i]=d?.spendOther ?? NaN;}continue;}
       for (const c of a.campaigns || []) {
         const fromReport = String(c.campaignId).startsWith('cpo:');
         for (let i = 0; i < N; i++) {
@@ -117,9 +118,9 @@ export default function AdSpendCats({ data, cabinet, tip }) {
     const rank = id => { const i = LICIO.indexOf(id); return i >= 0 ? i : id === '0' ? 1e6 : 1e5; };
     if (!isDefly) list.sort((x, y) => rank(x.id) - rank(y.id) || y.total - x.total);
     const top = list.filter(r => !r.parent);
-    const grand = top.reduce((s, r) => s + r.total, 0);
+    const known=!data._wb||data.availability?.ads; const grand = known?top.reduce((s, r) => s + r.total, 0):NaN;
     const gCpc = top.reduce((s, r) => s + r.tCpc, 0), gCpo = top.reduce((s, r) => s + r.tCpo, 0);
-    return { list, top, grand, gCpc, gCpo, isDefly };
+    return { list, top, grand, gCpc:known?gCpc:NaN, gCpo:known?gCpo:NaN, isDefly };
   }, [data, dates, cabinet]);
 
   if (!model) return null;
@@ -194,7 +195,7 @@ export default function AdSpendCats({ data, cabinet, tip }) {
     <div className="a-card" style={{ marginTop: 16 }}>
       <div className="a-bar" style={{ marginBottom: 6 }}>
         <b style={{ fontSize: 14 }}>Расход на рекламу по категориям</b>
-        <span className="a-hint" style={{ margin: 0 }}>за период: <b>{fmtInt(model.grand)} ₽</b> · клик {fmtInt(model.gCpc)} · заказ {fmtInt(model.gCpo)}</span>
+        <span className="a-hint" style={{ margin: 0 }}>за период: <b>{fmtInt(model.grand)} ₽</b> · клик {fmtInt(model.gCpc)} · {data._wb ? 'показы / прочее' : 'заказ'} {fmtInt(model.gCpo)}</span>
         <span className="a-seg" style={{ marginLeft: 'auto' }}>
           {[['day', 'Дни'], ['week', 'Недели'], ['month', 'Месяцы']].map(([v, l]) => (
             <button key={v} type="button" className={gran === v ? 'on' : ''} onClick={() => setGran(v)}>{l}</button>
@@ -202,18 +203,18 @@ export default function AdSpendCats({ data, cabinet, tip }) {
         </span>
       </div>
       <div className="a-hint" style={{ marginBottom: 10, padding: '6px 10px', borderLeft: '3px solid var(--s-c4)', background: 'var(--a-panel2, transparent)' }}>
-        ⚠ «Оплата за заказ» в этом блоке начислена <b>в день списания</b> — когда Ozon фактически списал деньги (после выкупа заказа).
+        {data._wb ? <>Расходы WB по дням рекламы. Оплата за показы и кампании с неизвестным типом оплаты показаны отдельно от оплаты за клик.</> : <>⚠ «Оплата за заказ» в этом блоке начислена <b>в день списания</b> — когда Ozon фактически списал деньги (после выкупа заказа).
         В таблице выше она отнесена ко дню заказа, поэтому суммы за один и тот же период могут отличаться.
-        «Оплата за клик» — в день показа, одинаково в обоих местах.
+        «Оплата за клик» — в день показа, одинаково в обоих местах.</>}
       </div>
       {chartGroups.length > 0
         ? <StackChart buckets={buckets} groups={chartGroups} metric="spend" tip={tip} gran={gran} labels />
-        : <div className="a-empty" style={{ padding: 24 }}>За период расходов на рекламу нет.</div>}
+        : <div className="a-empty" style={{ padding: 24 }}>{data._wb && !data.availability?.ads ? 'Данные о расходах за весь период пока не получены.' : 'За период расходов на рекламу нет.'}</div>}
       <div className="a-scroll" style={{ marginTop: 12 }}>
         <table className="a-t s-slice">
           <thead><tr>
             <th>Категория</th><th className="r">Оплата за клик, ₽</th>
-            <th className="r" title="По дню списания">Оплата за заказ, ₽ <span className="muted">(по дню списания)</span></th>
+            <th className="r" title="По дню списания">{data._wb ? 'За показы / прочее, ₽' : <>Оплата за заказ, ₽ <span className="muted">(по дню списания)</span></>}</th>
             <th className="r">Всего, ₽</th><th className="r">Доля</th>
           </tr></thead>
           <tbody>{model.list.filter(r => r.total > 0 || (model.isDefly && r.id !== '0') || LICIO.includes(r.id)).map(catRow)}</tbody>
@@ -224,8 +225,8 @@ export default function AdSpendCats({ data, cabinet, tip }) {
         </table>
       </div>
       <div className="a-hint" style={{ marginTop: 8 }}>
-        «Без категории / без привязки к товару» — расход кампаний, которые Ozon не разносит по товарам (например, «Оплата за заказ — все товары»,
-        пока за эти дни нет отчёта по её заказам). Как только отчёт подгрузится, расход разойдётся по товарам и категориям.
+        {data._wb ? <>Расходы без подтверждённой привязки к товару показаны отдельно вверху страницы.</> : <>«Без категории / без привязки к товару» — расход кампаний, которые Ozon не разносит по товарам (например, «Оплата за заказ — все товары»,
+        пока за эти дни нет отчёта по её заказам). Как только отчёт подгрузится, расход разойдётся по товарам и категориям.</>}
       </div>
       {model.isDefly && (
         <div className="a-hint" style={{ marginTop: 8 }}>

@@ -84,7 +84,7 @@ function finByDay(fin, dates) {
   const pd = fin.dates.map(d => di.get(d));
   const m = new Map();
   const arr = () => new Float64Array(L);
-  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), ad: arr(), self: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null, sTot: 0 }; m.set(o, x); } return x; };
+  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), ad: arr(), self: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null, sTot: 0 }; if(fin._operational){for(const a of Object.values(x.b))a.fill(NaN);} m.set(o, x); } return x; };
   const saleDay = arr(), nsOther = arr(), nsSale = arr();
   let saleAll = 0, adsAll = 0, nsAdsTot = 0;
   fin.articles.forEach((a, i) => { if (fin.cost?.[i]) get(a.o).cost = fin.cost[i]; });
@@ -107,7 +107,7 @@ function finByDay(fin, dates) {
     if (k === 'ads') nsAdsTot += a; else if (OZ.includes(k)) nsOther[d] += a; else if (k === 'sale' || k === 'return') nsSale[d] += a;
   }
   (fin.adNoSku || []).forEach((v, dd) => { const d = pd[dd]; if (d !== undefined && dd > lastFin && v) nsOther[d] -= v; });
-  return { m, saleDay, nsOther, nsSale, nsAdsTot, adsAll, saleAll, late, L };
+  return { operational:fin._operational, available:fin.available, m, saleDay, nsOther, nsSale, nsAdsTot, adsAll, saleAll, late, L };
 }
 
 // Суммы по дням для одного артикула: { key: Float64Array(L) }.
@@ -119,7 +119,7 @@ function artDays(a, dates, F, ctx) {
   const pr = ctx.priceOf ? ctx.priceOf(a.o) : null;
   for (let d = 0; d < L; d++) {
     S.views[d] = a.views[d]; S.pdp[d] = a.pdpViews[d]; S.cart[d] = a.cart[d]; S.orders[d] = a.orders[d]; S.revenue[d] = a.revenue[d];
-    S.spendCpc[d] = a.spendCpc[d]; S.spendCpo[d] = a.spendCpo[d]; S.spend[d] = a.spendCpc[d] + a.spendCpo[d];
+    S.spendCpc[d] = a.spendCpc[d]; S.spendCpo[d] = a.spendCpo[d]; S.spend[d] = a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0);
     S.adOrders[d] = a.adOrders[d]; S.clicks[d] = a.clicks[d]; S.adViews[d] = a.adViews ? a.adViews[d] : 0;
     const sf = ctx.selfOf ? ctx.selfOf(a.i) : null;
     if (sf && sf[d]) { S.selfQ[d] = sf[d][0]; S.selfR[d] = sf[d][1]; }
@@ -134,7 +134,11 @@ function artDays(a, dates, F, ctx) {
       S.pS[d] = p[0]; S.cS[d] = p[1] || p[0]; S.pN[d] = 1;
       if (a.orders[d] > 0) { S.pW[d] = p[0] * a.orders[d]; S.cW[d] = (p[1] || p[0]) * a.orders[d]; S.wN[d] = a.orders[d]; }
     }
-    if (x) finDay(S, x, F, d, a.o, dates, ctx);
+    if (F?.operational) {
+      const known=F.available?.mn&&dates[d]>=F.available.mn&&dates[d]<=F.available.mx;
+      S.buyQty[d]=known?(x?.q[d]??0):NaN;S.buyRub[d]=known?(x?.s[d]??0):NaN;S.finAny[d]=known?1:0;
+      for(const key of [...OZ.map(k=>'oz_'+k),'ozAds','cost','taxBase','nsOther','nsAds','adLate']) S[key][d]=NaN;
+    } else if (x) finDay(S, x, F, d, a.o, dates, ctx);
   }
   return S;
 }

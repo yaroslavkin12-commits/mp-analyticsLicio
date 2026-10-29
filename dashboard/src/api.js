@@ -5,6 +5,15 @@ export const getTaxSettings = cabinet => api.get('/settings/tax', { params: { ca
 export const saveTaxSettings = (cabinet, settings) => api.post('/settings/tax', { cabinet, ...settings });
 // Счётчик запросов в полёте: фоновая подгрузка разделов ждёт, пока сеть
 // освободится, — открытая страница получает данные первой.
+// WB использует те же страницы и контракты представления, что и Ozon.
+api.interceptors.request.use(cfg => {
+  const cabinet = cfg.params?.cabinet || (cfg.data && typeof cfg.data === 'object' ? cfg.data.cabinet : null);
+  if (cabinet === 'defly_wb') {
+    if (/^\/(sales|promo|ads|stocks|orders|clusters|finance|queries)(\/|$)/.test(cfg.url)) { cfg.url = '/wb/views' + cfg.url; cfg.timeout = Math.max(cfg.timeout || 0, 120000); }
+    if (/^\/pricelog/.test(cfg.url)) { cfg.params = { ...cfg.params, platform: 'wb' }; if (cfg.data && typeof cfg.data === 'object') cfg.data.platform = 'wb'; }
+  }
+  return cfg;
+});
 let pending = 0;
 api.interceptors.request.use(cfg => { pending++; return cfg; });
 const done = () => { pending = Math.max(0, pending - 1); };
@@ -45,6 +54,15 @@ api.interceptors.response.use(async r => {
     if (again) return again;
   }
   return Promise.reject(err);
+});
+api.interceptors.response.use(r => {
+  const d = r.data?.data; if (!d?._wb) return r;
+  const url = r.config.url;
+  if (/\/sales\/data$/.test(url)) { d.rows = d.rows.map(row => row.map((v, i) => i >= 2 && v === null ? NaN : v)); d.prev = d.prev?.map(row => row.map((v, i) => i > 0 && v === null ? NaN : v)); }
+  if (/\/stocks\/data$/.test(url)) for (const key of ['stock', 'orders', 'fbs']) d[key] = d[key].map(row => row.map((v, i) => i > (key === 'stock' ? 0 : 1) && v === null ? NaN : v));
+  if (/\/finance\/pnl$/.test(url)) d.rows = d.rows.map(row => row.map((v, i) => i >= 3 && v === null ? NaN : v));
+  if (/\/queries\/season$/.test(url)) d.rows = d.rows.map(row => row.map((v, i) => i >= 2 && v === null ? NaN : v));
+  return r;
 });
 export const getOverview    = p => api.get('/dashboard/overview', { params: p });
 export const getChart       = p => api.get('/dashboard/chart',    { params: p });
@@ -196,6 +214,6 @@ export const savePricePlans = (cabinet, items, platform = 'ozon') => api.post('/
 export const setSnapRule = (cabinet, platform, snapId, offers, rule) => api.post('/pricelog/snap-rule', { cabinet, platform, snapId, offers, rule });
 export const getClusters = cabinet => api.get('/clusters', { params: { cabinet }, timeout: 60000 });
 export const decideCluster = (cabinet, action, offers, id) => api.post('/clusters/decide', { cabinet, action, offers, id });
-export const getOrderFeed = (cabinet, dateFrom, dateTo) => api.get('/orders/feed', { params: { cabinet, dateFrom, dateTo }, timeout: 60000 });
+export const getOrderFeed = (cabinet, dateFrom, dateTo, kind) => api.get('/orders/feed', { params: { cabinet, dateFrom, dateTo, kind }, timeout: 60000 });
 export const setSelfBuyout = (cabinet, items, on) => api.post('/orders/self', { cabinet, items, on });
 export const getSalesSummary = (dateFrom, dateTo, cabinet) => api.get('/sales/summary', { params: { dateFrom, dateTo, cabinet }, timeout: 120000 });

@@ -178,7 +178,7 @@ function wbStats_(kind) {
     batch.forEach(function (r) {
       var id = kind === 'orders' ? r.srid : r.saleID;
       if (!id) throw new Error('WB не прислал идентификатор строки ' + kind);
-      map[String(id)] = { id: String(id), date: String(r.date || '').slice(0, 10), changed: r.lastChangeDate || '', nmId: r.nmId, offer: r.supplierArticle || '', name: r.subject || '', price: Number(r.priceWithDisc) > 0 ? wbNumber_(r.priceWithDisc) : null, customerPrice: Number(r.finishedPrice) > 0 ? wbNumber_(r.finishedPrice) : null, warehouse: r.warehouseName || '', warehouseType: r.warehouseType || '', region: r.regionName || r.oblast || '', cancelled: r.isCancel === true, cancelDate: r.cancelDate || r.cancel_dt || '', type: kind === 'sales' ? (/^S/.test(String(id)) ? 'sale' : /^R/.test(String(id)) ? 'return' : 'unknown') : 'order', srid: r.srid || '' };
+      map[String(id)] = { id: String(id), date: String(r.date || '').slice(0, 10), at: r.date || null, changed: r.lastChangeDate || '', nmId: r.nmId, offer: r.supplierArticle || '', name: r.subject || '', price: Number(r.priceWithDisc) > 0 ? wbNumber_(r.priceWithDisc) : null, customerPrice: Number(r.finishedPrice) > 0 ? wbNumber_(r.finishedPrice) : null, warehouse: r.warehouseName || '', warehouseType: r.warehouseType || '', region: r.regionName || r.oblast || '', cancelled: r.isCancel === true, cancelDate: r.cancelDate || r.cancel_dt || '', type: kind === 'sales' ? (/^S/.test(String(id)) ? 'sale' : /^R/.test(String(id)) ? 'return' : 'unknown') : 'order', srid: r.srid || '' };
     });
     last = String(batch[batch.length - 1].lastChangeDate || '');
     if (!last || last === cursor || ++page > 8) throw new Error('WB не продвигает курсор статистики; неполный набор не отправлен');
@@ -197,7 +197,7 @@ function wbCatalog_() {
   for (var page = 0; page < 100; page++) {
     var data = wbFetch_('post', 'https://content-api.wildberries.ru/content/v2/get/cards/list', { settings: { cursor: cursor, filter: { withPhoto: -1 } } });
     if (!Array.isArray(data.cards)) throw new Error('WB не прислал каталог');
-    data.cards.forEach(function (r) { rows.push({ id: String(r.nmID), nmId: r.nmID, offer: r.vendorCode || '', name: r.title || '', brand: r.brand || '', sizes: (r.sizes || []).map(function (s) { return { chrtId: s.chrtID, skus: s.skus || [] }; }) }); });
+    data.cards.forEach(function (r) { rows.push({ id: String(r.nmID), nmId: r.nmID, imtId: r.imtID || null, created: r.createdAt || null, offer: r.vendorCode || '', name: r.title || '', brand: r.brand || '', sizes: (r.sizes || []).map(function (s) { return { chrtId: s.chrtID, skus: s.skus || [] }; }) }); });
     if (data.cards.length < 100) { wbSave_('catalog', rows); return; }
     if (!data.cursor || !data.cursor.updatedAt || !data.cursor.nmID || JSON.stringify(cursor) === JSON.stringify(data.cursor)) throw new Error('Некорректный курсор каталога WB');
     cursor = { limit: 100, updatedAt: data.cursor.updatedAt, nmID: data.cursor.nmID }; Utilities.sleep(700);
@@ -242,14 +242,14 @@ function syncWbAds() { wbLock_('ads', function () {
   for (var i = 0; i < candidates.length; i += 50) {
     var ids = candidates.slice(i, i + 50), info = wbFetch_('get', 'https://advert-api.wildberries.ru/api/advert/v2/adverts?ids=' + ids.join(','));
     if (!Array.isArray(info.adverts)) throw new Error('WB не прислал параметры кампаний');
-    info.adverts.forEach(function (r) { var c = campaigns.find(function (c) { return c.id === String(r.id); }); if (c) { c.name = r.settings?.name || c.name; c.payment = r.settings?.payment_type || ''; } });
+    info.adverts.forEach(function (r) { var c = campaigns.find(function (c) { return c.id === String(r.id); }); if (c) { c.name = r.settings?.name || c.name; c.payment = r.settings?.payment_type || ''; c.bidType = r.bid_type || null; c.nmIds = (r.nm_settings || []).map(function(n){ return n.nm_id; }); c.search = r.settings?.placements?.search === true; c.recommendations = r.settings?.placements?.recommendations === true; } });
     var stats = wbFetch_('get', 'https://advert-api.wildberries.ru/adv/v3/fullstats?ids=' + ids.join(',') + '&beginDate=' + from + '&endDate=' + to);
     if (!Array.isArray(stats)) throw new Error('WB не прислал статистику рекламы');
     stats.forEach(function (c) { (c.days || []).forEach(function (d) {
       var date = String(d.date).slice(0, 10), id = [c.advertId, date].join('|');
       all[id] = { id: id, campaign: String(c.advertId), date: date, scope: 'campaign', spend: wbNumber_(d.sum), views: wbNumber_(d.views), clicks: wbNumber_(d.clicks), orders: wbNumber_(d.orders), orderRub: wbNumber_(d.sum_price), atbs: wbNumber_(d.atbs) };
       (d.apps || []).forEach(function (app) { (app.nms || []).forEach(function (n) { var key = id + '|' + n.nmId, a = all[key]; if (!a) a = all[key] = { id: key, campaign: String(c.advertId), date: date, scope: 'sku', nmId: n.nmId, name: n.name || '', spend: 0, views: 0, clicks: 0, orders: 0, orderRub: 0, atbs: 0 }; [['spend', 'sum'], ['views', 'views'], ['clicks', 'clicks'], ['orders', 'orders'], ['orderRub', 'sum_price'], ['atbs', 'atbs']].forEach(function (p) { var v = wbNumber_(n[p[1]]); a[p[0]] = a[p[0]] === null || v === null ? null : a[p[0]] + v; }); }); });
-    }); });
+    }); (c.boosterStats || []).forEach(function(p){var a=all[[c.advertId,String(p.date).slice(0,10),p.nm].join('|')];if(a)a.position=wbNumber_(p.avg_position);}); });
     if (i + 50 < candidates.length) Utilities.sleep(61000);
   }
   wbSave_('campaigns', campaigns);

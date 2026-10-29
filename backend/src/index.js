@@ -26,7 +26,7 @@ const reportCache = new Map();
 const CACHE_TTL = 2 * 60 * 60 * 1000;
 const dataVersion = require('./lib/dataVersion');
 const cacheFresh = h => h && h.ver === dataVersion.get() && Date.now() - h.at < CACHE_TTL;
-const CACHED = ['/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout', '/api/finance/calc-base', '/api/stocks/data', '/api/queries/data', '/api/queries/season'];
+const CACHED = ['/api/wb/views/sales/data', '/api/wb/views/promo/stats', '/api/wb/views/stocks/data','/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout', '/api/finance/calc-base', '/api/stocks/data', '/api/queries/data', '/api/queries/season'];
 app.use((req, res, next) => {
   if (req.path === '/api/wb/import') return next(); // кэши обновляются после приёма целого набора
   // Шаблоны конструктора и «отшивается» отчёты не меняют — кэш не трогаем.

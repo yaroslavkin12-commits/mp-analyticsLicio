@@ -25,7 +25,7 @@ import './sales.css';
 // и срезы считаются мгновенно.
 // ─────────────────────────────────────────────────────────────────────────
 
-const K = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spendCpc', 'spendCpo', 'clicks', 'adOrders', 'adRevenue', 'adViews'];
+const K = ['spendOther', 'views', 'pdpViews', 'cart', 'orders', 'revenue', 'spendCpc', 'spendCpo', 'clicks', 'adOrders', 'adRevenue', 'adViews'];
 const SEP = ' / ';
 // Цвета категорий (проверены на различимость, в т.ч. при дальтонизме).
 // Цвет закреплён за категорией по её месту в справочнике, а не по рангу.
@@ -41,7 +41,7 @@ const fmtShort = v => {
   if (a >= 1e3) return `${Math.round(v / 1e3)} тыс`;
   return String(Math.round(v));
 };
-const perDayTxt = v => v === null ? '—' : v.toFixed(v < 10 ? 1 : 0).replace('.', ',');
+const perDayTxt = v => !Number.isFinite(v) ? '—' : v.toFixed(v < 10 ? 1 : 0).replace('.', ',');
 
 // ── Подготовка данных ────────────────────────────────────────────────────
 function prepare(data) {
@@ -52,11 +52,11 @@ function prepare(data) {
     return o;
   });
   for (const r of data.rows) {
-    const a = arts[r[0]], d = r[1];
+    const a = arts[r[0]], d = r[1]; a._wb = !!data._wb;
     a.views[d] = r[2]; a.pdpViews[d] = r[3]; a.cart[d] = r[4]; a.orders[d] = r[5]; a.revenue[d] = r[6];
     a.spendCpc[d] = r[7]; a.spendCpo[d] = r[8]; a.clicks[d] = r[9]; a.adOrders[d] = r[10]; a.adRevenue[d] = r[11];
     if (r[12] !== null) a.pos[d] = r[12];
-    a.adViews[d] = r[13] || 0;
+    a.adViews[d] = data._wb ? r[13] : r[13] || 0; a.spendOther[d] = data._wb ? r[14] : 0;
   }
   // Остаток: в данных только дни, когда он менялся — переносим вперёд.
   const byArt = new Map();
@@ -73,7 +73,7 @@ function prepare(data) {
   }
   for (const a of arts) {
     let rev = 0, ord = 0, sp = 0;
-    for (let d = 0; d < n; d++) { rev += a.revenue[d]; ord += a.orders[d]; sp += a.spendCpc[d] + a.spendCpo[d]; }
+    for (let d = 0; d < n; d++) { rev += a.revenue[d]; ord += a.orders[d]; sp += a.spendCpc[d] + a.spendCpo[d] + a.spendOther[d]; }
     a.tRevenue = rev; a.tOrders = ord; a.tSpend = sp;
     a.short = shortModel(a.n) || a.n;
   }
@@ -92,7 +92,7 @@ function aggregate(list, n) {
     if (a.st !== null && a.st !== undefined) stockNow = (stockNow || 0) + a.st;
     if (a.prev) {
       prev = prev || { views: 0, pdpViews: 0, cart: 0, orders: 0, revenue: 0, spend: 0, adOrders: 0 };
-      for (const k of Object.keys(prev)) prev[k] += a.prev[k] || 0;
+      for (const k of Object.keys(prev)) prev[k] += a._wb && !Number.isFinite(a.prev[k]) ? NaN : a.prev[k] || 0;
     }
     if (a.tOrders > 0) active++;
     if (a.prev && a.prev.orders > 0) pActive++;
@@ -119,14 +119,14 @@ function toModel(ag, buckets) {
   for (const b of buckets) {
     const raw = {};
     for (const k of K) { let v = 0; for (const i of b.idx) v += ag.s[k][i]; raw[k] = v; tot[k] += v; }
-    raw.spend = raw.spendCpc + raw.spendCpo;
+    raw.spend = raw.spendCpc + raw.spendCpo + raw.spendOther;
     let st = null;
     for (const i of b.idx) if (ag.stock[i] !== null) st = ag.stock[i];
     let pos = null;
     if (ag.single) { const ps = b.idx.map(i => ag.single.pos[i]).filter(v => v !== null); pos = ps.length ? ps.reduce((x, y) => x + y, 0) / ps.length : null; }
     byDate[b.key] = { ...derive(raw, 'all'), stock: st, position: pos, avgCpc: raw.clicks > 0 ? raw.spendCpc / raw.clicks : null };
   }
-  tot.spend = tot.spendCpc + tot.spendCpo;
+  tot.spend = tot.spendCpc + tot.spendCpo + tot.spendOther;
   const totals = derive(tot, 'all');
   totals.avgCpc = tot.clicks > 0 ? tot.spendCpc / tot.clicks : null;
   const prev = ag.prev ? derive({ ...ag.prev, spendCpc: 0, spendCpo: 0, clicks: 0 }, 'all') : null;
@@ -189,7 +189,7 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize, labe
   const val = (g, b) => {
     if (g.model) return g.model.byDate[b.key]?.[metric] ?? null;
     let v = 0;
-    for (const i of b.idx) v += metric === 'spend' ? g.ag.s.spendCpc[i] + g.ag.s.spendCpo[i] : g.ag.s[metric][i];
+    for (const i of b.idx) v += metric === 'spend' ? g.ag.s.spendCpc[i] + g.ag.s.spendCpo[i] + (g.ag.s.spendOther?.[i] ?? 0) : g.ag.s[metric][i];
     return v;
   };
   const raw = buckets.map(b => groups.map(g => val(g, b)));
@@ -598,7 +598,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     for (const x of m.values()) saleAll += x.sRub;
     // Самовыкупы — себестоимость за эти штуки не вычитается.
     for (const [pai, , q] of pnl.self || []) { const o = pnl.articles[pai]?.o; const x = o && m.get(o); if (x) x.selfQ = (x.selfQ || 0) + q; }
-    return { m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
+    return { complete:!pnl._operational || !!pnl.available?.mn && pnl.dates.every(d=>d>=pnl.available.mn&&d<=pnl.available.mx), m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
   const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -612,7 +612,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   const coefArts = useMemo(() => (fin?.coefs ? fin.coefs.articles.map(a => ({ o: a.o, parts: String(a.cat || '').split(SEP) })) : []), [fin]);
   const bs = useBuyerShare(cabinet, coefArts);
   const unitK = useMemo(() => {
-    const c = fin?.coefs; if (!c) return null;
+    const c = fin?.coefs; if (!c || c._metadataOnly) return null;
     const ks = unitCoefs(c, coefArts, bs.shareOf);
     return new Map(coefArts.map((a, i) => [a.o, ks[i]]));
   }, [fin, coefArts, bs.shareOf]);
@@ -658,7 +658,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
 
   const node = tree.byPath.get(sel) || tree.root;
   const buckets = useMemo(() => bucketsOf(dates, gran), [dates, gran]);
-  const agOf = useCallback(list => aggregate(list, N), [N]);
+  const agOf = useCallback(list => { const a = aggregate(list, N); if (data?._wb && !list.length) for (const k of K) { const source = ['orders','revenue'].includes(k) ? 'orders' : ['views','pdpViews','cart'].includes(k) ? null : 'ads'; if (!source || !data.availability?.[source]) a.s[k].fill(NaN); } return a; }, [N,data]);
   const ag = useMemo(() => agOf(node.arts), [node, agOf]);
   const model = useMemo(() => toModel(ag, buckets), [ag, buckets]);
   const chartModel = useMemo(() => enrichSalesChart(node.arts,dates,buckets,model,{pnl:fin?.pnl,forecast:builderForecast,shareAt:builderShareAt,tax}), [node,dates,buckets,model,fin?.pnl,builderForecast,builderShareAt,tax]);
@@ -692,7 +692,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         }
       } else if (k && (a.tOrders > 0 || a.tSpend > 0)) {
         for (let d = 0; d < N; d++) {
-          const ordRub = a.revenue[d], ordQty = a.orders[d], ads = a.spendCpc[d] + a.spendCpo[d];
+          const ordRub = a.revenue[d], ordQty = a.orders[d], ads = a.spendCpc[d] + a.spendCpo[d] + a.spendOther[d];
           if (!ordRub && !ordQty && !ads) continue;
           const fs = fbsDay.get(a.o + '|' + dates[d]);
           const r = unitProfit(k, { ordRub, ordQty, ads, fbs: fs }, tax);
@@ -711,10 +711,11 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
       oz += finPer.noSkuAds * (finPer.adsAll > 0 ? selAd / finPer.adsAll : shareAll);
     }
     if (taxDay) for (let d = 0; d < taxDay.length; d++) if (taxDay[d] > 0) taxBase += taxDay[d];
-    const pay = sRub + oz;
+    if(fin?.pnl?._operational && finPer && !finPer.complete){sRub=NaN;sQty=NaN;}
+    const pay = fin?.pnl?._operational ? null : sRub + oz;
     return {
-      has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: sQty > 0 ? pay / sQty : null,
-      payOrder: fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer ? pay - cost - taxBase * tax / 100 : null, noCost,
+      has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: pay != null && sQty > 0 ? pay / sQty : null,
+      payOrder: !fin?.pnl?._operational && fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer && !fin?.pnl?._operational ? pay - cost - taxBase * tax / 100 : null, noCost,
     };
   };
   const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay, bsF.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -733,7 +734,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
   if (error && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить данные: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
 
-  if (!all.length) {
+  if (!all.length && cabinet !== 'defly_wb') {
     return (
       <div className="mpui sa-page">
         <div className="a-top"><h1>Аналитика продаж</h1></div>
@@ -1084,14 +1085,14 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
           <span className="sub"><Delta value={P && changePct(T.orders, P.orders)} /> · ≈ {N ? perDayTxt(dayT.orders / N) : '—'} в день</span>
           <AreaSpark values={series('orders')} color="var(--a-good)" />
         </div>
-        <div className="a-kpi" title="Сумма выкупленных товаров за вычетом возвратов — по дню выкупа (из финансового отчёта Ozon)">
+        <div className="a-kpi" title="Сумма выкупленных товаров за вычетом возвратов — по дню выкупа (из отчёта продаж)">
           <span className="lbl">Выкупы, ₽</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.sRub) : '…'}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.sRub) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sRub, finKP.sRub) : null} /> {finK?.has && T.revenue ? `${fmtPct(finK.sRub / T.revenue * 100)} от суммы заказов` : 'по дню выкупа'}</span>
         </div>
         <div className="a-kpi" title="Выкуплено штук за вычетом возвратов — по дню выкупа">
           <span className="lbl">Выкупы, шт</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.sQty) : '…'}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.sQty) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sQty, finKP.sQty) : null} /> {finK?.has && N ? `≈ ${perDayTxt(finK.sQty / N)} в день` : ''}</span>
         </div>
 
@@ -1103,18 +1104,18 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         </div>
         <div className="a-kpi" title="Выкупы, ₽ / выкупы, шт">
           <span className="lbl">Ср. чек выкупа, ₽</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.checkSale) : '…'}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.checkSale) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.checkSale, finKP.checkSale) : null} /> по выкупленным товарам</span>
         </div>
         <div className="a-kpi" title="Прогноз по заказам периода: ожидаемая выручка (заказы × % выкупа) минус комиссия, логистика, эквайринг, хранение и реклама, делённая на ожидаемое число выкупов. Сравнима с фактическим поступлением с выкупа справа.">
           <span className="lbl">Ср. поступление с выкупа (прогноз), ₽</span>
-          <span className="val n">{finK ? fmtInt(finK.payOrder) : '…'}</span>
+          <span className="val n">{finK ? fmtInt(finK.payOrder) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP ? dP(finK?.payOrder, finKP.payOrder) : null} /> на 1 ожидаемый выкуп</span>
         </div>
         <div className="a-kpi" title="Фактически к перечислению по выкупам периода (выкупы минус все удержания Ozon) / выкупы, шт">
           <span className="lbl">Ср. поступление с выкупа (факт), ₽</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.paySale) : '…'}</span>
-          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.paySale, finKP.paySale) : null} /> {finK?.has && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.paySale) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.paySale, finKP.paySale) : null} /> {finK?.pay != null && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
         </div>
 
         {/* 3. Реклама */}
@@ -1146,18 +1147,18 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         {/* 4. Прибыль и ассортимент */}
         <div className="a-kpi" title="С заказов периода: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог (как в «Юнит-экономике»)">
           <span className="lbl">Прогнозируемая прибыль (с заказов), ₽</span>
-          <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : '…'}</span>
+          <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> налог {tax}%</span>
         </div>
         <div className="a-kpi" title="По выкупам периода, как в «P&L»: поступления на счёт минус себестоимость выкупленных товаров и налог (налог — от суммы, оплаченной покупателем, по отчётам «Начисления»)">
           <span className="lbl">Фактическая прибыль (с выкупов), ₽</span>
-          <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : '…'}</span>
-          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
+          <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {fin?.pnl?._operational ? 'финансы пока не подключены' : finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
         </div>
         <div className="a-kpi" title="Фактическая прибыль / выручка с выкупов периода — как «Маржа» в P&L">
           <span className="lbl">Маржа факт, %</span>
-          {(() => { const mg = finK?.has && finK.sRub > 0 ? finK.profit / finK.sRub * 100 : null, mp = finKP?.has && finKP.sRub > 0 ? finKP.profit / finKP.sRub * 100 : null; return (<>
-            <span className="val n" style={{ color: mg !== null && mg < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? (mg === null ? '—' : fmtPct(mg)) : '…'}</span>
+          {(() => { const mg = finK?.pay != null && finK.sRub > 0 ? finK.profit / finK.sRub * 100 : null, mp = finKP?.profit != null && finKP.sRub > 0 ? finKP.profit / finKP.sRub * 100 : null; return (<>
+            <span className="val n" style={{ color: mg !== null && mg < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? (mg === null ? '—' : fmtPct(mg)) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
             <span className="sub"><Delta value={mg !== null && mp !== null ? mg - mp : null} unit="pp" /> к прошлому периоду</span>
           </>); })()}
         </div>
