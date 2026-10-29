@@ -170,7 +170,7 @@ function jobsForCabinet() { return JOBS; }
 // каждые 5 минут обновляет Google-скрипт, функция syncOrders).
 const ORDERS_JOB = { id: 'tracked_orders', every: 4 * MIN, run: c => pollOrdersFromSheet(c) };
 function ordersCabinets() {
-  return Object.keys(CABINETS).filter(isConnected);
+  return Object.keys(CABINETS).filter(c => CABINETS[c].platform !== 'wb' && isConnected(c));
 }
 const ordersBusy = new Set();
 async function tickOrders(cabinet) {
@@ -190,6 +190,7 @@ function adsCabinets() {
     // ключи Ozon на Render не обязательны. Licio подключён к рекламе с 11.10.2026.
     // Все магазины обновляются из таблиц, включая аналитику и финансы Licio.
     // Ключи Ozon на сервере не нужны.
+    .filter(([, cfg]) => cfg.platform !== 'wb')
     .filter(([id, cfg]) => cfg.sheetOnly ? isConnected(id) : !!(sheetId(id) || cfg.ozonClientId || cfg.ozonPerfClientId))
     .map(([id]) => id);
 }
@@ -438,7 +439,7 @@ async function tick() {
     (async () => { for (const c of adsCabinets()) await tickCabinet(c).catch(e => console.error(`[Jobs:${c}]`, e.message)); })(),
     ...discountCabinets().map(c => tickDiscounts(c).catch(e => console.error(`[Discounts:${c}]`, e.message))),
     // Дайджест Соинвеста работает по данным из расширения — для всех кабинетов.
-    ...Object.keys(CABINETS).filter(isConnected).map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
+    ...Object.keys(CABINETS).filter(c => CABINETS[c].platform !== 'wb' && isConnected(c)).map(c => tickDigest(c).catch(e => console.error(`[Digest:${c}]`, e.message))),
     ...adsCabinets().filter(c => c !== 'licio').map(c => tickMorning(c).catch(e => console.error(`[Morning:${c}]`, e.message))),
     ...ordersCabinets().map(c => tickOrders(c).catch(e => console.error(`[Orders:${c}]`, e.message))),
   ]);

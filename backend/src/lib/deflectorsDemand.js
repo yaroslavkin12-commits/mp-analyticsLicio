@@ -7,19 +7,22 @@ let cached, pending;
 const shops = () => listCabinets().filter(c => c.family === 'defly' && c.platform === 'ozon').map(c => ({ id: c.id, label: c.label, platform: 'ozon' }));
 async function catalog2d() {
   const cabinets = shops();
-  const [catalog, overrides] = await Promise.all([
+  const [catalog, overrides, wbData] = await Promise.all([
     query(`SELECT cabinet, offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = ANY($1::text[]) AND platform = 'ozon' ORDER BY updated_at DESC NULLS LAST, cabinet, offer_id`, [cabinets.map(c => c.id)]),
     query(OV_SQL, overrideArgs('defly')),
+    listCabinets().some(c => c.id === 'defly_wb' && c.connected) ? require('./wbBridge').read() : Promise.resolve([]),
   ]);
   const paths = new Map(overrides.map(r => [r.offer_id, r.path]));
   const selected = catalog.filter(r => (paths.get(r.offer_id) || autoPath('defly', r.product_name, r.offer_id).join(' / ')).split(' / ').includes('2D'));
   const unique = new Map();
   for (const r of selected) if (!unique.has(r.offer_id.toLowerCase())) unique.set(r.offer_id.toLowerCase(), { offer: r.offer_id, name: r.product_name || '' });
-  return { cabinets, catalog, articles: [...unique.values()].sort((a, b) => a.offer.localeCompare(b.offer, 'ru')) };
+  const wbCatalog = wbData.find(d => d.kind === 'catalog')?.rows || [];
+  for (const r of wbCatalog) if (r.offer && autoPath('defly', r.name, r.offer).includes('2D') && !unique.has(r.offer.toLowerCase())) unique.set(r.offer.toLowerCase(), { offer: r.offer, name: r.name || '' });
+  return { cabinets, catalog, wbData, articles: [...unique.values()].sort((a, b) => a.offer.localeCompare(b.offer, 'ru')) };
 }
 async function collect() {
   const { buildOzonDemand } = await import('../../../dashboard/src/lib/deflectors2d.mjs');
-  const { cabinets, catalog, articles } = await catalog2d();
+  const { cabinets, catalog, articles, wbData } = await catalog2d();
   const to = dayjs(new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date())).subtract(1, 'day').format('YYYY-MM-DD');
   const from = dayjs(to).subtract(1, 'year').subtract(29, 'day').format('YYYY-MM-DD');
   const ids = cabinets.map(c => c.id), offers = articles.map(a => a.offer);
@@ -38,6 +41,13 @@ async function collect() {
     r.offer_id = r.offer_id || skuOffer.get(`${r.cabinet}|${r.sku}`);
     const key = `${r.cabinet}|${r.sku}|${r.date}`, q = Math.max(0, Number(r.orders_item) || 0), take = Math.min(q, remaining.get(key) || 0);
     r.orders_item = q - take; remaining.set(key, (remaining.get(key) || 0) - take);
+  }
+  const wbOrders = wbData.find(d => d.kind === 'orders');
+  if (wbOrders) {
+    cabinets.push({ id: 'defly_wb', label: 'Defly WB', platform: 'wb' });
+    const wbCatalog = new Map((wbData.find(d => d.kind === 'catalog')?.rows || []).map(r => [String(r.nmId), r.offer]));
+    for (const r of wbOrders.rows) if (!r.cancelled) sales.push({ cabinet: 'defly_wb', date: r.date, offer_id: r.offer || wbCatalog.get(String(r.nmId)), orders_item: 1 });
+    for (let d = dayjs(wbOrders.meta.from > from ? wbOrders.meta.from : from); d.format('YYYY-MM-DD') <= to && d.format('YYYY-MM-DD') <= wbOrders.meta.to; d = d.add(1, 'day')) coverage.push({ cabinet: 'defly_wb', date: d.format('YYYY-MM-DD') });
   }
   const data = buildOzonDemand({ to, articles, shops: cabinets, sales, coverage });
   data.version = createHash('sha256').update(JSON.stringify(data)).digest('hex');

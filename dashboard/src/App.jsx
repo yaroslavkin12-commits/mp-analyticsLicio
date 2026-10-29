@@ -7,6 +7,7 @@ import { pagesOf } from './lib/navigation';
 import Sidebar, { navLabel } from './components/Sidebar';
 import { startStickyHeads } from './lib/stickyHeads';
 startStickyHeads();
+import Wildberries from './pages/Wildberries';
 import Dashboard from './pages/Dashboard';
 import Stocks from './pages/Stocks';
 import AdsStats from './pages/AdsStats2';
@@ -158,7 +159,7 @@ export default function App() {
 
   useEffect(() => { initArtLinks(cabinet); }, [cabinet]);
   useEffect(() => { initSearchClear(); }, []);
-  useEffect(() => { document.title = isDeflyLike(cabinet) ? `${shopOf(cabinet)?.label || cabinet} — аналитика Ozon` : 'Licio — WB + Ozon'; }, [cabinet]);
+  useEffect(() => { document.title = isDeflyLike(cabinet) ? `${shopOf(cabinet)?.label || cabinet} — аналитика ${shopOf(cabinet)?.platform === 'wb' ? 'WB' : 'Ozon'}` : 'Licio — WB + Ozon'; }, [cabinet]);
 
   // Переключатель WB/Ozon нужен только старым разделам Licio.
   const showPlatform = cabinet === 'licio' && !['ads', 'sales', 'rnp', 'orders', 'costs', 'unit', 'pnl', 'buyout', 'geo', 'inventory', 'production', 'pricelog', 'check', 'abc', 'recon', 'margin', 'plan', 'search', 'season', 'calculator', 'notifications'].includes(page);
@@ -193,7 +194,7 @@ export default function App() {
 
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
           {allowed.filter(id => visited.has(id) && PAGES[id] && (!isMobile || id === page)).map(id => {
-            const P = PAGES[id];
+            const P = shopOf(cabinet)?.platform === 'wb' && id !== 'production' ? Wildberries : PAGES[id];
             const on = id === page;
             return (
               <div key={cabinet + ':' + id + ':' + (pageGen[id] || 0)} aria-hidden={!on} className="app-page" style={{
@@ -202,7 +203,7 @@ export default function App() {
               }}>
                 {cabinet === 'licio' && !['settings', 'notifications', 'calculator'].includes(id) && <div style={{padding:'8px 20px 0',fontSize:12,color:'var(--text2)'}}>Ozon · данные кабинета Licio</div>}
                 <PageBoundary>
-                  <P platform={platform} cabinet={SHARED_PAGES[id] && isDeflyLike(cabinet) ? SHARED_PAGES[id] : cabinet} active={on}/>
+                  <P page={id} platform={platform} cabinet={SHARED_PAGES[id] && isDeflyLike(cabinet) ? SHARED_PAGES[id] : cabinet} active={on}/>
                 </PageBoundary>
               </div>
             );

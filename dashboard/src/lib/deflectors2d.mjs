@@ -96,7 +96,7 @@ export function buildOzonDemand({ to, articles, shops, sales, coverage }) {
   const daily = new Map();
   for (const r of sales) { if (!r.offer_id || !shops.some(s => s.id === r.cabinet)) continue; const key = `${r.offer_id.toLowerCase()}|${r.date}`; daily.set(key, (daily.get(key) || 0) + Math.max(0, Number(r.orders_item) || 0)); }
   const trend = (current, prev) => current === null || prev === null || prev === 0 ? null : (current / prev - 1) * 100;
-  return { to, platform: 'ozon', shops, ranges, articles: articles.map(a => {
+  return { to, platform: shops.some(s => s.platform === 'wb') ? 'mixed' : 'ozon', shops, ranges, articles: articles.map(a => {
     const periods = Object.fromEntries([...dates].map(([key, ds]) => [key, { quantity: ranges[key].complete ? ds.reduce((q, date) => q + (daily.get(`${a.offer.toLowerCase()}|${date}`) || 0), 0) : null }]));
     const weighted = [[7, 0.5], [14, 0.3], [30, 0.2]].filter(([days]) => periods['d' + days].quantity !== null);
     const weight = weighted.reduce((s, [, w]) => s + w, 0);

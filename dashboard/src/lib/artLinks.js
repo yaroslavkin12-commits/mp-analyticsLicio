@@ -69,6 +69,8 @@ function fallbackCopy(t, done) {
 export function initArtLinks(cabinet) {
   if (cabinet === cab) return;
   cab = cabinet;
+  skus = new Map();
+  if (cabinet === 'defly_wb') return;
   getSkus(cabinet).then(r => {
     if (cab !== cabinet) return;
     skus = new Map(Object.entries(r.data.data || {}));

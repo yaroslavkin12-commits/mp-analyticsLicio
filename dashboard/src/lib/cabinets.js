@@ -6,6 +6,7 @@ export const SHOPS = [
   { id: 'alex', label: 'Alex', platform: 'ozon', family: 'defly', color: '#f59e0b' },
   { id: 'fullgas', label: 'Fullgas', platform: 'ozon', family: 'defly', color: '#ef4444' },
   { id: 'accent', label: 'Accent Line', platform: 'ozon', family: 'defly', color: '#a855f7' },
+  { id: 'defly_wb', label: 'Defly WB', platform: 'wb', family: 'defly', color: '#b735db' },
   { id: 'licio', label: 'Licio', platform: 'mix', family: 'licio', color: '#94a3b8' },
 ];
 export const shopOf = id => SHOPS.find(s => s.id === id) || null;

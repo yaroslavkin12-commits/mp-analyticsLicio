@@ -488,3 +488,5 @@
 .mpui .pf-dt td.pf-c.g { background: color-mix(in srgb, var(--a-good) 26%, transparent); }
 .mpui .pf-dt td.pf-c.w { background: color-mix(in srgb, var(--a-warn) 26%, transparent); }
 .mpui .pf-dt td.pf-c.b { background: color-mix(in srgb, var(--a-bad) 24%, transparent); }
+.mpui.wb-page table.a-t{color:var(--a-ink)}
+.mpui.wb-page td a{color:var(--a-accent)}

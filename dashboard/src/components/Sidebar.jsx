@@ -65,7 +65,7 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
               <ShopMark key={cabinet} shop={shop} size={mini ? 30 : 28} />
               {!mini && <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ fontSize:15, fontWeight:700, display:'flex', alignItems:'center', gap:5 }}>{cabinetLabel}<span style={{ fontSize:10, color:'var(--text3)' }}>▾</span></div>
-                <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>Ozon</div>
+                <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>{shop?.platform === 'wb' ? 'Wildberries' : 'Ozon'}</div>
               </div>}
             </>
           ) : (
@@ -98,7 +98,7 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
               return item(x, off, off ? 'не подключён' : null);
             })}
             {head('WB')}
-            <div style={{ padding:'5px 12px 8px', fontSize:12, color:'var(--text3)' }}>скоро</div>
+            {SHOPS.filter(x => x.platform === 'wb').map(x => item(x, false, conn && conn[x.id] === false ? 'настройка' : null))}
             <div style={{ height:1, background:'var(--border)' }} />
             {item(shopOf('licio'), false, 'WB + Ozon')}
           </div>

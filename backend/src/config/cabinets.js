@@ -47,11 +47,14 @@ const SHEET_SHOPS = [
 for (const [id, label] of SHEET_SHOPS) CABINETS[id] = { label, platform: 'ozon', family: 'defly', sheetOnly: true };
 CABINETS.defly.platform = 'ozon'; CABINETS.defly.family = 'defly';
 
+CABINETS.defly_wb = { label: 'Defly WB', platform: 'wb', family: 'defly', wbBridge: true };
+
 const sheetEnv = id => process.env[`ADS_SHEET_ID_${id.toUpperCase()}`] || null;
 // Кабинет подключён: для магазинов из отдельной таблицы — задан её ID.
 function isConnected(id) {
   const c = CABINETS[id];
   if (!c) return false;
+  if (c.wbBridge) return !!(process.env.WB_SYNC_SECRET?.length >= 32);
   if (c.sheetOnly) return !!sheetEnv(id);
   return true;
 }

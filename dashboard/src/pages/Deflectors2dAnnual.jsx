@@ -37,7 +37,7 @@ export default function Deflectors2dAnnual({ annual, rows, apply }) {
   }
   return <div className="a-card pr-card">
     <h3 style={{ marginTop: 0 }}>Годовые продажи из 1С</h3>
-    <p className="a-hint">Дополнительная история по всей компании. Не складывается с Ozon и не меняет свежий темп заказов. Раз в месяц загружайте новый файл за год; он заменит предыдущий после сохранения таблицы.</p>
+    <p className="a-hint">Дополнительная история по всей компании. Не складывается с маркетплейсами и не меняет свежий темп заказов. Раз в месяц загружайте новый файл за год; он заменит предыдущий после сохранения таблицы.</p>
     {annual ? <p>{annual.file} · {dayjs(annual.from).format('DD.MM.YYYY')} — {dayjs(annual.to).format('DD.MM.YYYY')} · {Object.keys(annual.items).length} артикулов · загружено {dayjs(annual.uploadedAt).format('DD.MM.YYYY HH:mm')}{dayjs().diff(dayjs(annual.to), 'day') > 40 && <span style={{ color: 'var(--a-warn)' }}> · пора обновить файл</span>}</p> : <p>Годовой файл ещё не загружен.</p>}
     <input ref={input} type="file" accept=".xlsx,.xls,.csv" aria-label="Файл годовых продаж 1С" onChange={read} style={{ display: 'none' }} />
     <button className="a-btn ghost" disabled={reading} onClick={() => input.current.click()}>{reading ? 'Чтение файла…' : 'Загрузить годовые продажи 1С'}</button>

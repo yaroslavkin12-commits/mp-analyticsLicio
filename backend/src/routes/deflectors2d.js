@@ -31,7 +31,7 @@ async function mutate(req, journal) {
     }
   }
   const demand = journal && (draft.settings.source === 'ozon' || req.body.demandVersion) ? await demand2d(true) : null;
-  if (demand && demand.version !== req.body.demandVersion) throw Object.assign(new Error('Продажи Ozon обновились. Обновите продажи в таблице и проверьте подсорт перед записью.'), { status: 409 });
+  if (demand && demand.version !== req.body.demandVersion) throw Object.assign(new Error('Продажи маркетплейсов обновились. Обновите продажи в таблице и проверьте подсорт перед записью.'), { status: 409 });
   const calculated = calculate2d(draft, demand);
   const expected = req.body.revision;
   if (!Number.isSafeInteger(expected) || expected < 0) throw new Error('Не указана версия таблицы');

@@ -10,7 +10,9 @@ const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(require('compression')());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb', verify: (req, res, buffer) => { if (req.originalUrl.split('?')[0] === '/api/wb/import') req.wbRawBody = buffer; } }));
+
+app.use((req, res, next) => { if ((req.query.cabinet || req.body?.cabinet) === 'defly_wb' && /^\/api\/(finance|sales|ads|promo|discounts|stocks|queries|orders)(\/|$)/.test(req.path)) return res.status(409).json({ success: false, error: 'Этот раздел Ozon не используется для WB. Финансы Defly WB пока не подключены.' }); next(); });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 // Короткий кэш тяжёлых отчётов (вкладки «Реклама» и «Аналитика продаж»):
@@ -26,6 +28,7 @@ const dataVersion = require('./lib/dataVersion');
 const cacheFresh = h => h && h.ver === dataVersion.get() && Date.now() - h.at < CACHE_TTL;
 const CACHED = ['/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout', '/api/finance/calc-base', '/api/stocks/data', '/api/queries/data', '/api/queries/season'];
 app.use((req, res, next) => {
+  if (req.path === '/api/wb/import') return next(); // кэши обновляются после приёма целого набора
   // Шаблоны конструктора и «отшивается» отчёты не меняют — кэш не трогаем.
   if (req.method !== 'GET' && (req.path === '/api/sales/builder-templates' || req.path === '/api/sales/sewing' || req.path.startsWith('/api/production') || req.path.startsWith('/api/pricelog'))) return next();
   if (req.method !== 'GET') {
@@ -107,6 +110,7 @@ function heavyAcquire(isGone = () => false) {
     else heavyQueue.push({ go, isGone, resolveNoop: () => resolve(() => {}) });
   });
 }
+app.use('/api/wb', require('./routes/wb'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/settings',  require('./routes/settings'));
 app.use('/api/analytics', require('./routes/analytics'));

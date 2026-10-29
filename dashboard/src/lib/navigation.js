@@ -7,6 +7,7 @@ const DEFLY_NAV = [
     ['__h','Инструменты'],['notifications','🔔','Уведомления'],['calculator','🧮','Калькулятор'],['costs','🧾','Товары'],
   ];
 const LICIO_NAV = [...DEFLY_NAV.filter(([id]) => id !== 'production'), ['settings', '⚙️', 'Настройки']];
-export const navOf = cabinet => cabinet === 'licio' ? LICIO_NAV : isDeflyLike(cabinet) ? DEFLY_NAV : LICIO_NAV;
+const WB_NAV = [['__h', 'Продажи'], ['sales', '📈', 'Аналитика продаж'], ['orders', '🛒', 'Заказы и возвраты'], ['__h', 'Реклама'], ['ads', '📣', 'Реклама'], ['__h', 'Склад и товары'], ['inventory', '🏬', 'Остатки'], ['costs', '🧾', 'Товары и цены'], ['production', '🧵', 'Производство']];
+export const navOf = cabinet => cabinet === 'defly_wb' ? WB_NAV : cabinet === 'licio' ? LICIO_NAV : isDeflyLike(cabinet) ? DEFLY_NAV : LICIO_NAV;
 export const pagesOf = cabinet => ['sales', ...navOf(cabinet).map(([id]) => id).filter(id => id !== '__h' && id !== 'sales')];
 export const navLabel = (cabinet, page) => (navOf(cabinet).find(([id]) => id === page) || [])[2] || '';
