@@ -7,6 +7,7 @@ import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt } from './AdsStats2';
 import { SHOPS, MATERIALS, TOPS, DEFAULT_SETTINGS, calcRow, allocate, taskSizeOf, matOf, buildJournal, J_STATUS } from '../lib/production';
 import ProdJournal from './ProdJournal';
+import Deflectors2d from './Deflectors2d';
 import './ads2.css';
 import './sales.css';
 import './production.css';
@@ -56,6 +57,13 @@ function parseSheet(aoa, col) {
 }
 
 export default function Production({ cabinet }) {
+  const [tab, setTab] = useState(() => ld('mp-production-tab', 'covers'));
+  const pick = value => { setTab(value); sv('mp-production-tab', value); };
+  const nav = <span className="a-seg"><button type="button" className={tab !== '2d' ? 'on' : ''} onClick={() => pick('covers')}>Чехлы на сиденья</button><button type="button" className={tab === '2d' ? 'on' : ''} onClick={() => pick('2d')}>Дефлекторы · 2D</button></span>;
+  return tab === '2d' ? <Deflectors2d nav={nav} /> : <SeatProduction cabinet={cabinet} nav={nav} />;
+}
+
+function SeatProduction({ cabinet, nav }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
@@ -261,10 +269,7 @@ export default function Production({ cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Производство</h1>
-          <span className="a-seg">
-            <button type="button" className="on">Чехлы на сиденья</button>
-            <button type="button" disabled title="Добавим позже">Другие категории — скоро</button>
-          </span>
+          {nav}
           <span className="a-hint" style={{ margin: 0 }}>подача: пн — Гурьевская, чт — Ельцовка и Искитим</span>
         </div>
       </div>

@@ -13,6 +13,7 @@ const { query } = require('../db');
 // Расчёт — на клиенте (dashboard/src/lib/production.js).
 // ─────────────────────────────────────────────────────────────────────────
 const router = express.Router();
+router.use('/deflectors2d', require('./deflectors2d'));
 const KINDS = ['year', 'w4', 'w8', 'stock'];
 const key = (c, k) => `prod:${c}:${k}`;
 async function getJson(k, def) {

@@ -76,3 +76,6 @@
 .mpui .pr-t tr.pj-miss>td:first-child{box-shadow:inset 3px 0 0 var(--a-bad)}
 .mpui .pj-line{font-size:12.5px;line-height:1.45;white-space:nowrap}
 .mpui .pl-crumbs{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+
+/* Подсорт 2D: таблицы читаются в обеих темах, независимо от общих стилей таблиц. */
+.mpui.d2-page table.a-t{color:var(--a-ink)}

@@ -168,6 +168,10 @@ export function latestOnly(key) {
 
 // «Производство» — потребность в пошив
 export const getProduction = cabinet => api.get('/production', { params: { cabinet } });
+export const getDeflectors2d = () => api.get('/production/deflectors2d');
+export const getDeflectors2dCatalog = () => api.get('/production/deflectors2d/catalog');
+export const saveDeflectors2d = data => api.post('/production/deflectors2d/draft', data);
+export const submitDeflectors2d = data => api.post('/production/deflectors2d/journal', data);
 export const uploadProduction = (cabinet, kind, items, file) => api.post('/production/upload', { cabinet, kind, items, file });
 export const saveProductionMaster = (cabinet, items, replace) => api.post('/production/master', { cabinet, items, replace });
 export const saveProductionSettings = (cabinet, settings) => api.post('/production/settings', { cabinet, settings });
