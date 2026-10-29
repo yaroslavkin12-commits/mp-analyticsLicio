@@ -150,6 +150,7 @@ function startScheduler() {
   // Кабинеты (Defly и т.д.) — отдельный планировщик коротких задач, не ждёт
   // WB/Licio и не зависит от перезапусков (см. collectors/ads/jobs.js).
   startAdsJobs();
+  require('./collectors/wb/sheetSync').start();
 }
 
 module.exports = { startScheduler, runAll, runWB, runOzon };

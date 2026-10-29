@@ -53,8 +53,8 @@ test('Адаптер Ozon: все пять кабинетов, SKU, вычет �
   const manual = structuredClone(modified); manual.settings.source = 'manual'; manual.rows[0].sales = 300;
   const manualSnapshot = await call('/journal', 'post', { ...request, draft: manual, revision: 2, requestId: 'manual-journal-2', demandVersion: current.data.version });
   assert.equal(manualSnapshot.status, 200); assert.equal(manualSnapshot.data.journal[0].items[0].q7, 98); assert.equal(manualSnapshot.data.journal[0].items[0].rate, 10);
-  const previousSecret = process.env.WB_SYNC_SECRET;
-  process.env.WB_SYNC_SECRET = 'x'.repeat(40);
+  const previousSecret = process.env.ADS_SHEET_ID_DEFLY_WB;
+  process.env.ADS_SHEET_ID_DEFLY_WB = 'x'.repeat(40);
   const bridge = require('../src/lib/wbBridge'), oldRead = bridge.read;
   try {
     const start = dayjs(to).subtract(6, 'day').format('YYYY-MM-DD');
@@ -63,6 +63,6 @@ test('Адаптер Ozon: все пять кабинетов, SKU, вычет �
     assert.equal(mixed.data.articles[0].periods.d14.quantity, null);
     bridge.read = async () => [{ kind: 'orders', meta: { from: start, to: dayjs(to).subtract(1, 'day').format('YYYY-MM-DD') }, rows: [] }];
     assert.equal((await call('/demand')).data.articles[0].rate, null);
-  } finally { bridge.read = oldRead; if (previousSecret === undefined) delete process.env.WB_SYNC_SECRET; else process.env.WB_SYNC_SECRET = previousSecret; }
+  } finally { bridge.read = oldRead; if (previousSecret === undefined) delete process.env.ADS_SHEET_ID_DEFLY_WB; else process.env.ADS_SHEET_ID_DEFLY_WB = previousSecret; }
   assert.ok(calls.filter(([sql]) => sql.includes('FROM product_analytics_daily')).every(([, args]) => !args[0].includes('licio')));
 });

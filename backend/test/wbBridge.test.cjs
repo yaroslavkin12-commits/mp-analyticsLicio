@@ -57,7 +57,6 @@ test('WB: рабочий скрипт исправляет отмену по sri
   ctx.WB_JOB_STARTED = Date.now(); ctx.wbRead_ = kind => data[kind]; ctx.wbMeta_ = () => null; ctx.wbSave_ = (...args) => saved.push(args);
   let seen = new Set(); ctx.wbFetch_ = (m, url) => { const kind = url.includes('/orders?') ? 'orders' : 'sales'; if (seen.has(kind)) return []; seen.add(kind); return kind === 'orders' ? [{ srid: 'order-1', date: '2026-10-27', lastChangeDate: '2026-10-29T10:00:00', nmId: 1, supplierArticle: 'A', priceWithDisc: 100, isCancel: true }] : [{ saleID: 'S1', srid: 'order-1', date: '2026-10-28', lastChangeDate: '2026-10-29T10:00:00', nmId: 1, supplierArticle: 'A', priceWithDisc: 100 }, { saleID: 'R1', srid: 'order-1', date: '2026-10-29', lastChangeDate: '2026-10-29T11:00:00', nmId: 1, supplierArticle: 'A', priceWithDisc: 0 }]; };
   ctx.wbStats_('orders'); ctx.wbStats_('sales'); assert.equal(saved[0][1].length, 1); assert.equal(saved[0][1][0].cancelled, true); assert.equal(saved[1][1].length, 2); assert.equal(saved[1][1][1].price, null);
-  ctx.wbPush_({ cabinet: 'defly_wb', kind: 'orders', total: 1 }, [{ id: '1' }]);
-  assert.equal(requests.length, 1); assert.ok(!JSON.stringify(requests).includes('wb-secret-must-not-leak'));
-  const req = requests[0].options; assert.doesNotThrow(() => bridge.verify(Buffer.from(req.payload), req.headers['X-WB-Timestamp'], req.headers['X-WB-Signature'], Date.now(), secret));
+  assert.equal(requests.length, 0); // рабочий сбор больше не отправляет данные напрямую в Render
+
 });

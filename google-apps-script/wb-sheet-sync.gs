@@ -111,12 +111,11 @@ function probeWb() {
   } catch (e) { Logger.log('Продвижение · детали: ' + e.message); }
 }
 
-// Этап 1: рабочий сбор Defly WB БЕЗ финансов. Таблица остаётся закрытой.
-// Дополнительное свойство WB_SYNC_SECRET (не менее 32 случайных символов)
-// должно совпадать с WB_SYNC_SECRET в Render Environment. Сам WB_TOKEN в сервис не передаётся.
+// Этап 1: рабочий сбор Defly WB БЕЗ финансов → открытая Google-таблица → Render.
+// Render Environment: ADS_SHEET_ID_DEFLY_WB = ID этой таблицы между /d/ и /edit.
+// WB_TOKEN остаётся только в свойствах скрипта. WB_SYNC_SECRET не нужен.
 // После вставки: setupWbTriggers(), syncWbRecent(), syncWbDaily(), syncWbAds().
 // Каждый запуск независим; заказы/продажи сначала забираются за 90 дней.
-var WB_SERVICE_URL = 'https://mp-analyticslicio-1.onrender.com/api/wb/import';
 var WB_JOB_STARTED = 0;
 function wbCheckTime_() { if (Date.now() - WB_JOB_STARTED > 265000) throw new Error('Заканчивается время запуска; прежние данные сохранены. Повторите сбор.'); }
 function wbFetch_(method, url, body, statistics) {
@@ -131,7 +130,7 @@ function wbFetch_(method, url, body, statistics) {
 function wbLock_(name, fn) {
   var lock = LockService.getScriptLock(); if (!lock.tryLock(1000)) { Logger.log('Уже идёт сбор WB, следующий запуск по расписанию.'); return; }
   WB_JOB_STARTED = Date.now();
-  try { if (SpreadsheetApp.getActiveSpreadsheet().getId() !== '13_54MPKRjkSz49DmDhV5eA4Q0SJoPgAPwXnikKBqoHs') throw new Error('Скрипт должен быть привязан к таблице WB Defly'); if (wbCabinet_() !== 'defly_wb') throw new Error('Эта версия подключает только defly_wb'); if ((PropertiesService.getScriptProperties().getProperty('WB_SYNC_SECRET') || '').length < 32) throw new Error('Настройте WB_SYNC_SECRET в свойствах скрипта и в Render'); fn(); }
+  try { if (SpreadsheetApp.getActiveSpreadsheet().getId() !== '13_54MPKRjkSz49DmDhV5eA4Q0SJoPgAPwXnikKBqoHs') throw new Error('Скрипт должен быть привязан к таблице WB Defly'); if (wbCabinet_() !== 'defly_wb') throw new Error('Эта версия подключает только defly_wb'); fn(); }
   finally { lock.releaseLock(); }
 }
 function wbSheet_(kind) { var book = SpreadsheetApp.getActiveSpreadsheet(), name = 'WB_' + kind; return book.getSheetByName(name) || book.insertSheet(name); }
@@ -140,35 +139,31 @@ function wbRead_(kind) {
   var values = s.getRange(2, 1, s.getLastRow() - 1, 2).getValues();
   return values.filter(function (r) { return r[0] && r[1]; }).map(function (r) { return JSON.parse(r[1]); });
 }
-function wbSave_(kind, rows, from, to, warning) {
+function wbSave_(kind, rows, from, to, warning, sourceAt) {
   var ids = {}; rows.forEach(function (r) { if (!r.id || ids[r.id]) throw new Error('Нет идентификатора или повтор WB: ' + r.id); ids[r.id] = true; });
-  var run = Utilities.getUuid(), collectedAt = new Date().toISOString();
+  var run = Utilities.getUuid(), collectedAt = sourceAt || new Date().toISOString();
   var metadata = { cabinet: wbCabinet_(), kind: kind, runId: run, collectedAt: collectedAt, from: from || null, to: to || null, total: rows.length, warning: warning || '' };
-  var sheet = wbSheet_(kind), values = [['id', 'payload']].concat(rows.map(function (r) { var text = JSON.stringify(r); if (text.length > 49000) throw new Error('Слишком большая строка WB'); return [r.id, text]; }));
+  var sheet = wbSheet_(kind), values = [['id', 'payload', 'run_id']].concat(rows.map(function (r) { var text = JSON.stringify(r); if (text.length > 49000) throw new Error('Слишком большая строка WB'); return [r.id, text, run]; }));
   if (sheet.getMaxRows() < values.length) sheet.insertRowsAfter(sheet.getMaxRows(), values.length - sheet.getMaxRows());
-  sheet.getRange(1, 1, values.length, 2).setNumberFormat('@').setValues(values);
-  if (sheet.getLastRow() > values.length) sheet.getRange(values.length + 1, 1, sheet.getLastRow() - values.length, 2).clearContent();
+  sheet.getRange(1, 1, values.length, 3).setNumberFormat('@').setValues(values);
+  if (sheet.getLastRow() > values.length) sheet.getRange(values.length + 1, 1, sheet.getLastRow() - values.length, 3).clearContent();
   SpreadsheetApp.flush();
   PropertiesService.getScriptProperties().setProperty('WB_META_' + kind, JSON.stringify(metadata));
-  wbPush_(metadata, rows);
-  Logger.log('WB ' + kind + ': сохранено и отправлено ' + rows.length + ' строк');
+  wbStatus_(metadata);
+  Logger.log('WB ' + kind + ': сохранено в таблицу ' + rows.length + ' строк');
 }
-function wbPush_(metadata, rows) {
-  var secret = PropertiesService.getScriptProperties().getProperty('WB_SYNC_SECRET'), parts = Math.max(1, Math.ceil(rows.length / 1000));
-  if (parts > 200) throw new Error('Слишком большой набор WB');
-  for (var i = 0; i < parts; i++) {
-    wbCheckTime_();
-    var packet = Object.assign({}, metadata, { part: i, parts: parts, rows: rows.slice(i * 1000, (i + 1) * 1000) });
-    var body = JSON.stringify(packet), timestamp = String(Date.now());
-    var signature = Utilities.computeHmacSha256Signature(timestamp + '.' + body, secret).map(function (b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('');
-    var response = UrlFetchApp.fetch(WB_SERVICE_URL, { method: 'post', contentType: 'application/json', payload: body, headers: { 'X-WB-Timestamp': timestamp, 'X-WB-Signature': signature }, muteHttpExceptions: true });
-    var code = response.getResponseCode(), text = response.getContentText(), result;
-    try { result = JSON.parse(text); } catch (e) { throw new Error('Сервис WB перезапускается или недоступен: HTTP ' + code); }
-    if (code !== 200 || !result.success || (i === parts - 1 && !result.data.complete)) throw new Error('Импорт WB: ' + (result.error || 'не все пакеты получены'));
-  }
+function wbStatus_(meta) {
+  var sheet = wbSheet_('status'), header = ['cabinet', 'kind', 'run_id', 'collected_at', 'from', 'to', 'total', 'warning'];
+  var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 8).getValues().filter(function (r) { return r[0] && !(r[0] === meta.cabinet && r[1] === meta.kind); }) : [];
+  rows.push([meta.cabinet, meta.kind, meta.runId, meta.collectedAt, meta.from || '', meta.to || '', meta.total, meta.warning || '']);
+  var values = [header].concat(rows);
+  if (sheet.getMaxRows() < values.length) sheet.insertRowsAfter(sheet.getMaxRows(), values.length - sheet.getMaxRows());
+  sheet.getRange(1, 1, values.length, 8).setNumberFormat('@').setValues(values);
+  if (sheet.getLastRow() > values.length) sheet.getRange(values.length + 1, 1, sheet.getLastRow() - values.length, 8).clearContent();
+  SpreadsheetApp.flush();
 }
-// Повторная отправка уже собранных вкладок: API WB повторно не вызывается.
-function resendWbData() { wbLock_('resend', function () { ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices'].forEach(function (kind) { var meta = PropertiesService.getScriptProperties().getProperty('WB_META_' + kind); if (meta) wbPush_(JSON.parse(meta), wbRead_(kind)); }); }); }
+// Повторная публикация уже собранных вкладок: API WB повторно не вызывается.
+function resendWbData() { wbLock_('resend', function () { ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices'].forEach(function (kind) { var meta = PropertiesService.getScriptProperties().getProperty('WB_META_' + kind); if (meta) { var m = JSON.parse(meta); wbSave_(kind, wbRead_(kind), m.from, m.to, m.warning, m.collectedAt); } }); }); }
 function wbMeta_(kind) { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('WB_META_' + kind) || 'null'); } catch (e) { return null; } }
 function wbNumber_(v) { return v === undefined || v === null || v === '' || !isFinite(Number(v)) ? null : Number(v); }
 function wbStats_(kind) {
@@ -191,6 +186,7 @@ function wbStats_(kind) {
   }
   // Окно покрытия не расширяется назад без полного первоначального сбора.
   var coverageFrom = previous && previous.to >= floor ? previous.from : floor;
+  if (coverageFrom < ymd_(399)) coverageFrom = ymd_(399);
   // При пропуске более 3 дней запрашиваем с последней успешной даты (не старше 90 дней).
   var rows = Object.keys(map).map(function (k) { return map[k]; }).filter(function (r) { return r.date >= ymd_(399); });
   wbSave_(kind, rows, coverageFrom, ymd_(0));

@@ -789,6 +789,7 @@ async function cleanupSheetJunk() {
 }
 
 module.exports = {
+  parseCsv,
   backfillNewCampaigns, logCampaignSwitches,
   addAutoEvent,
   importPrices,

@@ -12,9 +12,10 @@ router.get('/data', async (req, res) => {
     const to = req.query.dateTo || new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date());
     const from = req.query.dateFrom || dayjs(to).subtract(29, 'day').format('YYYY-MM-DD');
     if (![from, to].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d) || from > to || dayjs(to).diff(from, 'day') > 365) throw new Error('Выберите период не более года');
+    const sync = await require('../collectors/wb/sheetSync').sync(req.query.fresh === '1');
     const datasets = await bridge.read();
     res.set('Cache-Control', 'no-store');
-    res.json({ success: true, data: buildReport(datasets, from, to, !!(process.env.WB_SYNC_SECRET?.length >= 32)) });
+    res.json({ success: true, data: { ...buildReport(datasets, from, to, !!process.env.ADS_SHEET_ID_DEFLY_WB), sync } });
   } catch (e) { res.status(400).json({ success: false, error: e.message }); }
 });
 const n = v => v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);

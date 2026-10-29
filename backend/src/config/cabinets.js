@@ -54,7 +54,7 @@ const sheetEnv = id => process.env[`ADS_SHEET_ID_${id.toUpperCase()}`] || null;
 function isConnected(id) {
   const c = CABINETS[id];
   if (!c) return false;
-  if (c.wbBridge) return !!(process.env.WB_SYNC_SECRET?.length >= 32);
+  if (c.wbBridge) return !!sheetEnv(id);
   if (c.sheetOnly) return !!sheetEnv(id);
   return true;
 }
