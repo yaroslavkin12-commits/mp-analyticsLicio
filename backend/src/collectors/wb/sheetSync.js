@@ -4,10 +4,10 @@ const { parseCsv } = require('../ads/sheetSync');
 const ENV = 'ADS_SHEET_ID_DEFLY_WB';
 let pending, financePending, lastCheck = 0, state = { lastSuccessAt: null, error: null, errors: [], busy: false };
 const configured = () => !!process.env[ENV];
-async function csv(tab) {
+async function csv(tab, version) {
   const id = process.env[ENV];
   if (!/^[\w-]{20,100}$/.test(id || '')) throw new Error('В ADS_SHEET_ID_DEFLY_WB укажите только ID таблицы между /d/ и /edit');
-  const response = await axios.get(`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(tab)}`, { timeout: 30000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });
+  const response = await axios.get(`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(tab)}&cachebust=${encodeURIComponent(version || String(Date.now()))}`, { timeout: 30000, responseType: 'text', maxContentLength: 100 * 1024 * 1024 });
   const text = String(response.data);
   if (/^\s*</.test(text)) throw new Error('Google не отдал CSV: проверьте доступ к таблице WB по ссылке');
   const raw = parseCsv(text), headers = raw.shift() || [];
@@ -34,7 +34,7 @@ async function collect() {
         }
         continue;
       }
-      const table = await csv('WB_' + m.kind), total = Number(m.total);
+      const table = await csv('WB_' + m.kind,m.run_id), total = Number(m.total);
       if (!['id', 'payload', 'run_id'].every(k => table.headers.includes(k))) throw new Error('Не найдены колонки id / payload / run_id');
       if (!/^\d+$/.test(m.total) || !Number.isSafeInteger(total) || total < 0 || table.rows.length !== total || table.rows.some(r => r.run_id !== m.run_id)) throw new Error('Таблица ещё обновляется или получен неполный набор; прежние данные сохранены');
       const rows = table.rows.map(r => { const data = JSON.parse(r.payload); if (data.id !== r.id) throw new Error('ID строки не совпадает с содержимым'); return data; });

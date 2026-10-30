@@ -14,7 +14,7 @@ const source = require('../src/collectors/wb/sheetSync');
 test('WB читает именно ID своего кабинета, CSV с кавычками; секрет не требуется; повтор не качает набор', async () => {
   delete process.env.WB_SYNC_SECRET;
   const s = await source.sync(true); assert.equal(s.error, null); assert.equal(saved.length, 1); assert.equal(saved[0].rows[0].price, 100); assert.match(saved[0].rows[0].note, /перенос\nстроки/);
-  assert.ok(requests.every(u => u.includes('/d/' + ID + '/gviz/')));
+  assert.ok(requests.every(u => u.includes('/d/' + ID + '/gviz/') && u.includes('cachebust='))); assert.ok(requests.find(u=>u.includes('sheet=WB_orders')).endsWith('cachebust=run-sheet-1'));
   requests.length = 0; await source.sync(true); assert.equal(requests.length, 1); assert.equal(saved.length, 1);
   assert.equal(require('../src/config/cabinets').isConnected('defly_wb'), true);
 });

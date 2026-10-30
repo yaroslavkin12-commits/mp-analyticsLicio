@@ -27,7 +27,7 @@ async function importFinance(m, sheetId) {
   if (!/^\d+$/.test(m.total) || !Number.isSafeInteger(total) || total < 0 || total > 150000) throw new Error('Некорректное число строк финансов WB');
   const parts = Math.max(1, Math.ceil(total / 1000));
   const meta = {cabinet:bridge.CABINET,kind:'finance',runId:m.run_id,collectedAt:m.collected_at,from:m.from,to:m.to,warning:m.warning||'',total,parts};
-  const response = await axios.get(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&headers=1&sheet=WB_finance`, {responseType:'stream',timeout:90000,maxContentLength:100*1024*1024});
+  const response = await axios.get(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&headers=1&sheet=WB_finance&cachebust=${encodeURIComponent(m.run_id)}`, {responseType:'stream',timeout:90000,maxContentLength:100*1024*1024});
   let headers, count = 0, batch = [], part = 0, last;
   const seen = new Set();
   try {

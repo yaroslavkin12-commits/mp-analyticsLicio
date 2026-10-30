@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),{Readable}=require('node:stream');
-let body,ingested=[];require.cache[require.resolve('../node_modules/axios')]={exports:{get:async(url,opt)=>{assert.equal(opt.responseType,'stream');return {data:body};}}};
+let body,ingested=[];require.cache[require.resolve('../node_modules/axios')]={exports:{get:async(url,opt)=>{assert.equal(opt.responseType,'stream');assert.ok(url.endsWith('cachebust=run-stream-1'));return {data:body};}}};
 require.cache[require.resolve('../src/lib/wbBridge')]={exports:{CABINET:'defly_wb',ingest:async(p,opt)=>{ingested.push({part:p.part,rows:p.rows.length,deferred:!!opt?.deferCommit});}}};
 const {csvRows,importFinance}=require('../src/collectors/wb/financeSheet');
 const quote=r=>r.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(',');
