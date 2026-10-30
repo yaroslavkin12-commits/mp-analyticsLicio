@@ -26,7 +26,7 @@ function validate(input) {
   if (kind === 'finance' && rows.some(r => !/^[1-9]\d*$/.test(r.reportId || '') || !/^[1-9]\d*$/.test(r.rrdId || '') || typeof r.reportId !== 'string' || typeof r.rrdId !== 'string' || r.id !== r.reportId + '|' + r.rrdId)) throw new Error('Некорректные точные идентификаторы финансов WB');
   return { meta: { cabinet, kind, runId, collectedAt, from: from || null, to: to || null, parts, total, warning: String(input.warning || '').slice(0, 500) }, part, rows };
 }
-async function ingest(input) {
+async function ingest(input, { deferCommit = false } = {}) {
   const { meta, part, rows } = validate(input); await ensure();
   const client = await getPool().connect();
   try {
@@ -39,20 +39,37 @@ async function ingest(input) {
     const previous = (await client.query('SELECT hash FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3 AND part=$4', [meta.cabinet, meta.kind, meta.runId, part])).rows[0];
     if (previous && previous.hash !== hash) throw new Error('Повторный пакет WB отличается от первого');
     await client.query(`INSERT INTO wb_bridge_parts(cabinet,kind,run_id,part,hash,meta,rows) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb) ON CONFLICT DO NOTHING`, [meta.cabinet, meta.kind, meta.runId, part, hash, JSON.stringify(meta), JSON.stringify(rows)]);
-    const chunks = (await client.query('SELECT part, meta, rows FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3 ORDER BY part', [meta.cabinet, meta.kind, meta.runId])).rows;
+    const received = Number((await client.query('SELECT COUNT(*)::int AS received FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3', [meta.cabinet, meta.kind, meta.runId])).rows[0].received);
     let complete = false;
-    if (chunks.length === meta.parts) {
+    if (received === meta.parts && !deferCommit) {
+      const chunks = (await client.query(meta.kind === 'finance'
+        ? 'SELECT part, meta, jsonb_array_length(rows) AS row_count FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3 ORDER BY part'
+        : 'SELECT part, meta, rows FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3 ORDER BY part', [meta.cabinet, meta.kind, meta.runId])).rows;
       if (chunks.some((c, i) => c.part !== i || JSON.stringify(c.meta) !== JSON.stringify(chunks[0].meta))) throw new Error('Пакеты WB относятся к разным версиям');
-      const all = chunks.flatMap(c => c.rows);
-      if (all.length !== meta.total || new Set(all.map(r => r.id)).size !== all.length) throw new Error('Количество или идентификаторы строк WB не совпадают');
-      await client.query(`INSERT INTO wb_bridge_data(cabinet,kind,run_id,collected_at,meta,rows) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb) ON CONFLICT(cabinet,kind) DO UPDATE SET run_id=EXCLUDED.run_id,collected_at=EXCLUDED.collected_at,meta=EXCLUDED.meta,rows=EXCLUDED.rows,updated_at=NOW()`, [meta.cabinet, meta.kind, meta.runId, meta.collectedAt, JSON.stringify(meta), JSON.stringify(all)]);
+      if (meta.kind === 'finance') {
+        // Большой отчёт объединяет Postgres. Все строки не возвращаются в память Node.js.
+        const check = (await client.query(`SELECT COUNT(*)::int AS total, COUNT(DISTINCT e.value->>'id')::int AS unique_count
+          FROM wb_bridge_parts p CROSS JOIN LATERAL jsonb_array_elements(p.rows) AS e(value)
+          WHERE p.cabinet=$1 AND p.kind=$2 AND p.run_id=$3`, [meta.cabinet,meta.kind,meta.runId])).rows[0];
+        if(check.total!==meta.total||check.unique_count!==meta.total)throw new Error('Количество или идентификаторы строк WB не совпадают');
+        await client.query(`INSERT INTO wb_bridge_data(cabinet,kind,run_id,collected_at,meta,rows)
+          SELECT $1,$2,$3,$4,$5::jsonb,COALESCE(jsonb_agg(e.value ORDER BY p.part,e.ordinality) FILTER (WHERE e.value IS NOT NULL),'[]'::jsonb)
+          FROM wb_bridge_parts p LEFT JOIN LATERAL jsonb_array_elements(p.rows) WITH ORDINALITY AS e(value,ordinality) ON TRUE
+          WHERE p.cabinet=$1 AND p.kind=$2 AND p.run_id=$3
+          ON CONFLICT(cabinet,kind) DO UPDATE SET run_id=EXCLUDED.run_id,collected_at=EXCLUDED.collected_at,meta=EXCLUDED.meta,rows=EXCLUDED.rows,updated_at=NOW()`,
+          [meta.cabinet,meta.kind,meta.runId,meta.collectedAt,JSON.stringify(meta)]);
+      } else {
+        const all = chunks.flatMap(c => c.rows);
+        if (all.length !== meta.total || new Set(all.map(r => r.id)).size !== all.length) throw new Error('Количество или идентификаторы строк WB не совпадают');
+        await client.query(`INSERT INTO wb_bridge_data(cabinet,kind,run_id,collected_at,meta,rows) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb) ON CONFLICT(cabinet,kind) DO UPDATE SET run_id=EXCLUDED.run_id,collected_at=EXCLUDED.collected_at,meta=EXCLUDED.meta,rows=EXCLUDED.rows,updated_at=NOW()`, [meta.cabinet, meta.kind, meta.runId, meta.collectedAt, JSON.stringify(meta), JSON.stringify(all)]);
+      }
       await client.query('DELETE FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3', [meta.cabinet, meta.kind, meta.runId]);
       complete = true;
     }
     await client.query("DELETE FROM wb_bridge_parts WHERE created_at < NOW() - INTERVAL '1 day'");
     await client.query('COMMIT');
     if (complete) require('./dataVersion').bump();
-    return { complete, received: chunks.length, parts: meta.parts };
+    return { complete, received, parts: meta.parts };
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
 async function read({ excludeFinance = false } = {}) { await ensure(); return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1' + (excludeFinance ? " AND kind <> 'finance'" : ''), [CABINET]); }

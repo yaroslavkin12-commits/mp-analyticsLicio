@@ -24,7 +24,7 @@ router.get('/data', async (req, res) => {
 router.get('/finance-status', async (req,res) => {
   try {
     if((req.query.cabinet || bridge.CABINET)!==bridge.CABINET)return res.status(400).json({success:false,error:'Неизвестный кабинет WB'});
-    const sync=await require('../collectors/wb/sheetSync').sync(req.query.fresh==='1');
+    const source=require('../collectors/wb/sheetSync'); source.sync(req.query.fresh==='1').catch(()=>{}); const sync=source.status();
     const d=(await bridge.readMeta()).find(r=>r.kind==='finance');
     res.set('Cache-Control','no-store');res.json({success:true,data:{imported:!!d,rows:d?.meta.total??null,from:d?.meta.from??null,to:d?.meta.to??null,collectedAt:d?.meta.collectedAt??null,receivedAt:d?.updated_at??null,calculationsReady:false,sync}});
   } catch(e){res.status(400).json({success:false,error:e.message});}

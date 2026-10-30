@@ -2,7 +2,7 @@ const axios = require('axios');
 const bridge = require('../../lib/wbBridge');
 const { parseCsv } = require('../ads/sheetSync');
 const ENV = 'ADS_SHEET_ID_DEFLY_WB';
-let pending, lastCheck = 0, state = { lastSuccessAt: null, error: null, errors: [], busy: false };
+let pending, financePending, lastCheck = 0, state = { lastSuccessAt: null, error: null, errors: [], busy: false };
 const configured = () => !!process.env[ENV];
 async function csv(tab) {
   const id = process.env[ENV];
@@ -24,6 +24,16 @@ async function collect() {
   for (const m of metaRows) {
     if (current.get(m.kind) === m.run_id) continue;
     try {
+      if (m.kind === 'finance') {
+        if (!financePending) {
+          state.financeError = null;
+          financePending = require('./financeSheet').importFinance(m,process.env[ENV])
+            .then(()=>{state.financeLastSuccessAt=new Date().toISOString();})
+            .catch(e=>{state.financeError='finance: '+e.message;})
+            .finally(()=>{financePending=null;});
+        }
+        continue;
+      }
       const table = await csv('WB_' + m.kind), total = Number(m.total);
       if (!['id', 'payload', 'run_id'].every(k => table.headers.includes(k))) throw new Error('Не найдены колонки id / payload / run_id');
       if (!/^\d+$/.test(m.total) || !Number.isSafeInteger(total) || total < 0 || table.rows.length !== total || table.rows.some(r => r.run_id !== m.run_id)) throw new Error('Таблица ещё обновляется или получен неполный набор; прежние данные сохранены');
@@ -35,7 +45,7 @@ async function collect() {
   }
   return { changed, errors };
 }
-function status() { return { configured: configured(), ...state, lastCheckedAt: lastCheck ? new Date(lastCheck).toISOString() : null }; }
+function status() { const errors=[...state.errors,...(state.financeError?[state.financeError]:[])]; return { configured: configured(), ...state, busy:state.busy||!!financePending, financeBusy:!!financePending, errors, error:errors.length?errors.join('; '):null, lastCheckedAt: lastCheck ? new Date(lastCheck).toISOString() : null }; }
 async function sync(force = false) {
   if (!configured()) return status();
   if (pending) { await pending; return status(); }
@@ -47,4 +57,4 @@ async function sync(force = false) {
   await pending; return status();
 }
 function start() { const tick = () => sync().catch(e => console.error('[WB Sheet]', e.message)); setTimeout(tick, 12000).unref?.(); setInterval(tick, 5 * 60000).unref?.(); }
-module.exports = { sync, start, status, configured };
+module.exports = { sync, start, status, configured, waitForFinance: () => financePending || Promise.resolve() };

@@ -51,5 +51,5 @@ test('Google-импорт WB принимает отдельный финанс�
  const r={id:'142382026102312345|9007199254740993',reportId:'142382026102312345',rrdId:'9007199254740993',forPay:'100.01'};
  manifest=quote([header,['defly_wb','finance','run-finance-1',stamp,'2026-08-01','2026-10-29',1,'']]);
  table=quote([['id','payload','run_id'],[r.id,JSON.stringify(r),'run-finance-1']]);
- const s=await source.sync(true);assert.equal(s.error,null);assert.equal(saved.at(-1).kind,'finance');assert.equal(saved.at(-1).rows[0].reportId,r.reportId);assert.equal(saved.at(-1).rows[0].forPay,'100.01');assert.ok(old.has('orders'));
+ await source.sync(true);await source.waitForFinance();assert.equal(source.status().error,null);assert.equal(saved.at(-1).kind,'finance');assert.equal(saved.at(-1).rows[0].reportId,r.reportId);assert.equal(saved.at(-1).rows[0].forPay,'100.01');assert.ok(old.has('orders'));
 });

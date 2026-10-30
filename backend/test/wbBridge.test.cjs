@@ -8,8 +8,10 @@ const client = { release() {}, async query(sql, args = []) {
   if (sql.includes('SELECT run_id, collected_at')) return { rows: state.has(key(args)) ? [state.get(key(args))] : [] };
   if (sql.includes('SELECT hash')) return { rows: parts.has(args.join('|')) ? [parts.get(args.join('|'))] : [] };
   if (sql.includes('INSERT INTO wb_bridge_parts')) { const k = args.slice(0, 4).join('|'); if (!parts.has(k)) parts.set(k, { cabinet: args[0], kind: args[1], run: args[2], part: args[3], hash: args[4], meta: JSON.parse(args[5]), rows: JSON.parse(args[6]) }); }
-  if (sql.includes('SELECT part, meta, rows')) return { rows: [...parts.values()].filter(p => [p.cabinet, p.kind, p.run].join('|') === args.join('|')).sort((a, b) => a.part - b.part) };
-  if (sql.includes('INSERT INTO wb_bridge_data')) state.set(key(args), { run_id: args[2], collected_at: args[3], meta: JSON.parse(args[4]), rows: JSON.parse(args[5]) });
+  if(sql.includes('COUNT(DISTINCT')){const all=[...parts.values()].filter(p=>[p.cabinet,p.kind,p.run].join('|')===args.join('|')).flatMap(p=>p.rows);return {rows:[{total:all.length,unique_count:new Set(all.map(r=>r.id)).size}]};}
+  if (sql.includes('SELECT COUNT(*)')) return {rows:[{received:[...parts.values()].filter(p=>[p.cabinet,p.kind,p.run].join('|')===args.join('|')).length}]};
+  if (sql.includes('SELECT part, meta,')) return { rows: [...parts.values()].filter(p => [p.cabinet, p.kind, p.run].join('|') === args.join('|')).sort((a, b) => a.part - b.part) };
+  if (sql.includes('INSERT INTO wb_bridge_data')) state.set(key(args), { run_id: args[2], collected_at: args[3], meta: JSON.parse(args[4]), rows: sql.includes('jsonb_agg')?[...parts.values()].filter(p=>p.cabinet===args[0]&&p.kind===args[1]&&p.run===args[2]).sort((a,b)=>a.part-b.part).flatMap(p=>p.rows):JSON.parse(args[5]) });
   if (sql.startsWith('DELETE FROM wb_bridge_parts WHERE cabinet')) for (const [k, p] of parts) if (p.cabinet === args[0] && p.kind === args[1] && p.run === args[2]) parts.delete(k);
   return { rows: [] };
 } };
