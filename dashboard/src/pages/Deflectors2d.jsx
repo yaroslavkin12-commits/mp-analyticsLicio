@@ -74,7 +74,6 @@ export default function Deflectors2d({ nav }) {
     try { if (dirty) localStorage.setItem(CACHE, JSON.stringify({ revision: state.revision, draft })); else localStorage.removeItem(CACHE); } catch { /* ignore */ }
   }, [draft, state, dirty]);
   useEffect(() => { try { localStorage.setItem('mp-deflectors2d-columns', JSON.stringify(columns)); } catch { /* ignore */ } }, [columns]);
-  useEffect(() => { const warn = e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } }; window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn); }, [dirty]);
   const preview = useMemo(() => { if (!draft) return null; try { return calculate2d(draft, demand); } catch (e) { return { rows: draft.rows.map(r => ({ ...r, quantity: r.manual || 0 })), total: 0, left: 0, over: 0, issues: [e.message], invalid: true }; } }, [draft, demand]);
   const shown = useMemo(() => !preview ? [] : ctl.apply(preview.rows.filter(r => (!q || `${r.offer} ${r.name}`.toLowerCase().includes(q.toLowerCase())) && (!only || r.quantity > 0) && (!missing || r.rate == null || r.stock == null || r.transit == null)), (r, k) => r[k]), [preview, q, only, missing, ctl.apply]);
   const patch = (offer, changes) => setDraft(v => ({ ...v, rows: v.rows.map(r => r.offer === offer ? { ...r, ...changes } : r) }));

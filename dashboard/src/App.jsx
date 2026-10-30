@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { initArtLinks } from './lib/artLinks';
 import { initSearchClear } from './lib/searchClear';
-import { whenIdle } from './api';
 import { isDeflyLike, shopOf, SHARED_PAGES } from './lib/cabinets';
 import { pagesOf } from './lib/navigation';
 import Sidebar, { navLabel } from './components/Sidebar';
@@ -113,16 +112,11 @@ export default function App() {
     if (!allowed.includes(page)) setPage(allowed[0]);
   }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Страницы не размонтируются при переключении: открытая один раз страница
-  // остаётся в памяти со своими данными и прокруткой, поэтому возврат на неё
-  // мгновенный. Остальные разделы кабинета подгружаются в фоне по очереди.
+  // Сохраняем открытые разделы; новые загружаем только по выбору пользователя.
   const allowed = PAGES_BY_CABINET[cabinet] || PAGES_BY_CABINET.licio;
   const [visited, setVisited] = useState(() => new Set([page]));
   useEffect(() => { setVisited(prev => prev.has(page) ? prev : new Set(prev).add(page)); }, [page]);
-  // Все разделы кабинета открываются в фоне по очереди — переключение между
-  // вкладками мгновенное, данные уже загружены.
-  // Данные изменились (сохранили себестоимость и т. п.) — остальные разделы
-  // перезагружаются в фоне, открытый остаётся как есть.
+  // После изменения данных обновляем ранее открытые разделы.
   const [gen, setGen] = useState(0);
   const pageRef = React.useRef(page); pageRef.current = page;
   const [pageGen, setPageGen] = useState({});
@@ -137,23 +131,6 @@ export default function App() {
   }, [allowed]);
   useEffect(() => {
     setVisited(new Set([pageRef.current]));
-    let cancelled = false;
-    const timers = [];
-    // По одному разделу и только когда сеть свободна: сначала свои данные
-    // получает открытая страница, потом фоном — остальные.
-    const order = allowed.filter(id => id !== page);
-    // На телефоне фоном ничего не грузим — только открытый раздел (память).
-    if (window.matchMedia && window.matchMedia(MOBILE_Q).matches) return () => {};
-    (async () => {
-      await new Promise(r => timers.push(setTimeout(r, 1500)));
-      for (const id of order) {
-        await whenIdle(800);
-        if (cancelled) return;
-        setVisited(prev => prev.has(id) ? prev : new Set(prev).add(id));
-        await new Promise(r => timers.push(setTimeout(r, 400)));
-      }
-    })();
-    return () => { cancelled = true; timers.forEach(clearTimeout); };
   }, [cabinet, gen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { initArtLinks(cabinet); }, [cabinet]);
@@ -192,7 +169,7 @@ export default function App() {
         )}
 
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
-          {allowed.filter(id => visited.has(id) && PAGES[id] && (!isMobile || id === page)).map(id => {
+          {allowed.filter(id => (id === page || visited.has(id)) && PAGES[id] && (!isMobile || id === page)).map(id => {
             const P = PAGES[id];
             const on = id === page;
             return (

@@ -532,9 +532,10 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     return () => ro.disconnect();
   }, [data]);
 
+  const requestScope = useRef(Symbol('sales'));
   const load = useCallback(() => {
     setLoading(true); setError(null);
-    const ok = latestOnly('sales:' + cabinet);
+    const ok = latestOnly(requestScope.current);
     getSalesData(cabinet, { dateFrom, dateTo, compare: 1 })
       .then(ok(r => setData(r.data.data)))
       .catch(ok(e => setError(e.response?.data?.error || e.message)))
