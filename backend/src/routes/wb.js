@@ -14,10 +14,20 @@ router.get('/data', async (req, res) => {
     const from = req.query.dateFrom || dayjs(to).subtract(29, 'day').format('YYYY-MM-DD');
     if (![from, to].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d) || from > to || dayjs(to).diff(from, 'day') > 365) throw new Error('Выберите период не более года');
     const sync = await require('../collectors/wb/sheetSync').sync(req.query.fresh === '1');
-    const datasets = await bridge.read();
+    const datasets = await bridge.read({excludeFinance:true});
+    const finance = (await bridge.readMeta()).find(x=>x.kind==='finance'); if(finance)datasets.push({...finance,rows:[]});
     res.set('Cache-Control', 'no-store');
     res.json({ success: true, data: { ...buildReport(datasets, from, to, !!process.env.ADS_SHEET_ID_DEFLY_WB), sync } });
   } catch (e) { res.status(400).json({ success: false, error: e.message }); }
+});
+// Статус исходного отчёта: не подменяет подтверждение финансовых формул.
+router.get('/finance-status', async (req,res) => {
+  try {
+    if((req.query.cabinet || bridge.CABINET)!==bridge.CABINET)return res.status(400).json({success:false,error:'Неизвестный кабинет WB'});
+    const sync=await require('../collectors/wb/sheetSync').sync(req.query.fresh==='1');
+    const d=(await bridge.readMeta()).find(r=>r.kind==='finance');
+    res.set('Cache-Control','no-store');res.json({success:true,data:{imported:!!d,rows:d?.meta.total??null,from:d?.meta.from??null,to:d?.meta.to??null,collectedAt:d?.meta.collectedAt??null,receivedAt:d?.updated_at??null,calculationsReady:false,sync}});
+  } catch(e){res.status(400).json({success:false,error:e.message});}
 });
 const n = v => v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
 const total = (rows, key) => rows.some(r => n(r[key]) === null) ? null : rows.reduce((s, r) => s + n(r[key]), 0);
@@ -42,7 +52,7 @@ function buildReport(datasets, from, to, configured) {
   for (const r of stock) { const a = art(r); for (const [target, source] of [[r.scheme === 'seller' ? 'stockSeller' : 'stockWb', 'quantity'], ['toClient', 'toClient'], ['fromClient', 'fromClient']]) a[target] = a[target] === null || n(r[source]) === null ? null : a[target] + n(r[source]); }
   const campaigns = new Map(get('campaigns').map(r => [String(r.id), { ...r, spend: 0, views: 0, clicks: 0, orders: 0, orderRub: 0, atbs: 0 }]));
   for (const r of ads.filter(r => r.scope === 'campaign')) { let c = campaigns.get(String(r.campaign)); if (!c) { c = { id: r.campaign, name: `РК ${r.campaign}`, spend: 0, views: 0, clicks: 0, orders: 0, orderRub: 0, atbs: 0 }; campaigns.set(String(r.campaign), c); } for (const k of ['spend', 'views', 'clicks', 'orders', 'orderRub', 'atbs']) c[k] = c[k] === null || n(r[k]) === null ? null : c[k] + n(r[k]); const d = daily.get(r.date); d.spend = d.spend === null || n(r.spend) === null ? null : d.spend + n(r.spend); }
-  const available = kind => data.has(kind) && (!['orders', 'sales', 'ads'].includes(kind) || (data.get(kind).meta.from <= from && data.get(kind).meta.to >= to));
+  const available = kind => data.has(kind) && (!['orders', 'sales', 'ads', 'finance'].includes(kind) || (data.get(kind).meta.from <= from && data.get(kind).meta.to >= to));
   const list = [...articles.values()];
   const sums = { orders: list.reduce((s, a) => s + a.orders, 0), cancelled: list.reduce((s, a) => s + a.cancelled, 0), orderRub: total(list, 'orderRub'), sold: list.reduce((s, a) => s + a.sold, 0), returned: list.reduce((s, a) => s + a.returned, 0), salesRub: total(list, 'salesRub'), unknownSales: sales.filter(r => !['sale', 'return'].includes(r.type)).length };
   for (const a of list) { if (!available('orders')) for (const k of ['orders', 'cancelled', 'orderRub']) a[k] = null; if (!available('sales')) for (const k of ['sold', 'returned', 'salesRub']) a[k] = null; if (!data.has('stocks')) for (const k of ['stockWb', 'stockSeller', 'toClient', 'fromClient']) a[k] = null; }

@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const { query, getPool } = require('../db');
 const CABINET = 'defly_wb';
-const KINDS = ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices'];
+const KINDS = ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices', 'finance'];
 let ready;
 function ensure() {
   if (!ready) ready = (async () => {
@@ -21,8 +21,9 @@ function validate(input) {
   if (cabinet !== CABINET || !KINDS.includes(kind)) throw new Error('Неизвестный кабинет или набор WB');
   if (!/^[\w-]{8,80}$/.test(runId || '') || !Number.isFinite(Date.parse(collectedAt)) || Date.parse(collectedAt) > Date.now() + 300000) throw new Error('Некорректная версия WB');
   if (![part, parts, total].every(Number.isSafeInteger) || parts < 1 || parts > 200 || part < 0 || part >= parts || total < 0 || total > 150000 || !Array.isArray(rows) || rows.length > 1000) throw new Error('Некорректный пакет WB');
-  if (['orders', 'sales', 'ads'].includes(kind) && (![from, to].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d) || from > to)) throw new Error('Некорректный период WB');
+  if (['orders', 'sales', 'ads', 'finance'].includes(kind) && (![from, to].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d) || from > to)) throw new Error('Некорректный период WB');
   if (rows.some(r => !r || typeof r !== 'object' || typeof r.id !== 'string' || !r.id || r.id.length > 250)) throw new Error('У строки WB отсутствует идентификатор');
+  if (kind === 'finance' && rows.some(r => !/^[1-9]\d*$/.test(r.reportId || '') || !/^[1-9]\d*$/.test(r.rrdId || '') || typeof r.reportId !== 'string' || typeof r.rrdId !== 'string' || r.id !== r.reportId + '|' + r.rrdId)) throw new Error('Некорректные точные идентификаторы финансов WB');
   return { meta: { cabinet, kind, runId, collectedAt, from: from || null, to: to || null, parts, total, warning: String(input.warning || '').slice(0, 500) }, part, rows };
 }
 async function ingest(input) {
@@ -54,5 +55,6 @@ async function ingest(input) {
     return { complete, received: chunks.length, parts: meta.parts };
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
-async function read() { await ensure(); return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1', [CABINET]); }
-module.exports = { CABINET, KINDS, verify, validate, ingest, read };
+async function read({ excludeFinance = false } = {}) { await ensure(); return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1' + (excludeFinance ? " AND kind <> 'finance'" : ''), [CABINET]); }
+async function readMeta() { await ensure(); return query('SELECT kind, meta, updated_at FROM wb_bridge_data WHERE cabinet=$1', [CABINET]); }
+module.exports = { CABINET, KINDS, verify, validate, ingest, read, readMeta };

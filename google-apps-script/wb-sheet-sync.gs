@@ -1,9 +1,9 @@
 // Wildberries → Google-таблица → сервис (как ozon-sheet-sync.gs для Ozon).
-// Рабочий сбор без финансов и отдельная диагностика доступа. Ключ — ТОЛЬКО в свойствах скрипта:
+// Рабочий сбор и отдельная диагностика доступа. Финансы загружаются отдельно. Ключ — ТОЛЬКО в свойствах скрипта:
 //   Настройки проекта → Свойства скрипта → WB_TOKEN = <токен «только чтение»>
 //   CABINET_ID = defly_wb (для других магазинов — alex_wb, nab_wb …)
 // Доступы: Статистика, Аналитика, Продвижение, Контент, Цены и скидки,
-// Маркетплейс. Финансы потребуются позже, в рабочем сборе не запрашиваются. Только чтение, не тестовый контур.
+// Маркетплейс, Финансы. Только чтение, не тестовый контур.
 // Никуда больше токен не вставляйте и никому не пересылайте.
 
 function wbToken_() {
@@ -163,7 +163,7 @@ function wbStatus_(meta) {
   SpreadsheetApp.flush();
 }
 // Повторная публикация уже собранных вкладок: API WB повторно не вызывается.
-function resendWbData() { wbLock_('resend', function () { ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices'].forEach(function (kind) { var meta = PropertiesService.getScriptProperties().getProperty('WB_META_' + kind); if (meta) { var m = JSON.parse(meta); wbSave_(kind, wbRead_(kind), m.from, m.to, m.warning, m.collectedAt); } }); }); }
+function resendWbData() { wbLock_('resend', function () { ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices', 'finance'].forEach(function (kind) { var meta = PropertiesService.getScriptProperties().getProperty('WB_META_' + kind); if (meta) { var m = JSON.parse(meta); wbSave_(kind, wbRead_(kind), m.from, m.to, m.warning, m.collectedAt); } }); }); }
 function wbMeta_(kind) { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('WB_META_' + kind) || 'null'); } catch (e) { return null; } }
 function wbNumber_(v) { return v === undefined || v === null || v === '' || !isFinite(Number(v)) ? null : Number(v); }
 function wbStats_(kind) {
@@ -256,13 +256,79 @@ function syncWbAds() { wbLock_('ads', function () {
   var legacy = campaigns.some(function (c) { return [8, 9].indexOf(c.type) < 0 && ([9, 11].indexOf(c.status) >= 0 || spend[c.id] > 0); });
   wbSave_('ads', Object.keys(all).map(function (id) { return all[id]; }).filter(function (r) { return r.date >= ymd_(399); }), oldMeta && oldMeta.to >= from ? oldMeta.from : from, to, legacy ? 'Активные кампании старых типов не поддерживаются fullstats v3; расходы могут быть неполными.' : '');
 }); }
+// Финансовый отчёт WB: отдельный сбор. Денежные строки не преобразуем в Number.
+// Публикуем WB_finance и его статус только после HTTP 204 (все страницы получены).
+var WB_FINANCE_FIELDS = ['reportId','rrdId','dateFrom','dateTo','createDate','currency','reportType','nmId','vendorCode','title','sku','docTypeName','sellerOperName','quantity','orderDt','saleDt','rrDate','retailPrice','retailAmount','retailPriceWithDisc','commissionPercent','ppvzSalesCommission','forPay','ppvzReward','acquiringFee','vw','vwNds','deliveryAmount','returnAmount','deliveryService','penalty','additionalPayment','rebillLogisticCost','paidStorage','deduction','paidAcceptance','installmentCofinancingAmount','cashbackAmount','cashbackDiscount','cashbackCommissionChange','paymentSchedule','deliveryMethod','srid'];
+function wbFinanceId_(value) {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) throw new Error('WB прислал неточный идентификатор финансов');
+  var s = String(value); if (!/^[1-9]\d*$/.test(s)) throw new Error('WB прислал неверный идентификатор финансов'); return s;
+}
+function wbFinanceParse_(text) {
+  // reportId может превышать MAX_SAFE_INTEGER. Кавычки ставим до JSON.parse.
+  var raw = String(text).replace(/("(?:reportId|rrdId)"\s*:\s*)(\d+)(?=\s*[,}])/g, '$1"$2"');
+  var rows = JSON.parse(raw); if (!Array.isArray(rows) || !rows.length) throw new Error('Ожидался массив финансов WB. Конец отчёта подтверждается только HTTP 204');
+  return rows.map(function (r) {
+    var result = {}; WB_FINANCE_FIELDS.forEach(function (k) { if (r[k] !== undefined) result[k] = r[k]; });
+    result.reportId = wbFinanceId_(r.reportId); result.rrdId = wbFinanceId_(r.rrdId); result.id = result.reportId + '|' + result.rrdId;
+    return result;
+  });
+}
+function wbFinanceRequest_(job) {
+  var props = PropertiesService.getScriptProperties(), wait = Number(props.getProperty('WB_FINANCE_LAST') || 0) + 61000 - Date.now();
+  if (wait > 0) { if (Date.now() + wait - WB_JOB_STARTED > 240000) return null; Utilities.sleep(wait); }
+  wbCheckTime_(); props.setProperty('WB_FINANCE_LAST', String(Date.now()));
+  var body = {dateFrom:job.from+'T00:00:00+03:00',dateTo:job.to+'T23:59:59+03:00',period:'daily',limit:10000,rrdId:job.cursor,fields:WB_FINANCE_FIELDS};
+  // В запросе нужен JSON integer, но курсор в памяти хранится точной строкой.
+  var payload = JSON.stringify(body).replace(/"rrdId":"(\d+)"/, '"rrdId":$1');
+  var response = UrlFetchApp.fetch('https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed', {method:'post',contentType:'application/json',headers:{Authorization:wbToken_()},payload:payload,muteHttpExceptions:true});
+  var code = response.getResponseCode();
+  if (code === 204) return {done:true};
+  if (code !== 200) throw new Error('Финансы WB: HTTP '+code+'. Полученные страницы сохранены, прежний отчёт не изменён. '+(code===401||code===403?'Проверьте WB_TOKEN и доступ «Финансы».':code===429?'Лимит WB — повторите syncWbFinance позже.':''));
+  return {done:false,rows:wbFinanceParse_(response.getContentText())};
+}
+function wbFinanceStage_(job, rows) {
+  var s = wbSheet_('finance_pending'), values = [['id','payload','run_id']].concat(rows.map(function(r){return [r.id,JSON.stringify(r),job.runId];}));
+  if (s.getMaxRows() < values.length) s.insertRowsAfter(s.getMaxRows(),values.length-s.getMaxRows());
+  s.getRange(1,1,values.length,3).setNumberFormat('@').setValues(values);
+  if (s.getLastRow()>values.length) s.getRange(values.length+1,1,s.getLastRow()-values.length,3).clearContent();
+  SpreadsheetApp.flush();
+}
+function syncWbFinance() { wbLock_('finance',function(){
+  var props = PropertiesService.getScriptProperties(), saved=props.getProperty('WB_FINANCE_JOB'), job=saved?JSON.parse(saved):null;
+  if (!job || Date.now()-job.startedAt>86400000) {
+    job={runId:Utilities.getUuid(),from:ymd_(90),to:ymd_(1),cursor:'0',startedAt:Date.now()};
+    wbFinanceStage_(job,[]); props.setProperty('WB_FINANCE_JOB',JSON.stringify(job));
+  }
+  if(!/^\d+$/.test(job.cursor)) throw new Error('Неверный курсор финансов WB');
+  var stage=wbSheet_('finance_pending'), raw=stage.getLastRow()>1?stage.getRange(2,1,stage.getLastRow()-1,3).getValues():[];
+  if(raw.some(function(r){return r[0]&&r[2]!==job.runId;}))throw new Error('Незавершённые страницы финансов относятся к другой загрузке');
+  var map={}; raw.forEach(function(r){if(r[0]&&r[1])map[r[0]]=JSON.parse(r[1]);});
+  for(var page=0;page<3;page++) {
+    var result=wbFinanceRequest_(job); if(!result)break;
+    if(result.done) {
+      var rows=Object.keys(map).map(function(id){return map[id];});
+      wbSave_('finance',rows,job.from,job.to,'Исходный ежедневный отчёт WB. Финансовые расчёты включаются после сверки полей.');
+      props.deleteProperty('WB_FINANCE_JOB');
+      Logger.log('Финансы WB: загрузка завершена. '+rows.length+' строк за '+job.from+' — '+job.to+'. Сервис заберёт WB_finance автоматически.'); return;
+    }
+    var next=result.rows[result.rows.length-1].rrdId;
+    if(next.length<job.cursor.length||next.length===job.cursor.length&&next<=job.cursor)throw new Error('Курсор финансов WB не продвинулся. Прежний отчёт сохранён');
+    result.rows.forEach(function(r){map[r.id]=r;});
+    var all=Object.keys(map).map(function(id){return map[id];});if(all.length>150000)throw new Error('Отчёт WB превышает 150000 строк. Прежний отчёт сохранён');
+    wbFinanceStage_(job,all); job.cursor=next; props.setProperty('WB_FINANCE_JOB',JSON.stringify(job));
+    Logger.log('Финансы WB: получено '+all.length+' строк, сбор продолжается.');
+  }
+  Logger.log('Финансы WB: страницы сохранены, но отчёт ещё не завершён. Запустите syncWbFinance ещё раз; сбор продолжится с сохранённой страницы. Триггер тоже продолжит сбор автоматически.');
+}); }
+
 function setupWbTriggers() {
   wbLock_('setup', function () {
-    var names = ['syncWbRecent', 'syncWbDaily', 'syncWbAds'];
+    var names = ['syncWbRecent', 'syncWbDaily', 'syncWbAds', 'syncWbFinance'];
     ScriptApp.getProjectTriggers().forEach(function (t) { if (names.indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t); });
     ScriptApp.newTrigger('syncWbRecent').timeBased().everyMinutes(30).create();
     ScriptApp.newTrigger('syncWbDaily').timeBased().everyHours(1).create();
     ScriptApp.newTrigger('syncWbAds').timeBased().everyHours(1).create();
-    Logger.log('Триггеры WB установлены. Запустите syncWbRecent, затем syncWbDaily и syncWbAds по отдельности. Финансы не запрашиваются.');
+    ScriptApp.newTrigger('syncWbFinance').timeBased().everyHours(1).create();
+    Logger.log('Триггеры WB установлены. Запустите syncWbRecent, затем syncWbDaily и syncWbAds по отдельности. Финансы собираются функцией syncWbFinance. Запустите её отдельно.');
   });
 }

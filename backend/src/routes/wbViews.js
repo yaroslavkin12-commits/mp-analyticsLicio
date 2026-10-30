@@ -36,7 +36,7 @@ router.use(async (req, res) => {
         if (path === '/clusters/decide') { if (!Array.isArray(body.offers) || !['add', 'ignore', 'reset'].includes(body.action)) throw new Error('Некорректное действие'); for (const o of body.offers) { if (body.action === 'reset') delete p.clusterDecisions[o]; else p.clusterDecisions[o] = body.action === 'add' ? bounded(body.id, 128) : null; } return {}; }
         throw new Error('Эта операция WB пока недоступна');
       });
-      if (path === '/clusters/decide') { const m = V.build(await bridge.read(), await V.preferences()); return res.json({ success: true, data: m.clusters() }); }
+      if (path === '/clusters/decide') { const m = V.build(await bridge.read({excludeFinance:true}), await V.preferences()); return res.json({ success: true, data: m.clusters() }); }
       return res.json({ success: true, data: result });
     }
     const prefs = await V.preferences();
@@ -48,13 +48,13 @@ router.use(async (req, res) => {
     if (path === '/sales/builder-templates') return res.json({ success: true, data: { templates: prefs.templates } });
     if (path === '/finance/buyer-share') return res.json({ success: true, data: { periods: [] } });
     if (path === '/promo/data-status') {
-      const ds = await bridge.read(), status = require('../collectors/wb/sheetSync').status();
+      const ds = await bridge.read({excludeFinance:true}), status = require('../collectors/wb/sheetSync').status();
       return res.json({ success: true, data: { running: status.busy, jobs: [['catalog', 'catalog'], ['analytics', 'orders'], ['perf', 'ads'], ['stocks', 'stocks']].map(([job, kind]) => ({ job, everyMin: 60, lastSuccessAt: ds.find(x => x.kind === kind)?.meta.collectedAt || null, lastError: status.error })) } });
     }
     const supported = ['/orders/feed', '/sales/data', '/sales/geo', '/sales/costs', '/sales/skus', '/promo/stats', '/promo/catalog', '/promo/sibling-clusters', '/stocks/data', '/finance/coefs', '/finance/pnl', '/finance/calc-base', '/clusters', '/queries/season'];
     if (!supported.includes(path)) return res.status(503).json({ success: false, error: 'Данные WB для этого раздела пока не подключены' });
     await require('../collectors/wb/sheetSync').sync(req.query.fresh === '1');
-    const ds = await bridge.read(), m = V.build(ds, prefs, req.query); let out;
+    const ds = await bridge.read({excludeFinance:true}), m = V.build(ds, prefs, req.query); let out;
     if (path === '/sales/data') out = m.sales();
     if (path === '/promo/stats') out = m.ads();
     if (path === '/orders/feed') out = m.feed();

@@ -46,3 +46,10 @@ test('Apps Script публикует данные и WB_status с одной в�
   const originalTime = sheets.get('WB_status').cells[1][3];
   ctx.resendWbData(); assert.equal(sheets.get('WB_status').cells.length, 2); assert.equal(sheets.get('WB_status').cells[1][3], originalTime);
 });
+test('Google-импорт WB принимает отдельный финансовый набор без изменения заказов',async()=>{
+ const bridge=require('../src/lib/wbBridge');bridge.KINDS.push('finance');
+ const r={id:'142382026102312345|9007199254740993',reportId:'142382026102312345',rrdId:'9007199254740993',forPay:'100.01'};
+ manifest=quote([header,['defly_wb','finance','run-finance-1',stamp,'2026-08-01','2026-10-29',1,'']]);
+ table=quote([['id','payload','run_id'],[r.id,JSON.stringify(r),'run-finance-1']]);
+ const s=await source.sync(true);assert.equal(s.error,null);assert.equal(saved.at(-1).kind,'finance');assert.equal(saved.at(-1).rows[0].reportId,r.reportId);assert.equal(saved.at(-1).rows[0].forPay,'100.01');assert.ok(old.has('orders'));
+});

@@ -10,7 +10,7 @@ async function catalog2d() {
   const [catalog, overrides, wbData] = await Promise.all([
     query(`SELECT cabinet, offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = ANY($1::text[]) AND platform = 'ozon' ORDER BY updated_at DESC NULLS LAST, cabinet, offer_id`, [cabinets.map(c => c.id)]),
     query(OV_SQL, overrideArgs('defly')),
-    listCabinets().some(c => c.id === 'defly_wb' && c.connected) ? require('./wbBridge').read() : Promise.resolve([]),
+    listCabinets().some(c => c.id === 'defly_wb' && c.connected) ? require('./wbBridge').read({excludeFinance:true}) : Promise.resolve([]),
   ]);
   const paths = new Map(overrides.map(r => [r.offer_id, r.path]));
   const selected = catalog.filter(r => (paths.get(r.offer_id) || autoPath('defly', r.product_name, r.offer_id).join(' / ')).split(' / ').includes('2D'));

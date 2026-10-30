@@ -16,14 +16,14 @@ const client = { release() {}, async query(sql, args = []) {
 require.cache[require.resolve('../src/db')] = { exports: { query: async () => [], getPool: () => ({ connect: async () => client }) } };
 const bridge = require('../src/lib/wbBridge');
 const { buildReport } = require('../src/routes/wb');
-test('WB: подпись ограничена временем и телом, чужой кабинет и финансы не принимаются', () => {
+test('WB: подпись ограничена временем и телом, чужой кабинет и некорректные пакеты не принимаются', () => {
   const secret = 'a'.repeat(40), timestamp = String(Date.now()), raw = Buffer.from('{"test":1}'), signature = crypto.createHmac('sha256', secret).update(timestamp + '.' + raw).digest('hex');
   assert.doesNotThrow(() => bridge.verify(raw, timestamp, signature, Date.now(), secret));
   assert.throws(() => bridge.verify(Buffer.from('{}'), timestamp, signature, Date.now(), secret), /недействительна/);
   assert.throws(() => bridge.verify(raw, timestamp, signature, Date.now() + 600000, secret), /недействительна/);
   assert.throws(() => bridge.verify(raw, timestamp, signature, Date.now(), ''), /не настроен/);
   assert.throws(() => bridge.validate({ cabinet: 'licio', kind: 'orders' }), /Неизвестный/);
-  assert.throws(() => bridge.validate({ cabinet: 'defly_wb', kind: 'finance' }), /Неизвестный/);
+  assert.throws(() => bridge.validate({ cabinet: 'defly_wb', kind: 'finance' }), /Некорректная версия/);
 });
 test('WB: пакеты заменяют набор только целиком; повтор безопасен, прежние наборы сохраняются', async () => {
   const packet = { cabinet: 'defly_wb', kind: 'orders', runId: 'run-test-1', collectedAt: new Date().toISOString(), from: '2026-10-01', to: '2026-10-29', part: 0, parts: 2, total: 2, rows: [{ id: 'a', cancelled: false }] };
@@ -59,4 +59,13 @@ test('WB: рабочий скрипт исправляет отмену по sri
   ctx.wbStats_('orders'); ctx.wbStats_('sales'); assert.equal(saved[0][1].length, 1); assert.equal(saved[0][1][0].cancelled, true); assert.equal(saved[1][1].length, 2); assert.equal(saved[1][1][1].price, null);
   assert.equal(requests.length, 0); // рабочий сбор больше не отправляет данные напрямую в Render
 
+});
+test('Финансы WB: импорт сохраняет точные ID и денежные строки, снимок меняется только целиком',async()=>{
+ const r={id:'142382026102312345|9007199254740993',reportId:'142382026102312345',rrdId:'9007199254740993',forPay:'100.01'};
+ const p={cabinet:'defly_wb',kind:'finance',runId:'finance-test-1',collectedAt:new Date().toISOString(),from:'2026-08-01',to:'2026-10-29',parts:2,part:0,total:2,rows:[r]};
+ assert.throws(()=>bridge.validate({...p,rows:[{...r,reportId:Number(r.reportId)}]}),/точные идентификаторы/);
+ assert.throws(()=>bridge.validate({...p,from:'2026-02-30'}),/период/);
+ await bridge.ingest(p);assert.equal(state.has('defly_wb|finance'),false);
+ await bridge.ingest({...p,part:1,rows:[{...r,id:r.reportId+'|9007199254740994',rrdId:'9007199254740994'}]});
+ assert.equal(state.get('defly_wb|finance').rows[0].forPay,'100.01');assert.equal(state.get('defly_wb|finance').rows[0].reportId,r.reportId);
 });

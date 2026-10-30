@@ -19,7 +19,7 @@ async function collect() {
   const metaRows = manifest.rows.filter(r => r.cabinet === bridge.CABINET);
   if (!metaRows.length) throw new Error('В WB_status ещё нет данных Defly WB. Запустите сбор в Apps Script.');
   if (metaRows.some(r => !bridge.KINDS.includes(r.kind)) || new Set(metaRows.map(r => r.kind)).size !== metaRows.length) throw new Error('Некорректный список наборов WB_status');
-  const current = new Map((await bridge.read()).map(r => [r.kind, r.meta.runId]));
+  const current = new Map((await (bridge.readMeta ? bridge.readMeta() : bridge.read())).map(r => [r.kind, r.meta.runId]));
   const errors = []; let changed = 0;
   for (const m of metaRows) {
     if (current.get(m.kind) === m.run_id) continue;
