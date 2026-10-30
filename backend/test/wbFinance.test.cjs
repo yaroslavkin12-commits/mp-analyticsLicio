@@ -43,3 +43,9 @@ test('Статус финансов различает отсутствие и �
  meta=[{kind:'finance',meta:{total:0,from:'2026-08-01',to:'2026-10-29',collectedAt:'2026-10-30T08:00:00Z'}}];const r=await call();assert.equal(r.data.imported,true);assert.equal(r.data.rows,0);assert.equal(r.data.calculationsReady,false);assert.equal((await call('licio')).code,400);
  }finally{bridge.readMeta=readMeta;sheetSync.sync=sync;}
 });
+test('Диагностика WB различает запрошенное и отсутствующее поле, не пишет суммы и реквизиты в журнал',()=>{
+ const h=harness([{code:200,text:JSON.stringify([{deduction:'123456.78',ppvzSupplierInn:'private-counterparty'}])}]);
+ h.ctx.probeWbFinanceFields(); const logs=h.logs.join('\n');
+ assert.match(logs,/bonusTypeName запрошен: true/); assert.match(logs,/с полем bonusTypeName: 0; удержаний: 1/);
+ assert.ok(!logs.includes('secret-only-in-properties'));assert.ok(!logs.includes('private-counterparty'));assert.ok(!logs.includes('123456.78'));assert.equal(h.sheets.size,0);
+});

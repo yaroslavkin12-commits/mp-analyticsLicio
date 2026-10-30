@@ -259,6 +259,18 @@ function syncWbAds() { wbLock_('ads', function () {
 // Финансовый отчёт WB: отдельный сбор. Денежные строки не преобразуем в Number.
 // Публикуем WB_finance и его статус только после HTTP 204 (все страницы получены).
 var WB_FINANCE_FIELDS = ['reportId','rrdId','dateFrom','dateTo','createDate','currency','reportType','nmId','vendorCode','title','sku','docTypeName','sellerOperName','bonusTypeName','quantity','orderDt','saleDt','rrDate','retailPrice','retailAmount','retailPriceWithDisc','commissionPercent','ppvzSalesCommission','forPay','ppvzReward','acquiringFee','vw','vwNds','deliveryAmount','returnAmount','deliveryService','penalty','additionalPayment','rebillLogisticCost','paidStorage','deduction','paidAcceptance','installmentCofinancingAmount','cashbackAmount','cashbackDiscount','cashbackCommissionChange','paymentSchedule','deliveryMethod','srid'];
+// Проверка состава ответа: без токена, сумм и реквизитов контрагентов в журнале.
+function probeWbFinanceFields() {
+  var r = wbRaw_('post', 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed', {dateFrom:ymd_(90),dateTo:ymd_(1),period:'daily',limit:10000,rrdId:0,fields:WB_FINANCE_FIELDS});
+  Logger.log('Поля финансов WB: HTTP '+r.code+'; bonusTypeName запрошен: '+(WB_FINANCE_FIELDS.indexOf('bonusTypeName')>=0));
+  if(r.code!==200)return;
+  var rows=JSON.parse(r.text); if(!Array.isArray(rows))throw new Error('Ожидался массив финансов WB');
+  var deductions=rows.filter(function(x){return Number(x.deduction)!==0 && x.deduction!=null;});
+  Logger.log('Строк: '+rows.length+'; с полем bonusTypeName: '+rows.filter(function(x){return Object.prototype.hasOwnProperty.call(x,'bonusTypeName');}).length+'; удержаний: '+deductions.length);
+  Logger.log('Поля ответа: '+Object.keys(rows[0]||{}).join(', '));
+  Logger.log('Поля удержания: '+Object.keys(deductions[0]||{}).join(', '));
+  Logger.log('Пояснения удержаний: '+JSON.stringify(deductions.slice(0,20).map(function(x){return x.bonusTypeName===undefined?null:x.bonusTypeName;})));
+}
 function wbFinanceId_(value) {
   if (typeof value === 'number' && !Number.isSafeInteger(value)) throw new Error('WB прислал неточный идентификатор финансов');
   var s = String(value); if (!/^[1-9]\d*$/.test(s)) throw new Error('WB прислал неверный идентификатор финансов'); return s;
