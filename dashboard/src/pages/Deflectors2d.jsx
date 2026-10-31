@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { getDeflectors2d, getDeflectors2dDemand, getDeflectors2dCatalog, saveDeflectors2d, submitDeflectors2d, getDeflectors2dInventory } from '../api';
 import Deflectors2dJournal from './Deflectors2dJournal';
+import ColumnPicker from '../components/ColumnPicker';
 import Deflectors2dAnnual from './Deflectors2dAnnual';
 import { calculate2d, PERIODS_2D } from '../lib/deflectors2d.mjs';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
@@ -18,7 +19,6 @@ const HISTORY_COLS = [...PERIODS_2D.map(d => ['q' + d, `МП ${d === 365 ? 'го
 COLUMNS.splice(3, 0, ...HISTORY_COLS);
 COLUMNS.push(['priority', 'Приоритет']);
 COLUMNS.push(['rateWindow', 'Периоды расчёта темпа, дней']);
-const BASE_KEYS = ['sales', 'stock', 'transit', 'rate', 'cover', 'need', 'recommended', 'quantity', 'after'];
 const DEFAULT_COLS = ['offer', 'name', 'quantity'];
 const CACHE = 'mp-deflectors2d-draft';
 function ExportDialog({ plan, selected, setSelected, busy, error, date, setDate, expectedDate, setExpectedDate, note, setNote, onClose, download, submit }) {
@@ -49,11 +49,20 @@ export default function Deflectors2d({ nav }) {
   const [exportPlan, setExportPlan] = useState(null), [exportError, setExportError] = useState('');
   const [columns, setColumns] = useState(() => { try { const v = JSON.parse(localStorage.getItem('mp-deflectors2d-columns')); return Array.isArray(v) ? [...new Set(['offer', ...v])] : DEFAULT_COLS; } catch { return DEFAULT_COLS; } });
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD')), [note, setNote] = useState('');
-  const [section, setSection] = useState('production'), [selected, setSelected] = useState('');
-  const [favorites, setFavorites] = useState(false), [priority, setPriority] = useState('');
+  const [selected, setSelected] = useState('');
+  const journalRef = useRef(null);
+  const [favorites, setFavorites] = useState(false);
   const [inventory, setInventory] = useState(null), [inventoryError, setInventoryError] = useState('');
   const [expectedDate, setExpectedDate] = useState(dayjs().add(7, 'day').format('YYYY-MM-DD'));
-  const [tableColumns, setTableColumns] = useState(() => { try { return JSON.parse(localStorage.getItem('mp-d2-visible-columns')) || ['cover','transit','priority','recommended','quantity','trend7']; } catch { return ['cover','transit','priority','recommended','quantity','trend7']; } });
+  const [tableColumns, setTableColumns] = useState(() => {
+    const defaults = ['stock','cover','transit','priority','recommended','quantity','rate'];
+    try {
+      const current = JSON.parse(localStorage.getItem('mp-d2-column-layout-v2'));
+      if (Array.isArray(current)) return current;
+      const previous = JSON.parse(localStorage.getItem('mp-d2-visible-columns'));
+      return Array.isArray(previous) ? [...new Set(['stock',...previous])] : defaults;
+    } catch { return defaults; }
+  });
   const ctl = useTableCtl('deflectors2d', { k: 'cover', dir: 1 });
   async function load(restore = true) {
     setError(''); setMessage('');
@@ -75,7 +84,7 @@ export default function Deflectors2d({ nav }) {
   }
   useEffect(() => { load(); loadDemand(); getDeflectors2dCatalog().then(r => setCatalog(r.data.data)).catch(() => setMessage('Не удалось получить список из каталога. Артикулы можно добавить вручную.')); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (draft && catalog.length) add(catalog); }, [catalog, !!draft]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { localStorage.setItem('mp-d2-visible-columns', JSON.stringify(tableColumns)); }, [tableColumns]);
+  useEffect(() => { localStorage.setItem('mp-d2-column-layout-v2', JSON.stringify(tableColumns)); }, [tableColumns]);
   const receivingCabinet = draft?.settings?.receivingCabinet || 'defly';
   const inventoryRequest = useRef(0);
   async function refreshInventory() {
@@ -91,7 +100,7 @@ export default function Deflectors2d({ nav }) {
   }, [draft, state, dirty]);
   useEffect(() => { try { localStorage.setItem('mp-deflectors2d-columns', JSON.stringify(columns)); } catch { /* ignore */ } }, [columns]);
   const preview = useMemo(() => { if (!draft) return null; try { return calculate2d(draft, demand, inventory); } catch (e) { return { rows: draft.rows.map(r => ({ ...r, quantity: r.manual || 0 })), total: 0, left: 0, over: 0, issues: [e.message], invalid: true }; } }, [draft, demand, inventory]);
-  const shown = useMemo(() => !preview ? [] : ctl.apply(preview.rows.filter(r => (!q || `${r.offer} ${r.name}`.toLowerCase().includes(q.toLowerCase())) && (!only || r.quantity > 0) && (!favorites || r.favorite) && (!priority || r.priority === priority) && (!missing || r.rate == null || r.stock == null || r.transit == null)), (r, k) => r[k]), [preview, q, only, favorites, priority, missing, ctl.apply]);
+  const shown = useMemo(() => !preview ? [] : ctl.apply(preview.rows.filter(r => (!q || `${r.offer} ${r.name}`.toLowerCase().includes(q.toLowerCase())) && (!only || r.quantity > 0) && (!favorites || r.favorite) && (!missing || r.rate == null || r.stock == null || r.transit == null)), (r, k) => r[k]), [preview, q, only, favorites, missing, ctl.apply]);
   const patch = (offer, changes) => setDraft(v => ({ ...v, rows: v.rows.map(r => r.offer === offer ? { ...r, ...changes } : r) }));
   const setting = (key, value) => setDraft(v => ({ ...v, settings: { ...v.settings, [key]: value } }));
   function add(items) {
@@ -146,15 +155,19 @@ export default function Deflectors2d({ nav }) {
   const s = draft.settings, invReady = inventory?.cabinet === receivingCabinet && !inventoryError;
   const stockSource = s.stockSource || 'manual';
   const transitSource = s.transitSource || (s.stockSource ? 'live' : 'manual');
+  const knownStocks = preview.rows.filter(r => r.stock != null).length;
+  const knownRates = preview.rows.filter(r => r.rate != null).length;
+  const noNeed = preview.rows.length > 0 && preview.rows.every(r => r.need === 0);
+  const stockDate = Object.values(inventory?.byOffer || {}).map(r => r.date).filter(Boolean).sort().at(-1);
   const canExport = !busy && invReady && !(s.source === 'ozon' && (!demand || demandBusy || demandError)) && !preview.issues.length;
   const numeric = (r, key, label, step = 1) => <input className="a-input d2-num" aria-label={`${label}: ${r.offer}`} type="number" min="0" step={step} value={r[key] ?? ''} placeholder={key === 'manual' ? String(r.quantity || 0) : '—'} onChange={e => patch(r.offer, { [key]: e.target.value === '' ? null : Number(e.target.value) })} />;
-  const order = ['stock','cover','transit','priority','recommended','quantity','trend7','trend14','trend30',...HISTORY_COLS.map(([k]) => k),'rate','after','sales','name','note','need','rateWindow'];
-  const displayedColumns = [...new Set(order)].filter(k => tableColumns.includes(k) && (k !== 'sales' || s.source !== 'ozon'));
+  const displayedColumns = [...new Set(tableColumns)].filter(k => COLUMNS.some(c => c[0] === k) && k !== 'offer' && (k !== 'sales' || s.source !== 'ozon'));
   const cell = (r, k) => {
     if (k === 'quantity') return <>{numeric(r, 'manual', 'Подсорт', s.multiple)}{r.manual !== null && <button className="tt-reset" aria-label={`Автоматическое количество: ${r.offer}`} onClick={() => patch(r.offer, { manual: null })}>↺</button>}</>;
     if (k === 'stock' && stockSource === 'manual') return numeric(r, 'stock', 'Остаток');
     if (k === 'transit' && transitSource === 'manual') return <>{numeric({ ...r, transit: r.legacyTransit }, 'transit', 'Прежний ручной ввод в пути')}<small className="pr-sub2">Всего с заявками: {fmt(r.transit)}</small></>;
     if (k === 'stock' && r.staleStock) return <span title={`Последний снимок: ${r.stockDate}`}>—<small className="pr-sub2">от {dayjs(r.stockDate).format('DD.MM')}</small></span>;
+    if (k === 'recommended' && r.need === null) return <span title={r.stock === null ? 'Нет актуального остатка' : r.rate === null ? 'Нет полного периода продаж' : 'Неизвестно количество в пути'}>—</span>;
     if (k === 'sales') return numeric(r, 'sales', 'Продажи');
     if (k === 'priority') return <span className={`pr-sig ${r.priority === 'Срочно' ? 'warn' : ''}`}>{r.priority}</span>;
     if (k === 'note') return <input className="a-input" value={r.note} aria-label={`Комментарий: ${r.offer}`} onChange={e => patch(r.offer, { note: e.target.value })} />;
@@ -162,14 +175,13 @@ export default function Deflectors2d({ nav }) {
     return <span className={k.startsWith('trend') && r[k] != null ? r[k] > 0 ? 's-up' : 's-down' : ''}>{fmt(r[k])}{k.startsWith('trend') && r[k] != null ? '%' : ''}</span>;
   };
   return <div className="mpui d2-page">
-    <div className="page-sticky"><div className="a-top"><h1>Производство</h1>{nav}<span className="a-seg"><button className={section === 'production' ? 'on' : ''} onClick={() => setSection('production')}>Производство</button><button className={section === 'journal' ? 'on' : ''} onClick={() => setSection('journal')}>Журнал</button></span></div></div>
+    <div className="page-sticky"><div className="a-top"><h1>Производство</h1>{nav}</div></div>
     {error && <div className="c-msg bad" role="alert">{error}</div>}{message && <div className="c-msg" role="status">{message}</div>}
     {inventoryError && <div className="c-msg bad">Не удалось обновить остатки: {inventoryError} <button className="a-btn" onClick={refreshInventory}>Повторить</button></div>}
     <fieldset disabled={busy} className="d2-fieldset">
-    <div hidden={section !== 'production'}>
     <div className="a-card pr-card">
-      <div className="a-bar"><details className="d2-settings"><summary>Подача: {s.periodDays} дн. · Поступление: {s.leadDays ?? 7} дн. · Кратность: {s.multiple} · Лимит: {s.total} шт.</summary>
-        <div className="a-bar d2-settings-fields">{[['multiple','Кратность, шт.'],['periodDays','Подача каждые, дней'],['leadDays','До поступления, дней'],['total','Лимит, шт.']].map(([k,label]) => <label key={k}>{label}<input className="a-input d2-num" aria-label={label} type="number" min={['total','leadDays'].includes(k) ? 0 : 1} value={s[k] ?? 7} onChange={e => setting(k, e.target.value === '' ? '' : Number(e.target.value))} /></label>)}
+      <div className="d2-plan-grid">{[['periodDays','Подача каждые','дней'],['leadDays','Поступление через','дней'],['multiple','Кратность','шт.'],['total','Лимит партии','шт.']].map(([k,label,unit]) => <label key={k} className="d2-plan-item"><span>{label}</span><div><input className="a-input" aria-label={label} type="number" min={['total','leadDays'].includes(k) ? 0 : 1} value={s[k] ?? 7} onChange={e => setting(k, e.target.value === '' ? '' : Number(e.target.value))} /><small>{unit}</small></div></label>)}</div>
+      <div className="a-bar d2-plan-actions"><details className="d2-settings"><summary>Источники и дополнительные настройки</summary><div className="a-bar d2-settings-fields">
         <label>Поступление в кабинет<select className="a-input" value={receivingCabinet} onChange={e => setting('receivingCabinet', e.target.value)}>{(state.receivingCabinets || [{id:'defly',label:'Defly'}]).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
         <label>Остатки<select className="a-input" value={stockSource} onChange={e => setting('stockSource', e.target.value)}><option value="live">Из выбранного кабинета</option><option value="manual">Ввести остаток компании</option></select></label>
         <label>В пути<select className="a-input" value={transitSource} onChange={e => setting('transitSource', e.target.value)}><option value="live">Из рекламы и заявок</option><option value="manual">Прежний ручной ввод + заявки</option></select></label>
@@ -178,20 +190,28 @@ export default function Deflectors2d({ nav }) {
         <label><input type="checkbox" checked={s.fill} onChange={e => setting('fill', e.target.checked)} /> Добрать до лимита сверх потребности</label></div>
         <div className="a-hint">Приоритет — по запасу на срок поступления и интервал подачи. Рекомендации — по темпу продаж 7/14/30 дней; прибыль и реклама пока не меняют количество. «В пути» = открытые заявки + выбранный ручной источник; два ручных источника не складываются. Снимки старше вчерашнего дня не используются как текущий остаток. Поступления определяются по событиям роста остатков выбранного кабинета.</div>
       </details><button className="a-btn ghost" disabled={!dirty || preview.invalid} onClick={save}>Сохранить</button><button className="a-btn ghost" onClick={() => { loadDemand(true); refreshInventory(); }}>Обновить данные</button><button className="a-btn ghost" onClick={() => { if (!dirty || window.confirm('Загрузить серверную версию вместо локальных правок?')) load(false); }}>Загрузить с сервера</button></div>
+    </div>
+    <div className="a-card pr-card">
       <details className="d2-sources"><summary>Источники и годовые продажи 1С</summary><Deflectors2dAnnual annual={draft.annual} rows={draft.rows} apply={annual => setDraft(v => ({ ...v, annual }))} />
         {demand && <div className="a-hint">Продажи: {demand.shops.map(c => c.label).join(', ')} · по {dayjs(demand.to).format('DD.MM.YYYY')}. {PERIODS_2D.filter(d => demand.ranges['d'+d]?.complete).join(', ')} дней полной истории.</div>}
         {demandError && <p role="alert">{demandError}</p>}<div className="a-bar"><input className="a-input" placeholder="Новый артикул" value={newOffer} onChange={e => setNewOffer(e.target.value)} /><input className="a-input" placeholder="Наименование" value={newName} onChange={e => setNewName(e.target.value)} /><button className="a-btn ghost" disabled={!newOffer.trim()} onClick={() => { add([{offer:newOffer,name:newName}]); setNewOffer(''); setNewName(''); }}>Добавить</button></div>
       </details>
-      <div className="a-bar d2-filters"><input className="a-input" aria-label="Поиск дефлекторов" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} /><label><input type="checkbox" checked={only} onChange={e => setOnly(e.target.checked)} /> Только в заказе</label><label><input type="checkbox" checked={favorites} onChange={e => setFavorites(e.target.checked)} /> ★ Избранные</label><label><input type="checkbox" checked={missing} onChange={e => setMissing(e.target.checked)} /> Без данных</label><select className="a-input" aria-label="Приоритет" value={priority} onChange={e => setPriority(e.target.value)}><option value="">Все приоритеты</option>{['Срочно','Пополнить','Хватает','Нет данных'].map(p => <option key={p}>{p}</option>)}</select><ResetCtl ctl={ctl} /></div>
-      <details className="d2-columns"><summary>Колонки таблицы · {shown.length} из {preview.rows.length} артикулов</summary><div className="d2-column-options">{COLUMNS.filter(([k]) => k !== 'offer').map(([k,label]) => <label key={k}><input type="checkbox" checked={tableColumns.includes(k)} onChange={() => setTableColumns(v => v.includes(k) ? v.filter(x => x !== k) : [...v,k])} /> {label}</label>)}</div></details>
+      <div className="d2-data-status" role="status"><span>Остатки: <b>{stockSource === 'live' ? `${receivingCabinet} · ${stockDate ? dayjs(stockDate).format('DD.MM.YYYY') : 'загрузка…'}` : 'ручной ввод компании'}</b> · {knownStocks} / {preview.rows.length} арт.</span><span>Темп продаж ({s.source === 'ozon' ? 'МП' : 'ручной ввод'}): {knownRates} / {preview.rows.length} арт. · {s.source !== 'ozon' ? `за ${s.salesDays} дней` : demand ? `по ${dayjs(demand.to).format('DD.MM.YYYY')}` : 'загрузка…'}</span></div>
+      {stockSource === 'manual' && knownStocks < preview.rows.length && <div className="c-msg">Выбран ручной остаток, часть значений не заполнена. <button className="a-btn ghost" onClick={() => setting('stockSource','live')}>Использовать актуальные остатки</button></div>}
+      {demandError && <div className="c-msg bad" role="alert">Не удалось получить продажи: {demandError}<button className="a-btn ghost" onClick={() => loadDemand(true)}>Повторить</button></div>}
+      {s.source !== 'ozon' && knownRates < preview.rows.length && <div className="c-msg">Не заполнены ручные продажи. <button className="a-btn ghost" onClick={() => setting('source','ozon')}>Использовать продажи маркетплейсов</button></div>}
+      {noNeed && <div className="a-hint d2-no-need">Подсорт не требуется: запаса с учётом «В пути» хватает на {Number(s.periodDays) + Number(s.leadDays ?? 7)} дней. Рекомендация 0 — результат расчёта.</div>}
+      <div className="a-bar d2-filters"><input className="a-input" aria-label="Поиск дефлекторов" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} /><label><input type="checkbox" checked={only} onChange={e => setOnly(e.target.checked)} /> Только в заказе</label><label><input type="checkbox" checked={favorites} onChange={e => setFavorites(e.target.checked)} /> ★ Избранные</label><label><input type="checkbox" checked={missing} onChange={e => setMissing(e.target.checked)} /> Без данных</label><ResetCtl ctl={ctl} /></div>
+      <div className="a-bar d2-table-tools"><span className="a-hint">{shown.length} из {preview.rows.length} артикулов</span><ColumnPicker columns={COLUMNS.filter(([k]) => k !== 'offer')} value={tableColumns} onChange={setTableColumns} /></div>
+
       <div className="a-scroll"><table className="a-t pr-t d2-table"><thead><tr><th>★</th><ThCtl ctl={ctl} k="offer" filter={false}>Артикул</ThCtl>{displayedColumns.map(k => <ThCtl key={k} ctl={ctl} k={k} filter={!['name','priority','note','rateWindow'].includes(k)}>{COLUMNS.find(c => c[0] === k)?.[1]}</ThCtl>)}</tr></thead><tbody>
       {shown.map(r => <tr key={r.offer} className={`${r.quantity > 0 ? 'pr-in-order' : ''} ${selected === r.offer ? 'd2-selected' : ''}`}><td><button className={`pr-star ${r.favorite ? 'on' : ''}`} aria-label={`Избранное: ${r.offer}`} aria-pressed={r.favorite} onClick={() => patch(r.offer, {favorite:!r.favorite})}>★</button></td><td><button className="d2-article" onClick={() => setSelected(v => v === r.offer ? '' : r.offer)} aria-pressed={selected === r.offer}><b>{r.offer}</b><small className="pr-sub2">{r.name}</small></button></td>{displayedColumns.map(k => <td key={k} className="n r">{cell(r,k)}</td>)}</tr>)}
       {!shown.length && <tr><td colSpan={displayedColumns.length+2}>Нет артикулов по выбранным фильтрам.</td></tr>}</tbody></table></div>
       <div className="a-bar d2-footer"><span>К подаче: <b>{fmt(preview.total)} / {fmt(s.total)} шт.</b>{dirty && <small className="pr-sub2">Есть несохранённые правки</small>}</span><button className="a-btn ghost" disabled={!canExport || !preview.total} onClick={() => openExport(preview.rows)}>Весь подсорт</button><button className="a-btn" disabled={!canExport || !shown.some(r => r.quantity > 0)} onClick={() => openExport(shown)}>Подать подсорт / Excel</button></div>
       {preview.issues.map(t => <div key={t} role="alert" className="s-down">{t}</div>)}{preview.over > 0 && <div className="s-down">Лимит превышен на {fmt(preview.over)} шт.</div>}
-      {selected && <div className="a-bar d2-footer"><b>{selected}</b><button className="a-btn ghost" onClick={() => setSection('journal')}>Журнал артикула</button><button className="a-btn ghost" onClick={() => setSelected('')}>Снять выбор</button></div>}
-    </div></div>
-    <div hidden={section !== 'journal'}><Deflectors2dJournal journal={inventory?.journal || state.journal} rows={preview.rows} inventory={inventory} selected={selected} onClear={() => setSelected('')} onExport={openExport} stockSource={stockSource} /></div>
+      {selected && <div className="a-bar d2-footer"><b>{selected}</b><button className="a-btn ghost" onClick={() => journalRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Журнал артикула</button><button className="a-btn ghost" onClick={() => setSelected('')}>Снять выбор</button></div>}
+    </div>
+    <div ref={journalRef} className="d2-journal-anchor"><Deflectors2dJournal journal={inventory?.journal || state.journal} rows={preview.rows} inventory={inventory} selected={selected} onClear={() => setSelected('')} onExport={openExport} stockSource={stockSource} /></div>
     </fieldset>
     {exportPlan && <ExportDialog plan={exportPlan} selected={columns} setSelected={setColumns} busy={busy} error={exportError} date={date} setDate={setDate} expectedDate={expectedDate} setExpectedDate={setExpectedDate} note={note} setNote={setNote} onClose={() => setExportPlan(null)} download={() => exportFile(false)} submit={() => exportFile(true)} />}
   </div>;

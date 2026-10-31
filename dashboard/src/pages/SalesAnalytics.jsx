@@ -193,7 +193,7 @@ export function StackChart({ buckets, groups, metric, tip, gran, normalize, labe
     return v;
   };
   const raw = buckets.map(b => groups.map(g => val(g, b)));
-  const signals = barSignals(raw.map(c => c.every(v => v === null) ? null : c.reduce((a,b)=>a+(b||0),0)), {dates:buckets.map(b=>b.key),gran,metric,durations:buckets.map(b=>b.idx.length),pending:buckets.map(b=>groups.some(g=>g.model?.byDate[b.key]?._provisional) || ((b.last || b.key) >= new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'})))});
+  const signals = barSignals(raw.map(c => c.every(v => v === null) ? null : c.reduce((a,b)=>a+(b||0),0)), {baseline:'period',dates:buckets.map(b=>b.key),gran,metric,durations:buckets.map(b=>b.idx.length),pending:buckets.map(b=>groups.some(g=>g.model?.byDate[b.key]?._provisional) || ((b.last || b.key) >= new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'})))});
   // normalize — каждый столбец 100%: видно, как менялась доля, а не объём.
   const cols = normalize ? raw.map(c => { const t = c.reduce((s, v) => s + v, 0); return c.map(v => t ? v / t * 100 : 0); }) : raw;
   const max = normalize ? 100 : Math.max(1, ...cols.map(c => c.reduce((s, v) => s + v, 0)));
@@ -385,7 +385,7 @@ function ArticleDetail({ a, dates, buckets, gran, tip, leafPaths, onMoveCategory
     <div className="a-dwrap">
       <div className="a-box wide">
         <h4>Динамика {gran !== 'day' && <span className="a-hint">по {gran === 'week' ? 'неделям' : 'месяцам'}</span>}</h4>
-        <DualChart dates={buckets.map(b => b.key)} byDate={model.byDate} events={[]} tip={tip} mode="all"
+        <DualChart signalBaseline="period" dates={buckets.map(b => b.key)} byDate={model.byDate} events={[]} tip={tip} mode="all"
           metricsList={SALES_CHART_METRICS} storeKey="mp-sales-art-chart" defaults={{ left: 'revenue', right: null }} remember={false} gran={gran} />
       </div>
       <div className="a-box">
@@ -1198,9 +1198,9 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         </div>
         {chartMode === 'cats' && split && kids.length && !isRateMetric(stackMetric) && !FIN_CHART_METRICS.some(m => m.key === stackMetric)
           ? <StackChart buckets={buckets} groups={cached(`chartgroups|${sel}`, () => stackGroups.map(g => ({...g, model: enrichSalesChart(g.arts || node.arts,dates,buckets,toModel(g.ag,buckets),{pnl:fin?.pnl,forecast:builderForecast,shareAt:builderShareAt,tax})})))} metric={stackMetric} tip={tip} gran={gran} labels />
-          : <DualChart dates={buckets.map(b => b.key)} byDate={chartModel.byDate} events={[]} tip={tip} mode="all" gran={gran}
+          : <DualChart signalBaseline="period" dates={buckets.map(b => b.key)} byDate={chartModel.byDate} events={[]} tip={tip} mode="all" gran={gran}
               metricsList={SALES_CHART_METRICS} storeKey="mp-sales-chart" remember={false} defaults={{ left: 'revenue', right: null }} singleMetric={chartMode === 'cats' ? stackMetric : undefined} hideControls={chartMode === 'cats'} />}
-        <div className="a-hint" style={{marginTop:8}}>Цвет динамики: зелёный — улучшение более 5%, жёлтый — в пределах ±5%, красный — ухудшение. Дни сравниваются с тем же днём прошлой недели, при короткой истории — с предыдущим днём; недели и месяцы — с предыдущим периодом в среднем за день. Незавершённые периоды — серые. При разбивке по категориям оценка показана полоской над столбцом.</div>
+        <div className="a-hint" style={{marginTop:8}}>Цвет динамики: зелёный — улучшение более 5%, жёлтый — в пределах ±5%, красный — ухудшение. Каждый завершённый день сравнивается со средним за выбранный период; недели и месяцы — в среднем за день. Для расходов и ДРР снижение относительно среднего отмечается зелёным. Незавершённые периоды — серые. При разбивке по категориям оценка показана полоской над столбцом.</div>
       </div>
 
       <SharesCard node={node} kids={kids} colorNode={colorNode} brandRank={brandRank} dates={dates} buckets={buckets} gran={gran} tip={tip}

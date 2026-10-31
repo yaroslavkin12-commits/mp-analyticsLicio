@@ -31,3 +31,12 @@ test('Выкупы и поступления на графике использ�
  const zero=enrichSalesChart([{...a,o:'B'}],dates,[buckets[0]],{byDate:{}},{pnl}).byDate.week;
  assert.equal(zero.buyoutQty,0);assert.equal(zero.paySale,null);
 });
+test('Цвет дня относительно среднего выбранного периода; пропуски и незавершённые дни не меняют базу',async()=>{
+ const {barSignals}=await model;
+ const s=barSignals([50,100,150,null,1000],{baseline:'period',pending:[false,false,false,false,true]});
+ assert.deepEqual(s.map(x=>x.status),['bad','warn','good','pending','pending']);assert.equal(s[0].base,100);assert.equal(s[2].base,100);assert.match(s[0].text,/среднему за выбранный период/);
+ assert.equal(barSignals([50,100,150],{baseline:'period',metric:'spend'})[0].status,'good');
+ assert.equal(barSignals([700,600],{baseline:'period',gran:'week',durations:[7,3],metric:'revenue'})[0].base,130);
+ assert.equal(barSignals([100,100],{baseline:'period',durations:[7,3],metric:'avgOrder'})[0].base,100);
+ assert.equal(barSignals([100],{baseline:'period'})[0].status,'warn');
+});

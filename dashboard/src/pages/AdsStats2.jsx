@@ -514,7 +514,7 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
   );
 }
 
-export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults, remember = true, singleMetric, trafficLight = true, gran = 'day', hideControls = false }) {
+export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults, remember = true, singleMetric, trafficLight = true, gran = 'day', hideControls = false, signalBaseline = 'previous' }) {
   const [cfg, setCfg] = useState(() => {
     try { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}), ...(remember ? JSON.parse(localStorage.getItem(storeKey) || '{}') : {}) }; }
     catch (e) { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}) }; }
@@ -528,7 +528,7 @@ export function DualChart({ dates, byDate, events, tip, mode, metricsList, store
     const nums = values.filter(v => v !== null && Number.isFinite(v));
     return {
       ...m, side, values,
-      signals: trafficLight ? barSignals(values, { dates, gran, metric: m.key, direction: m.good, durations: dates.map(d => byDate[d]?.[['buyoutRub','buyoutQty','payout','profitActual'].includes(m.key) ? '_actualDays' : '_days'] || 1), pending: dates.map(d => byDate[d]?._provisional ?? d >= new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'})) }) : null,
+      signals: trafficLight ? barSignals(values, { baseline: signalBaseline, dates, gran, metric: m.key, direction: m.good, durations: dates.map(d => byDate[d]?.[['buyoutRub','buyoutQty','payout','profitActual'].includes(m.key) ? '_actualDays' : '_days'] || 1), pending: dates.map(d => byDate[d]?._provisional ?? d >= new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'})) }) : null,
       color: side === 'left' ? 'var(--a-rev)' : 'var(--a-spend)',
       kind: (singleMetric || cfg.type === 'combo') && side === 'left' ? 'bar' : 'line',
       scale: niceScale(nums.length ? Math.min(...nums) : 0, nums.length ? Math.max(...nums) : 1, m.free),
@@ -1591,9 +1591,9 @@ export default function AdsStats2({ cabinet }) {
           })}
         </span>
         <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
-        <span className="a-seg" title="Откуда брать показы, переходы и заказы">
-          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Вся аналитика</button>
-          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Только реклама</button>
+        <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
+          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
+          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
         </span>
         <Freshness status={status} />
         <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>

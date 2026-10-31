@@ -105,3 +105,13 @@
 .mpui.d2-page .d2-batch-detail{padding:12px}
 .mpui.d2-page .d2-chart{min-width:0;margin:12px 0}
 .mpui.d2-page .d2-sources .pr-card{margin:8px 0}
+.mpui.d2-page .d2-plan-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.mpui.d2-page .d2-plan-item{padding:16px 18px;background:var(--a-panel2);border:1px solid var(--a-line);border-radius:10px;display:flex;flex-direction:column;gap:10px;color:var(--a-ink2);font-size:12px}
+.mpui.d2-page .d2-plan-item>div{display:flex;align-items:center;gap:10px}
+.mpui.d2-page .d2-plan-item input{width:90px;font-size:22px;font-weight:600;border:0;background:transparent;padding:0;color:var(--a-ink)}
+.mpui.d2-page .d2-plan-actions{margin-top:12px;flex-wrap:wrap}
+.mpui.d2-page .d2-table-tools{margin-bottom:8px}
+.mpui.d2-page .d2-data-status{display:flex;flex-wrap:wrap;gap:8px 24px;color:var(--a-ink2);font-size:12px;margin:10px 0}
+.mpui.d2-page .d2-no-need{padding:8px 0;color:var(--a-ink2)}
+.mpui.d2-page .d2-journal-anchor{scroll-margin-top:75px}
+@media(max-width:760px){.mpui.d2-page .d2-plan-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

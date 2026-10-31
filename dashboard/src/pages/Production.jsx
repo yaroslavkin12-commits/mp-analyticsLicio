@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
 import {
   getProduction, uploadProduction, saveProductionMaster, saveProductionSettings, saveProductionOrder, removeProductionOrder,
@@ -68,7 +68,8 @@ function SeatProduction({ cabinet, nav }) {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState('');
-  const [view, setView] = useState('production'), [selectedOffer, setSelectedOffer] = useState('');
+  const [selectedOffer, setSelectedOffer] = useState('');
+  const journalRef = useRef(null);
   const [expandedOrders, setExpandedOrders] = useState(new Set());
   const load = useCallback(() => getProduction(cabinet).then(r => setD(r.data.data)).catch(e => setErr(e.response?.data?.error || e.message)), [cabinet]);
   useEffect(() => { load(); }, [load]);
@@ -272,14 +273,13 @@ function SeatProduction({ cabinet, nav }) {
         <div className="a-top">
           <h1>Производство</h1>
           {nav}
-          <span className="a-seg"><button className={view === 'production' ? 'on' : ''} onClick={() => setView('production')}>Производство</button><button className={view === 'journal' ? 'on' : ''} onClick={() => setView('journal')}>Журнал</button></span>
+
           <span className="a-hint" style={{ margin: 0 }}>подача: пн — Гурьевская, чт — Ельцовка и Искитим</span>
         </div>
       </div>
 
       {msg && <div className={`c-msg ${msg.bad ? 'bad' : ''}`} style={{ margin: '10px 0' }}>{msg.text}</div>}
 
-      <div hidden={view !== 'production'}>
       {/* Данные из 1С */}
       <div className="a-card pr-card">
         <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 14 }}>Данные из 1С</b>
@@ -468,8 +468,8 @@ function SeatProduction({ cabinet, nav }) {
         {shown.length > 60 && <button type="button" className="s-fold" onClick={() => setFull(f => !f)}>{full ? 'Свернуть ▲' : `Показать все ${shown.length} ▼`}</button>}
       </div>
 
-      {selectedOffer && <div className="a-bar"><b>{selectedOffer}</b><button className="a-btn ghost" onClick={() => setView('journal')}>Журнал артикула</button><button className="a-btn ghost" onClick={() => setSelectedOffer('')}>Снять выбор</button></div>}
-      </div><div hidden={view !== 'journal'}>
+      {selectedOffer && <div className="a-bar"><b>{selectedOffer}</b><button className="a-btn ghost" onClick={() => journalRef.current?.scrollIntoView({behavior:'smooth',block:'start'})}>Журнал артикула</button><button className="a-btn ghost" onClick={() => setSelectedOffer('')}>Снять выбор</button></div>}
+      <div ref={journalRef} style={{scrollMarginTop:75}}>
       {selectedOffer && <div className="a-bar"><b>{selectedOffer}</b><button className="a-btn ghost" onClick={() => setSelectedOffer('')}>Все артикулы</button></div>}
       <ProdJournal cabinet={cabinet} journal={selectedOffer ? journal.filter(r => r.o === selectedOffer) : journal} master={d.master} setD={setD} setMsg={setMsg} />
 

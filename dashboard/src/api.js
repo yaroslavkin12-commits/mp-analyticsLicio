@@ -216,6 +216,6 @@ export const getClusters = cabinet => api.get('/clusters', { params: { cabinet }
 export const decideCluster = (cabinet, action, offers, id) => api.post('/clusters/decide', { cabinet, action, offers, id });
 export const getOrderFeed = (cabinet, dateFrom, dateTo, kind) => api.get('/orders/feed', { params: { cabinet, dateFrom, dateTo, kind }, timeout: 60000 });
 export const setSelfBuyout = (cabinet, items, on) => api.post('/orders/self', { cabinet, items, on });
-export const getSalesSummary = (dateFrom, dateTo, cabinet) => api.get('/sales/summary', { params: { dateFrom, dateTo, cabinet }, timeout: 120000 });
+export const getSalesSummary = (dateFrom, dateTo, cabinet) => api.get('/sales/summary', { params: { dateFrom, dateTo, cabinet, includeWb: cabinet === 'licio' ? undefined : '1' }, timeout: 120000 });
 
 export const getDeflectors2dInventory = receivingCabinet => api.get('/production/deflectors2d/inventory', { params: { receivingCabinet } });

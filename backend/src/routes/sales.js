@@ -352,7 +352,16 @@ router.get('/summary', async (req, res) => {
         t.q += q; t.r += v; const b = t.byCat[k] || (t.byCat[k] = [0, 0]); b[0] += q; b[1] += v;
         for (let d = 1; d <= Math.min(3, parts.length); d++) { const kk = parts.slice(0, d).join(' / '); const b2 = t.byPath[kk] || (t.byPath[kk] = [0, 0]); b2[0] += q; b2[1] += v; }
       }
-      out.push({ id: cab, label: c.label, cur, prev });
+      out.push({ id: cab, label: c.label, platform: 'ozon', cur, prev });
+    }
+    if (req.query.includeWb === '1' && req.query.cabinet !== 'licio' && listCabinets().some(c => c.id === 'defly_wb' && c.connected)) {
+      try {
+        const datasets = await require('../lib/wbBridge').read({excludeFinance:true});
+        const prefs = await require('../lib/wbViews').preferences();
+        out.push(require('../lib/shopsSummary').wbShopSummary(datasets, prefs, {from,to}));
+      } catch (e) {
+        out.push({id:'defly_wb',label:'Defly WB',platform:'wb',error:'Не удалось получить заказы WB',cur:{q:null,r:null,byCat:{},byPath:{}},prev:{q:null,r:null,byCat:{},byPath:{}}});
+      }
     }
     res.json({ success: true, data: { from, to, pFrom, pTo, shops: out } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }

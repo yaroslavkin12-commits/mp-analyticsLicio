@@ -11,7 +11,7 @@ import './ads2.css';
 import './sales.css';
 
 // ─────────────────────────────────────────────────────────────────────────
-// «Сводка по магазинам» — все магазины Ozon в одной таблице: заказы (без
+// «Сводка по магазинам» — магазины Ozon и подключённый WB в одной таблице: заказы (без
 // самовыкупов), выручка с выкупов, услуги Ozon, реклама, к перечислению,
 // себестоимость, налог, прибыль и рентабельность. Деньги — по начислениям
 // Ozon тем же расчётом, что «P&L» каждого магазина (налог — ставка из «P&L»
@@ -25,8 +25,10 @@ const top = a => String(a.cat || 'Без категории').split(SEP)[0];
 const pre = d => a => String(a.cat || 'Без категории').split(SEP).slice(0, d).join(SEP);
 // Начисления по всем уровням категорий (1–3): путь → итоги.
 const byPathOf = (data, opts) => Object.assign({}, ...[1, 2, 3].map(d => pnlTotals(data, { ...opts, groupOf: pre(d) }).byGroup));
+const strictSum = list => list.length && list.every(Number.isFinite) ? list.reduce((a,b)=>a+b,0) : null;
+const zeroFin = f => f ? Object.fromEntries(Object.entries(f).map(([k,v])=>[k,Number.isFinite(v)?0:null])) : null;
 const FK = ['revenue', 'ozonX', 'ads', 'payout', 'cost', 'tax', 'profit', 'qty'];
-const addF = (list) => { const ok = list.filter(Boolean); if (!ok.length) return null; const o = {}; for (const k of FK) o[k] = ok.reduce((x, f) => x + (f[k] || 0), 0); return o; };
+const addF = (list) => { if (!list.length || list.some(f=>!f)) return null; const o = {}; for (const k of FK) o[k] = strictSum(list.map(f=>f[k])); return o; };
 
 function Delta({ cur, prev, pp }) {
   if (cur === null || prev === null || cur === undefined || prev === undefined || !Number.isFinite(cur) || !Number.isFinite(prev)) return null;
@@ -38,7 +40,7 @@ function Delta({ cur, prev, pp }) {
 }
 
 export default function ShopsSummary({ active, cabinet }) {
-  const OZON = cabinet === 'licio' ? LICIO : DEFAULT_OZON;
+  const MARKETS = cabinet === 'licio' ? LICIO : [...DEFAULT_OZON, ...SHOPS.filter(s=>s.platform === 'wb')];
   const catKey = cabinet === 'licio' ? 'mp-ss-licio-cat' : 'mp-ss-cat';
   const today = dayjs().format('YYYY-MM-DD');
   const [from, setFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
@@ -50,7 +52,7 @@ export default function ShopsSummary({ active, cabinet }) {
   const [open, setOpen] = useState(new Set());
   const [err, setErr] = useState('');
   const [taxVersion, setTaxVersion] = useState(0);
-  useEffect(() => { if (active) return watchTaxCabinets(OZON.map(s => s.id)); return undefined; }, [active, cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (active) return watchTaxCabinets(MARKETS.map(s => s.id)); return undefined; }, [active, cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { const update = () => setTaxVersion(v => v + 1); window.addEventListener('mp-tax-changed', update); window.addEventListener('focus', update); return () => { window.removeEventListener('mp-tax-changed', update); window.removeEventListener('focus', update); }; }, []);
   // Тяжёлая страница (начисления всех магазинов) — грузим только когда её открыли, не в фоне.
   const [armed, setArmed] = useState(!!active);
@@ -64,7 +66,7 @@ export default function ShopsSummary({ active, cabinet }) {
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD');
     getSalesSummary(from, to, cabinet === 'licio' ? 'licio' : undefined).then(r => { if (!off) setOrders(r.data.data); }).catch(e => { if (!off) setErr(e.response?.data?.error || e.message); });
     (async () => {
-      for (const s of OZON) {
+      for (const s of MARKETS) {
         try {
           const [cur, prev, bs, taxSettings] = await Promise.all([
             getFinancePnl(s.id, { dateFrom: from, dateTo: to }).then(r => r.data.data),
@@ -82,14 +84,14 @@ export default function ShopsSummary({ active, cabinet }) {
           const pOk = prev && prev.available?.mn && prev.available.mn <= pFrom;
           const p = pOk ? pnlTotals(prev, { tax, shareAt, groupOf: top }) : null;
           if (p) p.byPath = byPathOf(prev, { tax, shareAt });
-          setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax } }));
+          setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax, operational: !!cur._operational } }));
         } catch (e) { if (!off) setFin(f => ({ ...f, [s.id]: { error: e.message } })); }
       }
     })();
     return () => { off = true; };
   }, [from, to, armed, cabinet, taxVersion]);
 
-  const shops = useMemo(() => (orders?.shops || []).map(o => ({ ...o, shop: OZON.find(s => s.id === o.id) || { id: o.id, label: o.label, color: '#888' }, fin: fin[o.id] })), [orders, fin]);
+  const shops = useMemo(() => (orders?.shops || []).map(o => ({ ...o, shop: MARKETS.find(s => s.id === o.id) || { id: o.id, label: o.label, platform:o.platform, color: '#888' }, fin: fin[o.id] })), [orders, fin]);
   // Категория сверху: «Все» — магазины целиком, иначе — только эта категория.
   const [cat, setCat] = useState(() => { try { return localStorage.getItem(catKey) || ''; } catch (e) { return ''; } });
   useEffect(() => { try { localStorage.setItem(catKey, cat); } catch (e) { /* ignore */ } }, [cat]);
@@ -104,11 +106,11 @@ export default function ShopsSummary({ active, cabinet }) {
     const depth = cat ? cat.split(SEP).length : 0;
     const kidsOf = keys => keys.filter(k => k.split(SEP).length === depth + 1 && (!cat || k.startsWith(cat + SEP))).map(k => ({
       k, name: k.split(SEP).pop(), oq: (s.cur.byPath[k] || o0)[0], or: (s.cur.byPath[k] || o0)[1], poq: (s.prev.byPath?.[k] || o0)[0], por: (s.prev.byPath?.[k] || o0)[1],
-      F: s.fin?.cur?.byPath?.[k] || null, PF: s.fin?.prev?.byPath?.[k] || null }));
+      F: s.fin?.cur?.byPath?.[k] || zeroFin(s.fin?.cur?.total), PF: s.fin?.prev?.byPath?.[k] || zeroFin(s.fin?.prev?.total) }));
     const keys = [...new Set([...Object.keys(s.cur.byPath || {}), ...Object.keys(s.fin?.cur?.byPath || {})])];
     if (!cat) return { oq: s.cur.q, or: s.cur.r, poq: s.prev.q, por: s.prev.r, F: s.fin?.cur?.total || null, PF: s.fin?.prev?.total || null, kids: kidsOf(keys) };
     return { oq: (s.cur.byPath[cat] || o0)[0], or: (s.cur.byPath[cat] || o0)[1], poq: (s.prev.byPath?.[cat] || o0)[0], por: (s.prev.byPath?.[cat] || o0)[1],
-      F: s.fin?.cur?.byPath?.[cat] || null, PF: s.fin?.prev?.byPath?.[cat] || null, kids: kidsOf(keys) };
+      F: s.fin?.cur?.byPath?.[cat] || zeroFin(s.fin?.cur?.total), PF: s.fin?.prev?.byPath?.[cat] || zeroFin(s.fin?.prev?.total), kids: kidsOf(keys) };
   };
   // Подкатегории выбранной верхней категории — для выпадающего списка.
   const catTop = cat ? cat.split(SEP)[0] : '';
@@ -117,26 +119,27 @@ export default function ShopsSummary({ active, cabinet }) {
     for (const s of orders?.shops || []) for (const [k, v] of Object.entries(s.cur.byPath || {})) if (catTop && k.startsWith(catTop + SEP)) m.set(k, (m.get(k) || 0) + v[1]);
     return [...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
   }, [orders, catTop]);
-  const sum = (list, f) => list.reduce((s, x) => s + (f(x) || 0), 0);
-  const total = useMemo(() => {
-    const v = shops.map(s => ({ s, v: viewOf(s) }));
-    const ok = v.filter(x => x.s.fin?.cur);
+  const sum = (list, f) => strictSum(list.map(f));
+  const totalsOf = selectedShops => {
+    const v = selectedShops.map(s => ({ s, v: viewOf(s) }));
     return {
       oq: sum(v, x => x.v.oq), or: sum(v, x => x.v.or), por: sum(v, x => x.v.por), poq: sum(v, x => x.v.poq),
-      fin: ok.length ? addF(ok.map(x => x.v.F)) : null,
-      pfin: ok.length && ok.every(x => x.s.fin.prev) ? addF(ok.map(x => x.v.PF)) : null,
-      loading: shops.some(s => !s.fin),
+      fin: addF(v.map(x => x.v.F)),
+      pfin: v.every(x => x.s.fin?.prev) ? addF(v.map(x => x.v.PF)) : null,
+      loading: selectedShops.some(s => !s.fin),
     };
-  }, [shops, cat]); // eslint-disable-line react-hooks/exhaustive-deps
+  };
+  const total = totalsOf(shops);
+  const marketplaceGroups = (cabinet === 'licio' ? [{id:'licio',label:'Licio'}] : [{id:'ozon',label:'Ozon'},{id:'wb',label:'WB'}]).map(p=>({...p,shops:cabinet === 'licio' ? shops : shops.filter(s=>s.platform === p.id)})).filter(p=>p.shops.length);
 
-  const money = (v, rev) => (pct ? (rev > 0 && Number.isFinite(v) ? fmtPct((-v / rev) * 100) : '—') : `${fmtInt(-v)} ₽`);
+  const money = (v, rev) => !Number.isFinite(v) ? '—' : (pct ? (rev > 0 && Number.isFinite(v) ? fmtPct((-v / rev) * 100) : '—') : `${fmtInt(-v)} ₽`);
   const row = ({ key, name, sub, color, oq, or, por, poq, F, PF, depth, onToggle, isOpen, onOpenShop, loading }) => {
     const rev = F?.revenue;
-    const chk = oq > 0 ? or / oq : null, pchk = poq > 0 ? por / poq : null;
-    const bchk = F && F.qty > 0 ? rev / F.qty : null, pbchk = PF && PF.qty > 0 ? PF.revenue / PF.qty : null;
-    const pay1 = F && F.qty > 0 ? F.payout / F.qty : null, ppay1 = PF && PF.qty > 0 ? PF.payout / PF.qty : null;
-    const margin = F && rev > 0 ? (F.profit / rev) * 100 : null;
-    const pMargin = PF && PF.revenue > 0 ? (PF.profit / PF.revenue) * 100 : null;
+    const chk = oq > 0 && Number.isFinite(or) ? or / oq : null, pchk = poq > 0 && Number.isFinite(por) ? por / poq : null;
+    const bchk = F && Number.isFinite(rev) && F.qty > 0 ? rev / F.qty : null, pbchk = PF && Number.isFinite(PF.revenue) && PF.qty > 0 ? PF.revenue / PF.qty : null;
+    const pay1 = F && Number.isFinite(F.payout) && F.qty > 0 ? F.payout / F.qty : null, ppay1 = PF && Number.isFinite(PF.payout) && PF.qty > 0 ? PF.payout / PF.qty : null;
+    const margin = F && Number.isFinite(F.profit) && rev > 0 ? (F.profit / rev) * 100 : null;
+    const pMargin = PF && Number.isFinite(PF.profit) && PF.revenue > 0 ? (PF.profit / PF.revenue) * 100 : null;
     return (
       <tr key={key} className={`${depth === 0 ? 'ss-total' : depth === 1 ? 'ss-shop' : 'ss-cat'}`}>
         <td className="l">
@@ -149,18 +152,18 @@ export default function ShopsSummary({ active, cabinet }) {
             </div>
           </div>
         </td>
-        <td className="n r">{fmtInt(or)} ₽<small className="ss-sub">{fmtInt(oq)} шт <Delta cur={or} prev={por} /></small></td>
+        <td className="n r">{fmtInt(or)}{Number.isFinite(or) ? ' ₽' : ''}<small className="ss-sub">{fmtInt(oq)} шт <Delta cur={or} prev={por} /></small></td>
         <td className="n r">{chk !== null ? <>{fmtInt(chk)} ₽<Delta cur={chk} prev={pchk} /></> : '—'}</td>
         <td className="n r">{F ? <>{fmtInt(rev)} ₽<small className="ss-sub">{fmtInt(F.qty)} шт</small><Delta cur={rev} prev={PF?.revenue} /></> : loading ? '…' : '—'}</td>
-        <td className="n r">{bchk !== null ? <>{fmtInt(bchk)} ₽<Delta cur={bchk} prev={pbchk} /></> : ''}</td>
-        <td className="n r ss-pay">{pay1 !== null ? <><b>{fmtInt(pay1)} ₽</b><Delta cur={pay1} prev={ppay1} /></> : ''}</td>
-        <td className="n r">{F ? money(F.ozonX, rev) : ''}</td>
-        <td className="n r">{F ? money(F.ads, rev) : ''}</td>
-        <td className="n r">{F ? `${fmtInt(F.payout)} ₽` : ''}</td>
-        <td className="n r">{F ? money(F.cost, rev) : ''}</td>
-        <td className="n r">{F ? money(F.tax, rev) : ''}</td>
-        <td className="n r ss-profit">{F ? <><b className={F.profit < 0 ? 's-down' : ''}>{fmtInt(F.profit)} ₽</b><Delta cur={F.profit} prev={PF?.profit} /></> : ''}</td>
-        <td className="n r">{margin !== null ? <><b className={margin < 0 ? 's-down' : ''}>{fmtPct(margin)}</b><Delta cur={margin} prev={pMargin} pp /></> : ''}</td>
+        <td className="n r">{bchk !== null ? <>{fmtInt(bchk)} ₽<Delta cur={bchk} prev={pbchk} /></> : '—'}</td>
+        <td className="n r ss-pay">{pay1 !== null ? <><b>{fmtInt(pay1)} ₽</b><Delta cur={pay1} prev={ppay1} /></> : '—'}</td>
+        <td className="n r">{F ? money(F.ozonX, rev) : '—'}</td>
+        <td className="n r">{F ? money(F.ads, rev) : '—'}</td>
+        <td className="n r">{F ? `${fmtInt(F.payout)}${Number.isFinite(F.payout) ? ' ₽' : ''}` : '—'}</td>
+        <td className="n r">{F ? money(F.cost, rev) : '—'}</td>
+        <td className="n r">{F ? money(F.tax, rev) : '—'}</td>
+        <td className="n r ss-profit">{F ? <><b className={F.profit < 0 ? 's-down' : ''}>{fmtInt(F.profit)}{Number.isFinite(F.profit) ? ' ₽' : ''}</b><Delta cur={F.profit} prev={PF?.profit} /></> : '—'}</td>
+        <td className="n r">{margin !== null ? <><b className={margin < 0 ? 's-down' : ''}>{fmtPct(margin)}</b><Delta cur={margin} prev={pMargin} pp /></> : '—'}</td>
       </tr>
     );
   };
@@ -207,7 +210,7 @@ export default function ShopsSummary({ active, cabinet }) {
                 <th className="r" title="Выкупы минус возвраты по начислениям Ozon">Выручка (выкупы)</th>
                 <th className="r" title="Выручка / выкупленные штуки">Ср. чек выкупа</th>
                 <th className="r" title="К перечислению / выкупленные штуки: сколько в среднем приходит на счёт за 1 выкуп (до себестоимости и налога)">Поступление на 1 выкуп</th>
-                <th className="r" title="Комиссия, логистика, эквайринг, хранение и прочие удержания Ozon (без рекламы)">Услуги Ozon</th>
+                <th className="r" title="Комиссия, логистика, эквайринг, хранение и прочие удержания Ozon (без рекламы)">Услуги площадки</th>
                 <th className="r">Реклама</th>
                 <th className="r" title="Выручка минус услуги Ozon и реклама">К перечислению</th>
                 <th className="r" title="Себестоимость выкупленного (без самовыкупов)">Себестоимость</th>
@@ -217,23 +220,27 @@ export default function ShopsSummary({ active, cabinet }) {
               </tr></thead>
               <tbody>
                 {row({ key: 'total', name: cat ? `Итого · ${cat.split(SEP).join(' › ')}` : 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
-                {shops.map(s => {
+                {marketplaceGroups.map(platform => {
+                  const subtotal = totalsOf(platform.shops);
+                  return <React.Fragment key={platform.id}>
+                {cabinet !== 'licio' && row({key:'platform-'+platform.id,name:platform.label,sub:`${platform.shops.length} маг.`,oq:subtotal.oq,or:subtotal.or,por:subtotal.por,poq:subtotal.poq,F:subtotal.fin,PF:subtotal.pfin,depth:0,loading:subtotal.loading})}
+                {platform.shops.map(s => {
                   const V = viewOf(s);
                   const isOpen = open.has(s.id);
                   const toggle = () => setOpen(o => { const n = new Set(o); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; });
                   const kids = [...V.kids].sort((a, b) => b.or - a.or);
                   return (
                     <React.Fragment key={s.id}>
-                      {row({ key: s.id, name: s.shop.label, sub: s.fin?.error ? 'начисления не загрузились' : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '', color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
+                      {row({ key: s.id, name: s.shop.label, sub: s.error || (s.fin?.error ? 'начисления не загрузились' : s.fin?.operational ? 'Продажи и возвраты WB · начисления пока не подключены' : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : ''), color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
                       {isOpen && kids.map(x => row({ key: s.id + x.k, name: x.name, oq: x.oq, or: x.or, por: x.por, poq: x.poq, F: x.F, PF: x.PF, depth: 2, loading: !s.fin }))}
                     </React.Fragment>
                   );
-                })}
+                })}</React.Fragment>; })}
               </tbody>
             </table>
           </div>
           <div className="a-hint" style={{ padding: '8px 14px 12px' }}>
-            Деньги — по начислениям Ozon, как в «P&L» каждого магазина; за последние 1–2 дня Ozon начисления ещё не провёл — там реклама из кабинета, а выручка может быть неполной.
+            Ozon — по начислениям, как в «P&L» каждого магазина; WB — продажи и возвраты из существующей аналитики. Начисления WB пока не подключены: общий итог по расходам и прибыли не рассчитывается без этих данных. За последние 1–2 дня Ozon начисления ещё не провёл — там реклама из кабинета, а выручка может быть неполной.
             Расходы {pct ? 'в % от выручки своей строки — магазины сравниваются напрямую' : 'в рублях'}. Сравнение с прошлым периодом той же длины.
           </div>
         </div>

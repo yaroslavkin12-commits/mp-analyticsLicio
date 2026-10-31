@@ -109,6 +109,7 @@ export default function DateRangePicker({ from, to, onChange }) {
   const QUICK = [
     { label:'Сегодня',    f:() => [dayjs(),                               dayjs()]                              },
     { label:'Вчера',      f:() => [dayjs().subtract(1,'day'),              dayjs().subtract(1,'day')]            },
+    { label:'Эта неделя', featured:true, f:() => [dayjs().subtract((dayjs().day() + 6) % 7, 'day'), dayjs()] },
     { label:'7 дней',     f:() => [dayjs().subtract(6,'day'),              dayjs()]                              },
     { label:'30 дней',    f:() => [dayjs().subtract(29,'day'),             dayjs()]                              },
     { label:'Этот месяц', f:() => [dayjs().startOf('month'),               dayjs()]                              },
@@ -141,13 +142,13 @@ export default function DateRangePicker({ from, to, onChange }) {
           {/* Быстрые периоды */}
           <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
             {QUICK.map(q => (
-              <button key={q.label} onClick={() => {
+              <button key={q.label} aria-label={q.label === 'Эта неделя' ? 'Эта неделя — с понедельника по сегодня' : q.label} onClick={() => {
                 const [s,e] = q.f();
                 onChange(s.format('YYYY-MM-DD'), e.format('YYYY-MM-DD'));
                 setTempStart(null); setOpen(false);
               }} style={{
                 padding:'4px 10px', border:'1px solid var(--border)', borderRadius:6,
-                background:'var(--surface2)', color:'var(--text2)', cursor:'pointer', fontSize:12,
+                background:q.featured ? 'var(--a-accent-soft, var(--surface2))' : 'var(--surface2)', color:q.featured ? 'var(--a-accent, var(--text))' : 'var(--text2)', fontWeight:q.featured ? 600 : 400, borderColor:q.featured ? 'var(--a-accent, var(--border))' : 'var(--border)', cursor:'pointer', fontSize:12,
               }}>{q.label}</button>
             ))}
           </div>
