@@ -1,3 +1,4 @@
+import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
@@ -214,11 +215,8 @@ export default function Costs({ cabinet, nav }) {
         </div>
       )}
 
+      <CategoryNav tops={cats.filter(c=>!c.includes(' / '))} value={cat} onChange={setCat} childrenOf={path=>cats.filter(c=>c.startsWith(path+' / ')&&c.split(' / ').length===path.split(' / ').length+1).map(c=>c.split(' / ').at(-1))} />
       <div className="a-bar">
-        <select className="a-sel" value={cat} onChange={e => setCat(e.target.value)} style={{ maxWidth: 360 }}>
-          <option value="">Все категории</option>
-          {cats.map(c => <option key={c} value={c}>{'  '.repeat(c.split(' / ').length - 1)}{c.split(' / ').pop()}</option>)}
-        </select>
         <ArtSearch value={search} onChange={setSearch} options={artOpts} style={{ minWidth: 220 }} />
         <button type="button" className="a-toggle" onClick={() => setOnlyEmpty(v => !v)}><span className={`a-sw ${onlyEmpty ? 'on' : ''}`} />Только без себестоимости</button>
         <button type="button" className="a-toggle" onClick={() => setOnlySold(v => !v)}><span className={`a-sw ${onlySold ? 'on' : ''}`} />Только с продажами</button>

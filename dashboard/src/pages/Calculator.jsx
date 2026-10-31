@@ -1,3 +1,4 @@
+import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { getCalcBase, getFinanceCoefs } from '../api';
 import { unitCoefs } from './unitModel';
@@ -388,20 +389,10 @@ export default function Calculator({ cabinet }) {
               {art !== null && (
                 <div className="k-chip">Товар: <b>{arts[art]?.o}</b> {arts[art]?.short} <button type="button" className="a-btn ghost" onClick={() => { setArt(null); setVals({}); }}>× как новый товар категории</button></div>
               )}
-              <label className="k-field wide">
+              <div className="k-field wide">
                 <span className="k-lbl">Категория — средние значения подставятся сами</span>
-                <span className="k-inp">
-                  <select value={cat} onChange={e => { setCat(e.target.value); setArt(null); setVals({}); }}>
-                    <option value="">Все товары кабинета</option>
-                    {tops.map(t => (
-                      <optgroup key={t} label={t}>
-                        <option value={t}>{t} — вся</option>
-                        {leafCats.filter(([c]) => c.startsWith(t + SEP)).map(([c, k]) => <option key={c} value={c}>{c.split(SEP).slice(1).join(' › ')} ({k})</option>)}
-                      </optgroup>
-                    ))}
-                  </select>
-                </span>
-              </label>
+                <CategoryNav tops={tops} value={cat} onChange={path=>{setCat(path);setArt(null);setVals({});}} allLabel="Все товары кабинета" childrenOf={path=>[...new Set(leafCats.filter(([c])=>c.startsWith(path+SEP)).map(([c])=>c.split(SEP)[path.split(SEP).length]).filter(Boolean))]} />
+              </div>
               <label className="k-field wide">
                 <span className="k-lbl">Название расчёта</span>
                 <span className="k-inp"><input value={name} onChange={e => setName(e.target.value)} placeholder="Например: чехлы экокожа, новая модель" /></span>

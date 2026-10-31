@@ -1,3 +1,4 @@
+import CategoryNav from '../components/CategoryNav';
 import { familyOf } from '../lib/cabinets';
 import SetMark from '../components/SetMark';
 import React, { useState, useEffect, useMemo, useCallback, useRef, createContext, useContext } from 'react';
@@ -694,22 +695,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
           : <input className="a-input" style={{ marginLeft: 'auto', minWidth: 240 }} placeholder="Поиск по названию строки" value={q} onChange={e => setQ(e.target.value)} />}
         {q && <span className="a-hint" style={{ margin: 0 }}>найдено {rowsIn.length}</span>}
       </div>
-      <div className="tb-bar">
-        <span className="tb-lbl">Категория</span>
-        <span className="tb-crumbs">
-          <button type="button" className={!catPath ? 'on' : ''} onClick={() => setCatPath('')}>Все</button>
-          {catPath && catPath.split(SEP).map((p, i, arr) => {
-            const path = arr.slice(0, i + 1).join(SEP);
-            return <React.Fragment key={path}><span className="sep">/</span><button type="button" className={path === catPath ? 'on' : ''} onClick={() => setCatPath(path)}>{p}</button></React.Fragment>;
-          })}
-        </span>
-        {kidsOf.length > 0 && (
-          <select className="a-input tb-sel" value="" onChange={e => e.target.value && setCatPath(e.target.value)} title="Выбрать подкатегорию">
-            <option value="">{catPath ? 'подкатегория…' : 'выбрать категорию…'}</option>
-            {kidsOf.map(([k, n]) => <option key={k} value={k}>{k.split(SEP).pop()} · {n}</option>)}
-          </select>
-        )}
-      </div>
+      <CategoryNav tops={[...new Set(arts.filter(a=>!scope||scope.has(a.o)).map(a=>a.parts[0]))]} value={catPath} onChange={setCatPath} childrenOf={path=>[...new Set(arts.filter(a=>(!scope||scope.has(a.o))&&a.cat.startsWith(path+SEP)).map(a=>a.parts[path.split(SEP).length]).filter(Boolean))]} />
       <ColsEditor cols={cfg.cols} setCols={f => setCfg(s => ({ ...s, cols: f(s.cols) }))} edit={edit} setEdit={setEdit} hdrDrag={drag} hdrOver={over} dnd={dnd} afterChips={null} />
 
       {hasSewCol && (

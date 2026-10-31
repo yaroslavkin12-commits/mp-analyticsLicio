@@ -1,3 +1,4 @@
+import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import { getStocksV2, getStocksHistory } from '../api';
@@ -219,7 +220,7 @@ export default function Stocks({ platform: platformProp }) {
   const rows = useMemo(() => {
     const s = search.trim().toLowerCase();
     const filtered = raw.products
-      .filter(p => category === 'all' || p.category === category)
+      .filter(p => category === 'all' || (p.category === category || p.category?.startsWith(category+' / ')))
       .filter(p => gender === 'all' || p.gender === gender)
       .filter(p => artMatch(p.baseArticle, p.subject, s))
       .map(p => {
@@ -299,15 +300,12 @@ export default function Stocks({ platform: platformProp }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div className="mpui" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 17, fontWeight: 700 }}>Остатки</h1>
         <ArtSearch placeholder="Поиск по артикулу или названию..." value={search} onChange={setSearch} className="" style={{ width: 260 }}
           options={raw.products.map(p => ({ o: p.baseArticle, n: p.subject }))} />
-        <select value={category} onChange={e => setCategory(e.target.value)} style={{ padding: '5px 8px', borderRadius: 6 }}>
-          <option value="all">Все категории</option>
-          {raw.categories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+
         <select value={sort} onChange={e => setSort(e.target.value)} style={{ padding: '5px 8px', borderRadius: 6 }}>
           {SORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
@@ -325,6 +323,8 @@ export default function Stocks({ platform: platformProp }) {
           {exporting ? 'Готовим файл...' : '⬇ Скачать в Excel'}
         </button>
       </div>
+      <CategoryNav tops={[...new Set(raw.categories.map(c=>c.split(' / ')[0]))]} value={category==='all'?'':category} onChange={path=>setCategory(path||'all')} childrenOf={path=>[...new Set(raw.categories.filter(c=>c.startsWith(path+' / ')).map(c=>c.split(' / ')[path.split(' / ').length]).filter(Boolean))]} />
+
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 3, background: 'var(--surface2)', borderRadius: 8, padding: 3 }}>

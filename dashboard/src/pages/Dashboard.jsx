@@ -1,3 +1,4 @@
+import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
@@ -290,17 +291,16 @@ export default function Dashboard({ platform }) {
   function scrollTiles(delta) { scrollerRef.current?.scrollBy({ left: delta, behavior: 'smooth' }); }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="mpui" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 17, fontWeight: 700 }}>Дашборд</h1>
-        <select value={category} onChange={e => setCategory(e.target.value)} style={{ fontSize: 12 }}>
-          <option value="all">Все категории</option>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+
         <div style={{ marginLeft: 'auto' }}>
           <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} /><DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         </div>
       </div>
+
+      <CategoryNav tops={categories} value={category==='all'?'':category} onChange={path=>setCategory(path||'all')} childrenOf={()=>[]} />
 
       {/* Блоки KPI */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

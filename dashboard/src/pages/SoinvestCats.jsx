@@ -1,3 +1,4 @@
+import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
@@ -214,10 +215,9 @@ export default function SoinvestCats({ cabinet, active = true }) {
     );
   }
   // При поиске — сразу список найденных артикулов с ценами, без раскрытия категорий.
-  if (search.trim() || group) sortArts(filtered).slice(0, 300).forEach(a => rows.push(artRow(a, 0, true)));
+  if (search.trim() || group || (sel && !filtered.some(a => a.parts.length > depth))) sortArts(filtered).slice(0, 300).forEach(a => rows.push(artRow(a, 0, true)));
   else pushLevel(filtered, depth, sel);
 
-  const crumbs = sel ? sel.split(SEP) : [];
   const TH = (k, t) => <th className={`r ${k ? 'sortable' : ''} ${sort.key === k ? 'sorted' : ''}`} onClick={() => k && setSort(p => p.key === k ? { key: k, dir: -p.dir } : { key: k, dir: -1 })}>{t}{sort.key === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</th>;
 
   return (
@@ -232,29 +232,7 @@ export default function SoinvestCats({ cabinet, active = true }) {
         <button type="button" className="a-btn" onClick={load} disabled={loading} title="Загрузить сохранённые на сервере цены; расширение на этом компьютере не требуется">{loading ? 'Загрузка…' : 'Обновить данные'}</button>
         <ArtSearch value={search} onChange={setSearch} options={items} style={{ marginLeft: 'auto', minWidth: 220 }} />
       </div>
-      <div className="a-bar">
-        <div className="a-tabs">
-          <button type="button" className={`a-tab ${!sel ? 'on' : ''}`} onClick={() => setSel('')}>Все<span className="c">{items.length}</span></button>
-          {tops.map((c, i) => (
-            <button key={c} type="button" className={`a-tab ${sel === c || sel.startsWith(c + SEP) ? 'on' : ''}`} onClick={() => setSel(c)}>
-              <i className="s-dot" style={{ background: CAT_COLORS[i] || OTHER }} />{c}<span className="c">{items.filter(a => a.parts[0] === c).length}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      {sel && (
-        <div className="a-bar s-crumbs">
-          <button type="button" className="s-crumb" onClick={() => setSel('')}>Все</button>
-          {crumbs.map((c, i) => (
-            <React.Fragment key={i}><span className="a-hint">›</span>
-              <button type="button" className={`s-crumb ${i === crumbs.length - 1 ? 'on' : ''}`} onClick={() => setSel(crumbs.slice(0, i + 1).join(SEP))}>{c}</button>
-            </React.Fragment>
-          ))}
-        </div>
-      )}
-
-      <div className="a-bar">
-        <div className="a-tabs">
+      <CategoryNav tops={tops} value={sel} onChange={setSel} childrenOf={path=>[...new Set(items.filter(a=>a.cat.startsWith(path+SEP)).map(a=>a.parts[path.split(SEP).length]).filter(Boolean))]} groups={<>
           <span className="a-hint" style={{ marginRight: 4 }}>Группы:</span>
           <button type="button" className={`a-tab ${!group ? 'on' : ''}`} onClick={() => setGroup('')}>Все товары</button>
           {groupsData.groups.map(g => (
@@ -270,7 +248,8 @@ export default function SoinvestCats({ cabinet, active = true }) {
               <button type="submit" className="a-btn" disabled={!newGroup.trim()}>Создать</button>
             </form>
           )}
-        </div>
+      </>} />
+      <div className="a-bar">
         {group && <AddToGroup catalog={items.map(a => ({ offerId: a.o, productName: a.n }))} exclude={Object.entries(groupsData.members).filter(([, g]) => g === group).map(([o]) => o)}
           onPick={o => { setGroupsData(p => ({ ...p, members: { ...p.members, [o]: group } })); assignAdsGroup(cabinet, o, group).catch(() => {}); }} />}
       </div>

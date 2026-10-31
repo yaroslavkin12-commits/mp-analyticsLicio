@@ -1054,7 +1054,7 @@ const MATRIX_METRICS = [
   { key: 'position', label: 'Ср. позиция', fmt: 'pos', good: 'down', total: 'avg' },
   { key: 'stock', label: 'Остаток', fmt: 'int', good: 'up' },
 ];
-function Matrix({ rows, dates, mode, cabinet, scopeLabel }) {
+function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls }) {
   const [metric, setMetric] = useState('orders');
   const [view,setView]=useState('articles');
   const ref = useRef(null);
@@ -1066,20 +1066,20 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel }) {
   for (const { m } of models) for (const d of dates) { const v = m.byDate[d]?.[metric]; if (v !== null && v !== undefined && Number.isFinite(v)) vals.push(v); }
   const min = vals.length ? Math.min(...vals) : 0, max = vals.length ? Math.max(...vals) : 0;
   const totalOf = m => metric === 'stock' ? m.stockNow : rowTotal(cfg, m.byDate, dates, m.totals);
-  if (!rows.length) return null;
   return (
     <div className="a-card" style={{ padding: 14 }}>
       <div className="a-bar" style={{ marginBottom: 10 }}>
         <b style={{ fontSize: 14 }}>{view==='rnp'?'Сводная рекламная РНП':'Артикулы по дням'}</b>
         {cabinet!=='licio'&&<span className="a-seg"><button type="button" className={view==='articles'?'on':''} onClick={()=>setView('articles')}>Артикулы</button><button type="button" className={view==='rnp'?'on':''} onClick={()=>setView('rnp')}>Сводная РНП</button></span>}
-        <span className="a-hint">{scopeLabel} · {rows.length} арт.</span>
+        <span className="a-hint"><span className={scopeActive?'a-scope':''}>{scopeLabel}</span> · {rows.length} арт.</span>
+        {controls}
         {view==='articles'&&<span className="a-seg">
           {MATRIX_METRICS.filter(m => !(mode === 'ads' && m.key === 'cart')).map(m => (
             <button key={m.key} type="button" className={metric === m.key ? 'on' : ''} onClick={() => setMetric(m.key)}>{m.label}</button>
           ))}
         </span>}
       </div>
-      {view==='rnp'?<DaysTable dates={dates} model={all} mode={mode} />:<React.Fragment>
+      {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable dates={dates} model={all} mode={mode} />:<React.Fragment>
       {metric === 'position' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }} title="Цветовая шкала постоянная и не зависит от периода, фильтров и крайних значений. Между ориентирами цвет меняется плавно.">
         <span>Цвет позиции:</span>
         {[[10, '1–10'], [30, '30'], [60, '60 и выше']].map(([v, label]) => <span key={v}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: positionHeatColor(v) }} />{label}</span>)}
@@ -1211,7 +1211,6 @@ export default function AdsStats2({ cabinet }) {
   const fctl = useTableCtl('ads-list'); // фильтры «от … до …» по колонкам
   const [search, setSearch] = useState('');
   const [onlyActive, setOnlyActive] = useState(false);
-  const [payFilter, setPayFilter] = useState('');
   const [open, setOpen] = useState(() => new Set());
   const [dragKey, setDragKey] = useState(null);
   const [overKey, setOverKey] = useState(null);
@@ -1294,10 +1293,9 @@ export default function AdsStats2({ cabinet }) {
     list = list.filter(a => {
       if (q && (isExactArt(q) ? String(a.offerId || '').toLowerCase() !== q : !(String(a.offerId || '').toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)
         || a.campaigns.some(c => (c.title || '').toLowerCase().includes(q))))) return false;
-      if (!onlyActive && !payFilter) return true;
+      if (!onlyActive) return true;
       if (a.campaigns.length === 0) return tab !== 'all' && !isCat;
-      return a.campaigns.some(c => (!onlyActive || c.state === 'CAMPAIGN_STATE_RUNNING')
-        && (!payFilter || (payFilter === 'cpm' ? c.paymentType === 'CPM' : payFilter.startsWith('s:') ? stratOf(c).k === payFilter.slice(2) : cabinet === 'defly_wb' ? c.paymentType === payFilter.toUpperCase() : (payFilter === 'cpo') === isCpoCampaign(c))));
+      return a.campaigns.some(c => c.state === 'CAMPAIGN_STATE_RUNNING');
     });
     const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
     const valK = (a, k) => {
@@ -1341,7 +1339,7 @@ export default function AdsStats2({ cabinet }) {
       });
     }
     return { rows: list, hiddenByFilter: before - list.length };
-  }, [articlesRaw, tab, members, search, onlyActive, payFilter, sort, manualOrder, mode, fctl.filters, unitK, taxPct, transit]);
+  }, [articlesRaw, tab, members, search, onlyActive, sort, manualOrder, mode, fctl.filters, unitK, taxPct, transit]);
 
   const total = useMemo(() => buildModel(rows, dates, mode, !!data?._wb), [rows, dates, mode, unitK, taxPct, data?._wb]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1596,9 +1594,55 @@ export default function AdsStats2({ cabinet }) {
           <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
           <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
         </span>
+        <div className="a-top-actions">
         <Freshness status={status} />
+        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 260, maxWidth: '100%' }} />
         <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>
+        </div>
       </div></div>
+
+      <CategoryNav allActive={tab==='all'} tops={catKids('').map(([c])=>c)} value={isCat?catPath:''} onChange={path=>selectTab(path?'cat:'+path:'all')} childrenOf={path=>catKids(path).map(([c])=>c)} groups={<>
+          {groups.length > 0 && <span className="a-hint" style={{ margin: '0 2px 0 8px' }}>группы:</span>}
+          {groups.map(g => {
+            const cnt = Object.values(members).filter(x => x === g.id).length;
+            return (
+              <span key={g.id} role="button" tabIndex={0} aria-label={g.name}
+                className={`a-tab ${tab === g.id ? 'on' : ''} ${overTab === g.id && dragTab && dragTab !== g.id ? 'drop' : ''}`}
+                onClick={() => selectTab(g.id)} onKeyDown={e => { if (e.key === 'Enter') selectTab(g.id); }}
+                draggable onDragStart={() => setDragTab(g.id)} onDragOver={e => { e.preventDefault(); setOverTab(g.id); }}
+                onDrop={e => { e.preventDefault(); reorderTabs(dragTab, g.id); setDragTab(null); setOverTab(null); }}
+                onDragEnd={() => { setDragTab(null); setOverTab(null); }}
+                title={g.name}>
+                <i className="s-dot" style={{ background: groupColors[g.id] }} />
+                {editGroup && editGroup.id === g.id ? (
+                  <input autoFocus className="a-input" value={editGroup.name} style={{ padding: '1px 6px', fontSize: 12.5, width: Math.max(90, editGroup.name.length * 8) }}
+                    onClick={e => e.stopPropagation()} onChange={e => setEditGroup({ id: g.id, name: e.target.value })}
+                    onBlur={() => saveGroupName()} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') saveGroupName(); if (e.key === 'Escape') setEditGroup(null); }} />
+                ) : (
+                  <span onDoubleClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>{g.name.length > 28 ? g.name.slice(0, 27) + '…' : g.name}</span>
+                )}
+                <span className="c">{cnt}</span>
+                <button type="button" className="x" title="Переименовать группу" onClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>✎</button>
+                <button type="button" className="x" title="Удалить группу" onClick={e => { e.stopPropagation(); removeGroup(g.id); }}>×</button>
+              </span>
+            );
+          })}
+          {newGroup === null ? (
+            <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
+          ) : (
+            <form onSubmit={createGroup} style={{ display: 'flex', gap: 6 }}>
+              <input className="a-input" autoFocus value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Название, напр. Haval M6"
+                onKeyDown={e => { if (e.key === 'Escape') setNewGroup(null); }} style={{ padding: '5px 10px' }} />
+              <button type="submit" className="a-btn" disabled={!newGroup.trim()}>Создать</button>
+            </form>
+          )}
+          {ungroupedClusters.length > 0 && (
+            <select className="a-sel" value="" onChange={e => createFromCluster(e.target.value)} title="Создать группу из готовой склейки одним действием">
+              <option value="">+ по склейке…</option>
+              {ungroupedClusters.map(c => <option key={c.primary} value={c.primary}>{c.primary} ({c.members.length} арт.)</option>)}
+            </select>
+          )}
+      </>} />
 
       <div className={`a-kpis ${loading ? 'a-loading' : ''}`}>
         <div className="a-kpi">
@@ -1644,62 +1688,10 @@ export default function AdsStats2({ cabinet }) {
           <AreaSpark values={drrSeries} color="var(--a-spend)" />
         </div>
       </div>
-      <div className="a-hint" style={{ margin: '6px 2px 0' }}>{cabinet === 'defly_wb' ? 'WB: недоступные данные показаны «—». CPM учтён отдельно от оплаты за клик. ДРР — расход / сумма заказов.' : <>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</>}</div>
 
-      <CategoryNav allActive={tab==='all'} tops={catKids('').map(([c])=>c)} value={isCat?catPath:''} onChange={path=>selectTab(path?'cat:'+path:'all')} childrenOf={path=>catKids(path).map(([c])=>c)} groups={<>
-          {groups.length > 0 && <span className="a-hint" style={{ margin: '0 2px 0 8px' }}>группы:</span>}
-          {groups.map(g => {
-            const cnt = Object.values(members).filter(x => x === g.id).length;
-            return (
-              <span key={g.id} role="button" tabIndex={0} aria-label={g.name}
-                className={`a-tab ${tab === g.id ? 'on' : ''} ${overTab === g.id && dragTab && dragTab !== g.id ? 'drop' : ''}`}
-                onClick={() => selectTab(g.id)} onKeyDown={e => { if (e.key === 'Enter') selectTab(g.id); }}
-                draggable onDragStart={() => setDragTab(g.id)} onDragOver={e => { e.preventDefault(); setOverTab(g.id); }}
-                onDrop={e => { e.preventDefault(); reorderTabs(dragTab, g.id); setDragTab(null); setOverTab(null); }}
-                onDragEnd={() => { setDragTab(null); setOverTab(null); }}
-                title={g.name}>
-                <i className="s-dot" style={{ background: groupColors[g.id] }} />
-                {editGroup && editGroup.id === g.id ? (
-                  <input autoFocus className="a-input" value={editGroup.name} style={{ padding: '1px 6px', fontSize: 12.5, width: Math.max(90, editGroup.name.length * 8) }}
-                    onClick={e => e.stopPropagation()} onChange={e => setEditGroup({ id: g.id, name: e.target.value })}
-                    onBlur={() => saveGroupName()} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') saveGroupName(); if (e.key === 'Escape') setEditGroup(null); }} />
-                ) : (
-                  <span onDoubleClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>{g.name.length > 28 ? g.name.slice(0, 27) + '…' : g.name}</span>
-                )}
-                <span className="c">{cnt}</span>
-                <button type="button" className="x" title="Переименовать группу" onClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>✎</button>
-                <button type="button" className="x" title="Удалить группу" onClick={e => { e.stopPropagation(); removeGroup(g.id); }}>×</button>
-              </span>
-            );
-          })}
-          {newGroup === null ? (
-            <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
-          ) : (
-            <form onSubmit={createGroup} style={{ display: 'flex', gap: 6 }}>
-              <input className="a-input" autoFocus value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Название, напр. Haval M6"
-                onKeyDown={e => { if (e.key === 'Escape') setNewGroup(null); }} style={{ padding: '5px 10px' }} />
-              <button type="submit" className="a-btn" disabled={!newGroup.trim()}>Создать</button>
-            </form>
-          )}
-          {ungroupedClusters.length > 0 && (
-            <select className="a-sel" value="" onChange={e => createFromCluster(e.target.value)} title="Создать группу из готовой склейки одним действием">
-              <option value="">+ по склейке…</option>
-              {ungroupedClusters.map(c => <option key={c.primary} value={c.primary}>{c.primary} ({c.members.length} арт.)</option>)}
-            </select>
-          )}
-      </>} />
 
-      <div className="a-bar">
-        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ minWidth: 260 }} />
+      <Matrix rows={rows} dates={dates} mode={mode} cabinet={cabinet} scopeLabel={isGroup?activeGroup.name:isCat?catPath:'Все рекламируемые товары'} scopeActive={isGroup||isCat} controls={<>      <div className="a-bar a-table-controls">
         <button type="button" className="a-toggle" onClick={() => setOnlyActive(v => !v)}><span className={`a-sw ${onlyActive ? 'on' : ''}`} />Только с активными РК</button>
-        <select className="a-sel" value={payFilter} onChange={e => setPayFilter(e.target.value)}>
-          <option value="">Все типы оплаты</option>
-          <option value="cpc">Оплата за клик</option>
-          <option value="cpo">Оплата за заказ</option>{cabinet === 'defly_wb' && <option value="cpm">Оплата за показы</option>}
-          <optgroup label="Стратегия оплаты за клик">
-            {(cabinet === 'defly_wb' ? [['WB_UNIFIED',{t:'Единая ставка'}],['WB_MANUAL',{t:'Ручная ставка'}]] : Object.entries(STRATEGY)).map(([k,v]) => <option key={k} value={`s:${k}`}>{v.t}</option>)}
-          </optgroup>
-        </select>
         <button type="button" className="a-toggle" onClick={() => setShowAssoc(v => !v)} title="Добавить заказы по остальным артикулам склейки: отдельно и итогом">
           <span className={`a-sw ${showAssoc ? 'on' : ''}`} />Показать склейку
         </button>
@@ -1708,12 +1700,10 @@ export default function AdsStats2({ cabinet }) {
           <button type="button" className="a-btn ghost" onClick={() => setSort({ key: 'manual', dir: 1 })}>↺ Свой порядок</button>
         )}
         {isGroup && <AddToGroup catalog={catalog} exclude={memberIds} onPick={id => assignGroup(id, tab)} />}
-      </div>
-
-      <Matrix rows={rows} dates={dates} mode={mode} cabinet={cabinet} scopeLabel={isGroup?activeGroup.name:isCat?catPath:'Все рекламируемые товары'} />
+      </div></>} />
 
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctlAds} /></div>
+        <div className="a-bar" style={{ marginBottom: 0 }}><b>Реклама по артикулам</b>{(isGroup||isCat)&&<span className="a-scope">{isGroup?activeGroup.name:catPath}</span>}<span style={{ marginLeft: 'auto' }}><ResetCtl ctl={ctlAds} /></span></div>
         <div className="a-scroll">
           <table className="a-t a-main">
             <thead>
@@ -1734,7 +1724,7 @@ export default function AdsStats2({ cabinet }) {
             {rows.length > 0 && (
               <tfoot>
                 <tr className={`row ${open.has(aggKey) ? 'open' : ''}`} onClick={() => toggleOpen(aggKey)} title="Нажмите, чтобы открыть общую аналитику по всем строкам">
-                  <td><div className="a-art"><span className="a-chev">▶</span>Итого · {rows.length} арт.{isGroup ? ` · ${activeGroup.name}` : ''}</div></td>
+                  <td><div className="a-art"><span className="a-chev">▶</span>Итого · {rows.length} арт.{(isGroup||isCat)&&<span className="a-scope"> · {isGroup?activeGroup.name:catPath}</span>}</div></td>
                   <td />
                   <td className="n">{fmtInt(T.revenue)}{showAssoc && assocLine(assocForRows, 'revenue', T.revenue)}</td>
                   <td className="n">{fmtInt(T.orders)}{showAssoc && assocLine(assocForRows, 'orders', T.orders)}</td>
@@ -1759,6 +1749,8 @@ export default function AdsStats2({ cabinet }) {
           </table>
         </div>
       </div>
+
+      <div className="a-hint" style={{ margin: '6px 2px 0' }}>{cabinet === 'defly_wb' ? 'WB: недоступные данные показаны «—». CPM учтён отдельно от оплаты за клик. ДРР — расход / сумма заказов.' : <>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</>}</div>
 
       <React.Suspense fallback={null}><AdSpendCats data={data} cabinet={cabinet} tip={tip} /></React.Suspense>
 
