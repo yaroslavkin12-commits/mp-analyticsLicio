@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const model = import('../../dashboard/src/lib/deflectors2d.mjs');
-const settings = { multiple: 10, periodDays: 7, salesDays: 30, total: 140, fill: false };
+const settings = { leadDays: 0, stockSource: 'manual', multiple: 10, periodDays: 7, salesDays: 30, total: 140, fill: false };
 const row = (offer, sales, stock, manual = null) => ({ offer, name: offer, sales, stock, transit: 0, manual, enabled: true, note: '' });
 test('Период подачи задаёт запас до следующего подсорта; партии идут в дефицит, сумма не превышает лимит', async () => {
   const { calculate2d } = await model;
@@ -51,14 +51,14 @@ async function call(path, body) {
 test('Черновик и журнал отдельны от чехлов; версия, повтор запроса и неизменность снимка', async () => {
   const draft = { settings, rows: [row('A', 300, 0), row('B', 300, 0)] };
   const save = await call('/draft', { revision: 0, draft }); assert.equal(save.status, 200); assert.equal(save.data.revision, 1);
-  const request = { revision: 1, draft, offers: ['A'], requestId: 'test-request-1', date: '2026-10-29', columns: ['offer', 'quantity'], note: 'Подсорт' };
-  const fix = await call('/journal', request); assert.equal(fix.status, 200); assert.equal(fix.data.journal.length, 1); assert.equal(fix.data.journal[0].total, 70);
+  const request = { revision: 1, draft, offers: ['A'], requestId: 'test-request-1', date: '2026-10-29', expectedDate: '2026-11-05', inventoryVersion: save.data.inventory.version, columns: ['offer', 'quantity'], note: 'Подсорт' };
+  const fix = await call('/journal', request); assert.equal(fix.status, 200); assert.equal(fix.data.journal.length, 1); assert.equal(fix.data.journal[0].total, 70); assert.equal(fix.data.draft.rows[0].manual, 0); assert.equal(fix.data.draft.rows[1].manual, null);
   const changed = structuredClone(draft); changed.rows[0].manual = 10;
   const edit = await call('/draft', { revision: 2, draft: changed }); assert.equal(edit.status, 200); assert.equal(edit.data.journal[0].items[0].quantity, 70);
   const retry = await call('/journal', request); assert.equal(retry.status, 200); assert.equal(retry.data.revision, 3); assert.equal(retry.data.journal.length, 1);
   assert.equal((await call('/draft', { revision: 1, draft })).status, 409);
   assert.equal((await call('/journal', { ...request, note: 'Другое' })).status, 409);
-  assert.equal((await call('/journal', { ...request, requestId: 'test-request-2', date: '2026-02-30' })).status, 400);
+  assert.equal((await call('/journal', { ...request, requestId: 'test-request-2', date: '2026-02-30', inventoryVersion: edit.data.inventory.version })).status, 400);
   assert.equal((await call('/draft', { cabinet: 'licio', revision: 3, draft })).status, 400);
   assert.equal(store.get('prod:defly:master'), '{"unchanged":true}'); assert.equal(store.get('prod:defly:orders'), '[{"id":"old"}]');
 });

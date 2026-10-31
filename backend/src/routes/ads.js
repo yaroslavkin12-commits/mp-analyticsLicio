@@ -269,7 +269,9 @@ router.get('/transit', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';
     const rows = await query('SELECT value FROM app_settings WHERE key=$1', [`ads_transit:${cabinet}`]);
-    res.json({ success: true, data: rows[0] ? JSON.parse(rows[0].value) : {} });
+    const manual = rows[0] ? JSON.parse(rows[0].value) : {};
+    const data = cabinet === 'licio' ? manual : await require('../lib/deflectorsTransit').adsTransit(cabinet, manual);
+    res.json({ success: true, data });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 router.post('/transit', async (req, res) => {

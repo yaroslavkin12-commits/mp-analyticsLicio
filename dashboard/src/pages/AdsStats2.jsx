@@ -122,6 +122,10 @@ function TransitCell({ value, onSave }) {
   const q = trQ(value), d = trD(value);
   const late = d && d < dayjs().format('YYYY-MM-DD');
   const doneQ = () => { const n = Math.max(0, Math.round(Number(String(ed).replace(/\s/g, '').replace(',', '.')) || 0)); setEd(null); if (n !== q) onSave({ qty: n }); };
+  if (value?.managed) return <div className="a-trc" title={`По заявкам производства: ${value.productionQty} шт.; вручную: ${value.manualQty} шт.`}>
+    <span className="a-transit">{fmtInt(q)}</span><span className={`a-trd ${late ? 'late' : ''}`}>{d ? dayjs(d).format('DD.MM') : 'по журналу'}</span>
+    <details><summary className="muted" style={{fontSize:10}}>ручная добавка{value.manualQty ? ` ${value.manualQty}` : ''}</summary><TransitCell value={{ q:value.manualQty, d:value.manualDate }} onSave={onSave} /></details>
+  </div>;
   return (
     <div className="a-trc">
       {ed === null
@@ -1230,9 +1234,16 @@ export default function AdsStats2({ cabinet }) {
   useEffect(() => {
     getAdsGroups(cabinet).then(r => setGroupsData(r.data.data || { groups: [], members: {} })).catch(() => {});
     getAdsOrder(cabinet).then(r => setManualOrder(r.data.data || [])).catch(() => {});
-    getAdsTransit(cabinet).then(r => setTransit(r.data.data || {})).catch(() => setTransit({}));
     getAdsCatalog(cabinet).then(r => setCatalog(r.data.data || [])).catch(() => {});
     getSiblingClusters(cabinet).then(r => setClusters(r.data.data || [])).catch(() => {});
+  }, [cabinet]);
+
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => getAdsTransit(cabinet).then(r => { if (alive) setTransit(r.data.data || {}); }).catch(console.error);
+    refresh(); const timer = setInterval(refresh, 60000);
+    window.addEventListener('mp-production-updated', refresh); window.addEventListener('focus', refresh);
+    return () => { alive = false; clearInterval(timer); window.removeEventListener('mp-production-updated', refresh); window.removeEventListener('focus', refresh); };
   }, [cabinet]);
 
   const dates = data?.dates || [];
@@ -1343,15 +1354,9 @@ export default function AdsStats2({ cabinet }) {
     } finally { setCollecting(false); }
   }
   function saveTransit(offerId, patch) {
-    setTransit(p => {
-      const n = { ...p }, cur = typeof n[offerId] === 'number' ? { q: n[offerId] } : { ...(n[offerId] || {}) };
-      if ('qty' in patch) { if (patch.qty > 0) cur.q = patch.qty; else delete cur.q; }
-      if ('date' in patch) { if (patch.date) cur.d = patch.date; else delete cur.d; }
-      if (cur.q || cur.d) n[offerId] = cur; else delete n[offerId];
-      return n;
-    });
-    saveAdsTransit(cabinet, offerId, patch).catch(console.error);
+    saveAdsTransit(cabinet, offerId, patch).then(() => getAdsTransit(cabinet)).then(r => setTransit(r.data.data || {})).catch(console.error);
   }
+
   function toggleOpen(key) {
     setOpen(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }

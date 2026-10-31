@@ -68,6 +68,8 @@ function SeatProduction({ cabinet, nav }) {
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState('');
+  const [view, setView] = useState('production'), [selectedOffer, setSelectedOffer] = useState('');
+  const [expandedOrders, setExpandedOrders] = useState(new Set());
   const load = useCallback(() => getProduction(cabinet).then(r => setD(r.data.data)).catch(e => setErr(e.response?.data?.error || e.message)), [cabinet]);
   useEffect(() => { load(); }, [load]);
 
@@ -230,7 +232,7 @@ function SeatProduction({ cabinet, nav }) {
   }
   async function downloadPast(o) {
     const XLSX = await import('xlsx');
-    const aoa = [['Артикул', 'Наименование', 'Кол-во, шт', 'Заданий'], ...o.items.map(([a, q, t]) => [a, d.master?.[a]?.n || '', q, t])];
+    const aoa = [['Артикул', 'Наименование', 'Кол-во, шт', 'Заданий'], ...o.items.filter(r => !selectedOffer || r[0] === selectedOffer).map(([a, q, t]) => [a, d.master?.[a]?.n || '', q, t])];
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), o.shop.slice(0, 30));
     XLSX.writeFile(wb, `Заказ ${o.shop} ${dayjs(o.date).format('DD.MM.YYYY')}.xlsx`);
   }
@@ -270,12 +272,14 @@ function SeatProduction({ cabinet, nav }) {
         <div className="a-top">
           <h1>Производство</h1>
           {nav}
+          <span className="a-seg"><button className={view === 'production' ? 'on' : ''} onClick={() => setView('production')}>Производство</button><button className={view === 'journal' ? 'on' : ''} onClick={() => setView('journal')}>Журнал</button></span>
           <span className="a-hint" style={{ margin: 0 }}>подача: пн — Гурьевская, чт — Ельцовка и Искитим</span>
         </div>
       </div>
 
       {msg && <div className={`c-msg ${msg.bad ? 'bad' : ''}`} style={{ margin: '10px 0' }}>{msg.text}</div>}
 
+      <div hidden={view !== 'production'}>
       {/* Данные из 1С */}
       <div className="a-card pr-card">
         <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 14 }}>Данные из 1С</b>
@@ -412,7 +416,7 @@ function SeatProduction({ cabinet, nav }) {
                     <td><div className="a-art">
                       <button type="button" className={`pr-star ${r.focus ? 'on' : ''}`} onClick={() => editMaster(r.o, { focus: !r.focus })}
                         title={r.focus ? `Под рекламу: прогноз продаж × ${r.focusK || 1.5}${r.focusMin ? `, не меньше ${r.focusMin} в день` : ''}, приоритет +800. Нажмите, чтобы снять` : 'Отметить «под рекламу»: ждём рост продаж — подсорт заранее и выше в очереди'}>★</button>
-                      <div style={{ minWidth: 0 }}><div className="id">{r.o}</div><div className="model" title={r.n}>{r.car || r.n}</div>
+                      <div style={{ minWidth: 0 }}><button type="button" className="a-btn ghost" aria-pressed={selectedOffer === r.o} onClick={() => setSelectedOffer(v => v === r.o ? '' : r.o)}>{r.o}</button><div className="model" title={r.n}>{r.car || r.n}</div>
                         {r.focus && edit && <div className="pr-edrow">
                           <label title="Во сколько раз ждём рост продаж">×<input className="a-input pr-num" type="number" step="0.1" defaultValue={r.focusK || 1.5} onBlur={e => editMaster(r.o, { focusK: Number(e.target.value) || 1.5 })} /></label>
                           <label title="Не меньше столько продаж в день (для новинок без истории)">мин/день<input className="a-input pr-num" type="number" step="0.1" defaultValue={r.focusMin ?? ''} onBlur={e => editMaster(r.o, { focusMin: e.target.value === '' ? null : Number(e.target.value) })} /></label>
@@ -464,7 +468,10 @@ function SeatProduction({ cabinet, nav }) {
         {shown.length > 60 && <button type="button" className="s-fold" onClick={() => setFull(f => !f)}>{full ? 'Свернуть ▲' : `Показать все ${shown.length} ▼`}</button>}
       </div>
 
-      <ProdJournal cabinet={cabinet} journal={journal} master={d.master} setD={setD} setMsg={setMsg} />
+      {selectedOffer && <div className="a-bar"><b>{selectedOffer}</b><button className="a-btn ghost" onClick={() => setView('journal')}>Журнал артикула</button><button className="a-btn ghost" onClick={() => setSelectedOffer('')}>Снять выбор</button></div>}
+      </div><div hidden={view !== 'journal'}>
+      {selectedOffer && <div className="a-bar"><b>{selectedOffer}</b><button className="a-btn ghost" onClick={() => setSelectedOffer('')}>Все артикулы</button></div>}
+      <ProdJournal cabinet={cabinet} journal={selectedOffer ? journal.filter(r => r.o === selectedOffer) : journal} master={d.master} setD={setD} setMsg={setMsg} />
 
       {/* История */}
       {(d.orders || []).length > 0 && (
@@ -473,20 +480,21 @@ function SeatProduction({ cabinet, nav }) {
           <table className="a-t s-slice">
             <thead><tr><th>Дата</th><th>Цех</th><th className="r">Заданий</th><th className="r">Штук</th><th className="r">Артикулов</th><th /></tr></thead>
             <tbody>
-              {d.orders.slice(0, 20).map(o => (
-                <tr key={o.id}>
-                  <td>{dayjs(o.date).format('DD.MM.YYYY')}, {WD[dayjs(o.date).day()]}</td><td>{o.shop}</td>
-                  <td className="n r">{o.tasks}</td><td className="n r">{fmtInt(o.pcs)}</td><td className="n r">{o.items.length}</td>
+              {d.orders.filter(o => !selectedOffer || o.items.some(r => r[0] === selectedOffer)).map(o => ({ ...o, items: o.items.filter(r => !selectedOffer || r[0] === selectedOffer) })).map(o => (
+                <React.Fragment key={o.id}><tr>
+                  <td><button className="a-btn ghost" aria-expanded={expandedOrders.has(o.id)} onClick={() => setExpandedOrders(v => { const n = new Set(v); n.has(o.id) ? n.delete(o.id) : n.add(o.id); return n; })}>{expandedOrders.has(o.id) ? '▾' : '▸'} {dayjs(o.date).format('DD.MM.YYYY')}, {WD[dayjs(o.date).day()]}</button></td><td>{o.shop}</td>
+                  <td className="n r">{selectedOffer ? fmtInt(o.items.reduce((n,r) => n + Number(r[2] || 0), 0)) : o.tasks}</td><td className="n r">{fmtInt(selectedOffer ? o.items.reduce((n,r) => n + r[1], 0) : o.pcs)}</td><td className="n r">{o.items.length}</td>
                   <td className="r">
                     <button type="button" className="a-btn ghost" onClick={() => downloadPast(o)}>⬇ Excel</button>{' '}
                     <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Удалить заказ из истории?')) removeProductionOrder(cabinet, o.id).then(r => setD(p => ({ ...p, orders: r.data.data }))); }}>×</button>
                   </td>
-                </tr>
+                </tr>{expandedOrders.has(o.id) && <tr><td colSpan={6}><table className="a-t no-sh"><thead><tr><th>Артикул</th><th>Название</th><th>Штук</th><th>Заданий</th></tr></thead><tbody>{o.items.filter(r => !selectedOffer || r[0] === selectedOffer).map(([art,qty,tasks]) => <tr key={art}><td>{art}</td><td>{d.master?.[art]?.n || ''}</td><td>{fmtInt(qty)}</td><td>{tasks}</td></tr>)}</tbody></table></td></tr>}</React.Fragment>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      </div>
     </div>
   );
 }

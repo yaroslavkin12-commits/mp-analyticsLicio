@@ -1,4 +1,4 @@
-export const DEFAULT_2D = { multiple: 10, periodDays: 7, salesDays: 30, total: 140, fill: false };
+export const DEFAULT_2D = { multiple: 10, periodDays: 7, leadDays: 7, salesDays: 30, total: 140, fill: false };
 const fail = message => { throw new Error(message); };
 function integer(v, name, min, max, nullable = false) {
   if (nullable && (v === null || v === undefined || v === '')) return null;
@@ -7,9 +7,11 @@ function integer(v, name, min, max, nullable = false) {
 }
 export function validate2d(input) {
   const s = input?.settings || {};
+  if (s.transitSource !== undefined && !['live', 'manual'].includes(s.transitSource)) fail('Неизвестный источник количества в пути');
   if (s.source !== undefined && !['ozon', 'manual'].includes(s.source)) fail('Неизвестный источник продаж');
   const settings = {
     multiple: integer(s.multiple, 'Кратность', 1, 10000), periodDays: integer(s.periodDays, 'Период подачи', 1, 365),
+    leadDays: integer(s.leadDays ?? 7, 'Срок поступления', 0, 365), receivingCabinet: String(s.receivingCabinet || 'defly'), stockSource: s.stockSource === 'live' ? 'live' : 'manual', transitSource: s.transitSource || (s.stockSource ? 'live' : 'manual'),
     salesDays: integer(s.salesDays, 'Период продаж', 1, 366), total: integer(s.total, 'Общее количество', 0, 1000000), fill: s.fill === true, source: s.source === 'ozon' ? 'ozon' : 'manual',
   };
   if (!Array.isArray(input.rows) || input.rows.length > 5000) fail('Допустимо не более 5000 артикулов');
@@ -20,7 +22,7 @@ export function validate2d(input) {
     seen.add(offer.toLowerCase());
     return { offer, name: String(r.name || '').slice(0, 500), sales: integer(r.sales, 'Продажи', 0, 100000000, true),
       stock: integer(r.stock, 'Остаток', 0, 100000000, true), transit: integer(r.transit, 'В пути', 0, 100000000, true),
-      manual: integer(r.manual, 'Подсорт вручную', 0, 1000000, true), enabled: r.enabled !== false, note: String(r.note || '').slice(0, 500) };
+      manual: integer(r.manual, 'Подсорт вручную', 0, 1000000, true), enabled: r.enabled !== false, favorite: r.favorite === true, note: String(r.note || '').slice(0, 500) };
   });
   let annual = null;
   if (input.annual) {
@@ -58,19 +60,25 @@ function distribute(rows, settings, manual) {
   }
   return result;
 }
-export function calculate2d(input, demand = null) {
+export function calculate2d(input, demand = null, inventory = null) {
   const draft = validate2d(input), { settings } = draft;
-  const rows = draft.rows.map(r => {
+  const rows = draft.rows.map(original => {
+    const live = inventory?.byOffer?.[original.offer.toLowerCase()];
+    const r = { ...original };
+    if (inventory) {
+      r.transit = settings.transitSource === 'manual' ? (original.transit === null ? null : original.transit + (live?.productionTransit ?? 0)) : live?.transit ?? 0;
+      if (settings.stockSource === 'live') r.stock = live?.stock ?? null;
+    }
     const ozon = demand?.articles?.find(a => a.offer.toLowerCase() === r.offer.toLowerCase());
     const rate = settings.source === 'ozon' ? (ozon?.rate ?? null) : r.sales === null ? null : r.sales / settings.salesDays;
     const history = Object.fromEntries(PERIODS_2D.map(d => ['q' + d, ozon?.periods?.['d' + d]?.quantity ?? null]));
     const annual1c = draft.annual ? (Object.hasOwn(draft.annual.items, r.offer.toLowerCase()) ? draft.annual.items[r.offer.toLowerCase()] : null) : null;
     const available = r.stock === null || r.transit === null ? null : r.stock + r.transit;
-    return { ...r, ...history, annual1c, annualRate1c: annual1c === null ? null : annual1c / draft.annual.days, trend7: ozon?.trend7 ?? null, trend30: ozon?.trend30 ?? null, lastYear30: ozon?.periods?.lastYear30?.quantity ?? null, ratePeriods: ozon?.ratePeriods || [], rateWindow: settings.source === 'ozon' ? (ozon?.ratePeriods?.join(' / ') || 'нет полных периодов') : `ручные ${settings.salesDays} дней`, rate, available, need: rate === null || available === null ? null : Math.max(0, rate * settings.periodDays - available), cover: rate > 0 && available !== null ? available / rate : null };
+    return { ...r, ...history, stockDate: live?.date || null, staleStock: settings.stockSource === 'live' && !!live?.stale, legacyTransit: original.transit, annual1c, annualRate1c: annual1c === null ? null : annual1c / draft.annual.days, trend7: ozon?.trend7 ?? null, trend14: ozon?.trend14 ?? null, trend30: ozon?.trend30 ?? null, lastYear30: ozon?.periods?.lastYear30?.quantity ?? null, ratePeriods: ozon?.ratePeriods || [], rateWindow: settings.source === 'ozon' ? (ozon?.ratePeriods?.join(' / ') || 'нет полных периодов') : `ручные ${settings.salesDays} дней`, rate, available, need: rate === null || available === null ? null : Math.max(0, rate * (settings.periodDays + settings.leadDays) - available), cover: rate > 0 && available !== null ? available / rate : null };
   });
   const recommendation = distribute(rows, settings, false), final = distribute(rows, settings, true);
   const issues = rows.filter(r => r.enabled && r.manual !== null && r.manual % settings.multiple !== 0).map(r => `${r.offer}: ручное количество должно быть кратно ${settings.multiple}`);
-  const result = rows.map(r => ({ ...r, recommended: recommendation.get(r.offer), quantity: final.get(r.offer), after: r.rate > 0 && r.available !== null ? (r.available + final.get(r.offer)) / r.rate : null }));
+  const result = rows.map(r => ({ ...r, priority: r.cover === null ? 'Нет данных' : r.cover < settings.leadDays ? 'Срочно' : r.cover < settings.leadDays + settings.periodDays ? 'Пополнить' : 'Хватает', recommended: recommendation.get(r.offer), quantity: final.get(r.offer), after: r.rate > 0 && r.available !== null ? (r.available + final.get(r.offer)) / r.rate : null }));
   const total = result.reduce((sum, r) => sum + r.quantity, 0);
   return { settings, rows: result, total, left: Math.max(0, settings.total - total), over: Math.max(0, total - settings.total), issues };
 }
@@ -85,6 +93,7 @@ export function buildOzonDemand({ to, articles, shops, sales, coverage }) {
   const present = new Set(coverage.map(r => `${r.cabinet}|${r.date}`));
   const dates = new Map(PERIODS_2D.map(d => ['d' + d, span(to, d)]));
   dates.set('prev7', span(iso(Date.parse(to) - 7 * 86400000), 7));
+  dates.set('prev14', span(iso(Date.parse(to) - 14 * 86400000), 14));
   dates.set('prev30', span(iso(Date.parse(to) - 30 * 86400000), 30));
   // День в день прошлого календарного года, включая переход через високосный год.
   const last = new Date(to + 'T00:00:00Z'); const month = last.getUTCMonth(); last.setUTCFullYear(last.getUTCFullYear() - 1); if (last.getUTCMonth() !== month) last.setUTCDate(0);
@@ -101,7 +110,7 @@ export function buildOzonDemand({ to, articles, shops, sales, coverage }) {
     const weighted = [[7, 0.5], [14, 0.3], [30, 0.2]].filter(([days]) => periods['d' + days].quantity !== null);
     const weight = weighted.reduce((s, [, w]) => s + w, 0);
     const rate = weight ? weighted.reduce((s, [days, w]) => s + periods['d' + days].quantity / days * w, 0) / weight : null;
-    return { ...a, periods, rate, ratePeriods: weighted.map(([days]) => days), trend7: trend(periods.d7.quantity, periods.prev7.quantity), trend30: trend(periods.d30.quantity, periods.prev30.quantity) };
+    return { ...a, periods, rate, ratePeriods: weighted.map(([days]) => days), trend7: trend(periods.d7.quantity, periods.prev7.quantity), trend14: trend(periods.d14.quantity, periods.prev14.quantity), trend30: trend(periods.d30.quantity, periods.prev30.quantity) };
   }) };
 }
 
@@ -117,4 +126,10 @@ export function parseAnnual2d(rows, offerCol, qtyCol, startRow = 0) {
     if (items[key] > 100000000) fail('Слишком большое количество по артикулу ' + offer);
   }
   return { items, rejected };
+}
+
+// Поданные строки остаются с явным нулём до новой ручной правки или сброса.
+export function afterSubmission2d(draft, offers) {
+  const submitted = new Set(offers);
+  return { ...draft, rows: draft.rows.map(r => submitted.has(r.offer) ? { ...r, manual: 0 } : r) };
 }

@@ -8,6 +8,7 @@ const store = new Map(); let units = 2; const calls = [];
 const query = async (sql, args = []) => {
   calls.push([sql, args]);
   if (sql.includes('SELECT value')) return store.has(args[0]) ? [{ value: store.get(args[0]) }] : [];
+  if (sql.includes('FROM ad_product_stocks') || sql.includes('to_regclass')) return [];
   if (sql.includes('FROM product_category_override')) return [];
   if (sql.includes('FROM ad_product_catalog')) return ids.map((cabinet, i) => ({ cabinet, offer_id: 'A', sku: String(i + 1), product_name: 'Дефлекторы окон 2D Test' }));
   if (sql.includes('FROM product_analytics_daily')) {
@@ -37,8 +38,8 @@ test('Адаптер Ozon: все пять кабинетов, SKU, вычет �
   const first = await call('/demand'); assert.equal(first.status, 200); assert.equal(first.data.shops.length, 5);
   assert.equal(first.data.articles[0].periods.d7.quantity, 63); assert.equal(first.data.articles[0].rate, 9);
   assert.equal((await call('/demand')).data.version, first.data.version); assert.equal(store.size, 0);
-  const draft = { settings: { multiple: 10, periodDays: 7, salesDays: 30, total: 140, source: 'ozon' }, rows: [{ offer: 'A', name: 'A', sales: 99999, stock: 0, transit: 0, manual: null }], annual: { from: '2025-10-29', to: '2026-10-28', file: 'Год.xlsx', items: { a: 365 } } };
-  const request = { revision: 0, draft, offers: ['A'], date: to, note: '', columns: ['offer', 'quantity', 'q7', 'annual1c'], requestId: 'ozon-journal-1', demandVersion: first.data.version };
+  const draft = { settings: { leadDays: 0, stockSource: 'manual', multiple: 10, periodDays: 7, salesDays: 30, total: 140, source: 'ozon' }, rows: [{ offer: 'A', name: 'A', sales: 99999, stock: 0, transit: 0, manual: null }], annual: { from: '2025-10-29', to: '2026-10-28', file: 'Год.xlsx', items: { a: 365 } } };
+  const request = { revision: 0, draft, offers: ['A'], date: to, expectedDate: dayjs(to).add(7,'day').format('YYYY-MM-DD'), inventoryVersion: (await call('/')).data.inventory.version, note: '', columns: ['offer', 'quantity', 'q7', 'annual1c'], requestId: 'ozon-journal-1', demandVersion: first.data.version };
   units = 3;
   assert.equal((await call('/journal', 'post', request)).status, 409); assert.equal(store.size, 0);
   units = 2;
@@ -50,8 +51,8 @@ test('Адаптер Ozon: все пять кабинетов, SKU, вычет �
   const edit = await call('/draft', 'post', { revision: 1, draft: modified }); assert.equal(edit.status, 200); assert.equal(edit.data.journal[0].items[0].annual1c, 365);
   assert.equal(edit.data.draft.annual.items.a, 999);
   const current = await call('/demand');
-  const manual = structuredClone(modified); manual.settings.source = 'manual'; manual.rows[0].sales = 300;
-  const manualSnapshot = await call('/journal', 'post', { ...request, draft: manual, revision: 2, requestId: 'manual-journal-2', demandVersion: current.data.version });
+  const manual = structuredClone(modified); manual.settings.source = 'manual'; manual.rows[0].sales = 300; manual.rows[0].manual = 10;
+  const manualSnapshot = await call('/journal', 'post', { ...request, draft: manual, revision: 2, requestId: 'manual-journal-2', inventoryVersion: edit.data.inventory.version, demandVersion: current.data.version });
   assert.equal(manualSnapshot.status, 200); assert.equal(manualSnapshot.data.journal[0].items[0].q7, 98); assert.equal(manualSnapshot.data.journal[0].items[0].rate, 10);
   const previousSecret = process.env.ADS_SHEET_ID_DEFLY_WB;
   process.env.ADS_SHEET_ID_DEFLY_WB = 'x'.repeat(40);

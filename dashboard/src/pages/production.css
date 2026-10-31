@@ -82,3 +82,26 @@
 .mpui.d2-page .d2-table th:nth-child(1),.mpui.d2-page .d2-table td:nth-child(1){position:sticky;left:0;min-width:44px;box-sizing:border-box;background:var(--a-panel);z-index:2}
 .mpui.d2-page .d2-table th:nth-child(2),.mpui.d2-page .d2-table td:nth-child(2){position:sticky;left:44px;min-width:130px;background:var(--a-panel);z-index:2;border-right:1px solid var(--a-line2)}
 .mpui.d2-page .d2-table th:nth-child(-n+2){z-index:4}
+
+/* Подсорт 2D: общие таблицы сервиса, компактные настройки и журнал. */
+.mpui.d2-page .d2-fieldset{border:0;padding:0;margin:0;min-width:0}
+.mpui.d2-page .d2-num{width:82px}
+.mpui.d2-page .d2-settings{flex:1;min-width:250px}
+.mpui.d2-page .d2-settings summary,.mpui.d2-page .d2-columns summary,.mpui.d2-page .d2-sources summary{cursor:pointer;color:var(--a-ink2);padding:8px 0}
+.mpui.d2-page .d2-settings-fields{display:flex;flex-wrap:wrap;gap:16px;margin:12px 0}
+.mpui.d2-page .d2-settings-fields label{display:flex;align-items:center;gap:8px}
+.mpui.d2-page .d2-column-options{display:flex;flex-wrap:wrap;gap:12px;padding:12px 0}
+.mpui.d2-page .d2-filters{gap:14px;flex-wrap:wrap;margin:14px 0}
+.mpui.d2-page .d2-footer{gap:12px;flex-wrap:wrap;justify-content:flex-end;margin-top:16px}
+.mpui.d2-page .d2-footer>span:first-child{margin-right:auto}
+.mpui.d2-page table.a-t.d2-table{min-width:740px;width:100%}
+.mpui.d2-page .d2-table td{padding:8px 10px}
+.mpui.d2-page .d2-article{background:none;border:0;padding:0;color:var(--a-ink);text-align:left;font:inherit;cursor:pointer;max-width:260px;white-space:normal}
+.mpui.d2-page .d2-selected td{background:var(--a-accent-soft)}
+.mpui.d2-page .d2-table tr.pr-in-order td:first-child{box-shadow:inset 3px 0 var(--a-accent,#8b5cf6)}
+.mpui.d2-page .d2-journal h3{margin:0}
+.mpui.d2-page .d2-journal-table{min-width:740px}
+.mpui.d2-page .d2-batch{cursor:pointer}
+.mpui.d2-page .d2-batch-detail{padding:12px}
+.mpui.d2-page .d2-chart{min-width:0;margin:12px 0}
+.mpui.d2-page .d2-sources .pr-card{margin:8px 0}
