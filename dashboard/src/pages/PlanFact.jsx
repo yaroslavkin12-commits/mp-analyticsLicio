@@ -5,6 +5,7 @@ import { getOzonPlan, getOzonPlanBasis, previewOzonPlan, fixOzonPlan, getOzonPla
 import { SHOPS } from '../lib/cabinets';
 import { planTotal as total } from '../lib/planEvaluation';
 import PlanExecution from './PlanExecution';
+import PlanDashboard from './PlanDashboard';
 import './ads2.css';
 import './plan.css';
 
@@ -150,8 +151,7 @@ export default function PlanFact({ active = true, cabinet }) {
     for (const p of paths.filter(p => p === top || p.startsWith(top + SEP))) displayRows.push({ path: p, parent: false });
   }
   return <div className="mpui op-page">
-    <div className="op-heading"><div><h1>План / факт <span>{scope==='licio'?'Licio':'Ozon + WB'}</span></h1><p>{scope==='licio' ? 'Отдельный план кабинета Licio' : 'Общие цели подкатегорий · Ozon и Wildberries · все подключённые кабинеты'}</p></div><label className="op-month">Месяц<input type="month" value={month} onChange={e => { if (e.target.value) setMonth(e.target.value); }} /></label><button className="a-btn primary" onClick={()=>setMode('plan')}>Настроить план</button></div>
-    <div className="op-toolbar"><b>Выполнение плана</b><span className="op-state">{fixed ? `Зафиксирован · версия ${state.versions.length} · ${stamp(fixed.createdAt)}` : 'План ещё не зафиксирован'}</span></div>
+    <div className="op-heading"><div><h1>План / факт <span>{scope==='licio'?'Licio':'Ozon + WB'}</span></h1></div><label className="op-month">Месяц<input type="month" value={month} onChange={e => { if (e.target.value) setMonth(e.target.value); }} /></label><button className="a-btn primary" onClick={()=>setMode('plan')}>Настроить план</button></div>
     {notice && <div className="op-alert" role="status">{notice}<button className="op-close" aria-label="Скрыть сообщение" onClick={() => setNotice('')}>×</button></div>}
     {actionError && <div className="op-alert bad" role="alert">{actionError}</div>}
     {mode === 'plan' ? <PlanEditor onClose={()=>setMode('actual')}>
@@ -189,9 +189,9 @@ export default function PlanFact({ active = true, cabinet }) {
       </section>}
     </PlanEditor> : null}
     <>
-      <section className="a-card op-section"><div className="op-controls"><label>Магазины<select value={shop} onChange={e => setShop(e.target.value)}><option value="">{groupLabel}</option>{[...new Set(SH.map(s=>s.platform))].map(p=><optgroup key={p} label={p==='wb'?'Wildberries':'Ozon'}><option value={'market:'+p}>{p==='wb'?'Весь Wildberries':'Весь Ozon'}</option>{SH.filter(s=>s.platform===p).map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>)}</select></label><label>Версия<select value={version || state.activeId || ''} onChange={e => setVersion(e.target.value)}>{!state.versions.length && <option value="">План не задан</option>}{state.versions.map((v, i) => <option key={v.id} value={v.id}>{i + 1} · {stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</option>)}</select></label><button className="a-btn" disabled={factBusy} onClick={() => setRefresh(x => x + 1)}>Обновить факт</button></div></section>
+      <section className="op-filterbar" aria-label="Фильтры выполнения"><div className="op-market-filter" role="group" aria-label="Маркетплейс">{[{id:'',label:'Все'},...([...new Set(SH.map(s=>s.platform))].map(p=>({id:'market:'+p,label:p==='wb'?'Wildberries':'Ozon'})))].map(m=><button key={m.id} className={(!shop&& !m.id)||shop===m.id?'active':''} aria-pressed={shop===m.id} onClick={()=>setShop(m.id)}>{m.label}</button>)}</div><div className="op-controls"><label>Магазины<select value={shop} onChange={e => setShop(e.target.value)}><option value="">{groupLabel}</option>{[...new Set(SH.map(s=>s.platform))].map(p=><optgroup key={p} label={p==='wb'?'Wildberries':'Ozon'}><option value={'market:'+p}>{p==='wb'?'Весь Wildberries':'Весь Ozon'}</option>{SH.filter(s=>s.platform===p).map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>)}</select></label><label>Версия<select value={version || state.activeId || ''} onChange={e => setVersion(e.target.value)}>{!state.versions.length && <option value="">План не задан</option>}{state.versions.map((v, i) => <option key={v.id} value={v.id}>{i + 1} · {stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</option>)}</select></label><button className="a-btn" disabled={factBusy} onClick={() => setRefresh(x => x + 1)}>Обновить факт</button></div></section>
       <CategoryNav tops={[...new Set(rows.map(r=>r.path.split(SEP)[0]))]} value={path} onChange={setPath} childrenOf={p=>[...new Set(rows.filter(r=>r.path.startsWith(p+SEP)).map(r=>r.path.split(SEP)[p.split(SEP).length]).filter(Boolean))]} />
-      {!viewed && <div className="op-alert">Общий план ещё не зафиксирован. Нажмите «Настроить план», заполните цели и проверьте распределение.</div>}
+      {!viewed && <><div className="op-alert">Общий план ещё не зафиксирован. Нажмите «Настроить план», заполните цели и проверьте распределение.</div><PlanDashboard shops={SH} rows={[]} fact={{ shops: {} }} month={month} shop={shop} path={path} elapsed={0} days={dayjs(month+'-01').daysInMonth()} empty /></>}
       {factBusy && <div className="op-alert" role="status">Загружаем фактические результаты площадок и кабинетов…</div>}
       {factError && <div className="op-alert bad" role="alert">Не удалось загрузить факт: {factError}. Нулевые результаты не подставлены.</div>}
       {fact && viewed && <PlanExecution shops={SH} groupLabel={groupLabel} month={month} viewed={viewed} paths={paths} fact={fact} shop={shop} path={path} setPath={setPath} />}
