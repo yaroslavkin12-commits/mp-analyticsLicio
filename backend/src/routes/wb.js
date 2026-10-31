@@ -25,8 +25,9 @@ router.get('/finance-status', async (req,res) => {
   try {
     if((req.query.cabinet || bridge.CABINET)!==bridge.CABINET)return res.status(400).json({success:false,error:'Неизвестный кабинет WB'});
     const source=require('../collectors/wb/sheetSync'); source.sync(req.query.fresh==='1').catch(()=>{}); const sync=source.status();
-    const d=(await bridge.readMeta()).find(r=>r.kind==='finance');
-    res.set('Cache-Control','no-store');res.json({success:true,data:{imported:!!d,rows:d?.meta.total??null,from:d?.meta.from??null,to:d?.meta.to??null,collectedAt:d?.meta.collectedAt??null,receivedAt:d?.updated_at??null,calculationsReady:false,sync}});
+    const d=await bridge.readFinance();
+    let calculationError=null,totals=null;if(d)try{const rows=require('../lib/wbFinance').entries(d.rows);totals={payout:rows.reduce((s,r)=>s+r.amount,0),quantity:rows.reduce((s,r)=>s+r.qty,0)};}catch(e){calculationError=e.message;}
+    res.set('Cache-Control','no-store');res.json({success:true,data:{imported:!!d,rows:d?.meta.total??null,from:d?.meta.from??null,to:d?.meta.to??null,collectedAt:d?.meta.collectedAt??null,receivedAt:d?.updated_at??null,calculationsReady:!!d&&!calculationError,calculationError,totals,sync}});
   } catch(e){res.status(400).json({success:false,error:e.message});}
 });
 const n = v => v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);

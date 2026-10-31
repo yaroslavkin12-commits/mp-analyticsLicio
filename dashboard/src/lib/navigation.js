@@ -9,7 +9,7 @@ const DEFLY_NAV = [
 const LICIO_NAV = [...DEFLY_NAV.filter(([id]) => id !== 'production'), ['settings', '⚙️', 'Настройки']];
 // Меню одинаковое; недоступные источники остаются на своих местах с подсказкой.
 const WB_NAV = DEFLY_NAV;
-export const unavailablePage = (cabinet, page) => cabinet === 'defly_wb' && ['summary','plan','search','discounts','buyout','unit','margin','pnl','recon','notifications','calculator'].includes(page)
+export const unavailablePage = (cabinet, page) => cabinet === 'defly_wb' && ['plan','search','discounts','recon','notifications'].includes(page)
   ? (['unit','margin','pnl','recon','plan','calculator'].includes(page) ? 'Финансы WB пока не подключены' : 'Источник WB для этого раздела пока не подключён') : '';
 export const navOf = cabinet => cabinet === 'defly_wb' ? WB_NAV : cabinet === 'licio' ? LICIO_NAV : isDeflyLike(cabinet) ? DEFLY_NAV : LICIO_NAV;
 export const pagesOf = cabinet => ['sales', ...navOf(cabinet).map(([id]) => id).filter(id => id !== '__h' && id !== 'sales' && !unavailablePage(cabinet, id))];

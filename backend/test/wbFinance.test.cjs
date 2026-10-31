@@ -35,13 +35,13 @@ test('Финансы WB: повтор установки триггеров не
  const h=harness([]);h.ctx.setupWbTriggers();h.ctx.setupWbTriggers();assert.equal(h.triggers.length,4);assert.equal(h.triggers.filter(t=>t.getHandlerFunction()==='syncWbFinance').length,1);
 });
 test('Статус финансов различает отсутствие и полный пустой отчёт; расчёты не включаются преждевременно',async()=>{
- const bridge=require('../src/lib/wbBridge'),sheetSync=require('../src/collectors/wb/sheetSync'),readMeta=bridge.readMeta,sync=sheetSync.sync;
- let meta=[];bridge.readMeta=async()=>meta;sheetSync.sync=async()=>({configured:true,error:null});
+ const bridge=require('../src/lib/wbBridge'),sheetSync=require('../src/collectors/wb/sheetSync'),readMeta=bridge.readMeta,readFinance=bridge.readFinance,sync=sheetSync.sync;
+ let meta=[];bridge.readFinance=async()=>meta[0]?{...meta[0],rows:[]}:null;bridge.readMeta=async()=>meta;sheetSync.sync=async()=>({configured:true,error:null});
  try{const route=require('../src/routes/wb').stack.find(x=>x.route?.path==='/finance-status').route.stack[0].handle;
  const call=async(cabinet='defly_wb')=>{let code=200,value;await route({query:{cabinet}},{set(){},status(n){code=n;return this;},json(v){value=v;}});return {code,...value};};
  assert.equal((await call()).data.imported,false);
- meta=[{kind:'finance',meta:{total:0,from:'2026-08-01',to:'2026-10-29',collectedAt:'2026-10-30T08:00:00Z'}}];const r=await call();assert.equal(r.data.imported,true);assert.equal(r.data.rows,0);assert.equal(r.data.calculationsReady,false);assert.equal((await call('licio')).code,400);
- }finally{bridge.readMeta=readMeta;sheetSync.sync=sync;}
+ meta=[{kind:'finance',meta:{total:0,from:'2026-08-01',to:'2026-10-29',collectedAt:'2026-10-30T08:00:00Z'}}];const r=await call();assert.equal(r.data.imported,true);assert.equal(r.data.rows,0);assert.equal(r.data.calculationsReady,true);assert.equal((await call('licio')).code,400);
+ }finally{bridge.readMeta=readMeta;bridge.readFinance=readFinance;sheetSync.sync=sync;}
 });
 test('Диагностика WB различает запрошенное и отсутствующее поле, не пишет суммы и реквизиты в журнал',()=>{
  const h=harness([{code:200,text:JSON.stringify([{deduction:'123456.78',ppvzSupplierInn:'private-counterparty'}])}]);

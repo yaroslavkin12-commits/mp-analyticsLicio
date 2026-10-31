@@ -81,14 +81,14 @@ function OpsDrill({ cabinet, drill, dates, dateFrom, dateTo, arts, filtered, sel
   return (
     <div className="f-drill-bg" onClick={onClose}>
       <div className="f-drill" onClick={e => e.stopPropagation()}>
-        <div className="f-drill-h"><b>{LABEL[drill.bucket] || (drill.bucket === 'ads' ? 'Реклама' : drill.bucket === 'return' ? 'Возвраты' : drill.bucket)}</b><span>{when} · {selName}</span><button type="button" className="a-btn ghost" onClick={onClose}>✕</button></div>
+        <div className="f-drill-h"><b>{(LABEL[drill.bucket] || '').replaceAll('Ozon',cabinet==='defly_wb'?'WB':'Ozon') || (drill.bucket === 'ads' ? 'Реклама' : drill.bucket === 'return' ? 'Возвраты' : drill.bucket)}</b><span>{when} · {selName}</span><button type="button" className="a-btn ghost" onClick={onClose}>✕</button></div>
         {err && <div className="c-msg bad">{err}</div>}
-        {!view && !err && <div className="a-hint">Загрузка операций Ozon…</div>}
+        {!view && !err && <div className="a-hint">Загрузка операций {cabinet==='defly_wb'?'WB':'Ozon'}…</div>}
         {view && !view.list.length && <div className="a-hint">Операций нет.</div>}
         {view && view.list.length > 0 && (
           <>
             <table className="f-drill-t">
-              <thead><tr><th>Операция Ozon (как в начислениях)</th><th className="r">По артикулам</th><th className="r">Без артикула</th><th className="r">Артикулов</th></tr></thead>
+              <thead><tr><th>Операция {cabinet==='defly_wb'?'WB':'Ozon'} (как в начислениях)</th><th className="r">По артикулам</th><th className="r">Без артикула</th><th className="r">Артикулов</th></tr></thead>
               <tbody>
                 {view.list.map(x => (
                   <React.Fragment key={x.name}>
@@ -108,7 +108,7 @@ function OpsDrill({ cabinet, drill, dates, dateFrom, dateTo, arts, filtered, sel
             </table>
             {view.sumNo !== 0 && (
               <div className="a-hint" style={{ marginTop: 8 }}>
-                «Без артикула» — Ozon списал на весь кабинет, без привязки к товару. В P&L такие суммы делятся по доле выручки дня{filtered ? `: на «${selName}» за период пришлось ≈${(shareOf * 100).toFixed(1).replace('.', ',')}% — поэтому в выбранной категории статья может вырасти, даже если по её товарам ничего не списывали` : ''}.
+                «Без артикула» — {cabinet==='defly_wb'?'WB':'Ozon'} списал на весь кабинет, без привязки к товару. В P&L такие суммы делятся по доле выручки дня{filtered ? `: на «${selName}» за период пришлось ≈${(shareOf * 100).toFixed(1).replace('.', ',')}% — поэтому в выбранной категории статья может вырасти, даже если по её товарам ничего не списывали` : ''}.
               </div>
             )}
           </>
@@ -156,7 +156,7 @@ export default function PnL({ cabinet }) {
   const per = useMemo(() => {
     if (!data) return [];
     const P = cats.arts.map(() => null);
-    const get = ai => P[ai] || (P[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n), self: new Float64Array(n) });
+    const get = ai => P[ai] || (P[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n), self: new Float64Array(n), taxBase: new Float64Array(n) });
     for (const [ai, d, bi, a, q] of data.rows) {
       const x = get(ai), k = data.buckets[bi], j = B.indexOf(k);
       x.b[j < 0 ? 7 : j][d] += a;
@@ -165,6 +165,7 @@ export default function PnL({ cabinet }) {
     for (const [ai, d, v] of data.ads) get(ai).ads[d] += v;
     // Самовыкупы — себестоимость за эти штуки не вычитается (товар остаётся у нас).
     for (const [ai, d, q] of data.self || []) get(ai).self[d] += q;
+    for(const [ai,d,v] of data.taxBase || []) get(ai).taxBase[d]+=v;
     return P;
   }, [data, cats.arts, n]);
   // Реклама: если Ozon списывает её в начислениях (PayPerClick и т. п.) —
@@ -209,7 +210,7 @@ export default function PnL({ cabinet }) {
       for (let i = 0; i < n; i++) {
         for (let j = 0; j < B.length; j++) v[B[j]][i] += x.b[j][i];
         v.qty[i] += x.qty[i]; v.adsRaw[i] += x.ads[i]; sold += x.qty[i];
-        v.taxBase[i] += (x.b[iSale][i] + x.b[iRet][i]) * (shD ? shD[i] : 1);
+        v.taxBase[i] += data.taxBase ? x.taxBase[i] : (x.b[iSale][i] + x.b[iRet][i]) * (shD ? shD[i] : 1);
         if (cp) v.costRaw[i] += cp * (x.qty[i] - x.self[i]);
       }
       if (!cp && sold > 0) noCost++;
@@ -231,7 +232,7 @@ export default function PnL({ cabinet }) {
       const rev = v.sale[i] + v.return[i];
       const ozX = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
       // Реклама — часть удержаний Ozon: по начислениям, а за ещё не проведённые дни — из кабинета.
-      const ad = i <= lastFin ? v.ads[i] : -v.adsRaw[i];
+      const ad = data.financeSource === 'wb' || i <= lastFin ? v.ads[i] : -v.adsRaw[i];
       const oz = ozX + ad;
       const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
       const p = rev + oz - v.costRaw[i] + t;
@@ -239,6 +240,7 @@ export default function PnL({ cabinet }) {
       out.tax.push(t); out.profit.push(p); out.margin.push(rev > 0 ? p / rev * 100 : null); out.drr.push(rev > 0 ? -ad / rev * 100 : null);
       out.ozonAbs.push(-ozX); out.adsAbs.push(-ad);
     }
+    if(data.financeSource === 'wb') data.dates.forEach((date,i)=>{if(date<data.available.mn||date>data.available.mx)for(const a of Object.values(out))if(a.length===n)a[i]=NaN;});
     const sum = arr => { let s = 0; for (let i = 0; i < n; i++) s += arr[i] || 0; return s; };
     const T = {};
     for (const k of [...B, 'qty', 'taxBase', 'revenue', 'ozon', 'ozonX', 'payout', 'ads', 'cost', 'tax', 'profit', 'ozonAbs', 'adsAbs']) T[k] = sum(out[k]);
@@ -273,11 +275,12 @@ export default function PnL({ cabinet }) {
   const shownT = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perQ(T[r.key], T.qty)]))
     : pctMode ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perR(T[r.key], T.revenue)])) : T;
   // В процентах: подписи без «₽», расходы подсвечиваются — меньше доля (ближе к нулю) лучше.
-  const shownRows = pctMode ? ROWS.map(r => (!r.key || KEEP.has(r.key) ? r : { ...r, fmt: r.fmt === 'money0' ? 'pct0' : 'pct', label: r.label.replace(/, ₽$/, ', %'), good: r.signed ? 'up' : r.good })) : ROWS;
+  const formatRows = pctMode ? ROWS.map(r => (!r.key || KEEP.has(r.key) ? r : { ...r, fmt: r.fmt === 'money0' ? 'pct0' : 'pct', label: r.label.replace(/, ₽$/, ', %'), good: r.signed ? 'up' : r.good })) : ROWS;
+  const shownRows = data._wb ? formatRows.map(r=>({...r,label:r.label?.replaceAll('Ozon','WB'),block:r.block?.replaceAll('Ozon','WB'),hint:r.key==='ads'?'Списания «WB Продвижение» из ежедневного отчёта. Комиссия и эквайринг повторно не вычитаются.':r.key==='taxBase'?'Оплата покупателями из поля retailAmount, за вычетом возвратов.':r.hint?.replaceAll('Ozon','WB')})) : formatRows;
   const byDate = {};
   dates.forEach((d, i) => { byDate[d] = {}; for (const m of METRICS) byDate[d][m.key] = vals[m.key][i]; });
   const strip = [
-    ...COST_KEYS.map((k, i) => ({ k, name: LABEL[k], v: -T[k], color: CAT_COLORS[i] || 'var(--a-ink3)' })),
+    ...COST_KEYS.map((k, i) => ({ k, name: data._wb?LABEL[k].replaceAll('Ozon','WB'):LABEL[k], v: -T[k], color: CAT_COLORS[i] || 'var(--a-ink3)' })),
     { k: 'ads', name: 'Реклама', v: -T.ads, color: 'var(--a-spend)' },
     { k: 'cost', name: 'Себестоимость', v: -T.cost, color: 'var(--a-ink3)' },
     { k: 'tax', name: 'Налог', v: -T.tax, color: 'var(--a-line2)' },
@@ -300,6 +303,7 @@ export default function PnL({ cabinet }) {
         <TaxInput tax={tax} cabinet={cabinet} />
       </FinHeader>
 
+      {data.financeSource === 'wb' && <div className="a-hint" style={{margin:'10px 0'}}>Финансы WB по {dayjs(data.available.mx).format('DD.MM.YYYY')} · суммы к перечислению по отчёту, без повторного вычета комиссии и эквайринга. Дни вне выгрузки не входят в итог.</div>}
       {!data.rows.length && !data.noSku.length ? (
         <Empty>
           <b>Финансовых данных пока нет.</b><br />
@@ -310,7 +314,7 @@ export default function PnL({ cabinet }) {
         <>
           <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
             <Kpi label="Выручка" value={money(T.revenue)} sub={`${fmtInt(T.qty)} шт выкуплено`} />
-            <Kpi label="Расходы Ozon без рекламы" value={money(-T.ozonX)} sub={`${pct1(T.revenue > 0 ? -T.ozonX / T.revenue * 100 : null)} от выручки`} />
+            <Kpi label={data._wb?'Расходы WB без рекламы':'Расходы Ozon без рекламы'} value={money(-T.ozonX)} sub={`${pct1(T.revenue > 0 ? -T.ozonX / T.revenue * 100 : null)} от выручки`} />
             <Kpi label="Реклама" value={money(-T.ads)} sub={`${pct1(T.drr)} от выручки`} />
             <Kpi label="Прибыль" value={<span className={T.profit < 0 ? 's-down' : ''}>{money(T.profit)}</span>} sub={`маржа ${pct1(T.margin)} · ROI ${pct1(T.roi)}`} />
           </div>
@@ -345,7 +349,7 @@ export default function PnL({ cabinet }) {
               <label className="sw" title="Выручка по выкупам (выкупы − возвраты) = 100%; каждая статья — её доля от выручки за день и за период. Цвет: зелёнее — расход меньше обычного">
                 <input type="checkbox" checked={pctMode} onChange={e => setPct(e.target.checked)} /><i />в % от выручки
               </label>
-              <span className="a-hint">по дате начисления в Ozon; данные есть с {data.available?.mn ? dayjs(data.available.mn).format('DD.MM.YYYY') : '—'}</span>
+              <span className="a-hint">по дате начисления в {data._wb?'WB':'Ozon'}; данные есть с {data.available?.mn ? dayjs(data.available.mn).format('DD.MM.YYYY') : '—'}</span>
             </div>
             <RowsTable dates={dates} rows={shownRows} vals={shownVals} totals={shownT} clickable={DRILL} onCell={(k, i) => setDrill({ bucket: k, i })} />
           </div>

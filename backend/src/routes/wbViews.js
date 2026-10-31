@@ -51,16 +51,20 @@ router.use(async (req, res) => {
       const ds = await bridge.read({excludeFinance:true}), status = require('../collectors/wb/sheetSync').status();
       return res.json({ success: true, data: { running: status.busy, jobs: [['catalog', 'catalog'], ['analytics', 'orders'], ['perf', 'ads'], ['stocks', 'stocks']].map(([job, kind]) => ({ job, everyMin: 60, lastSuccessAt: ds.find(x => x.kind === kind)?.meta.collectedAt || null, lastError: status.error })) } });
     }
-    const supported = ['/orders/feed', '/sales/data', '/sales/geo', '/sales/costs', '/sales/skus', '/promo/stats', '/promo/catalog', '/promo/sibling-clusters', '/stocks/data', '/finance/coefs', '/finance/pnl', '/finance/calc-base', '/clusters', '/queries/season'];
+    const supported = ['/orders/feed', '/sales/data', '/sales/geo', '/sales/costs', '/sales/skus', '/promo/stats', '/promo/catalog', '/promo/sibling-clusters', '/stocks/data', '/finance/coefs', '/finance/pnl', '/finance/ops', '/finance/buyout', '/finance/calc-base', '/clusters', '/queries/season'];
     if (!supported.includes(path)) return res.status(503).json({ success: false, error: 'Данные WB для этого раздела пока не подключены' });
     await require('../collectors/wb/sheetSync').sync(req.query.fresh === '1');
-    const ds = await bridge.read({excludeFinance:true}), m = V.build(ds, prefs, req.query); let out;
+    const ds = await bridge.read({excludeFinance:true});
+    if (['/finance/pnl','/finance/ops','/finance/coefs','/finance/calc-base'].includes(path)) { const finance=await bridge.readFinance(); if(finance)ds.push(finance); }
+    const m = V.build(ds, prefs, req.query); let out;
     if (path === '/sales/data') out = m.sales();
     if (path === '/promo/stats') out = m.ads();
     if (path === '/orders/feed') out = m.feed();
     if (path === '/stocks/data') out = m.stocks();
-    if (path === '/finance/coefs') out = m.coefs();
-    if (path === '/finance/pnl') out = m.pnl();
+    if (path === '/finance/coefs') { const costs=await require('../db').query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC"); out = m.coefs(costs); }
+    if (path === '/finance/ops') { const d=ds.find(d=>d.kind==='finance'),bucket=String(req.query.bucket||'');if(!require('../lib/wbFinance').BUCKETS.includes(bucket))throw new Error('Неизвестная статья');const di=new Map(m.dates.map((d,i)=>[d,i])),offers=new Map(m.articles.map(a=>[String(a.sku),a.o]));out={rows:d?require('../lib/wbFinance').entries(d.rows).filter(e=>e.bucket===bucket&&di.has(e.date)).map(e=>[di.get(e.date),e.operation+(e.reason?' · '+e.reason:''),e.offer||offers.get(String(e.sku))||null,e.amount,e.qty]):[]}; }
+    if (path === '/finance/buyout') out=m.buyout();
+    if (path === '/finance/pnl') { const costs=await require('../db').query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC"); out = m.pnl(costs); }
     if (path === '/sales/geo') out = m.geo();
     if (path === '/queries/season') out = m.season();
     if (path === '/clusters') out = m.clusters();

@@ -1,3 +1,4 @@
+import CategoryNav, { categoryCompare } from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
 import { getAdsGroups, getAdsTransit, getPriceDynamics } from '../api';
@@ -84,7 +85,7 @@ function finByDay(fin, dates) {
   const pd = fin.dates.map(d => di.get(d));
   const m = new Map();
   const arr = () => new Float64Array(L);
-  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), ad: arr(), self: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null, sTot: 0 }; if(fin._operational){for(const a of Object.values(x.b))a.fill(NaN);} m.set(o, x); } return x; };
+  const get = o => { let x = m.get(o); if (!x) { x = { s: arr(), q: arr(), tax: arr(), ad: arr(), self: arr(), b: Object.fromEntries([...OZ, 'ads'].map(k => [k, arr()])), cost: null, sTot: 0 }; if(fin._operational){for(const a of Object.values(x.b))a.fill(NaN);} m.set(o, x); } return x; };
   const saleDay = arr(), nsOther = arr(), nsSale = arr();
   let saleAll = 0, adsAll = 0, nsAdsTot = 0;
   fin.articles.forEach((a, i) => { if (fin.cost?.[i]) get(a.o).cost = fin.cost[i]; });
@@ -107,7 +108,9 @@ function finByDay(fin, dates) {
     if (k === 'ads') nsAdsTot += a; else if (OZ.includes(k)) nsOther[d] += a; else if (k === 'sale' || k === 'return') nsSale[d] += a;
   }
   (fin.adNoSku || []).forEach((v, dd) => { const d = pd[dd]; if (d !== undefined && dd > lastFin && v) nsOther[d] -= v; });
-  return { operational:fin._operational, available:fin.available, m, saleDay, nsOther, nsSale, nsAdsTot, adsAll, saleAll, late, L };
+  for(const [ai,dd,v] of fin.taxBase||[]){const o=fin.articles[ai]?.o,d=pd[dd];if(o&&d!==undefined)get(o).tax[d]+=v;}
+  if(fin.financeSource === 'wb')late.fill(0);
+  return { exactTax:!!fin.taxBase, operational:fin._operational, available:fin.available, m, saleDay, nsOther, nsSale, nsAdsTot, adsAll, saleAll, late, L };
 }
 
 // Суммы по дням для одного артикула: { key: Float64Array(L) }.
@@ -154,7 +157,7 @@ function finDay(S, x, F, d, o, dates, ctx) {
   const k0 = ctx.coefOf ? ctx.coefOf(o) : null;
   const cost = (k0?.cost || x.cost || 0) * (q - x.self[d]);
   S.buyQty[d] = q; S.buyRub[d] = s; S.nsSale[d] = F.nsSale[d] * sh; S.nsOther[d] = F.nsOther[d] * sh; S.nsAds[d] = nsA; S.adLate[d] = adLate; S.cost[d] = cost;
-  S.taxBase[d] = s ? s * (ctx.shareAt ? (ctx.shareAt(o, dates[d]) ?? 1) : 1) : 0;
+  S.taxBase[d] = F.exactTax ? x.tax[d] : s ? s * (ctx.shareAt ? (ctx.shareAt(o, dates[d]) ?? 1) : 1) : 0;
   if (s || q || any || x.b.ads[d] || adLate || S.nsOther[d] || nsA) S.finAny[d] = 1;
 }
 const addInto = (T, S) => { for (const k of KEYS) { const a = T[k], b = S[k]; for (let i = 0; i < a.length; i++) a[i] += b[i]; } };
@@ -487,7 +490,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   ].filter(r => r[2] || Math.abs(r[1]) >= 0.5) : [];
 
   const allOpen = SECTIONS.every(g => secOpen[g]), noneOpen = SECTIONS.every(g => !secOpen[g]);
-  const tabs = [...tree.root.kids].map(n => ({ n, r: revOf(n.arts) })).sort((x, y) => (y.n.name === 'Чехлы') - (x.n.name === 'Чехлы') || y.r - x.r).map(x => x.n);
+  const tabs = [...tree.root.kids].map(n => ({ n, r: revOf(n.arts) })).sort((x, y) => (mode==='cats'?categoryCompare(x.n.name,y.n.name):0) || y.r-x.r).map(x => x.n);
   const tabCnt = n => n.arts.length;
   return (
     <div className="rnp">
@@ -526,23 +529,13 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
       </div>
       {!onlyArt && (
         <div className="rnp-nav">
+          {mode === 'cats' ? <CategoryNav tops={tabs.map(n=>n.name)} value={node.key==='__all'?'':node.key.slice(2)} onChange={path=>{setSel(path?'c:'+path:'__all');setSelArt('');}} childrenOf={path=>(tree.byKey.get('c:'+path)?.kids||[]).map(n=>n.name)} /> : <>
           <div className="a-tabs">
             <button type="button" className={`a-tab ${node.key === '__all' ? 'on' : ''}`} onClick={() => { setSel('__all'); setSelArt(''); }}>Все<span className="c">{arts.length}</span></button>
             {tabs.map(n => <button key={n.key} type="button" className={`a-tab ${top && top.key === n.key ? 'on' : ''}`} onClick={() => { setSel(n.key); setSelArt(''); }}>{n.name}<span className="c">{tabCnt(n)}</span></button>)}
           </div>
+          </>}
           <div className="rnp-subs">
-            {top && top.kids.length > 0 && (
-              <select className="a-sel" value={lvl2 ? lvl2.key : ''} onChange={e => { setSel(e.target.value || top.key); setSelArt(''); }} title="Подкатегория">
-                <option value="">Все: {top.name}</option>
-                {top.kids.map(k => <option key={k.key} value={k.key}>{k.name} · {k.arts.length}</option>)}
-              </select>
-            )}
-            {lvl2 && lvl2.kids.length > 0 && (
-              <select className="a-sel" value={pathKeys[2] || ''} onChange={e => { setSel(e.target.value || lvl2.key); setSelArt(''); }} title="Подкатегория">
-                <option value="">Все: {lvl2.name}</option>
-                {lvl2.kids.map(k => <option key={k.key} value={k.key}>{k.name} · {k.arts.length}</option>)}
-              </select>
-            )}
             <select className="a-sel" value={curArt} onChange={e => setSelArt(e.target.value)} title="Один артикул — по убыванию заказов, ₽">
               <option value="">Все артикулы · {node.arts.length}</option>
               {artsSorted.map(o => <option key={o} value={o}>{o}{artBy.get(o)?.short ? ` · ${artBy.get(o).short}` : ''}</option>)}
@@ -550,6 +543,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
           </div>
         </div>
       )}
+      {fin?.financeSource === 'wb' && <div className="a-hint">Финансы WB по {dayjs(fin.available.mx).format('DD.MM.YYYY')}</div>}
       <div className="rnp-title">
         <b>{title}</b>
         <span>{curArt ? (a?.n || a?.short || '') : `${list.length} арт.`}{curArt && a?.cat ? ` · ${a.cat}` : ''}</span>

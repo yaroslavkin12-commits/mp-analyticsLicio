@@ -1,3 +1,5 @@
+import CategoryNav from '../components/CategoryNav';
+import QuickPeriods from '../components/QuickPeriods';
 import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react';
 import { getAdsGroups } from '../api';
 import dayjs from 'dayjs';
@@ -55,10 +57,7 @@ export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFro
         <h1>{title}</h1>
         {setRange && (
           <>
-            <span className="a-seg">{periods.map(n => {
-              const f = dayjs().subtract(n - 1, 'day').format('YYYY-MM-DD');
-              return <button key={n} type="button" className={dateFrom === f && dateTo === today ? 'on' : ''} onClick={() => setRange(f, today)}>{n} дн</button>;
-            })}</span>
+            <QuickPeriods from={dateFrom} to={dateTo} onChange={setRange} periods={periods} />
             <DateRangePicker from={dateFrom} to={dateTo} onChange={setRange} />
           </>
         )}
@@ -66,35 +65,7 @@ export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFro
         {children}
         {loading && <span className="a-hint">обновляем…</span>}
       </div>
-      <div className="a-bar">
-        <div className="a-tabs">
-          <button type="button" className={`a-tab ${!sel ? 'on' : ''}`} onClick={() => setSel('')}>Все</button>
-          {cats.topCats.map(c => (
-            <button key={c} type="button" className={`a-tab ${sel === c || sel.startsWith(c + SEP) ? 'on' : ''}`} onClick={() => setSel(c)}>
-              <i className="s-dot" style={{ background: CAT_COLORS[cats.topSlot(c)] || OTHER }} />{c}
-            </button>
-          ))}
-          {grp && grp.list.length > 0 && <span className="a-hint" style={{ margin: '0 4px 0 10px' }}>группы:</span>}
-          {grp && grp.list.map(g => (
-            <button key={g.id} type="button" className={`a-tab ${grp.sel === g.id ? 'on' : ''}`} onClick={() => grp.setSel(grp.sel === g.id ? '' : g.id)} title="Группа из «Рекламы» — повторный клик снимает">
-              <i className="s-dot" style={{ background: grp.colors[g.id], borderRadius: 999 }} />{g.name}
-            </button>
-          ))}
-        </div>
-      </div>
-      {sel && (
-        <div className="a-bar s-crumbs">
-          <button type="button" className="s-crumb" onClick={() => setSel('')}>Все</button>
-          {crumbs.map((c, i) => (
-            <React.Fragment key={i}>
-              <span className="a-hint">›</span>
-              <button type="button" className={`s-crumb ${i === crumbs.length - 1 ? 'on' : ''}`} onClick={() => setSel(crumbs.slice(0, i + 1).join(SEP))}>{c}</button>
-            </React.Fragment>
-          ))}
-          {kids.length > 0 && <span className="a-hint" style={{ marginLeft: 8 }}>подкатегории:</span>}
-          {kids.map((k, i) => <button key={k} type="button" className="s-chip" onClick={() => setSel(sel + SEP + k)}><i className="s-dot" style={{ background: CAT_COLORS[i] || OTHER }} />{k}</button>)}
-        </div>
-      )}
+      <CategoryNav tops={cats.topCats} value={sel} onChange={setSel} childrenOf={cats.childrenOf} groups={grp&&<>{grp.list.map(g=><button key={g.id} type="button" className={grp.sel===g.id?'on':''} onClick={()=>grp.setSel(grp.sel===g.id?'':g.id)}>{g.name}</button>)}</>} />
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import CategoryNav from '../components/CategoryNav';
+import QuickPeriods from '../components/QuickPeriods';
 import { barSignals, isRateMetric } from '../lib/chartSignals';
 import { enrichSalesChart, FIN_CHART_METRICS } from '../lib/salesChartModel';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
@@ -7,7 +9,7 @@ import dayjs from 'dayjs';
 import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
 import { unitCoefs, unitProfit } from './unitModel';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
-import { useTax, useBuyerShare } from './finShared';
+import { useTax, useBuyerShare, useGroups } from './finShared';
 import TableBuilder from './TableBuilder';
 import Rnp from './Rnp';
 import DateRangePicker from '../components/DateRangePicker';
@@ -497,6 +499,7 @@ const FINDER_HINT = {
 // ═════════════════════════════════════════════════════════════════════════
 export default function SalesAnalytics({ cabinet, view, active = true }) {
   const today = dayjs().format('YYYY-MM-DD');
+  const grp=useGroups(cabinet);
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(today);
   const [data, setData] = useState(null);
@@ -575,7 +578,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     for (const [pai, d, b, a, q] of pnl.rows) {
       const o = pnl.articles[pai]?.o; if (!o) continue;
       const k = pnl.buckets[b];
-      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, ad: 0, sDay: new Float64Array(nd) }; m.set(o, x); }
+      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, ad: 0, sDay: new Float64Array(nd), taxDay: new Float64Array(nd) }; m.set(o, x); }
       if (k === 'sale' || k === 'return') { x.sRub += a; x.sDay[d] += a; saleDay[d] += a; x.sQty += k === 'sale' ? Math.abs(q) : -Math.abs(q); } else if (OZ.includes(k)) x.oz += a;
     }
     // Реклама без артикула — отдельно: делится по расходу рекламного кабинета.
@@ -590,7 +593,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     for (const [d, b, a] of pnl.noSku || []) if (b === ai && a) lastFin = Math.max(lastFin, d);
     for (const [pai, d, v] of pnl.ads || []) {
       const o = pnl.articles[pai]?.o; if (!o) continue;
-      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, ad: 0, sDay: new Float64Array(nd) }; m.set(o, x); }
+      let x = m.get(o); if (!x) { x = { sRub: 0, sQty: 0, oz: 0, ad: 0, sDay: new Float64Array(nd), taxDay: new Float64Array(nd) }; m.set(o, x); }
       x.ad += v; adsAll += v;
       if (d > lastFin) x.oz -= v;
     }
@@ -599,7 +602,8 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     for (const x of m.values()) saleAll += x.sRub;
     // Самовыкупы — себестоимость за эти штуки не вычитается.
     for (const [pai, , q] of pnl.self || []) { const o = pnl.articles[pai]?.o; const x = o && m.get(o); if (x) x.selfQ = (x.selfQ || 0) + q; }
-    return { complete:!pnl._operational || !!pnl.available?.mn && pnl.dates.every(d=>d>=pnl.available.mn&&d<=pnl.available.mx), m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
+    for(const [ai,di,value] of pnl.taxBase||[]){const x=m.get(pnl.articles[ai]?.o);if(x)x.taxDay[di]+=value;}
+    return { exactTax:!!pnl.taxBase, complete:!pnl._operational || !!pnl.available?.mn && pnl.dates.every(d=>d>=pnl.available.mn&&d<=pnl.available.mx), m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
   const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -645,8 +649,8 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   // Фильтры (марка, поиск) действуют на всё — дерево строится уже по ним.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return all.filter(a => (!brand || a.brand === brand) && artMatch(a.o, a.n, q));
-  }, [all, brand, search]);
+    return all.filter(a => (!brand || a.brand === brand) && artMatch(a.o, a.n, q) && grp.test(a));
+  }, [all, brand, search, grp.test]);
   const tree = useMemo(() => buildTree(filtered, data?.order || []), [filtered, data]);
   // Цвета — по полному дереву (без фильтров), чтобы не перекрашивались.
   const fullTree = useMemo(() => buildTree(all, data?.order || []), [all, data]);
@@ -681,7 +685,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
       if (x) {
         sRub += x.sRub; sQty += x.sQty; oz += x.oz;
         // Налоговая база — как в «P&L»: по дням, доля оплаты покупателем из отчёта «Начисления» того периода.
-        { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxDay[d] += x.sDay[d] * (bsF.shareAt ? (bsF.shareAt(a.o, parts, finPer.dates[d]) ?? 1) : 1); }
+        { const parts = partsOf.get(a.o); for (let d = 0; d < finPer.nd; d++) if (x.sDay[d]) taxDay[d] += finPer.exactTax ? x.taxDay[d] : x.sDay[d] * (bsF.shareAt ? (bsF.shareAt(a.o, parts, finPer.dates[d]) ?? 1) : 1); }
         if (k?.cost) cost += k.cost * (x.sQty - (x.selfQ || 0)); else if (x.sQty > 0) noCost++;
       }
       // Прогноз — по дням, как в «Юнит-экономике»: комиссия по доле FBS
@@ -1004,7 +1008,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         <div className="page-sticky">
           <div className="a-top">
             <h1>РНП</h1>
-            <span className="a-seg">{[7, 14, 30, 90].map(periodBtn)}</span>
+            <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} periods={[7, 14, 30, 90]} />
             <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
             {brands.length > 0 && (
               <select className="a-sel" value={brand} onChange={e => setBrand(e.target.value)} title="Марка автомобиля">
@@ -1027,7 +1031,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
       <div className="page-sticky">
       <div className="a-top">
         <h1>Аналитика продаж</h1>
-        <span className="a-seg">{[7, 14, 30, 90].map(periodBtn)}</span>
+        <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} periods={[7, 14, 30, 90]} />
         <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         {brands.length > 0 && (
           <select className="a-sel" value={brand} onChange={e => setBrand(e.target.value)} title="Марка автомобиля">
@@ -1039,39 +1043,11 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         {loading && <span className="a-hint">обновляем…</span>}
       </div>
 
-      {/* Категории верхнего уровня + путь */}
-      <div className="a-bar">
-        <div className="a-tabs">
-          <button type="button" className={`a-tab ${!sel ? 'on' : ''}`} onClick={() => setSel('')}>Все<span className="c">{filtered.length}</span></button>
-          {tree.root.kids.map(k => (
-            <button key={k.path} type="button" className={`a-tab ${sel === k.path || sel.startsWith(k.path + SEP) ? 'on' : ''}`} onClick={() => setSel(k.path)}>
-              <i className="s-dot" style={{ background: CAT_COLORS[fullTree.root.children.get(k.name)?.slot] || OTHER_COLOR }} />{k.name}<span className="c">{k.arts.length}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      {sel && (
-        <div className="a-bar s-crumbs">
-          {crumbs.map((c, i) => (
-            <React.Fragment key={c.path || 'root'}>
-              {i > 0 && <span className="a-hint">›</span>}
-              <button type="button" className={`s-crumb ${c === node ? 'on' : ''}`} onClick={() => setSel(c.path)}>{c.name}</button>
-            </React.Fragment>
-          ))}
-          {kids.length > 0 && <span className="a-hint" style={{ marginLeft: 8 }}>подкатегории:</span>}
-          {kids.map(k => {
-            const slot = colorNode?.children?.get(k.name)?.slot;
-            return (
-              <button key={k.path} type="button" className="s-chip" onClick={() => setSel(k.path)}>
-                <i className="s-dot" style={{ background: CAT_COLORS[slot] || OTHER_COLOR }} />{k.name} <span className="a-hint">{k.arts.length}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <CategoryNav groups={<>{grp.list.map(g=><button key={g.id} type="button" className={grp.sel===g.id?'on':''} onClick={()=>grp.setSel(grp.sel===g.id?'':g.id)}>{g.name}</button>)}</>} tops={fullTree.root.kids.map(k=>k.name)} value={sel} onChange={setSel} childrenOf={path=>(tree.byPath.get(path)?.kids||[]).map(k=>k.name)} />
 
       </div>
 
+      {fin?.pnl?.financeSource === 'wb' && <div className="a-hint" style={{margin:'8px 0'}}>Финансы WB по {dayjs(fin.pnl.available.mx).format('DD.MM.YYYY')} · прибыль и поступления — по отчёту реализации.</div>}
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         {/* 1. Заказы и выкупы */}
         <div className="a-kpi">

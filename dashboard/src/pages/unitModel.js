@@ -57,7 +57,7 @@ export function unitCoefs(coefs, arts, shareOf) {
         acq: srcOf(L, own, g => g[C.sale] > 0 && g[C.saleQty] >= 3),
         spp: sppSite !== null ? 'site' : 'report',
       };
-      return { buyout, commFbo, commFbs, fbs30, commCard, comm: commFbo * (1 - fbs30) + commFbs * fbs30, logi, direct, ret: ret ?? direct, acq, other,
+      return { platform:coefs._wb?'wb':'ozon', buyout, commFbo, commFbs, fbs30, commCard, comm: commFbo * (1 - fbs30) + commFbs * fbs30, logi, direct, ret: ret ?? direct, acq, other,
         cost: own && own[C.cost] ? own[C.cost] : null, ownLevel, share, spp: (1 - share) * 100, price: own && own[C.price] ? own[C.price] : null, src };
     });
 }
@@ -75,7 +75,7 @@ export function unitProfit(k, { ordRub, ordQty, ads = 0, fbs, selfRub = 0, selfF
   const logi = ordQty * k.logi, acq = expRev * k.acq, other = expRev * k.other;
   // Налог — от того, что заплатил покупатель (цена после скидки Ozon), а не от нашей цены.
   const cost = k.cost ? expQty * k.cost : 0, tax = expRev * (k.share ?? 1) * taxPct / 100;
-  const selfCost = (selfRub > 0 ? selfRub * (k.commFbo * (1 - sh) + k.commFbs * sh + k.acq) + selfRub * (k.share ?? 1) * taxPct / 100 : 0) + selfFbs * SELF_FBS_FEE;
+  const selfCost = (selfRub > 0 ? selfRub * (k.commFbo * (1 - sh) + k.commFbs * sh + k.acq) + selfRub * (k.share ?? 1) * taxPct / 100 : 0) + selfFbs * (k.platform === 'wb' ? 0 : SELF_FBS_FEE);
   const profit = expRev - comm - logi - acq - other - cost - tax - ads - selfCost;
   return { expRev, expQty, comm, logi, acq, other, cost, tax, ads, selfCost, profit, margin: expRev > 0 ? profit / expRev * 100 : null, noCost: !k.cost };
 }

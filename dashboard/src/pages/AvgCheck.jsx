@@ -190,6 +190,7 @@ export default function AvgCheck({ cabinet }) {
 
   return (
     <div className="mpui sa-page">
+      {pnl?.financeSource === 'wb' && <div className="a-hint">Финансы WB по {dayjs(pnl.available.mx).format('DD.MM.YYYY')}; поступления рассчитаны по отчёту реализации.</div>}
       <FinHeader title="Средний чек" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch} grp={grp}
         dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} periods={[14, 30, 60]} loading={loading}>
         <span className="a-seg">{BASES.map(([k, l]) => <button key={k} type="button" className={base === k ? 'on' : ''} onClick={() => setBase(k)}>{l}</button>)}</span>
@@ -197,8 +198,8 @@ export default function AvgCheck({ cabinet }) {
 
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         <Kpi label="Средний чек заказа" value={T.orders ? `${fmtInt(T.orders)} ₽` : '—'} sub={<span><Delta value={ch('orders')} /> последние 7 дн к 7 до них</span>} />
-        <Kpi label="Средний чек выкупа" value={T.sales ? `${fmtInt(T.sales)} ₽` : '—'} sub={<span><Delta value={ch('sales')} /> · {pnl?._operational ? 'цена продавца WB' : 'цена реализации с баллами Ozon'}</span>} />
-        <Kpi label="Поступление на счёт за 1 выкуп" value={T.payout ? `${fmtInt(T.payout)} ₽` : '—'} sub={<span><Delta value={ch('payout')} /> · {pnl?._operational ? 'финансы пока не подключены' : 'за вычетом удержаний Ozon'}</span>} />
+        <Kpi label="Средний чек выкупа" value={T.sales ? `${fmtInt(T.sales)} ₽` : '—'} sub={<span><Delta value={ch('sales')} /> · {pnl?._operational ? 'цена продавца WB' : pnl?.financeSource === 'wb' ? 'цена реализации WB' : 'цена реализации с баллами Ozon'}</span>} />
+        <Kpi label="Поступление на счёт за 1 выкуп" value={T.payout ? `${fmtInt(T.payout)} ₽` : '—'} sub={<span><Delta value={ch('payout')} /> · {pnl?._operational ? 'финансы пока не подключены' : pnl?.financeSource === 'wb' ? 'за вычетом удержаний WB' : 'за вычетом удержаний Ozon'}</span>} />
         <Kpi label="Доходит до счёта" value={pct1(T.share)} sub={`${fmtInt(T.pRub)} ₽ из ${fmtInt(T.sRub)} ₽ выручки`} />
       </div>
 

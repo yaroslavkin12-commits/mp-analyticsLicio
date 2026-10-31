@@ -96,7 +96,8 @@ function build(datasets, prefs = initial(), params = {}) {
     const kind = params.kind || 'orders', source = kind === 'orders' ? get('orders') : get('sales').filter(r => kind === 'returns' ? r.type === 'return' : r.type === 'sale');
     return { _wb: true, available:full(kind === 'orders'?'orders':'sales'), from, to, since: get('orders').map(r => r.at || r.date).sort()[0] || null, rows: source.filter(r => r.date >= from && r.date <= to).sort((a, b) => String(b.at || b.date).localeCompare(String(a.at || a.date))).map(r => ({ p: r.srid || r.id, sku: String(r.nmId), o: articles[index(r)].o, n: articles[index(r)].n, cat: articles[index(r)].cat, price: number(r.price), qty: 1, st: kind === 'orders' ? (r.cancelled ? 'cancelled' : 'ordered') : kind === 'returns' ? 'returned' : 'delivered', wh: r.warehouse, at: r.at ? r.at + (/Z$|[+-]\d\d:\d\d$/.test(r.at) ? '' : '+03:00') : null, date: r.date, sch: /продавца/i.test(r.warehouseType || '') ? 'fbs' : /WB/i.test(r.warehouseType || '') ? 'fbo' : null, self: self(r) })) };
   }
-  function pnl() {
+  function pnl(costRows = []) {
+    if (ds.has('finance')) return require('./wbFinance').pnl(ds.get('finance'),{articles,index,costs:costRows,prefs,dates,order:ORDER.defly});
     const rows = []; articles.forEach((a,ai)=>dates.forEach((d,di)=>rows.push([ai,di,0,covered('sales',d)?0:null,covered('sales',d)?0:null]))); for (const r of get('sales')) { if (r.date < from || r.date > to || !['sale', 'return'].includes(r.type)) continue; rows.push([index(r), dates.indexOf(r.date), r.type === 'sale' ? 0 : 1, number(r.price) == null ? null : (r.type === 'return' ? -1 : 1) * r.price, r.type === 'return' ? -1 : 1]); }
     return { _wb: true, _operational: true, dates, articles, rows, cost: articles.map(() => null), noSku: [], buckets: ['sale', 'return'], ads: [], adNoSku: [], self: [], order: ORDER.defly, available: { mn: ds.get('sales')?.meta.from || null, mx: ds.get('sales')?.meta.to || null }, from, to };
   }
@@ -124,9 +125,26 @@ function build(datasets, prefs = initial(), params = {}) {
     const byMonth=new Map(); for(const r of get('orders')) if(!r.cancelled&&!self(r)){const k=index(r)+'|'+r.date.slice(0,7),x=byMonth.get(k)||[0,0]; x[0]=add(x[0],number(r.price));x[1]++;byMonth.set(k,x);}
     const rows=[]; articles.forEach((a,ai)=>months.forEach((month,mi)=>{const x=byMonth.get(ai+'|'+month)||[0,0];rows.push([ai,mi,...x]);}));return {_wb:true,articles,order:ORDER.defly,months,rows};
   }
-  const coefs = () => ({ _wb: true, _metadataOnly: true, articles, order: ORDER.defly, rows: [], fbsDays: [] });
+  const coefs = (costRows=[]) => ds.has('finance') ? require('./wbFinance').coefs(ds.get('finance'),{articles,index,costs:costRows,orders:get('orders'),sales:get('sales'),prices:get('prices'),prefs,today,order:ORDER.defly}) : ({ _wb: true, _metadataOnly: true, articles, order: ORDER.defly, rows: [], coefs:[], noSku:{}, totalSale:0, names:[], fbsDays: [] });
   const costs = costRows => ({ _wb: true, items: articles.map((a, ai) => { const c = costRows.find(r => r.article === a.o), s = sum(ai, dates); return { offerId: a.o, name: a.n, category: a.cat, cost: c ? number(c.cost_price) : null, updatedAt: c?.updated_at || null, orders30: s.orders, avgPrice30: s.orders > 0 ? s.revenue / s.orders : null }; }), order: ORDER.defly });
-  const calcBase = costRows => ({_wb:true,_metadataOnly:true,articles,order:ORDER.defly,a:articles.map((a,ai)=>{const r=new Array(41).fill(null);r[0]=ai;r[1]=number(get('prices').find(p=>String(p.nmId)===a.sku)?.price);r[12]=number(costRows.find(c=>c.article===a.o)?.cost_price);return r;})});
-  return { sales, ads, feed, pnl, stocks, clusters, geo, season, coefs, costs, calcBase, articles, covered, prefs, dates, full };
+  const calcBase = costRows => {
+    const c=coefs(costRows), cm=new Map((c.coefs||[]).map(r=>[r[0],r]));
+    return {_wb:true,...(c._metadataOnly?{_metadataOnly:true}:{}),articles,order:ORDER.defly,since:c.since,a:articles.map((a,ai)=>{
+      const r=new Array(41).fill(0),x=cm.get(ai),s=sum(ai,dates);r[0]=ai;
+      for(const k of [1,2,3,4,5,6,7,8,9,10,11,12,34,35,36])r[k]=null;
+      r[1]=number(get('prices').find(p=>String(p.nmId)===a.sku)?.price);r[12]=number(costRows.find(c=>c.article.toLowerCase()===a.o.toLowerCase())?.cost_price);
+      if(x){r[2]=r[3]=x[1]>0?-x[3]/x[1]*100:null;r[11]=x[27];r[13]=x[9];r[14]=x[17];r[15]=x[10];r[16]=x[11];r[17]=x[1];r[18]=x[2];r[19]=x[3];r[20]=x[4];r[21]=x[5];r[22]=x[6]+x[7]+x[8];r[23]=-x[18];if(r[1]&&r[11]!=null)r[34]=r[1]*(1-r[11]/100);}
+      r[24]=s.revenue;r[25]=s.orders;r[37]=s.spend;
+      const s7=sum(ai,dates.slice(-7));r[38]=s7.spend;r[39]=s7.revenue;r[40]=s7.orders;return r;
+    })};
+  };
+  function buyout() {
+    const sold=new Set(get('sales').filter(r=>r.type==='sale').map(r=>r.srid)), returned=new Set(get('sales').filter(r=>r.type==='return').map(r=>r.srid));
+    const current=new Map(), previous=new Map(), di=new Map(dates.map((d,i)=>[d,i]));
+    for(const r of get('orders')){if(self(r)||r.date<prevFrom||r.date>to)continue;const ai=index(r),done=r.cancelled||returned.has(r.srid)?'cancelled':r.srid&&sold.has(r.srid)?'delivered':'inProgress',key=r.date>=from?ai+'|'+di.get(r.date):String(ai),map=r.date>=from?current:previous,v=map.get(key)||[ai,...(r.date>=from?[di.get(r.date)]:[]),0,0,0,0],off=r.date>=from?2:1;v[off]++;v[off+({delivered:1,cancelled:2,inProgress:3}[done])]++;map.set(key,v);}
+    return {_wb:true,dates,articles,rows:[...current.values()],prev:[...previous.values()],order:ORDER.defly,available:{mn:ds.get('orders')?.meta.from||null,mx:ds.get('orders')?.meta.to||null}};
+  }
+
+  return { sales, ads, feed, pnl, buyout, stocks, clusters, geo, season, coefs, costs, calcBase, articles, covered, prefs, dates, full };
 }
 module.exports = { build, preferences, update, initial };

@@ -1,3 +1,5 @@
+import CategoryNav from '../components/CategoryNav';
+import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo } from 'react';
 import dayjs from 'dayjs';
 import { getFinancePnl, getBuyerShare, getSalesSummary } from '../api';
@@ -84,7 +86,7 @@ export default function ShopsSummary({ active, cabinet }) {
           const pOk = prev && prev.available?.mn && prev.available.mn <= pFrom;
           const p = pOk ? pnlTotals(prev, { tax, shareAt, groupOf: top }) : null;
           if (p) p.byPath = byPathOf(prev, { tax, shareAt });
-          setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax, operational: !!cur._operational } }));
+          setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax, operational: !!cur._operational, through:cur.available?.mx, source:cur.financeSource } }));
         } catch (e) { if (!off) setFin(f => ({ ...f, [s.id]: { error: e.message } })); }
       }
     })();
@@ -175,7 +177,7 @@ export default function ShopsSummary({ active, cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Сводка по магазинам</h1>
-          <span className="a-seg">{[7, 14, 30, 90].map(periodBtn)}</span>
+          <QuickPeriods from={from} to={to} onChange={(f,t)=>{setFrom(f);setTo(t);}} periods={[7, 14, 30, 90]} />
           <DateRangePicker from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
           <span className="a-seg" style={{ marginLeft: 'auto' }}>
             <button type="button" className={pct ? 'on' : ''} onClick={() => setPct(true)}>% от выручки</button>
@@ -185,20 +187,7 @@ export default function ShopsSummary({ active, cabinet }) {
       </div>
       {err && <div className="c-msg bad" style={{ margin: '10px 0' }}>{err}</div>}
       {!orders && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
-      {orders && (
-        <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 0' }}>
-          <div className="a-tabs">
-            <button type="button" className={`a-tab ${!cat ? 'on' : ''}`} onClick={() => setCat('')}>Все</button>
-            {catList.map(([k, r]) => <button key={k} type="button" className={`a-tab ${catTop === k ? 'on' : ''}`} onClick={() => setCat(cat === k ? '' : k)} title={`Заказы: ${fmtInt(r)} ₽`}>{k}</button>)}
-          </div>
-          {subList.length > 0 && (
-            <select className="a-sel" value={cat !== catTop ? cat : ''} onChange={e => setCat(e.target.value || catTop)} title="Подкатегория">
-              <option value="">все в «{catTop}»</option>
-              {subList.map(([k]) => <option key={k} value={k}>{'\u00a0\u00a0'.repeat(k.split(SEP).length - 2)}{k.split(SEP).pop()}</option>)}
-            </select>
-          )}
-        </div>
-      )}
+      {orders && <CategoryNav tops={catList.map(([k])=>k)} value={cat} onChange={setCat} childrenOf={path=>[...new Set((orders.shops||[]).flatMap(s=>Object.keys(s.cur.byPath||{})).filter(k=>k.startsWith(path+SEP)&&k.split(SEP).length===path.split(SEP).length+1).map(k=>k.split(SEP).at(-1)))]} />}
       {orders && (
         <div className="a-card" style={{ padding: 0, marginTop: 12 }}>
           <div className="a-scroll">
@@ -231,7 +220,7 @@ export default function ShopsSummary({ active, cabinet }) {
                   const kids = [...V.kids].sort((a, b) => b.or - a.or);
                   return (
                     <React.Fragment key={s.id}>
-                      {row({ key: s.id, name: s.shop.label, sub: s.error || (s.fin?.error ? 'начисления не загрузились' : s.fin?.operational ? 'Продажи и возвраты WB · начисления пока не подключены' : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : ''), color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
+                      {row({ key: s.id, name: s.shop.label, sub: s.error || (s.fin?.error ? 'начисления не загрузились' : s.fin?.operational ? 'Продажи и возвраты WB · начисления пока не подключены' : s.fin?.source === 'wb' ? `Финансы по ${dayjs(s.fin.through).format('DD.MM.YYYY')} · налог ${s.fin.tax}%` : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : ''), color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
                       {isOpen && kids.map(x => row({ key: s.id + x.k, name: x.name, oq: x.oq, or: x.or, por: x.por, poq: x.poq, F: x.F, PF: x.PF, depth: 2, loading: !s.fin }))}
                     </React.Fragment>
                   );
@@ -240,7 +229,7 @@ export default function ShopsSummary({ active, cabinet }) {
             </table>
           </div>
           <div className="a-hint" style={{ padding: '8px 14px 12px' }}>
-            Ozon — по начислениям, как в «P&L» каждого магазина; WB — продажи и возвраты из существующей аналитики. Начисления WB пока не подключены: общий итог по расходам и прибыли не рассчитывается без этих данных. За последние 1–2 дня Ozon начисления ещё не провёл — там реклама из кабинета, а выручка может быть неполной.
+            Ozon — по начислениям, как в «P&L» каждого магазина; WB — по ежедневному отчёту реализации. Финансовые итоги включают только дни, за которые получен отчёт. За последние 1–2 дня Ozon начисления ещё не провёл — там реклама из кабинета, а выручка может быть неполной.
             Расходы {pct ? 'в % от выручки своей строки — магазины сравниваются напрямую' : 'в рублях'}. Сравнение с прошлым периодом той же длины.
           </div>
         </div>

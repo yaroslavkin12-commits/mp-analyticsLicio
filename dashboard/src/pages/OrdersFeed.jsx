@@ -1,3 +1,5 @@
+import CategoryNav from '../components/CategoryNav';
+import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getOrderFeed, setSelfBuyout } from '../api';
@@ -25,7 +27,7 @@ const msk = iso => dayjs(new Date(Date.parse(iso) + 3 * 3600e3).toISOString().sl
 export default function OrdersFeed({ cabinet }) {
   const today = dayjs().format('YYYY-MM-DD');
   const [kind, setKind] = useState('orders');
-  const [from, setFrom] = useState(today);
+  const [from, setFrom] = useState(dayjs().subtract(29,'day').format('YYYY-MM-DD'));
   const [to, setTo] = useState(today);
   const [d, setD] = useState(null);
   const [err, setErr] = useState('');
@@ -104,11 +106,7 @@ export default function OrdersFeed({ cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Лента заказов</h1>
-          <span className="a-seg">
-            {period(1)}
-            <button type="button" className={from === yest && to === yest ? 'on' : ''} onClick={() => { setFrom(yest); setTo(yest); }}>Вчера</button>
-            {[7, 30].map(period)}
-          </span>
+          <QuickPeriods from={from} to={to} onChange={(f,t)=>{setFrom(f);setTo(t);}} />
           <DateRangePicker from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
           <ArtSearch value={q} onChange={setQ} options={opts} placeholder="Артикул, название или номер отправления" style={{ minWidth: 260 }} />
         </div>
@@ -117,18 +115,7 @@ export default function OrdersFeed({ cabinet }) {
       {!d && !err && <div className="a-empty" style={{ padding: 40, textAlign: 'center' }}>Загрузка…</div>}
       {d && (
         <>
-          <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 0' }}>
-            <div className="a-tabs">
-              <button type="button" className={`a-tab ${!cat ? 'on' : ''}`} onClick={() => setCat('')}>Все</button>
-              {cats.top.map(([k, n]) => <button key={k} type="button" className={`a-tab ${catTop === k ? 'on' : ''}`} onClick={() => setCat(catTop === k && cat === k ? '' : k)}>{k}<span className="c">{fmtInt(n)}</span></button>)}
-            </div>
-            {subs.length > 0 && (
-              <select className="a-sel" value={cat !== catTop ? cat : ''} onChange={e => setCat(e.target.value || catTop)} title="Подкатегория">
-                <option value="">все в «{catTop}»</option>
-                {subs.map(([k, n]) => <option key={k} value={k}>{'\u00a0\u00a0'.repeat(k.split(' / ').length - 2)}{k.split(' / ').pop()} · {fmtInt(n)}</option>)}
-              </select>
-            )}
-          </div>
+          <CategoryNav tops={cats.top.map(([k])=>k)} value={cat} onChange={setCat} childrenOf={path=>[...new Set([...cats.sub.keys()].filter(k=>k.startsWith(path+' / ')&&k.split(' / ').length===path.split(' / ').length+1).map(k=>k.split(' / ').at(-1)))]} />
           <div className="cl-kpis">
             <div className="a-kpi"><span className="lbl">Заказы</span><span className="val">{fmtInt(sum.n)}</span><span className="sub">{fmtInt(sum.q)} шт · {fmtInt(sum.r)} ₽</span></div>
             <div className="a-kpi"><span className="lbl">Самовыкупы</span><span className="val" style={{ color: sum.sn ? 'var(--a-accent)' : undefined }}>{fmtInt(sum.sn)}</span><span className="sub">{fmtInt(sum.sq)} шт · {fmtInt(sum.sr)} ₽ — не в заказах</span></div>

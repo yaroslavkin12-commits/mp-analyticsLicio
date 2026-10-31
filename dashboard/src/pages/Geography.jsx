@@ -1,3 +1,5 @@
+import CategoryNav from '../components/CategoryNav';
+import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
@@ -307,7 +309,7 @@ export default function Geography({ cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>География продаж</h1>
-          <span className="a-seg">{[7, 14, 30, 45].map(periodBtn)}</span>
+          <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} periods={[7, 14, 30, 45]} />
           <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
           {brandsList.length > 0 && (
             <select className="a-sel" value={brand} onChange={e => setBrand(e.target.value)}>
@@ -322,29 +324,7 @@ export default function Geography({ cabinet }) {
           </label>
           {loading && <span className="a-hint">обновляем…</span>}
         </div>
-        <div className="a-bar">
-          <div className="a-tabs">
-            <button type="button" className={`a-tab ${!sel ? 'on' : ''}`} onClick={() => setSel('')}>Все</button>
-            {topCats.map(c => (
-              <button key={c} type="button" className={`a-tab ${sel === c || sel.startsWith(c + SEP) ? 'on' : ''}`} onClick={() => setSel(c)}>
-                <i className="s-dot" style={{ background: CAT_COLORS[topSlot(c)] || OTHER }} />{c}
-              </button>
-            ))}
-          </div>
-        </div>
-        {sel && (
-          <div className="a-bar s-crumbs">
-            <button type="button" className="s-crumb" onClick={() => setSel('')}>Все</button>
-            {crumbsParts.map((c, i) => (
-              <React.Fragment key={i}>
-                <span className="a-hint">›</span>
-                <button type="button" className={`s-crumb ${i === crumbsParts.length - 1 ? 'on' : ''}`} onClick={() => setSel(crumbsParts.slice(0, i + 1).join(SEP))}>{c}</button>
-              </React.Fragment>
-            ))}
-            {kidNames.length > 0 && <span className="a-hint" style={{ marginLeft: 8 }}>подкатегории:</span>}
-            {kidNames.map((k, i) => <button key={k} type="button" className="s-chip" onClick={() => setSel(sel + SEP + k)}><i className="s-dot" style={{ background: CAT_COLORS[i] || OTHER }} />{k}</button>)}
-          </div>
-        )}
+        <CategoryNav tops={topCats} value={sel} onChange={setSel} childrenOf={path=>[...new Set(arts.filter(a=>a.cat.startsWith(path+SEP)).map(a=>a.cat.split(SEP)[path.split(SEP).length]).filter(Boolean))]} />
       </div>
 
       {noData ? (

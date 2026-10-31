@@ -255,7 +255,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     const di = new Map(data.dates.map((d, i) => [d, i]));
     const pd = fin.dates.map(d => di.get(d));
     const m = new Map();
-    const get = o => { let x = m.get(o); if (!x) { x = { s: new Float64Array(L), q: new Float64Array(L), oz: new Float64Array(L), ad: new Float64Array(L), self: new Float64Array(L), cost: null }; m.set(o, x); } return x; };
+    const get = o => { let x = m.get(o); if (!x) { x = { s: new Float64Array(L), q: new Float64Array(L), taxBase: new Float64Array(L), oz: new Float64Array(L), ad: new Float64Array(L), self: new Float64Array(L), cost: null }; m.set(o, x); } return x; };
     const saleDay = new Float64Array(L), adDay = new Float64Array(L), nsOther = new Float64Array(L), nsAds = new Float64Array(L);
     fin.articles.forEach((a, i) => { if (fin.cost?.[i]) get(a.o).cost = fin.cost[i]; });
     for (const [pai, d0, b, a, q] of fin.rows) {
@@ -274,7 +274,9 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     }
     const ai = fin.buckets.indexOf('ads');
     for (const r of fin.rows) if (r[2] === ai && r[3] && pd[r[1]] !== undefined) lastFin = Math.max(lastFin, pd[r[1]]);
-    return { m, saleDay, adDay, nsOther, nsAds, lastFin, mn: fin.available?.mn || null };
+    for(const [ai,d0,v] of fin.taxBase||[]){const o=fin.articles[ai]?.o,d=pd[d0];if(o&&d!==undefined)get(o).taxBase[d]+=v;}
+    if(fin.financeSource === 'wb')lastFin=L-1;
+    return { exactTax:!!fin.taxBase, m, saleDay, adDay, nsOther, nsAds, lastFin, mn: fin.available?.mn || null };
   }, [fin, data, L]);
 
   // Суммы окна по артикулу: window = [lo, hi] индексов.
@@ -318,7 +320,8 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       S.buyQty = q; S.buyRub = s; S.payout = pay; S.cost = cost;
       // Налог — как в «P&L»: от оплаты покупателя по отчётам «Начисления» того дня.
       let base = 0;
-      if (shareAt) { for (let d = l; d <= hi; d++) if (x.s[d]) base += x.s[d] * (shareAt(a.o, data.dates[d]) ?? 1); }
+      if (finArt.exactTax) { for(let d=l;d<=hi;d++)base+=Math.max(0,x.taxBase[d]); }
+      else if (shareAt) { for (let d = l; d <= hi; d++) if (x.s[d]) base += x.s[d] * (shareAt(a.o, data.dates[d]) ?? 1); }
       else base = s * (shareOf ? shareOf(a.o) : 1);
       S.profit = pay - cost - base * (tax || 0) / 100;
       if(fin?._operational){S.payout=NaN;S.cost=NaN;S.profit=NaN;}

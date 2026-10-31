@@ -21,7 +21,7 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
   }
   const n = data.dates.length;
   const per = data.articles.map(() => null);
-  const get = ai => per[ai] || (per[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n), self: new Float64Array(n) });
+  const get = ai => per[ai] || (per[ai] = { b: B.map(() => new Float64Array(n)), qty: new Float64Array(n), ads: new Float64Array(n), self: new Float64Array(n), taxBase: new Float64Array(n) });
   for (const [ai, d, bi, a, q] of data.rows) {
     const x = get(ai), k = data.buckets[bi], j = B.indexOf(k);
     x.b[j < 0 ? 7 : j][d] += a;
@@ -29,6 +29,7 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
   }
   for (const [ai, d, v] of data.ads) get(ai).ads[d] += v;
   for (const [ai, d, q] of data.self || []) get(ai).self[d] += q;
+  for (const [ai,d,v] of data.taxBase || []) get(ai).taxBase[d] += v;
   const iAds = data.buckets.indexOf('ads');
   let lastFin = -1;
   for (const r of data.rows) if (r[2] === iAds && r[3]) lastFin = Math.max(lastFin, r[1]);
@@ -50,7 +51,7 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
         for (let j = 0; j < B.length; j++) v[B[j]][i] += x.b[j][i];
         v.qty[i] += x.qty[i]; v.adsRaw[i] += x.ads[i];
         const sh = shareAt ? (shareAt(a.o, parts, data.dates[i]) ?? 1) : 1;
-        v.taxBase[i] += (x.b[0][i] + x.b[1][i]) * sh;
+        v.taxBase[i] += data.taxBase ? x.taxBase[i] : (x.b[0][i] + x.b[1][i]) * sh;
         if (cp) v.costRaw[i] += cp * (x.qty[i] - x.self[i]);
       }
     }
@@ -64,9 +65,10 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
     const T = { revenue: 0, ozonX: 0, ads: 0, cost: 0, tax: 0, profit: 0, qty: 0, payout: 0 };
     if (withDays) T.days = [];
     for (let i = 0; i < n; i++) {
+      if (data.financeSource === 'wb' && (data.dates[i] < data.available.mn || data.dates[i] > data.available.mx)) { if(withDays) T.days.push({date:data.dates[i],qty:null,payout:null,revenue:null,profit:null}); continue; }
       const rev = v.sale[i] + v.return[i];
       const ozX = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
-      const ad = i <= lastFin ? v.ads[i] : -v.adsRaw[i];
+      const ad = data.financeSource === 'wb' || i <= lastFin ? v.ads[i] : -v.adsRaw[i];
       const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
       T.revenue += rev; T.ozonX += ozX; T.ads += ad; T.cost -= v.costRaw[i]; T.tax += t; T.qty += v.qty[i];
       T.payout += rev + ozX + ad; T.profit += rev + ozX + ad - v.costRaw[i] + t;

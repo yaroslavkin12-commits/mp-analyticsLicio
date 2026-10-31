@@ -25,8 +25,8 @@ const pill = p => (p === null ? <span className="muted">—</span> : <span class
 
 export default function SearchPositions({ cabinet }) {
   const yday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
-  const [dateFrom, setDateFrom] = useState(dayjs().subtract(14, 'day').format('YYYY-MM-DD'));
-  const [dateTo, setDateTo] = useState(yday);
+  const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
+  const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -95,7 +95,7 @@ export default function SearchPositions({ cabinet }) {
   return (
     <div className="mpui sa-page">
       <FinHeader title="Позиции в поиске" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch} grp={grp}
-        dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t > yday ? yday : t); }} periods={[7, 14, 30]} loading={loading}>
+        dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} periods={[7, 14, 30]} loading={loading}>
         <span className="a-seg">{[['queries', 'По запросам'], ['arts', 'По товарам']].map(([k, l]) => <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => { setView(k); setOpen(null); }}>{l}</button>)}</span>
         <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>частота от
           <input className="a-input" type="number" min="0" value={minFreq} onChange={e => setMinFreq(Math.max(0, Number(e.target.value) || 0))} style={{ width: 64, padding: '4px 8px' }} />

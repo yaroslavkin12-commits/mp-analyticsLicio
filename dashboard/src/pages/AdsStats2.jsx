@@ -1,3 +1,5 @@
+import CategoryNav from '../components/CategoryNav';
+import QuickPeriods from '../components/QuickPeriods';
 import { barSignals } from '../lib/chartSignals';
 import { useTax } from '../lib/taxSettings';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -1052,8 +1054,9 @@ const MATRIX_METRICS = [
   { key: 'position', label: 'Ср. позиция', fmt: 'pos', good: 'down', total: 'avg' },
   { key: 'stock', label: 'Остаток', fmt: 'int', good: 'up' },
 ];
-function Matrix({ rows, dates, mode, cabinet }) {
+function Matrix({ rows, dates, mode, cabinet, scopeLabel }) {
   const [metric, setMetric] = useState('orders');
+  const [view,setView]=useState('articles');
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length, rows.length]);
   const cfg = MATRIX_METRICS.find(m => m.key === metric);
@@ -1067,13 +1070,16 @@ function Matrix({ rows, dates, mode, cabinet }) {
   return (
     <div className="a-card" style={{ padding: 14 }}>
       <div className="a-bar" style={{ marginBottom: 10 }}>
-        <b style={{ fontSize: 14 }}>Артикулы по дням</b>
-        <span className="a-seg">
+        <b style={{ fontSize: 14 }}>{view==='rnp'?'Сводная рекламная РНП':'Артикулы по дням'}</b>
+        {cabinet!=='licio'&&<span className="a-seg"><button type="button" className={view==='articles'?'on':''} onClick={()=>setView('articles')}>Артикулы</button><button type="button" className={view==='rnp'?'on':''} onClick={()=>setView('rnp')}>Сводная РНП</button></span>}
+        <span className="a-hint">{scopeLabel} · {rows.length} арт.</span>
+        {view==='articles'&&<span className="a-seg">
           {MATRIX_METRICS.filter(m => !(mode === 'ads' && m.key === 'cart')).map(m => (
             <button key={m.key} type="button" className={metric === m.key ? 'on' : ''} onClick={() => setMetric(m.key)}>{m.label}</button>
           ))}
-        </span>
+        </span>}
       </div>
+      {view==='rnp'?<DaysTable dates={dates} model={all} mode={mode} />:<React.Fragment>
       {metric === 'position' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }} title="Цветовая шкала постоянная и не зависит от периода, фильтров и крайних значений. Между ориентирами цвет меняется плавно.">
         <span>Цвет позиции:</span>
         {[[10, '1–10'], [30, '30'], [60, '60 и выше']].map(([v, label]) => <span key={v}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: positionHeatColor(v) }} />{label}</span>)}
@@ -1102,6 +1108,7 @@ function Matrix({ rows, dates, mode, cabinet }) {
           </tbody>
         </table>
       </div>
+      </React.Fragment>}
     </div>
   );
 }
@@ -1583,13 +1590,7 @@ export default function AdsStats2({ cabinet }) {
     <div className="mpui">
       <div className="page-sticky"><div className="a-top">
         <h1>Реклама</h1>
-        <span className="a-seg">
-          {[7, 14, 30].map(n => {
-            const f = dayjs().subtract(n - 1, 'day').format('YYYY-MM-DD');
-            const on = dateFrom === f && dateTo === dayjs().format('YYYY-MM-DD');
-            return <button key={n} type="button" className={on ? 'on' : ''} onClick={() => { setDateFrom(f); setDateTo(dayjs().format('YYYY-MM-DD')); }}>{n} дн</button>;
-          })}
-        </span>
+        <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} />
         <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
           <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
@@ -1645,21 +1646,12 @@ export default function AdsStats2({ cabinet }) {
       </div>
       <div className="a-hint" style={{ margin: '6px 2px 0' }}>{cabinet === 'defly_wb' ? 'WB: недоступные данные показаны «—». CPM учтён отдельно от оплаты за клик. ДРР — расход / сумма заказов.' : <>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</>}</div>
 
-      <div className="a-bar">
-        <div className="a-tabs">
-          <button type="button" className={`a-tab ${tab === 'all' ? 'on' : ''}`} onClick={() => selectTab('all')}>
-            Все<span className="c">{articlesRaw.filter(a => a.campaigns.length > 0).length}</span>
-          </button>
-          {catKids('').map(([c, n], i) => (
-            <button key={c} type="button" className={`a-tab ${isCat && (catPath === c || catPath.startsWith(c + CSEP)) ? 'on' : ''}`} onClick={() => selectTab('cat:' + c)} title="Все рекламируемые товары категории">
-              <i className="s-dot" style={{ background: CAT_COLORS[i] || 'var(--a-ink3)' }} />{c}<span className="c">{n}</span>
-            </button>
-          ))}
+      <CategoryNav allActive={tab==='all'} tops={catKids('').map(([c])=>c)} value={isCat?catPath:''} onChange={path=>selectTab(path?'cat:'+path:'all')} childrenOf={path=>catKids(path).map(([c])=>c)} groups={<>
           {groups.length > 0 && <span className="a-hint" style={{ margin: '0 2px 0 8px' }}>группы:</span>}
           {groups.map(g => {
             const cnt = Object.values(members).filter(x => x === g.id).length;
             return (
-              <span key={g.id} role="button" tabIndex={0}
+              <span key={g.id} role="button" tabIndex={0} aria-label={g.name}
                 className={`a-tab ${tab === g.id ? 'on' : ''} ${overTab === g.id && dragTab && dragTab !== g.id ? 'drop' : ''}`}
                 onClick={() => selectTab(g.id)} onKeyDown={e => { if (e.key === 'Enter') selectTab(g.id); }}
                 draggable onDragStart={() => setDragTab(g.id)} onDragOver={e => { e.preventDefault(); setOverTab(g.id); }}
@@ -1695,24 +1687,7 @@ export default function AdsStats2({ cabinet }) {
               {ungroupedClusters.map(c => <option key={c.primary} value={c.primary}>{c.primary} ({c.members.length} арт.)</option>)}
             </select>
           )}
-        </div>
-      </div>
-
-      {isCat && (
-        <div className="a-bar s-crumbs">
-          <button type="button" className="s-crumb" onClick={() => selectTab('all')}>Все</button>
-          {catPath.split(CSEP).map((part, i, arr) => {
-            const path = arr.slice(0, i + 1).join(CSEP);
-            return <React.Fragment key={path}><span className="a-hint">›</span><button type="button" className={`s-crumb ${path === catPath ? 'on' : ''}`} onClick={() => selectTab('cat:' + path)}>{part}</button></React.Fragment>;
-          })}
-          {catKids(catPath).length > 0 && <span className="a-hint" style={{ marginLeft: 8 }}>подкатегории:</span>}
-          {catKids(catPath).map(([c, n], i) => (
-            <button key={c} type="button" className="s-chip" onClick={() => selectTab('cat:' + catPath + CSEP + c)}>
-              <i className="s-dot" style={{ background: CAT_COLORS[i] || 'var(--a-ink3)' }} />{c} <span className="a-hint">{n}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      </>} />
 
       <div className="a-bar">
         <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ minWidth: 260 }} />
@@ -1735,7 +1710,7 @@ export default function AdsStats2({ cabinet }) {
         {isGroup && <AddToGroup catalog={catalog} exclude={memberIds} onPick={id => assignGroup(id, tab)} />}
       </div>
 
-      <Matrix rows={rows} dates={dates} mode={mode} cabinet={cabinet} />
+      <Matrix rows={rows} dates={dates} mode={mode} cabinet={cabinet} scopeLabel={isGroup?activeGroup.name:isCat?catPath:'Все рекламируемые товары'} />
 
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><ResetCtl ctl={ctlAds} /></div>

@@ -75,3 +75,13 @@ async function ingest(input, { deferCommit = false } = {}) {
 async function read({ excludeFinance = false } = {}) { await ensure(); return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1' + (excludeFinance ? " AND kind <> 'finance'" : ''), [CABINET]); }
 async function readMeta() { await ensure(); return query('SELECT kind, meta, updated_at FROM wb_bridge_data WHERE cabinet=$1', [CABINET]); }
 module.exports = { CABINET, KINDS, verify, validate, ingest, read, readMeta };
+
+let financeCache, financeLoading;
+async function readFinance() {
+  const meta=(await readMeta()).find(r=>r.kind==='finance');
+  if(!meta)return null;
+  if(financeCache?.meta.runId===meta.meta.runId)return financeCache;
+  if(!financeLoading)financeLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind='finance'",[CABINET]).then(rows=>financeCache=rows[0]||null).finally(()=>financeLoading=null);
+  return financeLoading;
+}
+module.exports.readFinance=readFinance;

@@ -1,3 +1,4 @@
+import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
 import {
@@ -297,7 +298,7 @@ export default function Dashboard({ platform }) {
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <div style={{ marginLeft: 'auto' }}>
-          <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
+          <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} /><DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         </div>
       </div>
 

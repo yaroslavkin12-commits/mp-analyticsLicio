@@ -35,7 +35,7 @@ const rate = (d, c) => (d + c > 0 ? d / (d + c) * 100 : null);
 
 export default function Buyout({ cabinet }) {
   const today = dayjs().format('YYYY-MM-DD');
-  const [dateFrom, setDateFrom] = useState(dayjs().subtract(44, 'day').format('YYYY-MM-DD'));
+  const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(today);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -127,7 +127,7 @@ export default function Buyout({ cabinet }) {
   return (
     <div className="mpui sa-page">
       <FinHeader grp={grp} title="% выкупа" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch}
-        dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} periods={[14, 30, 45]} loading={loading} />
+        dateFrom={dateFrom} dateTo={dateTo} setRange={(f, t) => { setDateFrom(f); setDateTo(t); }} periods={[7, 14, 30, 45]} loading={loading} />
 
       {!data.rows.length ? (
         <Empty>
