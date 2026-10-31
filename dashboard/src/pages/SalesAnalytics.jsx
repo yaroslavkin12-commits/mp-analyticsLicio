@@ -133,6 +133,16 @@ function toModel(ag, buckets) {
   if(ag.partial)for(const k of K)tot[k]=sumAvailable(ag.s[k]);
   tot.spend = tot.spendCpc + tot.spendCpo + tot.spendOther;
   const totals = derive(tot, 'all');
+  if(ag.partial){
+    const spend=[],revenue=[],orders=[],adOrders=[];
+    for(let i=0;i<ag.s.orders.length;i++){
+      const cost=ag.s.spendCpc[i]+ag.s.spendCpo[i]+ag.s.spendOther[i];
+      if(Number.isFinite(cost)&&Number.isFinite(ag.s.revenue[i])){spend.push(cost);revenue.push(ag.s.revenue[i]);}
+      if(Number.isFinite(ag.s.orders[i])&&Number.isFinite(ag.s.adOrders[i])){orders.push(ag.s.orders[i]);adOrders.push(ag.s.adOrders[i]);}
+    }
+    const base=sumAvailable(revenue);totals.drr=base>0?sumAvailable(spend)/base*100:null;
+    totals.adOrderBase=sumAvailable(orders);totals.adOrdersMatched=sumAvailable(adOrders);
+  }
   totals.avgCpc = tot.clicks > 0 ? tot.spendCpc / tot.clicks : null;
   const prev = ag.prev ? derive({ ...ag.prev, spendCpc: 0, spendCpo: 0, clicks: 0 }, 'all') : null;
   if (prev) { prev.spend = ag.prev.spend; prev.drr = ag.prev.revenue > 0 ? ag.prev.spend / ag.prev.revenue * 100 : null; prev.adOrders = ag.prev.adOrders; }
@@ -765,7 +775,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   const sDays = stockDaysOf(ag, dates);
   const avgCheck = T.orders > 0 ? T.revenue / T.orders : null;
   const pAvgCheck = P && P.orders > 0 ? P.revenue / P.orders : null;
-  const adShare = T.orders > 0 ? T.adOrders / T.orders * 100 : null;
+  const adShare = data?._wb ? T.adOrderBase>0?T.adOrdersMatched/T.adOrderBase*100:null : T.orders > 0 ? T.adOrders / T.orders * 100 : null;
   const pAdShare = P && P.orders > 0 ? P.adOrders / P.orders * 100 : null;
   const series = key => dates.map(d => dayModel.byDate[d]?.[key] || 0);
   const unalloc = !sel && !brand && !search.trim() ? (data.unallocated?.cur || 0) : 0;
@@ -1054,7 +1064,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
 
       </div>
 
-      {data?._wb&&data.coverage&&<div className="a-hint" role="status">{[['orders','Заказы'],['ads','Реклама']].map(([key,label])=>{const c=data.coverage[key];return <span key={key} style={{marginRight:16}}>{label}: {c?`данные по ${dayjs(c.to).format('DD.MM.YYYY')}${c.to<dateTo?' · итог по загруженным дням':''}`:'ещё не загружены'}</span>;})}Незагруженные дни показаны «—».</div>}
+      {data?._wb&&data.coverage&&<div className="a-hint" role="status">{[['orders','Заказы'],['ads','Реклама']].map(([key,label])=>{const c=data.coverage[key];return <span key={key} style={{marginRight:16}}>{label}: {c&&c.from<=dateTo&&c.to>=dateFrom?`${dayjs(c.from>dateFrom?c.from:dateFrom).format('DD.MM.YYYY')} — ${dayjs(c.to<dateTo?c.to:dateTo).format('DD.MM.YYYY')}${c.from>dateFrom||c.to<dateTo?' · итог по загруженным дням':''}`:'нет загруженных дней в периоде'}</span>;})}Незагруженные дни показаны «—». ДРР, доля рекламных заказов и прогноз — за дни, для которых есть и заказы, и реклама.</div>}
       {fin?.pnl?.financeSource === 'wb' && <div className="a-hint" style={{margin:'8px 0'}}>Финансы WB по {dayjs(fin.pnl.available.mx).format('DD.MM.YYYY')} · прибыль и поступления — по отчёту реализации.</div>}
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         {/* 1. Заказы и выкупы */}

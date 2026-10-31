@@ -45,7 +45,7 @@ function WbAdsTiming({data,items,deductions,allScope}) {
   const ads=data.adStatistics;if(!ads)return null;
   const selected=new Set(items.map(a=>a.i)),all=allScope;
   const spend=data.dates.map(d=>ads.from&&d>=ads.from&&d<=ads.to?0:null);
-  for(const [ai,di,value] of ads.rows)if(selected.has(ai)&&spend[di]!==null)spend[di]+=value;
+  for(const [ai,di,value] of ads.rows)if((all||selected.has(ai))&&spend[di]!==null)spend[di]+=value;
   if(all)for(let di=0;di<spend.length;di++)if(spend[di]!==null)spend[di]+=ads.unallocated[di]||0;
   const held=data.dates.map((d,i)=>d>=data.available.mn&&d<=data.available.mx?-deductions[i]:null);
   const rows=[{key:'spend',label:'Расход по дням рекламы',fmt:'int',good:'neutral'},{key:'held',label:'Удержано по финансовому отчёту',fmt:'int',good:'neutral'}];
@@ -332,7 +332,7 @@ export default function PnL({ cabinet }) {
           {noCost > 0 && <div className="c-msg bad">У {noCost} арт. с выкупами нет себестоимости — прибыль по ним завышена. {cabinet === 'licio' ? 'Заполните в «Настройки → Себестоимость».' : 'Заполните во вкладке «Себестоимость».'}</div>}
           {filtered && <div className="a-hint">Начисления без артикула (хранение, подписки и т. п.) распределены пропорционально выкупам, реклама без привязки к товару — по расходу рекламного кабинета: на выбранное — {pct1(shareOf(list.arts) * 100)}.</div>}
 
-          {data.financeSource==='wb'&&<WbAdsTiming data={data} items={list.arts} deductions={vals.ads} allScope={!sel&&!q.trim()&&!grp.sel} />}
+          {data.financeSource==='wb'&&<WbAdsTiming data={data} items={cats.arts.filter(a=>inPath(a,sel)&&matchQ(a,q)&&grp.test(a))} deductions={vals.ads} allScope={!sel&&!q.trim()&&!grp.sel} />}
 
           {T.revenue > 0 && strip.length > 0 && (
             <div className="a-card s-card">
