@@ -68,3 +68,9 @@ test('WB: группы, порядок, ручные значения и сам�
  assert.equal((await call('/sales/data','GET',{},'defly')).code,400);assert.equal(store.size,1);
  }finally{[dbPath,bridgePath,sheetPath].forEach((p,i)=>{if(previous[i])require.cache[p]=previous[i];else delete require.cache[p];});}
 });
+
+test('WB: расходы по дням рекламы отделены от финансового удержания и не меняют P&L',()=>{
+ const ds=fixture();ds.push({kind:'finance',meta:{from,to},rows:[{id:'fin',rrDate:from,deduction:'30',bonusTypeName:'WB Продвижение'}]});
+ const m=model(ds),p=m.pnl();assert.equal(p.rows.filter(r=>p.buckets[r[2]]==='ads').reduce((s,r)=>s+r[3],0)+p.noSku.filter(r=>p.buckets[r[1]]==='ads').reduce((s,r)=>s+r[2],0),-30);
+ assert(p.adStatistics.rows.some(r=>r[1]===1&&r[2]>0));assert.equal(p.ads.length,0);assert.equal(p.adStatistics.to,to);
+});

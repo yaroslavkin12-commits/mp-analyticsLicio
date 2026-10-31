@@ -53,8 +53,10 @@ router.use(async (req, res) => {
     }
     const supported = ['/orders/feed', '/sales/data', '/sales/geo', '/sales/costs', '/sales/skus', '/promo/stats', '/promo/catalog', '/promo/sibling-clusters', '/stocks/data', '/finance/coefs', '/finance/pnl', '/finance/ops', '/finance/buyout', '/finance/calc-base', '/clusters', '/queries/season'];
     if (!supported.includes(path)) return res.status(503).json({ success: false, error: 'Данные WB для этого раздела пока не подключены' });
-    await require('../collectors/wb/sheetSync').sync(req.query.fresh === '1');
-    const ds = await bridge.read({excludeFinance:true});
+    const source=require('../collectors/wb/sheetSync');
+    let ds = await bridge.read({excludeFinance:true});
+    if(req.query.fresh==='1'||!ds.length){await source.sync(req.query.fresh==='1');ds=await bridge.read({excludeFinance:true});}
+    else source.sync().catch(()=>{});
     if (['/finance/pnl','/finance/ops','/finance/coefs','/finance/calc-base'].includes(path)) { const finance=await bridge.readFinance(); if(finance)ds.push(finance); }
     const m = V.build(ds, prefs, req.query); let out;
     if (path === '/sales/data') out = m.sales();

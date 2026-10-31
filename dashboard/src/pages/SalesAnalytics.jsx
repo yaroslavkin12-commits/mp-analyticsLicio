@@ -1,3 +1,4 @@
+import { sumAvailable } from '../lib/availableSum';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
@@ -77,7 +78,7 @@ function prepare(data) {
   for (const a of arts) {
     let rev = 0, ord = 0, sp = 0;
     for (let d = 0; d < n; d++) { rev += a.revenue[d]; ord += a.orders[d]; sp += a.spendCpc[d] + a.spendCpo[d] + a.spendOther[d]; }
-    a.tRevenue = rev; a.tOrders = ord; a.tSpend = sp;
+    a.tRevenue = data._wb?sumAvailable(a.revenue):rev; a.tOrders = data._wb?sumAvailable(a.orders):ord; a.tSpend = data._wb?sumAvailable(Array.from({length:n},(_,d)=>a.spendCpc[d]+a.spendCpo[d]+a.spendOther[d])):sp;
     a.short = shortModel(a.n) || a.n;
   }
   return arts;
@@ -100,7 +101,7 @@ function aggregate(list, n) {
     if (a.tOrders > 0) active++;
     if (a.prev && a.prev.orders > 0) pActive++;
   }
-  return { s, stock, stockNow, prev, count: list.length, active, pActive, single: list.length === 1 ? list[0] : null };
+  return { partial: list.some(a=>a._wb), s, stock, stockNow, prev, count: list.length, active, pActive, single: list.length === 1 ? list[0] : null };
 }
 
 // Модель в формате компонентов «Рекламы» (byDate, totals, prev), с
@@ -121,7 +122,7 @@ function toModel(ag, buckets) {
   for (const k of K) tot[k] = 0;
   for (const b of buckets) {
     const raw = {};
-    for (const k of K) { let v = 0; for (const i of b.idx) v += ag.s[k][i]; raw[k] = v; tot[k] += v; }
+    for (const k of K) { let v = 0; for (const i of b.idx) v += ag.s[k][i]; raw[k] = ag.partial?sumAvailable(b.idx.map(i=>ag.s[k][i])):v; if(!ag.partial)tot[k] += v; }
     raw.spend = raw.spendCpc + raw.spendCpo + raw.spendOther;
     let st = null;
     for (const i of b.idx) if (ag.stock[i] !== null) st = ag.stock[i];
@@ -129,6 +130,7 @@ function toModel(ag, buckets) {
     if (ag.single) { const ps = b.idx.map(i => ag.single.pos[i]).filter(v => v !== null); pos = ps.length ? ps.reduce((x, y) => x + y, 0) / ps.length : null; }
     byDate[b.key] = { ...derive(raw, 'all'), stock: st, position: pos, avgCpc: raw.clicks > 0 ? raw.spendCpc / raw.clicks : null };
   }
+  if(ag.partial)for(const k of K)tot[k]=sumAvailable(ag.s[k]);
   tot.spend = tot.spendCpc + tot.spendCpo + tot.spendOther;
   const totals = derive(tot, 'all');
   totals.avgCpc = tot.clicks > 0 ? tot.spendCpc / tot.clicks : null;
@@ -639,6 +641,8 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
 
   const dates = data?.dates || [];
   const N = dates.length;
+  const orderDays=data?._wb&&data.coverage?.orders?dates.filter(d=>d>=data.coverage.orders.from&&d<=data.coverage.orders.to).length:N;
+  const financeDays=fin?.pnl?.financeSource==='wb'?dates.filter(d=>d>=fin.pnl.available.mn&&d<=fin.pnl.available.mx).length:N;
   const all = useMemo(() => (data ? prepare(data) : []), [data]);
   const brands = useMemo(() => {
     const m = new Map();
@@ -699,6 +703,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
       } else if (k && (a.tOrders > 0 || a.tSpend > 0)) {
         for (let d = 0; d < N; d++) {
           const ordRub = a.revenue[d], ordQty = a.orders[d], ads = a.spendCpc[d] + a.spendCpo[d] + a.spendOther[d];
+          if (data?._wb && ![ordRub,ordQty,ads].every(Number.isFinite)) continue;
           if (!ordRub && !ordQty && !ads) continue;
           const fs = fbsDay.get(a.o + '|' + dates[d]);
           const r = unitProfit(k, { ordRub, ordQty, ads, fbs: fs }, tax);
@@ -949,7 +954,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     setTimeout(() => document.getElementById('s-tree')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   };
   // ── Поиск проблем и точек роста: метрики артикула за период и прошлый период ──
-  const sumA = arr => { let x = 0; for (let d = 0; d < N; d++) x += arr[d]; return x; };
+  const sumA = arr => { if(data?._wb)return sumAvailable(arr);let x = 0; for (let d = 0; d < N; d++) x += arr[d]; return x; };
   const ext = cached(`ext|${sel}|${tax}|${unitK ? 1 : 0}`, () => node.arts.map(a => {
     const views = sumA(a.views), pdp = sumA(a.pdpViews), orders = a.tOrders, rev = a.tRevenue, spend = a.tSpend, adOrders = sumA(a.adOrders);
     const p = a.prev || {};
@@ -1049,6 +1054,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
 
       </div>
 
+      {data?._wb&&data.coverage&&<div className="a-hint" role="status">{[['orders','Заказы'],['ads','Реклама']].map(([key,label])=>{const c=data.coverage[key];return <span key={key} style={{marginRight:16}}>{label}: {c?`данные по ${dayjs(c.to).format('DD.MM.YYYY')}${c.to<dateTo?' · итог по загруженным дням':''}`:'ещё не загружены'}</span>;})}Незагруженные дни показаны «—».</div>}
       {fin?.pnl?.financeSource === 'wb' && <div className="a-hint" style={{margin:'8px 0'}}>Финансы WB по {dayjs(fin.pnl.available.mx).format('DD.MM.YYYY')} · прибыль и поступления — по отчёту реализации.</div>}
       <div className={`a-kpis s-kpis ${loading ? 'a-loading' : ''}`}>
         {/* 1. Заказы и выкупы */}
@@ -1061,7 +1067,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         <div className="a-kpi">
           <span className="lbl">Заказы, шт</span>
           <span className="val n">{fmtInt(T.orders)}</span>
-          <span className="sub"><Delta value={P && changePct(T.orders, P.orders)} /> · ≈ {N ? perDayTxt(dayT.orders / N) : '—'} в день</span>
+          <span className="sub"><Delta value={P && changePct(T.orders, P.orders)} /> · ≈ {orderDays ? perDayTxt(dayT.orders / orderDays) : '—'} в день</span>
           <AreaSpark values={series('orders')} color="var(--a-good)" />
         </div>
         <div className="a-kpi" title="Сумма выкупленных товаров за вычетом возвратов — по дню выкупа (из отчёта продаж)">
@@ -1072,7 +1078,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         <div className="a-kpi" title="Выкуплено штук за вычетом возвратов — по дню выкупа">
           <span className="lbl">Выкупы, шт</span>
           <span className="val n">{finK?.has ? fmtInt(finK.sQty) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
-          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sQty, finKP.sQty) : null} /> {finK?.has && N ? `≈ ${perDayTxt(finK.sQty / N)} в день` : ''}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sQty, finKP.sQty) : null} /> {finK?.has && financeDays ? `≈ ${perDayTxt(finK.sQty / financeDays)} в день` : ''}</span>
         </div>
 
         {/* 2. Средние чеки и поступления */}

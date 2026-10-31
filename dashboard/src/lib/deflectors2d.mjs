@@ -60,6 +60,17 @@ function distribute(rows, settings, manual) {
   }
   return result;
 }
+export function priority2d(row, settings) {
+  const known=Number.isFinite(row.stock)&&Number.isFinite(row.transit)&&Number.isFinite(row.rate);
+  const horizon=settings.leadDays+settings.periodDays;
+  const status=!known?'Нет данных':row.rate===0?'Хватает':row.cover<settings.leadDays?'Срочно':row.cover<horizon?'Пополнить':'Хватает';
+  if(!known)return {priority:status,priorityScore:null,priorityParts:null};
+  const urgency=status==='Срочно'?3000:status==='Пополнить'?2000:1000;
+  const advertising=row.favorite?100:0;
+  const deficit=row.rate>0?Math.round(60*Math.max(0,Math.min(1,(horizon-row.cover)/horizon))):0;
+  const growth=Number.isFinite(row.trend7)?Math.round(30*Math.max(0,Math.min(1,row.trend7/100))):0;
+  return {priority:status,priorityScore:urgency+advertising+deficit+growth,priorityParts:{urgency,advertising,deficit,growth}};
+}
 export function calculate2d(input, demand = null, inventory = null) {
   const draft = validate2d(input), { settings } = draft;
   const rows = draft.rows.map(original => {
@@ -78,7 +89,7 @@ export function calculate2d(input, demand = null, inventory = null) {
   });
   const recommendation = distribute(rows, settings, false), final = distribute(rows, settings, true);
   const issues = rows.filter(r => r.enabled && r.manual !== null && r.manual % settings.multiple !== 0).map(r => `${r.offer}: ручное количество должно быть кратно ${settings.multiple}`);
-  const result = rows.map(r => ({ ...r, priority: r.cover === null ? 'Нет данных' : r.cover < settings.leadDays ? 'Срочно' : r.cover < settings.leadDays + settings.periodDays ? 'Пополнить' : 'Хватает', recommended: recommendation.get(r.offer), quantity: final.get(r.offer), after: r.rate > 0 && r.available !== null ? (r.available + final.get(r.offer)) / r.rate : null }));
+  const result = rows.map(r => ({ ...r, ...priority2d(r,settings), recommended: recommendation.get(r.offer), quantity: final.get(r.offer), after: r.rate > 0 && r.available !== null ? (r.available + final.get(r.offer)) / r.rate : null }));
   const total = result.reduce((sum, r) => sum + r.quantity, 0);
   return { settings, rows: result, total, left: Math.max(0, settings.total - total), over: Math.max(0, total - settings.total), issues };
 }

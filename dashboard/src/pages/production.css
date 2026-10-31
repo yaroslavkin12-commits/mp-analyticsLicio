@@ -115,3 +115,8 @@
 .mpui.d2-page .d2-no-need{padding:8px 0;color:var(--a-ink2)}
 .mpui.d2-page .d2-journal-anchor{scroll-margin-top:75px}
 @media(max-width:760px){.mpui.d2-page .d2-plan-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.mpui .d2-date-chips{display:flex;gap:4px;flex-wrap:wrap}
+.mpui .d2-date-chips .a-btn{padding:5px 8px}
+.mpui .d2-date-chips .on{background:var(--a-accent-soft);color:var(--a-accent);border-color:var(--a-accent)}
+.mpui .d2-table .pr-sig{font-weight:600}

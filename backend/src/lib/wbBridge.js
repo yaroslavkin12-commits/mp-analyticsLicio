@@ -68,11 +68,20 @@ async function ingest(input, { deferCommit = false } = {}) {
     }
     await client.query("DELETE FROM wb_bridge_parts WHERE created_at < NOW() - INTERVAL '1 day'");
     await client.query('COMMIT');
-    if (complete) require('./dataVersion').bump();
+    if (complete) { operationsEpoch++; operationsCache=null; require('./dataVersion').bump(); }
     return { complete, received, parts: meta.parts };
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
-async function read({ excludeFinance = false } = {}) { await ensure(); return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1' + (excludeFinance ? " AND kind <> 'finance'" : ''), [CABINET]); }
+let operationsCache, operationsLoading, operationsEpoch=0;
+async function read({ excludeFinance = false } = {}) {
+  await ensure();
+  if(!excludeFinance)return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1',[CABINET]);
+  if(operationsCache && Date.now()-operationsCache.at<30000)return [...operationsCache.rows];
+  if(!operationsLoading){const epoch=operationsEpoch;operationsLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind <> 'finance'",[CABINET]).then(rows=>{if(epoch===operationsEpoch)operationsCache={at:Date.now(),rows};return rows;}).finally(()=>{operationsLoading=null;});}
+  const epoch=operationsEpoch,rows=await operationsLoading;
+  if(epoch!==operationsEpoch)return read({excludeFinance:true});
+  return [...rows];
+}
 async function readMeta() { await ensure(); return query('SELECT kind, meta, updated_at FROM wb_bridge_data WHERE cabinet=$1', [CABINET]); }
 module.exports = { CABINET, KINDS, verify, validate, ingest, read, readMeta };
 

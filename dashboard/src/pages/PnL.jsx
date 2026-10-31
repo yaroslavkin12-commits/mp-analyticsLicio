@@ -1,3 +1,4 @@
+import { sumAvailable } from '../lib/availableSum';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getFinancePnl, getFinanceOps, latestOnly } from '../api';
@@ -40,6 +41,16 @@ const ROWS = [
   { key: 'margin', label: 'Маржа, %', fmt: 'pct', good: 'up', hint: 'Прибыль / выручка' },
   { key: 'drr', label: 'ДРР факт, %', fmt: 'pct', good: 'down', hint: 'ДРР фактический: списания на рекламу (по начислениям Ozon) / выручка по выкупам (выкупы − возвраты). В «Цены и маржа» и калькуляторе — ДРР прогнозный: реклама / (заказы × % выкупа)' },
 ];
+function WbAdsTiming({data,items,deductions,allScope}) {
+  const ads=data.adStatistics;if(!ads)return null;
+  const selected=new Set(items.map(a=>a.i)),all=allScope;
+  const spend=data.dates.map(d=>ads.from&&d>=ads.from&&d<=ads.to?0:null);
+  for(const [ai,di,value] of ads.rows)if(selected.has(ai)&&spend[di]!==null)spend[di]+=value;
+  if(all)for(let di=0;di<spend.length;di++)if(spend[di]!==null)spend[di]+=ads.unallocated[di]||0;
+  const held=data.dates.map((d,i)=>d>=data.available.mn&&d<=data.available.mx?-deductions[i]:null);
+  const rows=[{key:'spend',label:'Расход по дням рекламы',fmt:'int',good:'neutral'},{key:'held',label:'Удержано по финансовому отчёту',fmt:'int',good:'neutral'}];
+  return <details className="a-card" style={{padding:14}}><summary style={{cursor:'pointer',fontWeight:600}}>Реклама WB: расходы и удержания по дням</summary><p className="a-hint">Расход — по дате статистики рекламы; удержание — по дате операции отчёта. Эти суммы не складываются. Прибыль и поступления выше рассчитаны по удержаниям. Статистика рекламы может уточняться WB.{!all?' Расходы без привязки к товару доступны только в общем итоге.':''}</p><RowsTable dates={data.dates} rows={rows} vals={{spend,held}} totals={{spend:sumAvailable(spend),held:sumAvailable(held)}} /></details>;
+}
 const METRICS = [
   { key: 'revenue', label: 'Выручка, ₽', fmt: 'int' },
   { key: 'profit', label: 'Прибыль, ₽', fmt: 'int', free: true },
@@ -276,7 +287,7 @@ export default function PnL({ cabinet }) {
     : pctMode ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perR(T[r.key], T.revenue)])) : T;
   // В процентах: подписи без «₽», расходы подсвечиваются — меньше доля (ближе к нулю) лучше.
   const formatRows = pctMode ? ROWS.map(r => (!r.key || KEEP.has(r.key) ? r : { ...r, fmt: r.fmt === 'money0' ? 'pct0' : 'pct', label: r.label.replace(/, ₽$/, ', %'), good: r.signed ? 'up' : r.good })) : ROWS;
-  const shownRows = data._wb ? formatRows.map(r=>({...r,label:r.label?.replaceAll('Ozon','WB'),block:r.block?.replaceAll('Ozon','WB'),hint:r.key==='ads'?'Списания «WB Продвижение» из ежедневного отчёта. Комиссия и эквайринг повторно не вычитаются.':r.key==='taxBase'?'Оплата покупателями из поля retailAmount, за вычетом возвратов.':r.hint?.replaceAll('Ozon','WB')})) : formatRows;
+  const shownRows = data._wb ? formatRows.map(r=>({...r,label:r.label?.replaceAll('Ozon','WB'),block:r.block?.replaceAll('Ozon','WB'),hint:r.key==='ads'?'Удержания «WB Продвижение» по дате операции финансового отчёта. Они могут приходить позднее расходов рекламного кабинета; для оценки каждого дня смотрите блок «Расходы и удержания». Комиссия и эквайринг повторно не вычитаются.':r.key==='taxBase'?'Оплата покупателями из поля retailAmount, за вычетом возвратов.':r.hint?.replaceAll('Ozon','WB')})) : formatRows;
   const byDate = {};
   dates.forEach((d, i) => { byDate[d] = {}; for (const m of METRICS) byDate[d][m.key] = vals[m.key][i]; });
   const strip = [
@@ -320,6 +331,8 @@ export default function PnL({ cabinet }) {
           </div>
           {noCost > 0 && <div className="c-msg bad">У {noCost} арт. с выкупами нет себестоимости — прибыль по ним завышена. {cabinet === 'licio' ? 'Заполните в «Настройки → Себестоимость».' : 'Заполните во вкладке «Себестоимость».'}</div>}
           {filtered && <div className="a-hint">Начисления без артикула (хранение, подписки и т. п.) распределены пропорционально выкупам, реклама без привязки к товару — по расходу рекламного кабинета: на выбранное — {pct1(shareOf(list.arts) * 100)}.</div>}
+
+          {data.financeSource==='wb'&&<WbAdsTiming data={data} items={list.arts} deductions={vals.ads} allScope={!sel&&!q.trim()&&!grp.sel} />}
 
           {T.revenue > 0 && strip.length > 0 && (
             <div className="a-card s-card">
