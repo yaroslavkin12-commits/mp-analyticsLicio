@@ -1,3 +1,4 @@
+import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import { familyOf } from '../lib/cabinets';
 import SetMark from '../components/SetMark';
@@ -740,7 +741,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
                   <tr className="tb-total">
                     <td><b>Итого</b> <span className="muted" style={{ fontSize: 11.5 }}>{table.total.sub}</span></td>
                     {cfg.rows === 'art' && <td className="muted">{catPath ? catPath.split(SEP).pop() : ''}</td>}
-                    {table.total.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r">{cell(x, i)}</td>)}
+                    {table.total.vals.map((x, i) => <td key={cfg.cols[i].id} className="n r" style={{background:resultTint(x.v,x.p,['spend','drr','position','cost'].includes(cfg.cols[i].m)?'down':'up')}}>{cell(x, i)}</td>)}
                   </tr>
                 )}
                 {!shown.length && <tr><td colSpan={cfg.cols.length + 2} className="muted" style={{ padding: 12 }}>Ничего не подходит под фильтр</td></tr>}

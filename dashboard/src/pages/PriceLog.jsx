@@ -515,6 +515,7 @@ export default function PriceLog({ cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Журнал цен</h1>
+          <input className="a-input" aria-label="Поиск по журналу цен" placeholder="Артикул или категория" value={q} onChange={e => setQ(e.target.value)} style={{ width: 220 }} />
           <span className="a-seg"><button type="button" className="on">Ozon · Дефлай</button><button type="button" disabled title="Добавим позже">WB — позже</button></span>
           <span className="a-seg">{[['log', 'Журнал'], ['dyn', 'Динамика цен']].map(([k, t]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{t}</button>)}</span>
           <span className="a-hint" style={{ margin: 0 }}>{tab === 'log' ? 'цены для клиента из репрайсера, раз в неделю' : 'как меняются цены по категориям и артикулам'}</span>
@@ -647,7 +648,6 @@ export default function PriceLog({ cabinet }) {
             <select className="a-input" value={fGoal} onChange={e => setFGoal(e.target.value)} style={{ padding: '5px 8px' }}>
               <option value="">Все цели</option><option value="—">Без цели</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
             </select>
-            <input className="a-input" placeholder="Артикул или категория" value={q} onChange={e => setQ(e.target.value)} style={{ minWidth: 200 }} />
             <span className="muted" style={{ fontSize: 12.5 }}>{shown.length} арт.</span>
             <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
           </div>

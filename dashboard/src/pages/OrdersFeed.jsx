@@ -106,9 +106,9 @@ export default function OrdersFeed({ cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Лента заказов</h1>
+          <ArtSearch value={q} onChange={setQ} options={opts} placeholder="Артикул, название или номер отправления" style={{ minWidth: 260 }} />
           <QuickPeriods from={from} to={to} onChange={(f,t)=>{setFrom(f);setTo(t);}} />
           <DateRangePicker from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
-          <ArtSearch value={q} onChange={setQ} options={opts} placeholder="Артикул, название или номер отправления" style={{ minWidth: 260 }} />
         </div>
       </div>
       {err && <div className="c-msg bad" style={{ margin: '10px 0' }}>{err}</div>}

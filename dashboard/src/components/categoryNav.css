@@ -22,3 +22,5 @@
 @media(max-width:850px){.mpui .category-nav-group-wrap{flex-basis:100%;border-left:0;padding-left:0}}
 
 .mpui .category-nav-groups>*{flex-shrink:0}
+
+.mpui .category-nav-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap}

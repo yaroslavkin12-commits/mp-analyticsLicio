@@ -72,7 +72,7 @@ export default function Deflectors2d({ nav }) {
       let cached;
       if (restore) try { cached = JSON.parse(localStorage.getItem(CACHE)); } catch { /* ignore */ }
       const next = cached?.draft || value.draft;
-      setDraft({ ...next, settings: { ...next.settings, source: next.settings.source || 'ozon', stockSource: next.settings.stockSource || 'manual', transitSource: next.settings.transitSource || (next.settings.stockSource ? 'live' : 'manual') } });
+      setDraft({ ...next, settings: { ...next.settings, source: next.settings.source || 'ozon', stockSource: 'live', transitSource: next.settings.transitSource || (next.settings.stockSource ? 'live' : 'manual') } });
       if (cached?.draft && cached.revision !== value.revision) { setState(s => ({ ...s, revision: cached.revision })); setMessage('Есть локальные правки к старой версии. Скачайте их перед обновлением: запись на сервер будет защищена от перезаписи чужих изменений.'); }
     } catch (e) { setError(e.response?.data?.error || e.message); }
   }
@@ -151,9 +151,9 @@ export default function Deflectors2d({ nav }) {
     } catch (e) { setExportError(e.response?.data?.error || e.message); }
     finally { setBusy(false); }
   }
-  if (!draft) return <div className="mpui d2-page"><div className="a-top"><h1>Производство</h1>{nav}</div><div className="a-card pr-card">{error || 'Загрузка…'}{error && <button className="a-btn" onClick={() => load()}>Повторить</button>}</div></div>;
+  if (!draft) return <div className="mpui d2-page"><div className="a-top"><h1>Производство</h1><input className="a-input" aria-label="Поиск дефлекторов" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} />{nav}</div><div className="a-card pr-card">{error || 'Загрузка…'}{error && <button className="a-btn" onClick={() => load()}>Повторить</button>}</div></div>;
   const s = draft.settings, invReady = inventory?.cabinet === receivingCabinet && !inventoryError;
-  const stockSource = s.stockSource || 'manual';
+  const stockSource = 'live';
   const transitSource = s.transitSource || (s.stockSource ? 'live' : 'manual');
   const knownStocks = preview.rows.filter(r => r.stock != null).length;
   const knownRates = preview.rows.filter(r => r.rate != null).length;
@@ -164,7 +164,6 @@ export default function Deflectors2d({ nav }) {
   const displayedColumns = [...new Set(tableColumns)].filter(k => COLUMNS.some(c => c[0] === k) && k !== 'offer' && (k !== 'sales' || s.source !== 'ozon'));
   const cell = (r, k) => {
     if (k === 'quantity') return <>{numeric(r, 'manual', 'Подсорт', s.multiple)}{r.manual !== null && <button className="tt-reset" aria-label={`Автоматическое количество: ${r.offer}`} onClick={() => patch(r.offer, { manual: null })}>↺</button>}</>;
-    if (k === 'stock' && stockSource === 'manual') return numeric(r, 'stock', 'Остаток');
     if (k === 'transit' && transitSource === 'manual') return <>{numeric({ ...r, transit: r.legacyTransit }, 'transit', 'Прежний ручной ввод в пути')}<small className="pr-sub2">Всего с заявками: {fmt(r.transit)}</small></>;
     if (k === 'stock' && r.staleStock) return <span title={`Последний снимок: ${r.stockDate}`}>—<small className="pr-sub2">от {dayjs(r.stockDate).format('DD.MM')}</small></span>;
     if (k === 'recommended' && r.need === null) return <span title={r.stock === null ? 'Нет актуального остатка' : r.rate === null ? 'Нет полного периода продаж' : 'Неизвестно количество в пути'}>—</span>;
@@ -175,7 +174,7 @@ export default function Deflectors2d({ nav }) {
     return <span className={k.startsWith('trend') && r[k] != null ? r[k] > 0 ? 's-up' : 's-down' : ''}>{fmt(r[k])}{k.startsWith('trend') && r[k] != null ? '%' : ''}</span>;
   };
   return <div className="mpui d2-page">
-    <div className="page-sticky"><div className="a-top"><h1>Производство</h1>{nav}</div></div>
+    <div className="page-sticky"><div className="a-top"><h1>Производство</h1><input className="a-input" aria-label="Поиск дефлекторов" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} />{nav}</div></div>
     {error && <div className="c-msg bad" role="alert">{error}</div>}{message && <div className="c-msg" role="status">{message}</div>}
     {inventoryError && <div className="c-msg bad">Не удалось обновить остатки: {inventoryError} <button className="a-btn" onClick={refreshInventory}>Повторить</button></div>}
     <fieldset disabled={busy} className="d2-fieldset">
@@ -183,12 +182,11 @@ export default function Deflectors2d({ nav }) {
       <div className="d2-plan-grid">{[['periodDays','Подача каждые','дней'],['leadDays','Поступление через','дней'],['multiple','Кратность','шт.'],['total','Лимит партии','шт.']].map(([k,label,unit]) => <label key={k} className="d2-plan-item"><span>{label}</span><div><input className="a-input" aria-label={label} type="number" min={['total','leadDays'].includes(k) ? 0 : 1} value={s[k] ?? 7} onChange={e => setting(k, e.target.value === '' ? '' : Number(e.target.value))} /><small>{unit}</small></div></label>)}</div>
       <div className="a-bar d2-plan-actions"><details className="d2-settings"><summary>Источники и дополнительные настройки</summary><div className="a-bar d2-settings-fields">
         <label>Поступление в кабинет<select className="a-input" value={receivingCabinet} onChange={e => setting('receivingCabinet', e.target.value)}>{(state.receivingCabinets || [{id:'defly',label:'Defly'}]).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
-        <label>Остатки<select className="a-input" value={stockSource} onChange={e => setting('stockSource', e.target.value)}><option value="live">Из выбранного кабинета</option><option value="manual">Ввести остаток компании</option></select></label>
         <label>В пути<select className="a-input" value={transitSource} onChange={e => setting('transitSource', e.target.value)}><option value="live">Из рекламы и заявок</option><option value="manual">Прежний ручной ввод + заявки</option></select></label>
         <label><input type="checkbox" checked={s.source === 'ozon'} onChange={e => setting('source', e.target.checked ? 'ozon' : 'manual')} /> Продажи всех кабинетов</label>
         {s.source !== 'ozon' && <label>Период продаж, дней<input className="a-input d2-num" type="number" value={s.salesDays} onChange={e => setting('salesDays', Number(e.target.value))} /></label>}
         <label><input type="checkbox" checked={s.fill} onChange={e => setting('fill', e.target.checked)} /> Добрать до лимита сверх потребности</label></div>
-        <div className="a-hint">Приоритет — по запасу на срок поступления и интервал подачи. Рекомендации — по темпу продаж 7/14/30 дней; прибыль и реклама пока не меняют количество. «В пути» = открытые заявки + выбранный ручной источник; два ручных источника не складываются. Снимки старше вчерашнего дня не используются как текущий остаток. Поступления определяются по событиям роста остатков выбранного кабинета.</div>
+        <div className="a-hint">Приоритет — по запасу на срок поступления и интервал подачи. Рекомендации — по темпу продаж 7/14/30 дней; прибыль и реклама пока не меняют количество. «В пути» = открытые заявки + выбранный ручной источник; два ручных источника не складываются. Остатки загружаются из раздела «Остатки» выбранного кабинета и не редактируются здесь. Поступления определяются по событиям роста остатков выбранного кабинета.</div>
       </details><button className="a-btn ghost" disabled={!dirty || preview.invalid} onClick={save}>Сохранить</button><button className="a-btn ghost" onClick={() => { loadDemand(true); refreshInventory(); }}>Обновить данные</button><button className="a-btn ghost" onClick={() => { if (!dirty || window.confirm('Загрузить серверную версию вместо локальных правок?')) load(false); }}>Загрузить с сервера</button></div>
     </div>
     <div className="a-card pr-card">
@@ -196,12 +194,11 @@ export default function Deflectors2d({ nav }) {
         {demand && <div className="a-hint">Продажи: {demand.shops.map(c => c.label).join(', ')} · по {dayjs(demand.to).format('DD.MM.YYYY')}. {PERIODS_2D.filter(d => demand.ranges['d'+d]?.complete).join(', ')} дней полной истории.</div>}
         {demandError && <p role="alert">{demandError}</p>}<div className="a-bar"><input className="a-input" placeholder="Новый артикул" value={newOffer} onChange={e => setNewOffer(e.target.value)} /><input className="a-input" placeholder="Наименование" value={newName} onChange={e => setNewName(e.target.value)} /><button className="a-btn ghost" disabled={!newOffer.trim()} onClick={() => { add([{offer:newOffer,name:newName}]); setNewOffer(''); setNewName(''); }}>Добавить</button></div>
       </details>
-      <div className="d2-data-status" role="status"><span>Остатки: <b>{stockSource === 'live' ? `${receivingCabinet} · ${stockDate ? dayjs(stockDate).format('DD.MM.YYYY') : 'загрузка…'}` : 'ручной ввод компании'}</b> · {knownStocks} / {preview.rows.length} арт.</span><span>Темп продаж ({s.source === 'ozon' ? 'МП' : 'ручной ввод'}): {knownRates} / {preview.rows.length} арт. · {s.source !== 'ozon' ? `за ${s.salesDays} дней` : demand ? `по ${dayjs(demand.to).format('DD.MM.YYYY')}` : 'загрузка…'}</span></div>
-      {stockSource === 'manual' && knownStocks < preview.rows.length && <div className="c-msg">Выбран ручной остаток, часть значений не заполнена. <button className="a-btn ghost" onClick={() => setting('stockSource','live')}>Использовать актуальные остатки</button></div>}
+      <div className="d2-data-status" role="status"><span>Остатки: <b>{`${receivingCabinet} · ${stockDate ? dayjs(stockDate).format('DD.MM.YYYY') : 'загрузка…'}`}</b> · {knownStocks} / {preview.rows.length} арт.</span><span>Темп продаж ({s.source === 'ozon' ? 'МП' : 'ручной ввод'}): {knownRates} / {preview.rows.length} арт. · {s.source !== 'ozon' ? `за ${s.salesDays} дней` : demand ? `по ${dayjs(demand.to).format('DD.MM.YYYY')}` : 'загрузка…'}</span></div>
       {demandError && <div className="c-msg bad" role="alert">Не удалось получить продажи: {demandError}<button className="a-btn ghost" onClick={() => loadDemand(true)}>Повторить</button></div>}
       {s.source !== 'ozon' && knownRates < preview.rows.length && <div className="c-msg">Не заполнены ручные продажи. <button className="a-btn ghost" onClick={() => setting('source','ozon')}>Использовать продажи маркетплейсов</button></div>}
       {noNeed && <div className="a-hint d2-no-need">Подсорт не требуется: запаса с учётом «В пути» хватает на {Number(s.periodDays) + Number(s.leadDays ?? 7)} дней. Рекомендация 0 — результат расчёта.</div>}
-      <div className="a-bar d2-filters"><input className="a-input" aria-label="Поиск дефлекторов" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} /><label><input type="checkbox" checked={only} onChange={e => setOnly(e.target.checked)} /> Только в заказе</label><label><input type="checkbox" checked={favorites} onChange={e => setFavorites(e.target.checked)} /> ★ Избранные</label><label><input type="checkbox" checked={missing} onChange={e => setMissing(e.target.checked)} /> Без данных</label><ResetCtl ctl={ctl} /></div>
+      <div className="a-bar d2-filters"><label><input type="checkbox" checked={only} onChange={e => setOnly(e.target.checked)} /> Только в заказе</label><label><input type="checkbox" checked={favorites} onChange={e => setFavorites(e.target.checked)} /> ★ Избранные</label><label><input type="checkbox" checked={missing} onChange={e => setMissing(e.target.checked)} /> Без данных</label><ResetCtl ctl={ctl} /></div>
       <div className="a-bar d2-table-tools"><span className="a-hint">{shown.length} из {preview.rows.length} артикулов</span><ColumnPicker columns={COLUMNS.filter(([k]) => k !== 'offer')} value={tableColumns} onChange={setTableColumns} /></div>
 
       <div className="a-scroll"><table className="a-t pr-t d2-table"><thead><tr><th>★</th><ThCtl ctl={ctl} k="offer" filter={false}>Артикул</ThCtl>{displayedColumns.map(k => <ThCtl key={k} ctl={ctl} k={k} filter={!['name','priority','note','rateWindow'].includes(k)}>{COLUMNS.find(c => c[0] === k)?.[1]}</ThCtl>)}</tr></thead><tbody>

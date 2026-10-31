@@ -168,6 +168,7 @@ export default function Costs({ cabinet, nav }) {
       <div className="page-sticky">
       <div className="a-top">
         <h1>{nav ? 'Товары' : 'Себестоимость'}</h1>
+        <ArtSearch value={search} onChange={setSearch} options={artOpts} style={{ minWidth: 220 }} />
         {nav}
         <span className="a-hint">{fmtInt(filled)} из {fmtInt(items.length)} артикулов заполнено · из продававшихся за 30 дней — {fmtInt(soldFilled)} из {fmtInt(soldItems.length)}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -217,7 +218,6 @@ export default function Costs({ cabinet, nav }) {
 
       <CategoryNav tops={cats.filter(c=>!c.includes(' / '))} value={cat} onChange={setCat} childrenOf={path=>cats.filter(c=>c.startsWith(path+' / ')&&c.split(' / ').length===path.split(' / ').length+1).map(c=>c.split(' / ').at(-1))} />
       <div className="a-bar">
-        <ArtSearch value={search} onChange={setSearch} options={artOpts} style={{ minWidth: 220 }} />
         <button type="button" className="a-toggle" onClick={() => setOnlyEmpty(v => !v)}><span className={`a-sw ${onlyEmpty ? 'on' : ''}`} />Только без себестоимости</button>
         <button type="button" className="a-toggle" onClick={() => setOnlySold(v => !v)}><span className={`a-sw ${onlySold ? 'on' : ''}`} />Только с продажами</button>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>

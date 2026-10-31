@@ -72,3 +72,11 @@ test('Инвентарь: старый снимок не текущий оста
   assert.equal(inv.byOffer.a.stock,null);assert.equal(inv.byOffer.a.stale,true);assert.equal(inv.byOffer.a.transit,20);
   assert.equal(inv.byOffer.b.stock,10);assert.equal(inv.history[0].stock,17);
 });
+
+test('Актуальный остаток перекрывает старое ручное значение и не подменяется им при загрузке', async () => {
+  const { calculate2d } = await import('../../dashboard/src/lib/deflectors2d.mjs');
+  const draft = {settings:{multiple:10,periodDays:7,salesDays:30,total:140,stockSource:'live'},rows:[{offer:'A',sales:300,stock:999,transit:0,manual:null}]};
+  assert.equal(calculate2d(draft).rows[0].stock,null);
+  assert.equal(calculate2d(draft,null,{byOffer:{a:{stock:17,transit:0}}}).rows[0].stock,17);
+  assert.equal(draft.rows[0].stock,999);
+});

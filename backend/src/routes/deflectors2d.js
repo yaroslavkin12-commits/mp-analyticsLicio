@@ -7,6 +7,7 @@ const transit = require('../lib/deflectorsTransit');
 const { listCabinets } = require('../config/cabinets');
 const allowedCabinet = id => listCabinets().some(c => c.id === id && c.family === 'defly' && c.platform === 'ozon');
 async function decorate(state) {
+  state = { ...state, draft: { ...state.draft, settings: { ...state.draft.settings, stockSource: 'live', transitSource: state.draft.settings.transitSource || (state.draft.settings.stockSource ? 'live' : 'manual') } } };
   const data = await transit.inventory(state, state.draft.settings.receivingCabinet || 'defly');
   return { ...state, journal: data.journal, inventory: data, receivingCabinets: listCabinets().filter(c => c.family === 'defly' && c.platform === 'ozon' && c.connected).map(c => ({ id: c.id, label: c.label })) };
 }
@@ -31,7 +32,7 @@ router.get('/catalog', wrap(async () => (await catalog2d()).articles));
 router.get('/demand', wrap(req => demand2d(req.query.refresh === '1')));
 async function mutate(req, journal) {
   const { validate2d, calculate2d, afterSubmission2d } = await model();
-  const draft = validate2d(req.body.draft);
+  const draft = validate2d({ ...req.body.draft, settings: { ...req.body.draft?.settings, stockSource: 'live', transitSource: req.body.draft?.settings?.transitSource || (req.body.draft?.settings?.stockSource ? 'live' : 'manual') } });
   if (!allowedCabinet(draft.settings.receivingCabinet)) throw new Error('Выберите кабинет поступления Ozon');
   // Повтор уже сохранённого запроса возвращается даже после обновления продаж.
   const requestHash = journal ? createHash('sha256').update(JSON.stringify({ draft, offers: req.body.offers, requestId: req.body.requestId, columns: req.body.columns, date: req.body.date, note: req.body.note, expectedDate: req.body.expectedDate, inventoryVersion: req.body.inventoryVersion, demandVersion: req.body.demandVersion })).digest('hex') : null;

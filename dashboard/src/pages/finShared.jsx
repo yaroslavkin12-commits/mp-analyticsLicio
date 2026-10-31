@@ -1,3 +1,4 @@
+import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react';
@@ -55,13 +56,13 @@ export function FinHeader({ title, cats, sel, setSel, search, setSearch, dateFro
     <div className="page-sticky">
       <div className="a-top">
         <h1>{title}</h1>
+        <ArtSearch value={search} onChange={setSearch} options={cats.arts} style={{ minWidth: 200 }} />
         {setRange && (
           <>
             <QuickPeriods from={dateFrom} to={dateTo} onChange={setRange} periods={periods} />
             <DateRangePicker from={dateFrom} to={dateTo} onChange={setRange} />
           </>
         )}
-        <ArtSearch value={search} onChange={setSearch} options={cats.arts} style={{ minWidth: 200 }} />
         {children}
         {loading && <span className="a-hint">обновляем…</span>}
       </div>
@@ -133,8 +134,8 @@ export function CatTable({ cats, sel, setSel, list, cols, aggOf, sortKey, title,
       .sort((x, y) => Math.abs(y.agg[sortKey] || 0) - Math.abs(x.agg[sortKey] || 0)).slice(0, 300);
   }, [kids.join('|'), list, aggOf, sortKey, depth, sel]); // eslint-disable-line react-hooks/exhaustive-deps
   const total = useMemo(() => aggOf(list.arts), [list, aggOf]);
-  const cell = (c, agg) => (
-    <td key={c.key} className="n r">
+  const cell = (c, agg, isTotal=false) => (
+    <td key={c.key} className="n r" style={isTotal&&c.delta?{background:resultTint(c.delta(agg),0,c.good||'up')}:undefined}>
       {fmtBy(agg[c.key], c.fmt)}
       {c.delta && <span style={{ marginLeft: 6 }}><Delta value={c.delta(agg)} unit={c.deltaUnit || '%'} goodWhen={c.good || 'up'} /></span>}
     </td>
@@ -164,7 +165,7 @@ export function CatTable({ cats, sel, setSel, list, cols, aggOf, sortKey, title,
               </tr>
             ))}
             {!rows.length && <tr><td colSpan={cols.length + 1} className="muted" style={{ padding: 16 }}>Нет данных</td></tr>}
-            {rows.length > 1 && <tr className="s-total"><td><b>Итого</b></td>{cols.map(c => cell(c, total))}</tr>}
+            {rows.length > 1 && <tr className="s-total"><td><b>Итого</b></td>{cols.map(c => cell(c, total, true))}</tr>}
           </tbody>
         </table>
       </div>

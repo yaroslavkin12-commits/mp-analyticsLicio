@@ -341,6 +341,15 @@ export default function Calculator({ cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Калькулятор юнит-экономики</h1>
+          {tab==='calc'&&<>               <label className="k-field" style={{ width: 220, margin: 0, position: 'relative' }} title="Взять товар из кабинета — все поля заполнятся его данными">
+                <span className="k-inp"><input aria-label="Поиск товара для расчёта" value={q} onChange={e => setQ(e.target.value)} placeholder="Артикул или название" /></span>
+                {found.length > 0 && (
+                  <div className="k-drop">
+                    {found.map(a => <button key={a.i} type="button" onClick={() => pickArt(a)}><b>{a.o}</b> {a.short}<span className="muted"> · {a.cat}</span></button>)}
+                  </div>
+                )}
+              </label>
+ </>}
           <span className="a-seg">{[['calc', 'Калькулятор'], ['base', 'База по категориям'], ['hist', `История (${hist.length})`]].map(([k, l]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</span>
           {!data && <span className="a-hint">загружаем базу…</span>}
         </div>
@@ -377,15 +386,6 @@ export default function Calculator({ cabinet }) {
                 <span className="a-seg">{[['fbo', 'FBO'], ['fbs', 'FBS']].map(([k, l]) => <button key={k} type="button" className={scheme === k ? 'on' : ''} onClick={() => setScheme(k)}>{l}</button>)}</span>
                 <button type="button" className="a-btn ghost" style={{ marginLeft: 'auto' }} onClick={resetAll}>Сбросить</button>
               </div>
-              <label className="k-field wide">
-                <span className="k-lbl">Взять товар из кабинета — все поля заполнятся его данными</span>
-                <span className="k-inp"><input value={q} onChange={e => setQ(e.target.value)} placeholder="Артикул или название" /></span>
-                {found.length > 0 && (
-                  <div className="k-drop">
-                    {found.map(a => <button key={a.i} type="button" onClick={() => pickArt(a)}><b>{a.o}</b> {a.short}<span className="muted"> · {a.cat}</span></button>)}
-                  </div>
-                )}
-              </label>
               {art !== null && (
                 <div className="k-chip">Товар: <b>{arts[art]?.o}</b> {arts[art]?.short} <button type="button" className="a-btn ghost" onClick={() => { setArt(null); setVals({}); }}>× как новый товар категории</button></div>
               )}

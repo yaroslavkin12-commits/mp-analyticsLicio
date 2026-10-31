@@ -157,6 +157,7 @@ export default function Clusters({ cabinet, nav }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Товары</h1>
+            <input className="a-input" placeholder="Артикул или модель" value={q} onChange={e => setQ(e.target.value)} style={{ minWidth: 220 }} />
           {nav}
           <span className="a-hint" style={{ margin: 0 }}>{d ? (d.source === 'wb' ? 'склейки — объединённые карточки WB, обновляются из каталога' : d.source === 'ozon' ? 'склейки — объединённые карточки Ozon, обновляются раз в сутки' : 'склейки — из ручного списка; обновите скрипт в таблице, чтобы брать их с Ozon') : ''}</span>
         </div>
@@ -183,7 +184,6 @@ export default function Clusters({ cabinet, nav }) {
                 <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => setView(k)}>{t}</button>
               ))}
             </span>
-            <input className="a-input" placeholder="Артикул или модель" value={q} onChange={e => setQ(e.target.value)} style={{ minWidth: 220 }} />
           </div>
           {body}
         </>

@@ -1,3 +1,4 @@
+import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import { barSignals } from '../lib/chartSignals';
@@ -1065,6 +1066,8 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
   const vals = [];
   for (const { m } of models) for (const d of dates) { const v = m.byDate[d]?.[metric]; if (v !== null && v !== undefined && Number.isFinite(v)) vals.push(v); }
   const min = vals.length ? Math.min(...vals) : 0, max = vals.length ? Math.max(...vals) : 0;
+  const completedValues=dates.filter(d=>d<dayjs().format('YYYY-MM-DD')).map(d=>all.byDate[d]?.[metric]).filter(Number.isFinite);
+  const periodMean=completedValues.length?completedValues.reduce((s,v)=>s+v,0)/completedValues.length:null;
   const totalOf = m => metric === 'stock' ? m.stockNow : rowTotal(cfg, m.byDate, dates, m.totals);
   return (
     <div className="a-card" style={{ padding: 14 }}>
@@ -1099,11 +1102,11 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
                 })}
               </tr>
             ))}
-            <tr>
+            <tr className="a-total-row">
               <td className="lbl" style={{ fontWeight: 600, color: 'var(--a-ink)' }}>Итого</td>
               <td className="tot">{fmtBy(totalOf(all), cfg.fmt)}</td>
               <td className="stk" style={{ fontWeight: 600 }}>{fmtInt(all.stockNow)}</td>
-              {dates.map(d => <td key={d} style={{ fontWeight: 600, background: 'var(--a-panel2)' }}>{fmtBy(all.byDate[d]?.[metric], cfg.fmt)}</td>)}
+              {dates.map(d => <td key={d} style={{ fontWeight: 600, background: metric==='position'?positionHeatColor(all.byDate[d]?.[metric]):d<dayjs().format('YYYY-MM-DD')?resultTint(all.byDate[d]?.[metric],periodMean,cfg.good):undefined }}>{fmtBy(all.byDate[d]?.[metric], cfg.fmt)}</td>)}
             </tr>
           </tbody>
         </table>
@@ -1141,7 +1144,7 @@ function Freshness({ status }) {
   return (
     <span className="a-fresh" title={lines.join('\n')}>
       <span className={`a-dot ${worst === 'ok' ? '' : worst}`} />
-      {status.running ? 'Идёт сбор…' : worst === 'bad' ? 'Данные давно не обновлялись' : `Данные обновлены ${agoText(oldest)}`}
+      {status.running ? 'Идёт сбор…' : worst === 'bad' ? 'Данные давно не обновлялись' : `Обновлено ${agoText(oldest)}`}
     </span>
   );
 }
@@ -1586,8 +1589,9 @@ export default function AdsStats2({ cabinet }) {
 
   return (
     <div className="mpui">
-      <div className="page-sticky"><div className="a-top">
+      <div className="page-sticky"><div className="a-top ads-top">
         <h1>Реклама</h1>
+        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 190, minWidth: 140 }} />
         <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} />
         <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
@@ -1595,9 +1599,8 @@ export default function AdsStats2({ cabinet }) {
           <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
         </span>
         <div className="a-top-actions">
-        <Freshness status={status} />
-        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 260, maxWidth: '100%' }} />
-        <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>
+          <Freshness status={status} />
+          <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>
         </div>
       </div></div>
 
@@ -1627,6 +1630,8 @@ export default function AdsStats2({ cabinet }) {
               </span>
             );
           })}
+
+      </>} actions={<>
           {newGroup === null ? (
             <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
           ) : (
@@ -1726,12 +1731,12 @@ export default function AdsStats2({ cabinet }) {
                 <tr className={`row ${open.has(aggKey) ? 'open' : ''}`} onClick={() => toggleOpen(aggKey)} title="Нажмите, чтобы открыть общую аналитику по всем строкам">
                   <td><div className="a-art"><span className="a-chev">▶</span>Итого · {rows.length} арт.{(isGroup||isCat)&&<span className="a-scope"> · {isGroup?activeGroup.name:catPath}</span>}</div></td>
                   <td />
-                  <td className="n">{fmtInt(T.revenue)}{showAssoc && assocLine(assocForRows, 'revenue', T.revenue)}</td>
-                  <td className="n">{fmtInt(T.orders)}{showAssoc && assocLine(assocForRows, 'orders', T.orders)}</td>
+                  <td className="n" style={{background:resultTint(T.revenue,P?.revenue,'up')}}>{fmtInt(T.revenue)}{showAssoc && assocLine(assocForRows, 'revenue', T.revenue)}</td>
+                  <td className="n" style={{background:resultTint(T.orders,P?.orders,'up')}}>{fmtInt(T.orders)}{showAssoc && assocLine(assocForRows, 'orders', T.orders)}</td>
                   <td className="n">{fmtInt(total.stockNow)}</td>
                   <td className="n">{(() => { const t = rows.reduce((x, r) => x + trQ(transit[r.offerId]), 0); return t ? fmtInt(t) : '—'; })()}</td>
-                  <td className="n">{fmtInt(T.spend)}<span className="a-spendsub">{T.spendCpo ? <>клик {fmtInt(T.spendCpc)}<br />заказ {fmtInt(T.spendCpo)}</> : 'за клик'}</span></td>
-                  <td><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span>{T.drrB !== null && T.drrB !== undefined ? <span className="a-spendsub" title="С учётом выкупа">выкуп {fmtPct(T.drrB)}</span> : null}</td>
+                  <td className="n" style={{background:resultTint(T.spend,P?.spend,'down')}}>{fmtInt(T.spend)}<span className="a-spendsub">{T.spendCpo ? <>клик {fmtInt(T.spendCpc)}<br />заказ {fmtInt(T.spendCpo)}</> : 'за клик'}</span></td>
+                  <td style={{background:resultTint(T.drr,P?.drr,'down')}}><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span>{T.drrB !== null && T.drrB !== undefined ? <span className="a-spendsub" title="С учётом выкупа">выкуп {fmtPct(T.drrB)}</span> : null}</td>
                   {(() => { let p = 0, e = 0, any = false; for (const r of rows) { const x = profitOf(r); if (x) { p += x.profit; e += x.expRev; any = true; } } return (
                     <><td className="n"><b style={{ color: p < 0 ? 'var(--a-bad)' : undefined }}>{any ? fmtInt(p) : '—'}</b></td>
                     <td>{any && e > 0 ? <span className={`pill ${p < 0 ? 'b' : p / e * 100 < 10 ? 'w' : 'g'}`}>{fmtPct(p / e * 100)}</span> : '—'}</td></>

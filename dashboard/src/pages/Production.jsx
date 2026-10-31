@@ -272,6 +272,7 @@ function SeatProduction({ cabinet, nav }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>Производство</h1>
+          <input className="a-input" aria-label="Поиск по производству" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} style={{ width: 220 }} />
           {nav}
 
           <span className="a-hint" style={{ margin: 0 }}>подача: пн — Гурьевская, чт — Ельцовка и Искитим</span>
@@ -383,7 +384,6 @@ function SeatProduction({ cabinet, nav }) {
           {(() => { const n = rows.filter(r => inOrder(r.o)?.fill && (!fShop || r.shop === fShop)).length; return n || onlyFill ? (
             <button type="button" className={`s-chip ${onlyFill ? 'on' : ''}`} onClick={() => setOnlyFill(v => !v)} title="Артикулы, добавленные сверх потребности, чтобы добрать цех до нужного числа заданий">⊕ добор <b className="n">{n}</b></button>) : null; })()}
           <button type="button" className="a-toggle" onClick={() => setEdit(v => !v)} title="Править цех, материал, цикл, буфер, партию, TOP и продажи за год (для новинок)"><span className={`a-sw ${edit ? 'on' : ''}`} />Править справочник</button>
-          <input className="a-input" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} style={{ minWidth: 220 }} />
           <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
         </div>
         <div className="a-scroll">

@@ -309,6 +309,7 @@ export default function Geography({ cabinet }) {
       <div className="page-sticky">
         <div className="a-top">
           <h1>География продаж</h1>
+          <ArtSearch value={search} onChange={setSearch} options={arts} style={{ minWidth: 200 }} />
           <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} periods={[7, 14, 30, 45]} />
           <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
           {brandsList.length > 0 && (
@@ -317,7 +318,6 @@ export default function Geography({ cabinet }) {
               {brandsList.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           )}
-          <ArtSearch value={search} onChange={setSearch} options={arts} style={{ minWidth: 200 }} />
           <span className="a-seg">{[['revenue', 'по сумме'], ['orders', 'по штукам']].map(([k, l]) => <button key={k} type="button" className={metric === k ? 'on' : ''} onClick={() => setMetric(k)}>{l}</button>)}</span>
           <label className="sw" title="Выключено — федеральные округа, включено — области (кластеры доставки) внутри округов">
             <input type="checkbox" checked={byRegion} onChange={e => setByRegion(e.target.checked)} /><i />по областям

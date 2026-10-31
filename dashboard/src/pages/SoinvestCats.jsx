@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
@@ -76,7 +77,7 @@ function SppChart({ hist, list, tip }) {
   );
 }
 
-export default function SoinvestCats({ cabinet, active = true }) {
+export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -220,18 +221,21 @@ export default function SoinvestCats({ cabinet, active = true }) {
 
   const TH = (k, t) => <th className={`r ${k ? 'sortable' : ''} ${sort.key === k ? 'sorted' : ''}`} onClick={() => k && setSort(p => p.key === k ? { key: k, dir: -p.dir } : { key: k, dir: -1 })}>{t}{sort.key === k ? (sort.dir < 0 ? ' ↓' : ' ↑') : ''}</th>;
 
-  return (
-    <div className="mpui">
-      {loadError}
-      <div className="a-bar">
+  const headerTools = (
+    <div className="soinvest-tools">
+        <ArtSearch value={search} onChange={setSearch} options={items} style={{ minWidth: 220 }} />
         <span className="a-fresh" style={{ marginLeft: 0 }}>
           <span className={`a-dot ${ageH === null ? 'bad' : ageH > 6 ? 'bad' : ageH > 2 ? 'warn' : ''}`} />
           {last ? `Цены обновлены ${last.format('DD.MM HH:mm')}` : 'Цены ещё не собирались'}
-          {ageH !== null && ageH > 2 && ' — проверьте, что браузер с расширением открыт и вы вошли в seller.ozon.ru'}
         </span>
-        <button type="button" className="a-btn" onClick={load} disabled={loading} title="Загрузить сохранённые на сервере цены; расширение на этом компьютере не требуется">{loading ? 'Загрузка…' : 'Обновить данные'}</button>
-        <ArtSearch value={search} onChange={setSearch} options={items} style={{ marginLeft: 'auto', minWidth: 220 }} />
+        <button type="button" className="a-btn" onClick={load} disabled={loading} title="Загрузить сохранённые на сервере цены; расширение на этом компьютере не требуется">{loading ? 'Загрузка…' : 'Обновить'}</button>
       </div>
+  );
+
+  return (
+    <div className="mpui">
+      {loadError}
+      {headerTarget ? createPortal(headerTools,headerTarget) : headerTools}
       <CategoryNav tops={tops} value={sel} onChange={setSel} childrenOf={path=>[...new Set(items.filter(a=>a.cat.startsWith(path+SEP)).map(a=>a.parts[path.split(SEP).length]).filter(Boolean))]} groups={<>
           <span className="a-hint" style={{ marginRight: 4 }}>Группы:</span>
           <button type="button" className={`a-tab ${!group ? 'on' : ''}`} onClick={() => setGroup('')}>Все товары</button>
@@ -240,6 +244,8 @@ export default function SoinvestCats({ cabinet, active = true }) {
               <i className="s-dot" style={{ background: groupColors[g.id] }} />{g.name}<span className="c">{Object.values(groupsData.members).filter(x => x === g.id).length}</span>
             </button>
           ))}
+
+      </>} actions={<>
           {newGroup === null ? (
             <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
           ) : (
@@ -249,10 +255,10 @@ export default function SoinvestCats({ cabinet, active = true }) {
             </form>
           )}
       </>} />
-      <div className="a-bar">
-        {group && <AddToGroup catalog={items.map(a => ({ offerId: a.o, productName: a.n }))} exclude={Object.entries(groupsData.members).filter(([, g]) => g === group).map(([o]) => o)}
-          onPick={o => { setGroupsData(p => ({ ...p, members: { ...p.members, [o]: group } })); assignAdsGroup(cabinet, o, group).catch(() => {}); }} />}
-      </div>
+      {group && <div className="a-bar">
+        <AddToGroup catalog={items.map(a => ({ offerId: a.o, productName: a.n }))} exclude={Object.entries(groupsData.members).filter(([, g]) => g === group).map(([o]) => o)}
+          onPick={o => { setGroupsData(p => ({ ...p, members: { ...p.members, [o]: group } })); assignAdsGroup(cabinet, o, group).catch(() => {}); }} />
+      </div>}
       <div className="a-hint" style={{ marginTop: -8 }}>Группы общие с вкладкой «Реклама»: созданная здесь группа появится и там.</div>
 
       <div className="a-kpis s-kpis">

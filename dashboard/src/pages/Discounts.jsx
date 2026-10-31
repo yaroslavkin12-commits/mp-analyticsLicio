@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { barSignals } from '../lib/chartSignals';
 import React, { useState, useEffect, useCallback } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
@@ -259,7 +260,7 @@ function SummaryChart({ summary, loading, trafficLight = true }) {
   );
 }
 
-function ArticlesTab({ cabinet, days, setDays }) {
+function ArticlesTab({ cabinet, days, setDays, headerTarget }) {
   const [data, setData] = useState(null);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -303,15 +304,15 @@ function ArticlesTab({ cabinet, days, setDays }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
-        <DaysSwitch days={days} setDays={setDays} />
+      {headerTarget && createPortal(<>      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <ArtSearch value={search} onChange={setSearch} placeholder="Поиск по артикулу…"
           options={(data?.articles || []).map(a => ({ o: a.offerId, n: a.productName }))} className=""
-          style={{ marginLeft: 'auto', minWidth: 200 }} inputStyle={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)',
+          style={{ minWidth: 200 }} inputStyle={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)',
             background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
+        <DaysSwitch days={days} setDays={setDays} />
         <button onClick={load} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid var(--border)',
           background: 'var(--surface2)', color: 'var(--text2)', fontSize: 12.5 }}>Обновить</button>
-      </div>
+      </div></>, headerTarget)}
 
       {/* Фильтры по образцу СПП-монитора TrueStats: диапазон Соинвеста,
           сортировка, скрыть оценки без реальной цены, только с изменениями. */}
@@ -611,11 +612,12 @@ function SettingsTab({ cabinet }) {
 export default function Discounts({ cabinet, active = true }) {
   const [tab, setTab] = useState('cats');
   const [days, setDays] = useState('30');
+  const [headerTarget, setHeaderTarget] = useState(null);
 
   return (
-    <div>
-      <div className="page-sticky"><div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>Соинвест Ozon</h2>
+    <div className="mpui">
+      <div className="page-sticky"><div className="a-top">
+        <h1>Соинвест Ozon</h1><div ref={setHeaderTarget} className="soinvest-header-tools" />
         <div style={{ display: 'flex', gap: 4 }}>
           {TABS.map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
@@ -627,8 +629,8 @@ export default function Discounts({ cabinet, active = true }) {
         </div>
       </div></div>
 
-      {tab === 'cats' && <SoinvestCats cabinet={cabinet} active={active} />}
-      {tab === 'articles' && <ArticlesTab cabinet={cabinet} days={days} setDays={setDays} />}
+      {tab === 'cats' && <SoinvestCats cabinet={cabinet} active={active} headerTarget={headerTarget} />}
+      {tab === 'articles' && <ArticlesTab cabinet={cabinet} days={days} setDays={setDays} headerTarget={headerTarget} />}
       {tab === 'feed' && <FeedTab cabinet={cabinet} days={days} setDays={setDays} />}
       {tab === 'settings' && <SettingsTab cabinet={cabinet} />}
     </div>

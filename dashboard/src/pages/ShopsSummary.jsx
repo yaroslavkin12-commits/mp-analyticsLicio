@@ -1,3 +1,4 @@
+import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo } from 'react';
@@ -137,6 +138,8 @@ export default function ShopsSummary({ active, cabinet }) {
   const money = (v, rev) => !Number.isFinite(v) ? '—' : (pct ? (rev > 0 && Number.isFinite(v) ? fmtPct((-v / rev) * 100) : '—') : `${fmtInt(-v)} ₽`);
   const row = ({ key, name, sub, color, oq, or, por, poq, F, PF, depth, onToggle, isOpen, onOpenShop, loading }) => {
     const rev = F?.revenue;
+    const tint=(v,p)=>depth===0?{background:resultTint(v,p)}:undefined;
+    const expenseTint=(v,p)=>tint(pct&&rev>0?v/rev:v,pct&&PF?.revenue>0?p/PF.revenue:p);
     const chk = oq > 0 && Number.isFinite(or) ? or / oq : null, pchk = poq > 0 && Number.isFinite(por) ? por / poq : null;
     const bchk = F && Number.isFinite(rev) && F.qty > 0 ? rev / F.qty : null, pbchk = PF && Number.isFinite(PF.revenue) && PF.qty > 0 ? PF.revenue / PF.qty : null;
     const pay1 = F && Number.isFinite(F.payout) && F.qty > 0 ? F.payout / F.qty : null, ppay1 = PF && Number.isFinite(PF.payout) && PF.qty > 0 ? PF.payout / PF.qty : null;
@@ -154,18 +157,18 @@ export default function ShopsSummary({ active, cabinet }) {
             </div>
           </div>
         </td>
-        <td className="n r">{fmtInt(or)}{Number.isFinite(or) ? ' ₽' : ''}<small className="ss-sub">{fmtInt(oq)} шт <Delta cur={or} prev={por} /></small></td>
-        <td className="n r">{chk !== null ? <>{fmtInt(chk)} ₽<Delta cur={chk} prev={pchk} /></> : '—'}</td>
-        <td className="n r">{F ? <>{fmtInt(rev)} ₽<small className="ss-sub">{fmtInt(F.qty)} шт</small><Delta cur={rev} prev={PF?.revenue} /></> : loading ? '…' : '—'}</td>
-        <td className="n r">{bchk !== null ? <>{fmtInt(bchk)} ₽<Delta cur={bchk} prev={pbchk} /></> : '—'}</td>
-        <td className="n r ss-pay">{pay1 !== null ? <><b>{fmtInt(pay1)} ₽</b><Delta cur={pay1} prev={ppay1} /></> : '—'}</td>
-        <td className="n r">{F ? money(F.ozonX, rev) : '—'}</td>
-        <td className="n r">{F ? money(F.ads, rev) : '—'}</td>
-        <td className="n r">{F ? `${fmtInt(F.payout)}${Number.isFinite(F.payout) ? ' ₽' : ''}` : '—'}</td>
-        <td className="n r">{F ? money(F.cost, rev) : '—'}</td>
-        <td className="n r">{F ? money(F.tax, rev) : '—'}</td>
-        <td className="n r ss-profit">{F ? <><b className={F.profit < 0 ? 's-down' : ''}>{fmtInt(F.profit)}{Number.isFinite(F.profit) ? ' ₽' : ''}</b><Delta cur={F.profit} prev={PF?.profit} /></> : '—'}</td>
-        <td className="n r">{margin !== null ? <><b className={margin < 0 ? 's-down' : ''}>{fmtPct(margin)}</b><Delta cur={margin} prev={pMargin} pp /></> : '—'}</td>
+        <td className="n r" style={tint(or,por)}> {fmtInt(or)}{Number.isFinite(or) ? ' ₽' : ''}<small className="ss-sub">{fmtInt(oq)} шт <Delta cur={or} prev={por} /></small></td>
+        <td className="n r" style={tint(chk,pchk)}> {chk !== null ? <>{fmtInt(chk)} ₽<Delta cur={chk} prev={pchk} /></> : '—'}</td>
+        <td className="n r" style={tint(rev,PF?.revenue)}> {F ? <>{fmtInt(rev)} ₽<small className="ss-sub">{fmtInt(F.qty)} шт</small><Delta cur={rev} prev={PF?.revenue} /></> : loading ? '…' : '—'}</td>
+        <td className="n r" style={tint(bchk,pbchk)}> {bchk !== null ? <>{fmtInt(bchk)} ₽<Delta cur={bchk} prev={pbchk} /></> : '—'}</td>
+        <td className="n r ss-pay" style={tint(pay1,ppay1)}> {pay1 !== null ? <><b>{fmtInt(pay1)} ₽</b><Delta cur={pay1} prev={ppay1} /></> : '—'}</td>
+        <td className="n r" style={expenseTint(F?.ozonX,PF?.ozonX)}>{F ? money(F.ozonX, rev) : '—'}</td>
+        <td className="n r" style={expenseTint(F?.ads,PF?.ads)}>{F ? money(F.ads, rev) : '—'}</td>
+        <td className="n r" style={tint(F?.payout,PF?.payout)}> {F ? `${fmtInt(F.payout)}${Number.isFinite(F.payout) ? ' ₽' : ''}` : '—'}</td>
+        <td className="n r" style={expenseTint(F?.cost,PF?.cost)}>{F ? money(F.cost, rev) : '—'}</td>
+        <td className="n r" style={expenseTint(F?.tax,PF?.tax)}>{F ? money(F.tax, rev) : '—'}</td>
+        <td className="n r ss-profit" style={tint(F?.profit,PF?.profit)}> {F ? <><b className={F.profit < 0 ? 's-down' : ''}>{fmtInt(F.profit)}{Number.isFinite(F.profit) ? ' ₽' : ''}</b><Delta cur={F.profit} prev={PF?.profit} /></> : '—'}</td>
+        <td className="n r" style={tint(margin,pMargin)}> {margin !== null ? <><b className={margin < 0 ? 's-down' : ''}>{fmtPct(margin)}</b><Delta cur={margin} prev={pMargin} pp /></> : '—'}</td>
       </tr>
     );
   };

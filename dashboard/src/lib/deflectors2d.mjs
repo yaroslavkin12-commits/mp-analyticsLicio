@@ -67,8 +67,8 @@ export function calculate2d(input, demand = null, inventory = null) {
     const r = { ...original };
     if (inventory) {
       r.transit = settings.transitSource === 'manual' ? (original.transit === null ? null : original.transit + (live?.productionTransit ?? 0)) : live?.transit ?? 0;
-      if (settings.stockSource === 'live') r.stock = live?.stock ?? null;
     }
+    if (settings.stockSource === 'live') r.stock = live?.stock ?? null;
     const ozon = demand?.articles?.find(a => a.offer.toLowerCase() === r.offer.toLowerCase());
     const rate = settings.source === 'ozon' ? (ozon?.rate ?? null) : r.sales === null ? null : r.sales / settings.salesDays;
     const history = Object.fromEntries(PERIODS_2D.map(d => ['q' + d, ozon?.periods?.['d' + d]?.quantity ?? null]));

@@ -1,3 +1,4 @@
+import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import { barSignals, isRateMetric } from '../lib/chartSignals';
@@ -808,7 +809,8 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   const toggle = path => setOpen(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
   // Доля — от родителя: подкатегория от категории, артикул от своей
   // подкатегории (в подсказке — доля от всего выбранного).
-  const metricCells = (st, base) => {
+  const metricCells = (st, base, isTotal=false) => {
+    const tint=(key,good='up')=>isTotal?{background:resultTint(st.t[key],st.p?.[key],good)}:undefined;
     const t = st.t;
     const b = base === undefined ? totalRev : base;
     const share = b > 0 ? t.revenue / b * 100 : null;
@@ -817,19 +819,19 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     return (
       <>
         <td><SparkBars values={st.spark} dates={dates} /></td>
-        <td className="n r">{fmtInt(t.revenue)}</td>
+        <td className="n r" style={tint('revenue')} >{fmtInt(t.revenue)}</td>
         <td className="r"><Delta value={st.p ? changePct(t.revenue, st.p.revenue) : null} /></td>
         <td className="r" title={base !== undefined && shareAll !== null ? `${fmtPct(shareAll)} от всего выбранного` : ''}><span className="s-part"><i style={{ width: `${Math.min(100, share || 0)}%` }} /><b className="n">{share === null ? '—' : fmtPct(share)}</b></span></td>
-        <td className="n r">{fmtInt(t.orders)}</td>
+        <td className="n r" style={tint('orders')} >{fmtInt(t.orders)}</td>
         <td className="n r">{t.orders ? fmtInt(t.revenue / t.orders) : '—'}</td>
-        <td className="n r">{fmtInt(t.views)}</td>
-        <td className="n r">{fmtPct(t.ctr)}</td>
-        <td className="n r">{fmtPct(t.crToCart)}</td>
-        <td className="n r">{fmtPct(t.crToOrder)}</td>
+        <td className="n r" style={tint('views')} >{fmtInt(t.views)}</td>
+        <td className="n r" style={tint('ctr')} >{fmtPct(t.ctr)}</td>
+        <td className="n r" style={tint('crToCart')} >{fmtPct(t.crToCart)}</td>
+        <td className="n r" style={tint('crToOrder')} >{fmtPct(t.crToOrder)}</td>
         <td className="n r">{fmtInt(st.g.stockNow)}</td>
         <td className="r"><span className={`s-days ${daysCls}`}>{st.g.stockNow === null ? '—' : st.g.stockNow === 0 ? 'нет' : st.sd === null ? '∞' : `${Math.round(st.sd)} дн`}</span></td>
-        <td className="n r">{t.spend ? fmtInt(t.spend) : '—'}</td>
-        <td className="r">{t.spend ? <span className={`pill ${drrClass(t.drr)}`}>{t.drr === null ? '×' : fmtPct(t.drr)}</span> : <span className="muted">—</span>}</td>
+        <td className="n r" style={tint('spend','down')}>{t.spend ? fmtInt(t.spend) : '—'}</td>
+        <td className="r" style={tint('drr','down')}>{t.spend ? <span className={`pill ${drrClass(t.drr)}`}>{t.drr === null ? '×' : fmtPct(t.drr)}</span> : <span className="muted">—</span>}</td>
       </>
     );
   };
@@ -1008,6 +1010,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         <div className="page-sticky">
           <div className="a-top">
             <h1>РНП</h1>
+            <ArtSearch value={search} onChange={setSearch} options={all} style={{ minWidth: 200 }} />
             <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} periods={[7, 14, 30, 90]} />
             <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
             {brands.length > 0 && (
@@ -1016,7 +1019,6 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
                 {brands.map(b => <option key={b} value={b}>{b}</option>)}
               </select>
             )}
-            <ArtSearch value={search} onChange={setSearch} options={all} style={{ minWidth: 200 }} />
             {loading && <span className="a-hint">обновляем…</span>}
           </div>
         </div>
@@ -1031,6 +1033,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
       <div className="page-sticky">
       <div className="a-top">
         <h1>Аналитика продаж</h1>
+        <ArtSearch value={search} onChange={setSearch} options={all} style={{ minWidth: 200 }} />
         <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} periods={[7, 14, 30, 90]} />
         <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         {brands.length > 0 && (
@@ -1039,7 +1042,6 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
             {brands.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
         )}
-        <ArtSearch value={search} onChange={setSearch} options={all} style={{ minWidth: 200 }} />
         {loading && <span className="a-hint">обновляем…</span>}
       </div>
 
@@ -1205,7 +1207,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
               <tfoot>
                 <tr className="row s-total">
                   <td><div className="a-art"><b>Итого · {node.arts.length} арт.</b></div></td>
-                  {metricCells({ g: ag, t: dayT, p: dayModel.prev, sd: sDays, spark: series('orders') })}
+                  {metricCells({ g: ag, t: dayT, p: dayModel.prev, sd: sDays, spark: series('orders') },undefined,true)}
                 </tr>
               </tfoot>
             )}

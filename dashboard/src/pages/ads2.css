@@ -339,3 +339,18 @@ tr:hover .a-ungroup { opacity: 1; }
 
 .mpui .a-top-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-left:auto;max-width:100%;flex-wrap:wrap}
 .mpui .a-top-actions .a-fresh{margin-left:0}
+
+.mpui .soinvest-header-tools{display:contents}
+.mpui .soinvest-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mpui .a-top-actions{flex-wrap:nowrap;flex-shrink:0}
+.mpui table:is(.a-t,.a-dt)>:is(tbody,tfoot)>tr:is(.s-total,.ss-total,.tb-total,.a-total-row)>td,.mpui table.a-t>tfoot>tr:not(.a-detail)>td{border-top:2px solid var(--a-line2);border-bottom:2px solid var(--a-line2);font-weight:600}
+.mpui .a-dt td.tot,.mpui .rnp-tot{border-left:1px solid var(--a-line2);border-right:2px solid var(--a-line2)}
+
+.mpui .ads-top{flex-wrap:nowrap;gap:8px}
+.mpui .ads-top>.as-wrap{flex:0 1 190px}
+.mpui .ads-top .a-seg{flex-shrink:0;white-space:nowrap;flex-wrap:nowrap}
+.mpui .ads-top .a-seg button{padding-left:8px;padding-right:8px}
+@media(max-width:1350px){.mpui .ads-top{flex-wrap:wrap}}
+
+.mpui .ads-top h1{font-size:20px}
+.mpui .ads-top .a-seg button,.mpui .ads-top .a-fresh{font-size:11px}

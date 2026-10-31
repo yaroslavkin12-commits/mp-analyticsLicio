@@ -1,3 +1,4 @@
+import { resultTint } from '../lib/resultTint';
 import CategoryNav, { categoryCompare } from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
@@ -433,7 +434,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
       <tr className={`${m.strong ? 'rnp-strong' : ''} ${last && !(m.k === 'profit' && profOpen) ? 'rnp-last' : ''}`}>
         <td className={`rnp-m ${m.k === 'profit' ? 'rnp-click' : ''}`} onClick={m.k === 'profit' ? () => setProfOpen(v => !v) : undefined}
           title={m.k === 'profit' ? 'Нажмите — раскладка по статьям в ₽ и в %' : m.h || m.t}>{m.k === 'profit' && <span className={`rnp-mini ${profOpen ? 'on' : ''}`}>▶</span>}{m.t}</td>
-        <td className="n r rnp-tot">{finMissing ? '…' : fmt(vTot, m.kind)}</td>
+        <td className="n r rnp-tot" style={{background:finMissing?undefined:resultTint(vTot,vPrev,m.dir===0?'neutral':m.dir===-1?'down':'up')}}>{finMissing ? '…' : fmt(vTot, m.kind)}</td>
         <td className="n r rnp-prev">{m.now || finMissing ? '' : fmt(vPrev, m.kind)}</td>
         <td className="n r rnp-dyn">{m.now || finMissing ? '' : <Delta cur={vTot} prev={vPrev} kind={m.kind} dir={m.dir} />}</td>
         {cells.map((S, i) => (

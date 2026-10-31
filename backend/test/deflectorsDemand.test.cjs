@@ -8,7 +8,8 @@ const store = new Map(); let units = 2; const calls = [];
 const query = async (sql, args = []) => {
   calls.push([sql, args]);
   if (sql.includes('SELECT value')) return store.has(args[0]) ? [{ value: store.get(args[0]) }] : [];
-  if (sql.includes('FROM ad_product_stocks') || sql.includes('to_regclass')) return [];
+  if (sql.includes('FROM ad_product_stocks')) return [{offer_id:'A',date:to,fbo_present:0,fbs_present:0,fresh:true}];
+  if (sql.includes('to_regclass')) return [];
   if (sql.includes('FROM product_category_override')) return [];
   if (sql.includes('FROM ad_product_catalog')) return ids.map((cabinet, i) => ({ cabinet, offer_id: 'A', sku: String(i + 1), product_name: 'Дефлекторы окон 2D Test' }));
   if (sql.includes('FROM product_analytics_daily')) {
@@ -20,7 +21,7 @@ const query = async (sql, args = []) => {
   throw new Error('Неожиданный SQL: ' + sql);
 };
 const client = { query: async (sql, args = []) => {
-  if (sql.includes('SELECT value')) return { rows: await query(sql, args) };
+  if (sql.includes('SELECT value') || sql.includes('FROM ad_product_stocks')) return { rows: await query(sql, args) };
   if (sql.includes('INSERT INTO app_settings')) store.set(args[0], args[1]);
   return { rows: [] };
 }, release() {} };

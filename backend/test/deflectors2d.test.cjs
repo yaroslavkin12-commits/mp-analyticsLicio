@@ -33,9 +33,9 @@ test('Нулевой лимит, ручное превышение, валида
 });
 
 const store = new Map([['prod:defly:master', '{"unchanged":true}'], ['prod:defly:orders', '[{"id":"old"}]']]);
-const query = async (sql, args = []) => sql.includes('SELECT value') ? store.has(args[0]) ? [{ value: store.get(args[0]) }] : [] : [];
+const query = async (sql, args = []) => sql.includes('FROM ad_product_stocks') ? ['A','B'].map(offer_id=>({offer_id,date:'2026-10-31',fbo_present:0,fbs_present:0,fresh:true})) : sql.includes('SELECT value') ? store.has(args[0]) ? [{ value: store.get(args[0]) }] : [] : [];
 const client = { query: async (sql, args = []) => {
-  if (sql.includes('SELECT value')) return { rows: await query(sql, args) };
+  if (sql.includes('SELECT value') || sql.includes('FROM ad_product_stocks')) return { rows: await query(sql, args) };
   if (sql.includes('INSERT INTO app_settings')) store.set(args[0], args[1]);
   return { rows: [] };
 }, release() {} };
@@ -50,7 +50,7 @@ async function call(path, body) {
 }
 test('Черновик и журнал отдельны от чехлов; версия, повтор запроса и неизменность снимка', async () => {
   const draft = { settings, rows: [row('A', 300, 0), row('B', 300, 0)] };
-  const save = await call('/draft', { revision: 0, draft }); assert.equal(save.status, 200); assert.equal(save.data.revision, 1);
+  const save = await call('/draft', { revision: 0, draft }); assert.equal(save.status, 200); assert.equal(save.data.revision, 1); assert.equal(save.data.draft.settings.stockSource, 'live');
   const request = { revision: 1, draft, offers: ['A'], requestId: 'test-request-1', date: '2026-10-29', expectedDate: '2026-11-05', inventoryVersion: save.data.inventory.version, columns: ['offer', 'quantity'], note: 'Подсорт' };
   const fix = await call('/journal', request); assert.equal(fix.status, 200); assert.equal(fix.data.journal.length, 1); assert.equal(fix.data.journal[0].total, 70); assert.equal(fix.data.draft.rows[0].manual, 0); assert.equal(fix.data.draft.rows[1].manual, null);
   const changed = structuredClone(draft); changed.rows[0].manual = 10;
