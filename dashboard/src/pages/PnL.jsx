@@ -47,9 +47,12 @@ function WbAdsTiming({data,items,deductions,allScope}) {
   const spend=data.dates.map(d=>ads.from&&d>=ads.from&&d<=ads.to?0:null);
   for(const [ai,di,value] of ads.rows)if((all||selected.has(ai))&&spend[di]!==null)spend[di]+=value;
   if(all)for(let di=0;di<spend.length;di++)if(spend[di]!==null)spend[di]+=ads.unallocated[di]||0;
-  const held=data.dates.map((d,i)=>d>=data.available.mn&&d<=data.available.mx?-deductions[i]:null);
-  const rows=[{key:'spend',label:'Расход по дням рекламы',fmt:'int',good:'neutral'},{key:'held',label:'Удержано по финансовому отчёту',fmt:'int',good:'neutral'}];
-  return <details className="a-card" style={{padding:14}}><summary style={{cursor:'pointer',fontWeight:600}}>Реклама WB: расходы и удержания по дням</summary><p className="a-hint">Расход — по дате статистики рекламы; удержание — по дате операции отчёта. Эти суммы не складываются. Прибыль и поступления выше рассчитаны по удержаниям. Статистика рекламы может уточняться WB.{!all?' Расходы без привязки к товару доступны только в общем итоге.':''}</p><RowsTable dates={data.dates} rows={rows} vals={{spend,held}} totals={{spend:sumAvailable(spend),held:sumAvailable(held)}} /></details>;
+  const cash=data.cashAds,finRange=cash?.available||data.available;
+  const held=data.dates.map((d,i)=>d>=finRange.mn&&d<=finRange.mx?(cash?0:-deductions[i]):null);
+  if(cash){for(const [ai,di,,v] of cash.rows)if(held[di]!==null)held[di]-=v;for(const [di,,v] of cash.noSku)if(held[di]!==null)held[di]-=v;}
+
+  const rows=[{key:'spend',label:'Расход по дням рекламы',fmt:'int',good:'neutral'},{key:'held',label:'Удержано по кабинету (финансовый отчёт)',fmt:'int',good:'neutral'}];
+  return <details className="a-card" style={{padding:14}}><summary style={{cursor:'pointer',fontWeight:600}}>Реклама WB: расходы и удержания по дням</summary><p className="a-hint">Расход — по дате статистики рекламы; удержание — по дате операции отчёта. Эти суммы не складываются. В P&L реклама учтена по дню расхода; финансовое удержание повторно не вычитается. Строка удержаний показывает весь кабинет для сверки. Статистика рекламы может уточняться WB.{!all?' Расходы без привязки к товару доступны только в общем итоге.':''}</p><RowsTable dates={data.dates} rows={rows} vals={{spend,held}} totals={{spend:sumAvailable(spend),held:sumAvailable(held)}} /></details>;
 }
 const METRICS = [
   { key: 'revenue', label: 'Выручка, ₽', fmt: 'int' },
@@ -69,7 +72,7 @@ function OpsDrill({ cabinet, drill, dates, dateFrom, dateTo, arts, filtered, sel
   const [open, setOpen] = useState(null);
   useEffect(() => {
     setRows(null); setErr('');
-    getFinanceOps(cabinet, drill.bucket, { dateFrom, dateTo }).then(r => setRows(r.data.data.rows)).catch(e => setErr(e.response?.data?.error || e.message));
+    getFinanceOps(cabinet, drill.bucket, { dateFrom, dateTo, adsBasis:cabinet==='defly_wb'&&drill.bucket==='ads'?'activity':undefined }).then(r => setRows(r.data.data.rows)).catch(e => setErr(e.response?.data?.error || e.message));
   }, [cabinet, drill.bucket, dateFrom, dateTo]);
   useEffect(() => { const on = e => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', on); return () => window.removeEventListener('keydown', on); }, [onClose]);
   const mine = useMemo(() => new Set(arts.map(a => a.o)), [arts]);
@@ -154,7 +157,7 @@ export default function PnL({ cabinet }) {
   const load = useCallback(() => {
     setLoading(true); setError(null);
     const ok = latestOnly('pnl:' + cabinet);
-    getFinancePnl(cabinet, { dateFrom, dateTo })
+    getFinancePnl(cabinet, { dateFrom, dateTo, adsBasis:cabinet==='defly_wb'?'activity':undefined })
       .then(ok(r => setData(r.data.data)))
       .catch(ok(e => setError(e.response?.data?.error || e.message)))
       .finally(ok(() => setLoading(false)));
@@ -287,7 +290,7 @@ export default function PnL({ cabinet }) {
     : pctMode ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? T[r.key] : perR(T[r.key], T.revenue)])) : T;
   // В процентах: подписи без «₽», расходы подсвечиваются — меньше доля (ближе к нулю) лучше.
   const formatRows = pctMode ? ROWS.map(r => (!r.key || KEEP.has(r.key) ? r : { ...r, fmt: r.fmt === 'money0' ? 'pct0' : 'pct', label: r.label.replace(/, ₽$/, ', %'), good: r.signed ? 'up' : r.good })) : ROWS;
-  const shownRows = data._wb ? formatRows.map(r=>({...r,label:r.label?.replaceAll('Ozon','WB'),block:r.block?.replaceAll('Ozon','WB'),hint:r.key==='ads'?'Удержания «WB Продвижение» по дате операции финансового отчёта. Они могут приходить позднее расходов рекламного кабинета; для оценки каждого дня смотрите блок «Расходы и удержания». Комиссия и эквайринг повторно не вычитаются.':r.key==='taxBase'?'Оплата покупателями из поля retailAmount, за вычетом возвратов.':r.hint?.replaceAll('Ozon','WB')})) : formatRows;
+  const shownRows = data._wb ? formatRows.map(r=>({...r,label:r.key==='ads'?'Реклама по дням расхода':r.key==='payout'&&data.adsBasis==='activity'?'Поступление с учётом дневной рекламы':r.label?.replaceAll('Ozon','WB'),block:r.block?.replaceAll('Ozon','WB'),hint:r.key==='ads'?'Расход WB Продвижение по фактическому дню из рекламной статистики. Недельное финансовое удержание повторно не списывается.':r.key==='taxBase'?'Оплата покупателями из поля retailAmount, за вычетом возвратов.':r.hint?.replaceAll('Ozon','WB')})) : formatRows;
   const byDate = {};
   dates.forEach((d, i) => { byDate[d] = {}; for (const m of METRICS) byDate[d][m.key] = vals[m.key][i]; });
   const strip = [
@@ -314,10 +317,10 @@ export default function PnL({ cabinet }) {
         <TaxInput tax={tax} cabinet={cabinet} />
       </FinHeader>
 
-      {data.financeSource === 'wb' && <div className="a-hint" style={{margin:'10px 0'}}>Финансы WB по {dayjs(data.available.mx).format('DD.MM.YYYY')} · суммы к перечислению по отчёту, без повторного вычета комиссии и эквайринга. Дни вне выгрузки не входят в итог.</div>}
-      {!data.rows.length && !data.noSku.length ? (
+      {data.financeSource === 'wb' && <div className="a-hint" style={{margin:'10px 0'}}>Управленческий P&L WB · {dayjs(data.available.mn).format('DD.MM.YYYY')} — {dayjs(data.available.mx).format('DD.MM.YYYY')}: реклама по дню расхода, без повторного вычета удержаний. Итоги только за дни, где есть финансы и реклама. Фактическое поступление на счёт по отчёту доступно в сводке и среднем чеке.</div>}
+      {data.managementReady===false||(!data.rows.length && !data.noSku.length) ? (
         <Empty>
-          <b>Финансовых данных пока нет.</b><br />
+          <b>{data.managementReady===false?'Нет общих загруженных дат финансов и рекламы для управленческого P&L.':'Финансовых данных пока нет.'}</b><br />
           Начисления и списания Ozon собирает Google-скрипт во вкладку «Finance»: вставьте обновлённый скрипт,
           запустите <code>setupTriggers</code> и один раз <code>syncFinanceFull</code> (последние 30 дней). Дальше обновление каждые 6 часов.
         </Empty>
@@ -350,7 +353,7 @@ export default function PnL({ cabinet }) {
           )}
 
           <div className={`a-card s-card ${loading ? 'a-loading' : ''}`}>
-            <DualChart dates={dates} byDate={byDate} tip={tip} events={[]} metricsList={METRICS} storeKey="mp-pnl-chart" defaults={{ left: 'revenue', right: 'profit', type: 'combo' }} />
+            <DualChart dates={dates} byDate={byDate} tip={tip} events={[]} metricsList={data.adsBasis==='activity'?METRICS.map(m=>m.key==='payout'?{...m,label:'Поступление с дневной рекламой, ₽'}:m):METRICS} storeKey="mp-pnl-chart" defaults={{ left: 'revenue', right: 'profit', type: 'combo' }} />
           </div>
 
           <div className="a-card">
@@ -362,7 +365,7 @@ export default function PnL({ cabinet }) {
               <label className="sw" title="Выручка по выкупам (выкупы − возвраты) = 100%; каждая статья — её доля от выручки за день и за период. Цвет: зелёнее — расход меньше обычного">
                 <input type="checkbox" checked={pctMode} onChange={e => setPct(e.target.checked)} /><i />в % от выручки
               </label>
-              <span className="a-hint">по дате начисления в {data._wb?'WB':'Ozon'}; данные есть с {data.available?.mn ? dayjs(data.available.mn).format('DD.MM.YYYY') : '—'}</span>
+              <span className="a-hint">{data.adsBasis==='activity'?'реклама по дню расхода; прочие статьи по отчёту WB':'по дате начисления в '+(data._wb?'WB':'Ozon')}; данные есть с {data.available?.mn ? dayjs(data.available.mn).format('DD.MM.YYYY') : '—'}</span>
             </div>
             <RowsTable dates={dates} rows={shownRows} vals={shownVals} totals={shownT} clickable={DRILL} onCell={(k, i) => setDrill({ bucket: k, i })} />
           </div>

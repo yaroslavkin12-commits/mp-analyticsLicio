@@ -536,12 +536,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
             {tabs.map(n => <button key={n.key} type="button" className={`a-tab ${top && top.key === n.key ? 'on' : ''}`} onClick={() => { setSel(n.key); setSelArt(''); }}>{n.name}<span className="c">{tabCnt(n)}</span></button>)}
           </div>
           </>}
-          <div className="rnp-subs">
-            <select className="a-sel" value={curArt} onChange={e => setSelArt(e.target.value)} title="Один артикул — по убыванию заказов, ₽">
-              <option value="">Все артикулы · {node.arts.length}</option>
-              {artsSorted.map(o => <option key={o} value={o}>{o}{artBy.get(o)?.short ? ` · ${artBy.get(o).short}` : ''}</option>)}
-            </select>
-          </div>
+
         </div>
       )}
       {fin?.financeSource === 'wb' && <div className="a-hint">Финансы WB по {dayjs(fin.available.mx).format('DD.MM.YYYY')}</div>}

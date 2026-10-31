@@ -3,7 +3,6 @@ import dayjs from 'dayjs';
 import { getDeflectors2d, getDeflectors2dDemand, getDeflectors2dCatalog, saveDeflectors2d, submitDeflectors2d, getDeflectors2dInventory } from '../api';
 import Deflectors2dJournal from './Deflectors2dJournal';
 import ColumnPicker from '../components/ColumnPicker';
-import Deflectors2dAnnual from './Deflectors2dAnnual';
 import { calculate2d, PERIODS_2D } from '../lib/deflectors2d.mjs';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt } from './AdsStats2';
@@ -15,7 +14,7 @@ const COLUMNS = [
   ['rate', 'Продажи в день, шт'], ['cover', 'Запас, дней'], ['need', 'Потребность, шт'], ['recommended', 'Рекомендовано, шт'],
   ['quantity', 'Подсорт, шт'], ['after', 'Запас после подсорта, дней'], ['note', 'Комментарий'],
 ];
-const HISTORY_COLS = [...PERIODS_2D.map(d => ['q' + d, `МП ${d === 365 ? 'год' : d + ' дн'}, шт`]), ['trend7', 'Динамика 7 / 7 дней, %'], ['trend14', 'Динамика 14 / 14 дней, %'], ['trend30', 'Динамика 30 / 30 дней, %'], ['lastYear30', 'МП 30 дней год назад, шт'], ['annual1c', '1С за год, шт'], ['annualRate1c', '1С в день, шт']];
+const HISTORY_COLS = [...PERIODS_2D.map(d => ['q' + d, `МП ${d === 365 ? 'год' : d + ' дн'}, шт`]), ['trend7', 'Динамика 7 / 7 дней, шт. / %'], ['trend14', 'Динамика 14 / 14 дней, шт. / %'], ['trend30', 'Динамика 30 / 30 дней, шт. / %'], ['lastYear30', 'МП 30 дней год назад, шт'], ['annual1c', '1С за год, шт'], ['annualRate1c', '1С в день, шт']];
 COLUMNS.splice(3, 0, ...HISTORY_COLS);
 COLUMNS.push(['priority', 'Приоритет, баллы']);
 COLUMNS.push(['rateWindow', 'Периоды расчёта темпа, дней']);
@@ -25,17 +24,17 @@ function ExportDialog({ plan, selected, setSelected, busy, error, date, setDate,
   const ref = useRef(null);
   useEffect(() => { ref.current.showModal(); }, []);
   return <dialog ref={ref} className="mpui" aria-labelledby="d2-export" onCancel={e => { e.preventDefault(); if (!busy) onClose(); }} style={{ width: 550, maxWidth: '90vw', maxHeight: '85vh', overflow: 'auto', borderRadius: 12, padding: 22, border: '1px solid var(--a-line2)', background: 'var(--a-panel)', color: 'var(--a-ink)' }}>
-    <h3 id="d2-export" style={{ marginTop: 0 }}>Подсорт дефлекторов 2D</h3>
+    <h3 id="d2-export" style={{ marginTop: 0 }}>{plan.tableOnly?'Выгрузка таблицы':'Подсорт дефлекторов 2D'}</h3>
     <p>{plan.rows.length} артикулов · {fmtInt(plan.total)} шт · строки с учётом фильтров</p>
-    <div className="a-bar"><label>Дата подачи <input className="a-input" type="date" value={date} onChange={e => setDate(e.target.value)} disabled={busy || !!plan.past} /></label><label>Поступление <input className="a-input" type="date" min={date} value={expectedDate} onChange={e => setExpectedDate(e.target.value)} disabled={busy || !!plan.past} /></label></div>
-    <label style={{ display: 'block', margin: '12px 0' }}>Комментарий к подсорту <input className="a-input" value={note} onChange={e => setNote(e.target.value)} disabled={busy || !!plan.past} style={{ width: '100%' }} /></label>
+    {!plan.tableOnly&&<div className="a-bar"><label>Дата подачи <input className="a-input" type="date" value={date} onChange={e => setDate(e.target.value)} disabled={busy || !!plan.past} /></label><label>Поступление <input className="a-input" type="date" min={date} value={expectedDate} onChange={e => setExpectedDate(e.target.value)} disabled={busy || !!plan.past} /></label></div>}
+    {!plan.tableOnly&&<label style={{ display: 'block', margin: '12px 0' }}>Комментарий к подсорту <input className="a-input" value={note} onChange={e => setNote(e.target.value)} disabled={busy || !!plan.past} style={{ width: '100%' }} /></label>}
     <div className="a-bar"><b>Колонки файла</b><button className="a-btn ghost" disabled={busy} onClick={() => setSelected(COLUMNS.map(c => c[0]))}>Все</button><button className="a-btn ghost" disabled={busy} onClick={() => setSelected(DEFAULT_COLS)}>Артикул, название и количество</button></div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10, margin: '14px 0' }}>{COLUMNS.map(([k, label]) => <label key={k}><input type="checkbox" checked={selected.includes(k)} disabled={busy || k === 'offer'} onChange={() => setSelected(v => v.includes(k) ? v.filter(x => x !== k) : [...v, k])} /> {label}</label>)}</div>
     {error && <p role="alert" style={{ color: 'var(--a-bad)' }}>{error}</p>}
     <div className="a-bar" style={{ justifyContent: 'flex-end' }}>
       <button className="a-btn ghost" disabled={busy} onClick={onClose}>Отмена</button>
       <button className="a-btn ghost" disabled={busy} onClick={download}>Только скачать</button>
-      {!plan.past && <><button className="a-btn ghost" disabled={busy || !date} onClick={submit}>Зафиксировать и скачать</button><button className="a-btn" disabled={busy || !date} onClick={fix}>{busy ? 'Сохранение…' : 'Зафиксировать'}</button></>}
+      {!plan.past && !plan.tableOnly && <><button className="a-btn ghost" disabled={busy || !date} onClick={submit}>Зафиксировать и скачать</button><button className="a-btn" disabled={busy || !date} onClick={fix}>{busy ? 'Сохранение…' : 'Зафиксировать'}</button></>}
     </div>
   </dialog>;
 }
@@ -44,13 +43,13 @@ export default function Deflectors2d({ nav }) {
   const [demand, setDemand] = useState(null), [demandError, setDemandError] = useState(''), [demandBusy, setDemandBusy] = useState(false);
   const [state, setState] = useState(null), [draft, setDraft] = useState(null), [catalog, setCatalog] = useState([]);
   const [error, setError] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
-  const [q, setQ] = useState(''), [only, setOnly] = useState(false), [missing, setMissing] = useState(false);
-  const [newOffer, setNewOffer] = useState(''), [newName, setNewName] = useState('');
+  const [q, setQ] = useState(''), [only, setOnly] = useState(false);
   const [exportPlan, setExportPlan] = useState(null), [exportError, setExportError] = useState('');
   const [columns, setColumns] = useState(() => { try { const v = JSON.parse(localStorage.getItem('mp-deflectors2d-columns')); return Array.isArray(v) ? [...new Set(['offer', ...v])] : DEFAULT_COLS; } catch { return DEFAULT_COLS; } });
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD')), [note, setNote] = useState('');
   const [selected, setSelected] = useState('');
-  const journalRef = useRef(null);
+  const journalRef = useRef(null), dateStrip=useRef(null);
+  useEffect(()=>{dateStrip.current?.querySelector('[aria-pressed="true"]')?.scrollIntoView({block:'nearest',inline:'center'});},[date,!!draft]);
   const [favorites, setFavorites] = useState(false);
   const [inventory, setInventory] = useState(null), [inventoryError, setInventoryError] = useState('');
   const [expectedDate, setExpectedDate] = useState(dayjs().add(7, 'day').format('YYYY-MM-DD'));
@@ -72,7 +71,7 @@ export default function Deflectors2d({ nav }) {
       let cached;
       if (restore) try { cached = JSON.parse(localStorage.getItem(CACHE)); } catch { /* ignore */ }
       const next = cached?.draft || value.draft;
-      setDraft({ ...next, settings: { ...next.settings, source: next.settings.source || 'ozon', stockSource: 'live', transitSource: next.settings.transitSource || (next.settings.stockSource ? 'live' : 'manual') } });
+      setDraft({ ...next, settings: { ...next.settings, source: next.settings.source || 'ozon', stockSource: 'live', fill: true, requireFull: true, transitSource: next.settings.transitSource || (next.settings.stockSource ? 'live' : 'manual') } });
       if (cached?.draft && cached.revision !== value.revision) { setState(s => ({ ...s, revision: cached.revision })); setMessage('Есть локальные правки к старой версии. Скачайте их перед обновлением: запись на сервер будет защищена от перезаписи чужих изменений.'); }
     } catch (e) { setError(e.response?.data?.error || e.message); }
   }
@@ -100,7 +99,7 @@ export default function Deflectors2d({ nav }) {
   }, [draft, state, dirty]);
   useEffect(() => { try { localStorage.setItem('mp-deflectors2d-columns', JSON.stringify(columns)); } catch { /* ignore */ } }, [columns]);
   const preview = useMemo(() => { if (!draft) return null; try { return calculate2d(draft, demand, inventory); } catch (e) { return { rows: draft.rows.map(r => ({ ...r, quantity: r.manual || 0 })), total: 0, left: 0, over: 0, issues: [e.message], invalid: true }; } }, [draft, demand, inventory]);
-  const shown = useMemo(() => !preview ? [] : ctl.apply(preview.rows.filter(r => (!q || `${r.offer} ${r.name}`.toLowerCase().includes(q.toLowerCase())) && (!only || r.quantity > 0) && (!favorites || r.favorite) && (!missing || r.rate == null || r.stock == null || r.transit == null)), (r, k) => k==='priority'?r.priorityScore:r[k]), [preview, q, only, favorites, missing, ctl.apply]);
+  const shown = useMemo(() => !preview ? [] : ctl.apply(preview.rows.filter(r => (!q || `${r.offer} ${r.name}`.toLowerCase().includes(q.toLowerCase())) && (!only || r.quantity > 0) && (!favorites || r.favorite)), (r, k) => k==='priority'?r.priorityScore:r[k]), [preview, q, only, favorites, ctl.apply]);
   const patch = (offer, changes) => setDraft(v => ({ ...v, rows: v.rows.map(r => r.offer === offer ? { ...r, ...changes } : r) }));
   const setting = (key, value) => setDraft(v => ({ ...v, settings: { ...v.settings, [key]: value } }));
   function add(items) {
@@ -117,22 +116,22 @@ export default function Deflectors2d({ nav }) {
     catch (e) { setError(e.response?.data?.error || e.message); }
     finally { setBusy(false); }
   }
-  function openExport(rows, past = null) {
-    const selected = rows.filter(r => r.quantity > 0);
+  function openExport(rows, past = null, tableOnly = false) {
+    const selected = tableOnly ? rows : rows.filter(r => r.quantity > 0);
     if (!selected.length) return;
     setExpectedDate(past?.expectedDate || dayjs(date).add(draft.settings.leadDays ?? 7, 'day').format('YYYY-MM-DD'));
     setExportError(''); setNote(past?.note || ''); setDate(past?.date || date);
-    setExportPlan({ rows: selected, total: selected.reduce((s, r) => s + r.quantity, 0), settings: past?.settings || draft.settings, draft: structuredClone(draft), revision: state.revision, requestId: crypto.randomUUID(), inventoryVersion: inventory?.version, demandVersion: demand?.version, demand: past ? past.demand : demand, annual: past ? past.annual : draft.annual, past });
+    setExportPlan({ tableOnly, rows: selected, total: selected.reduce((s, r) => s + r.quantity, 0), settings: past?.settings || draft.settings, draft: structuredClone(draft), revision: state.revision, requestId: crypto.randomUUID(), inventoryVersion: inventory?.version, demandVersion: demand?.version, demand: past ? past.demand : demand, annual: past ? past.annual : draft.annual, past });
     if (past?.columns?.length) setColumns([...new Set(['offer', ...past.columns])]);
   }
   async function writeFile(plan, savedDate = date) {
-    const XLSX = await import('xlsx'), cols = COLUMNS.filter(([k]) => columns.includes(k));
+    const XLSX = await import('xlsx'), cols = columns.map(k=>COLUMNS.find(c=>c[0]===k)).filter(Boolean).flatMap(([k,label])=>k.startsWith('trend')?[[k+'Qty',label.replace('шт. / %','шт.')],[k,label.replace('шт. / %','%')]]:[[k,label]]);
     const ws = XLSX.utils.aoa_to_sheet([cols.map(c => c[1]), ...plan.rows.map(r => cols.map(([k]) => k==='priority' ? r.priorityScore??null : r[k] ?? null))]);
     ws['!cols'] = cols.map(([k]) => ({ wch: k === 'name' ? 60 : k === 'note' ? 40 : 22 }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Подсорт 2D');
     const s = plan.settings;
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Дата подачи', savedDate], ['Ожидаемое поступление', plan.past?.expectedDate || expectedDate], ['Кабинет поступления', s.receivingCabinet || 'defly'], ['Срок поступления, дней', s.leadDays ?? 7], ['Кратность, шт', s.multiple], ['Период между подачами, дней', s.periodDays], ['Источник темпа', s.source === 'ozon' ? 'Заказы маркетплейсов по указанным кабинетам; самовыкупы Ozon исключены' : 'Ручные продажи'], ['Маркетплейсы по дату', plan.demand?.to || ''], ['Кабинеты', plan.demand?.shops?.map(c => c.label).join(', ') || ''], ['Полные периоды маркетплейсов, дней', PERIODS_2D.filter(d => plan.demand?.ranges?.['d' + d]?.complete).join(', ')], ['Вес темпа 7 / 14 / 30 дней', s.source === 'ozon' ? '50% / 30% / 20%; только полные периоды' : ''], ['Период введённых продаж, дней', s.salesDays], ['1С с', plan.annual?.from || ''], ['1С по', plan.annual?.to || ''], ['Файл 1С', plan.annual?.file || ''], ['Общий лимит, шт', s.total], ['В файле, шт', plan.total], ['Комментарий', note]]), 'Параметры');
-    XLSX.writeFile(wb, `Подсорт дефлекторов 2D ${savedDate}.xlsx`);
+    XLSX.writeFile(wb, `${plan.tableOnly?'Таблица':'Подсорт'} дефлекторов 2D ${savedDate}.xlsx`);
   }
   async function exportFile(toJournal, download = true) {
     setBusy(true); setExportError('');
@@ -155,10 +154,7 @@ export default function Deflectors2d({ nav }) {
   const s = draft.settings, invReady = inventory?.cabinet === receivingCabinet && !inventoryError;
   const stockSource = 'live';
   const transitSource = s.transitSource || (s.stockSource ? 'live' : 'manual');
-  const knownStocks = preview.rows.filter(r => r.stock != null).length;
   const knownRates = preview.rows.filter(r => r.rate != null).length;
-  const noNeed = preview.rows.length > 0 && preview.rows.every(r => r.need === 0);
-  const stockDate = Object.values(inventory?.byOffer || {}).map(r => r.date).filter(Boolean).sort().at(-1);
   const canExport = !busy && invReady && !(s.source === 'ozon' && (!demand || demandBusy || demandError)) && !preview.issues.length;
   const numeric = (r, key, label, step = 1) => <input className="a-input d2-num" aria-label={`${label}: ${r.offer}`} type="number" min="0" step={step} value={r[key] ?? ''} placeholder={key === 'manual' ? String(r.quantity || 0) : '—'} onChange={e => patch(r.offer, { [key]: e.target.value === '' ? null : Number(e.target.value) })} />;
   const displayedColumns = [...new Set(tableColumns)].filter(k => COLUMNS.some(c => c[0] === k) && k !== 'offer' && (k !== 'sales' || s.source !== 'ozon'));
@@ -168,6 +164,7 @@ export default function Deflectors2d({ nav }) {
     if (k === 'stock' && r.staleStock) return <span title={`Последний снимок: ${r.stockDate}`}>—<small className="pr-sub2">от {dayjs(r.stockDate).format('DD.MM')}</small></span>;
     if (k === 'recommended' && r.need === null) return <span title={r.stock === null ? 'Нет актуального остатка' : r.rate === null ? 'Нет полного периода продаж' : 'Неизвестно количество в пути'}>—</span>;
     if (k === 'sales') return numeric(r, 'sales', 'Продажи');
+    if (k.startsWith('trend')) return <span className="d2-dynamics"><b>{fmt(r[k+'Qty'])} шт.</b><small className={r[k]>0?'s-up':r[k]<0?'s-down':''}>{r[k]==null?'—':`${r[k]>0?'+':''}${fmt(r[k])}%`}</small></span>;
     if (k === 'priority') return <span className={`pr-sig ${r.priority === 'Срочно' ? 'dn' : r.priority === 'Пополнить' ? 'warn' : r.priority === 'Хватает' ? 'up' : ''}`} title={r.priorityParts?`Срочность ${r.priorityParts.urgency} + реклама ${r.priorityParts.advertising} + дефицит ${r.priorityParts.deficit} + рост 7 / 7 ${r.priorityParts.growth}`:'Нет остатка, количества в пути или темпа продаж'}><b>{r.priorityScore??'—'}</b> · {r.priority}</span>;
     if (k === 'note') return <input className="a-input" value={r.note} aria-label={`Комментарий: ${r.offer}`} onChange={e => patch(r.offer, { note: e.target.value })} />;
     if (typeof r[k] === 'string') return r[k];
@@ -177,7 +174,7 @@ export default function Deflectors2d({ nav }) {
     <div className="page-sticky"><div className="a-top"><h1>Производство</h1><input className="a-input" aria-label="Поиск дефлекторов" placeholder="Артикул или название" value={q} onChange={e => setQ(e.target.value)} />{nav}</div></div>
     {error && <div className="c-msg bad" role="alert">{error}</div>}{message && <div className="c-msg" role="status">{message}</div>}
     {inventoryError && <div className="c-msg bad">Не удалось обновить остатки: {inventoryError} <button className="a-btn" onClick={refreshInventory}>Повторить</button></div>}
-    <div className="a-bar d2-submission-date"><b>Дата подсорта</b><input className="a-input" aria-label="Дата подсорта" type="date" value={date} onChange={e=>{if(e.target.value)setDate(e.target.value);}} /><span className="d2-date-chips">{Array.from({length:10},(_,i)=>dayjs().subtract(9-i,'day')).map(d=><button className={`a-btn ghost ${date===d.format('YYYY-MM-DD')?'on':''}`} key={d.format('YYYY-MM-DD')} onClick={()=>setDate(d.format('YYYY-MM-DD'))}>{d.format('DD.MM')}</button>)}</span><button className="a-btn" disabled={!canExport||!shown.some(r=>r.quantity>0)} onClick={()=>openExport(shown)}>Зафиксировать подсорт</button><span className="a-hint">Дата записи в журнале; количество — из таблицы ниже.</span></div>
+    <div className="a-bar d2-submission-date"><b>Дата подсорта</b><input className="a-input" aria-label="Дата подсорта" type="date" value={date} onChange={e=>{if(e.target.value)setDate(e.target.value);}} /><span className="d2-date-chips" ref={dateStrip} tabIndex={0} aria-label="Даты подсорта, горизонтальная прокрутка">{Array.from({length:75},(_,i)=>dayjs().subtract(60-i,'day')).map(d=><button className={`a-btn ghost ${date===d.format('YYYY-MM-DD')?'on':''} ${d.day()===5?'friday':''}`} aria-pressed={date===d.format('YYYY-MM-DD')} title={d.day()===5?'Пятница · подсорт':d.format('DD.MM.YYYY')} key={d.format('YYYY-MM-DD')} onClick={()=>setDate(d.format('YYYY-MM-DD'))}>{d.format('DD.MM')}</button>)}</span><button className="a-btn" disabled={!canExport||!shown.some(r=>r.quantity>0)} onClick={()=>openExport(shown)}>Зафиксировать подсорт</button><span className="a-hint">Дата записи в журнале; количество — из таблицы ниже.</span></div>
     <fieldset disabled={busy} className="d2-fieldset">
     <div className="a-card pr-card">
       <div className="d2-plan-grid">{[['periodDays','Подача каждые','дней'],['leadDays','Поступление через','дней'],['multiple','Кратность','шт.'],['total','Лимит партии','шт.']].map(([k,label,unit]) => <label key={k} className="d2-plan-item"><span>{label}</span><div><input className="a-input" aria-label={label} type="number" min={['total','leadDays'].includes(k) ? 0 : 1} value={s[k] ?? 7} onChange={e => setting(k, e.target.value === '' ? '' : Number(e.target.value))} /><small>{unit}</small></div></label>)}</div>
@@ -186,20 +183,14 @@ export default function Deflectors2d({ nav }) {
         <label>В пути<select className="a-input" value={transitSource} onChange={e => setting('transitSource', e.target.value)}><option value="live">Из рекламы и заявок</option><option value="manual">Прежний ручной ввод + заявки</option></select></label>
         <label><input type="checkbox" checked={s.source === 'ozon'} onChange={e => setting('source', e.target.checked ? 'ozon' : 'manual')} /> Продажи всех кабинетов</label>
         {s.source !== 'ozon' && <label>Период продаж, дней<input className="a-input d2-num" type="number" value={s.salesDays} onChange={e => setting('salesDays', Number(e.target.value))} /></label>}
-        <label><input type="checkbox" checked={s.fill} onChange={e => setting('fill', e.target.checked)} /> Добрать до лимита сверх потребности</label></div>
+        <span className="a-hint">Распределяется весь заданный объём с учётом кратности.</span></div>
         <div className="a-hint">Приоритет: сначала срочность (3000 / 2000 / 1000), затем реклама (+100), дефицит запаса (до +60) и рост последних 7 дней к предыдущим 7 (до +30). Балл сортируется и фильтруется в заголовке колонки. Рекомендации — по темпу продаж 7/14/30 дней; прибыль и реклама пока не меняют количество. «В пути» = открытые заявки + выбранный ручной источник; два ручных источника не складываются. Остатки загружаются из раздела «Остатки» выбранного кабинета и не редактируются здесь. Поступления определяются по событиям роста остатков выбранного кабинета.</div>
-      </details><button className="a-btn ghost" disabled={!dirty || preview.invalid} onClick={save}>Сохранить</button><button className="a-btn ghost" onClick={() => { loadDemand(true); refreshInventory(); }}>Обновить данные</button><button className="a-btn ghost" onClick={() => { if (!dirty || window.confirm('Загрузить серверную версию вместо локальных правок?')) load(false); }}>Загрузить с сервера</button></div>
+      </details><button className="a-btn" onClick={()=>setDraft(v=>({...v,settings:{...v.settings,fill:true,requireFull:true},rows:v.rows.map(r=>({...r,manual:null}))}))}>Распределить весь объём</button><button className="a-btn ghost" disabled={!dirty || preview.invalid} onClick={save}>Сохранить</button><button className="a-btn ghost" onClick={() => { loadDemand(true); refreshInventory(); }}>Обновить данные</button><button className="a-btn ghost" onClick={() => { if (!dirty || window.confirm('Загрузить серверную версию вместо локальных правок?')) load(false); }}>Загрузить с сервера</button></div>
     </div>
     <div className="a-card pr-card">
-      <details className="d2-sources"><summary>Источники и годовые продажи 1С</summary><Deflectors2dAnnual annual={draft.annual} rows={draft.rows} apply={annual => setDraft(v => ({ ...v, annual }))} />
-        {demand && <div className="a-hint">Продажи: {demand.shops.map(c => c.label).join(', ')} · по {dayjs(demand.to).format('DD.MM.YYYY')}. {PERIODS_2D.filter(d => demand.ranges['d'+d]?.complete).join(', ')} дней полной истории.</div>}
-        {demandError && <p role="alert">{demandError}</p>}<div className="a-bar"><input className="a-input" placeholder="Новый артикул" value={newOffer} onChange={e => setNewOffer(e.target.value)} /><input className="a-input" placeholder="Наименование" value={newName} onChange={e => setNewName(e.target.value)} /><button className="a-btn ghost" disabled={!newOffer.trim()} onClick={() => { add([{offer:newOffer,name:newName}]); setNewOffer(''); setNewName(''); }}>Добавить</button></div>
-      </details>
-      <div className="d2-data-status" role="status"><span>Остатки: <b>{`${receivingCabinet} · ${stockDate ? dayjs(stockDate).format('DD.MM.YYYY') : 'загрузка…'}`}</b> · {knownStocks} / {preview.rows.length} арт.</span><span>Темп продаж ({s.source === 'ozon' ? 'МП' : 'ручной ввод'}): {knownRates} / {preview.rows.length} арт. · {s.source !== 'ozon' ? `за ${s.salesDays} дней` : demand ? `по ${dayjs(demand.to).format('DD.MM.YYYY')}` : 'загрузка…'}</span></div>
       {demandError && <div className="c-msg bad" role="alert">Не удалось получить продажи: {demandError}<button className="a-btn ghost" onClick={() => loadDemand(true)}>Повторить</button></div>}
       {s.source !== 'ozon' && knownRates < preview.rows.length && <div className="c-msg">Не заполнены ручные продажи. <button className="a-btn ghost" onClick={() => setting('source','ozon')}>Использовать продажи маркетплейсов</button></div>}
-      {noNeed && <div className="a-hint d2-no-need">Подсорт не требуется: запаса с учётом «В пути» хватает на {Number(s.periodDays) + Number(s.leadDays ?? 7)} дней. Рекомендация 0 — результат расчёта.</div>}
-      <div className="a-bar d2-filters"><label><input type="checkbox" checked={only} onChange={e => setOnly(e.target.checked)} /> Только в заказе</label><label><input type="checkbox" checked={favorites} onChange={e => setFavorites(e.target.checked)} /> ★ В рекламе</label><label><input type="checkbox" checked={missing} onChange={e => setMissing(e.target.checked)} /> Без данных</label><ResetCtl ctl={ctl} /></div>
+      <div className="a-bar d2-filters"><button type="button" role="switch" aria-checked={only} className="a-toggle" onClick={()=>setOnly(v=>!v)}><span className={`a-sw ${only?'on':''}`} />Только в заказе</button><button type="button" role="switch" aria-checked={favorites} className="a-toggle" onClick={()=>setFavorites(v=>!v)}><span className={`a-sw ${favorites?'on':''}`} />В рекламе</button><ResetCtl ctl={ctl} /><button className="a-btn" style={{marginLeft:'auto'}} disabled={!shown.length} onClick={()=>{setColumns(['offer',...displayedColumns]);openExport(shown,null,true);}}>Выгрузить таблицу</button></div>
       <div className="a-bar d2-table-tools"><span className="a-hint">{shown.length} из {preview.rows.length} артикулов</span><ColumnPicker columns={COLUMNS.filter(([k]) => k !== 'offer')} value={tableColumns} onChange={setTableColumns} /></div>
 
       <div className="a-scroll"><table className="a-t pr-t d2-table"><thead><tr><th title="Артикул в рекламе">★</th><ThCtl ctl={ctl} k="offer" filter={false}>Артикул</ThCtl>{displayedColumns.map(k => <ThCtl key={k} ctl={ctl} k={k} filter={!['name','note','rateWindow'].includes(k)}>{COLUMNS.find(c => c[0] === k)?.[1]}</ThCtl>)}</tr></thead><tbody>

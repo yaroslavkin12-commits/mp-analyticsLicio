@@ -12,7 +12,7 @@ export function validate2d(input) {
   const settings = {
     multiple: integer(s.multiple, 'Кратность', 1, 10000), periodDays: integer(s.periodDays, 'Период подачи', 1, 365),
     leadDays: integer(s.leadDays ?? 7, 'Срок поступления', 0, 365), receivingCabinet: String(s.receivingCabinet || 'defly'), stockSource: s.stockSource === 'live' ? 'live' : 'manual', transitSource: s.transitSource || (s.stockSource ? 'live' : 'manual'),
-    salesDays: integer(s.salesDays, 'Период продаж', 1, 366), total: integer(s.total, 'Общее количество', 0, 1000000), fill: s.fill === true, source: s.source === 'ozon' ? 'ozon' : 'manual',
+    requireFull: s.requireFull === true, salesDays: integer(s.salesDays, 'Период продаж', 1, 366), total: integer(s.total, 'Общее количество', 0, 1000000), fill: s.fill === true, source: s.source === 'ozon' ? 'ozon' : 'manual',
   };
   if (!Array.isArray(input.rows) || input.rows.length > 5000) fail('Допустимо не более 5000 артикулов');
   const seen = new Set();
@@ -85,12 +85,13 @@ export function calculate2d(input, demand = null, inventory = null) {
     const history = Object.fromEntries(PERIODS_2D.map(d => ['q' + d, ozon?.periods?.['d' + d]?.quantity ?? null]));
     const annual1c = draft.annual ? (Object.hasOwn(draft.annual.items, r.offer.toLowerCase()) ? draft.annual.items[r.offer.toLowerCase()] : null) : null;
     const available = r.stock === null || r.transit === null ? null : r.stock + r.transit;
-    return { ...r, ...history, stockDate: live?.date || null, staleStock: settings.stockSource === 'live' && !!live?.stale, legacyTransit: original.transit, annual1c, annualRate1c: annual1c === null ? null : annual1c / draft.annual.days, trend7: ozon?.trend7 ?? null, trend14: ozon?.trend14 ?? null, trend30: ozon?.trend30 ?? null, lastYear30: ozon?.periods?.lastYear30?.quantity ?? null, ratePeriods: ozon?.ratePeriods || [], rateWindow: settings.source === 'ozon' ? (ozon?.ratePeriods?.join(' / ') || 'нет полных периодов') : `ручные ${settings.salesDays} дней`, rate, available, need: rate === null || available === null ? null : Math.max(0, rate * (settings.periodDays + settings.leadDays) - available), cover: rate > 0 && available !== null ? available / rate : null };
+    return { ...r, ...history, stockDate: live?.date || null, staleStock: settings.stockSource === 'live' && !!live?.stale, legacyTransit: original.transit, annual1c, annualRate1c: annual1c === null ? null : annual1c / draft.annual.days, trend7Qty:ozon?.periods?.d7?.quantity??null, trend14Qty:ozon?.periods?.d14?.quantity??null, trend30Qty:ozon?.periods?.d30?.quantity??null, trend7: ozon?.trend7 ?? null, trend14: ozon?.trend14 ?? null, trend30: ozon?.trend30 ?? null, lastYear30: ozon?.periods?.lastYear30?.quantity ?? null, ratePeriods: ozon?.ratePeriods || [], rateWindow: settings.source === 'ozon' ? (ozon?.ratePeriods?.join(' / ') || 'нет полных периодов') : `ручные ${settings.salesDays} дней`, rate, available, need: rate === null || available === null ? null : Math.max(0, rate * (settings.periodDays + settings.leadDays) - available), cover: rate > 0 && available !== null ? available / rate : null };
   });
   const recommendation = distribute(rows, settings, false), final = distribute(rows, settings, true);
   const issues = rows.filter(r => r.enabled && r.manual !== null && r.manual % settings.multiple !== 0).map(r => `${r.offer}: ручное количество должно быть кратно ${settings.multiple}`);
   const result = rows.map(r => ({ ...r, ...priority2d(r,settings), recommended: recommendation.get(r.offer), quantity: final.get(r.offer), after: r.rate > 0 && r.available !== null ? (r.available + final.get(r.offer)) / r.rate : null }));
   const total = result.reduce((sum, r) => sum + r.quantity, 0);
+  if(settings.requireFull && total !== settings.total)issues.push(`Распределено ${total} из ${settings.total} шт. Проверьте кратность, ручные количества и наличие артикулов с данными для распределения.`);
   return { settings, rows: result, total, left: Math.max(0, settings.total - total), over: Math.max(0, total - settings.total), issues };
 }
 
@@ -142,5 +143,5 @@ export function parseAnnual2d(rows, offerCol, qtyCol, startRow = 0) {
 // Поданные строки остаются с явным нулём до новой ручной правки или сброса.
 export function afterSubmission2d(draft, offers) {
   const submitted = new Set(offers);
-  return { ...draft, rows: draft.rows.map(r => submitted.has(r.offer) ? { ...r, manual: 0 } : r) };
+  return { ...draft, rows: draft.rows.map(r => draft.settings.requireFull || submitted.has(r.offer) ? { ...r, manual: 0 } : r) };
 }

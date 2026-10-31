@@ -7,12 +7,12 @@ const transit = require('../lib/deflectorsTransit');
 const { listCabinets } = require('../config/cabinets');
 const allowedCabinet = id => listCabinets().some(c => c.id === id && c.family === 'defly' && c.platform === 'ozon');
 async function decorate(state) {
-  state = { ...state, draft: { ...state.draft, settings: { ...state.draft.settings, stockSource: 'live', transitSource: state.draft.settings.transitSource || (state.draft.settings.stockSource ? 'live' : 'manual') } } };
+  state = { ...state, draft: { ...state.draft, settings: { ...state.draft.settings, stockSource: 'live', fill: true, requireFull: true, transitSource: state.draft.settings.transitSource || (state.draft.settings.stockSource ? 'live' : 'manual') } } };
   const data = await transit.inventory(state, state.draft.settings.receivingCabinet || 'defly');
   return { ...state, journal: data.journal, inventory: data, receivingCabinets: listCabinets().filter(c => c.family === 'defly' && c.platform === 'ozon' && c.connected).map(c => ({ id: c.id, label: c.label })) };
 }
 const KEY = 'prod:defly:deflectors2d:v1';
-const empty = () => ({ revision: 0, draft: { settings: { multiple: 10, periodDays: 7, leadDays: 7, receivingCabinet: 'defly', stockSource: 'live', transitSource: 'live', salesDays: 30, total: 140, fill: false, source: 'ozon' }, rows: [] }, journal: [] });
+const empty = () => ({ revision: 0, draft: { settings: { multiple: 10, periodDays: 7, leadDays: 7, receivingCabinet: 'defly', stockSource: 'live', fill: true, requireFull: true, transitSource: 'live', salesDays: 30, total: 140, fill: false, source: 'ozon' }, rows: [] }, journal: [] });
 const model = () => import('../../../dashboard/src/lib/deflectors2d.mjs');
 const wrap = fn => async (req, res) => {
   try {
@@ -32,7 +32,7 @@ router.get('/catalog', wrap(async () => (await catalog2d()).articles));
 router.get('/demand', wrap(req => demand2d(req.query.refresh === '1')));
 async function mutate(req, journal) {
   const { validate2d, calculate2d, afterSubmission2d } = await model();
-  const draft = validate2d({ ...req.body.draft, settings: { ...req.body.draft?.settings, stockSource: 'live', transitSource: req.body.draft?.settings?.transitSource || (req.body.draft?.settings?.stockSource ? 'live' : 'manual') } });
+  const draft = validate2d({ ...req.body.draft, settings: { ...req.body.draft?.settings, stockSource: 'live', fill: true, requireFull: true, transitSource: req.body.draft?.settings?.transitSource || (req.body.draft?.settings?.stockSource ? 'live' : 'manual') } });
   if (!allowedCabinet(draft.settings.receivingCabinet)) throw new Error('Выберите кабинет поступления Ozon');
   // Повтор уже сохранённого запроса возвращается даже после обновления продаж.
   const requestHash = journal ? createHash('sha256').update(JSON.stringify({ draft, offers: req.body.offers, requestId: req.body.requestId, columns: req.body.columns, date: req.body.date, note: req.body.note, expectedDate: req.body.expectedDate, inventoryVersion: req.body.inventoryVersion, demandVersion: req.body.demandVersion })).digest('hex') : null;
@@ -63,6 +63,7 @@ async function mutate(req, journal) {
     if (offers.some(o => !byOffer.has(o))) throw new Error('В подсорте есть неизвестный артикул');
     const items = offers.map(o => byOffer.get(o)).filter(r => r.quantity > 0);
     if (!items.length) throw new Error('Количество подсорта равно нулю');
+    if(draft.settings.requireFull&&items.reduce((n,r)=>n+r.quantity,0)!==draft.settings.total)throw new Error('Зафиксируйте весь заданный объём партии. Снимите фильтр; для выгрузки части строк используйте «Выгрузить таблицу».');
     if (typeof req.body.requestId !== 'string' || !/^[\w-]{8,80}$/.test(req.body.requestId)) throw new Error('Не указан идентификатор сохранения');
     const columns = Array.isArray(req.body.columns) ? req.body.columns.filter(x => typeof x === 'string').slice(0, 30) : [];
     snapshot = { id: req.body.requestId, tracked: true, receivingCabinet: draft.settings.receivingCabinet, expectedDate: String(req.body.expectedDate || '').slice(0, 10), date: String(req.body.date || '').slice(0, 10), note: String(req.body.note || '').slice(0, 500), settings: draft.settings, annual: draft.annual ? { ...draft.annual, items: undefined } : null, demand: demand ? { version: demand.version, to: demand.to, loadedAt: demand.loadedAt, shops: demand.shops, ranges: demand.ranges } : null, requestHash, items, total: items.reduce((s, r) => s + r.quantity, 0), columns };

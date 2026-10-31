@@ -65,8 +65,12 @@ router.use(async (req, res) => {
     if (path === '/stocks/data') out = m.stocks();
     if (path === '/finance/coefs') { const costs=await require('../db').query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC"); out = m.coefs(costs); }
     if (path === '/finance/ops') { const d=ds.find(d=>d.kind==='finance'),bucket=String(req.query.bucket||'');if(!require('../lib/wbFinance').BUCKETS.includes(bucket))throw new Error('Неизвестная статья');const di=new Map(m.dates.map((d,i)=>[d,i])),offers=new Map(m.articles.map(a=>[String(a.sku),a.o]));out={rows:d?require('../lib/wbFinance').entries(d.rows).filter(e=>e.bucket===bucket&&di.has(e.date)).map(e=>[di.get(e.date),e.operation+(e.reason?' · '+e.reason:''),e.offer||offers.get(String(e.sku))||null,e.amount,e.qty]):[]}; }
+    if(path==='/finance/ops'&&req.query.bucket==='ads'&&req.query.adsBasis==='activity'){
+      const d=require('../lib/wbActivityPnl').activityPnl(m.pnl()),ad=d.adStatistics;
+      out={rows:ad?[...ad.rows.map(([ai,di,v])=>[di,'Расход WB Продвижение',d.articles[ai].o,-v,0]),...ad.unallocated.map((v,di)=>[di,'Расход WB без артикула',null,-v,0]).filter(r=>r[3])].filter(r=>d.dates[r[0]]>=d.available.mn&&d.dates[r[0]]<=d.available.mx):[]};
+    }
     if (path === '/finance/buyout') out=m.buyout();
-    if (path === '/finance/pnl') { const costs=await require('../db').query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC"); out = m.pnl(costs); }
+    if (path === '/finance/pnl') { const costs=await require('../db').query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC"); out = m.pnl(costs);if(req.query.adsBasis==='activity')out=require('../lib/wbActivityPnl').activityPnl(out); }
     if (path === '/sales/geo') out = m.geo();
     if (path === '/queries/season') out = m.season();
     if (path === '/clusters') out = m.clusters();

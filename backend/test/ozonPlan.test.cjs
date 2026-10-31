@@ -78,3 +78,10 @@ test('Разбивка P&L по дням сохраняет прежние ит�
   }
   assert.equal(next.total.qty, 3); assert.equal(next.total.payout, 1705);
 });
+
+test('Ozon + WB: два уровня округления сохраняют штуки и среднее, 2D отделён от 3D',()=>{
+ const {allocate,taxonomy}=require('../src/lib/ozonPlan'),ids=['defly','alex','defly_wb'],path='Дефлекторы / Окна / 2D';
+ const basis={hierarchical:true,shops:{defly:{platform:'ozon',byPath:{[path]:{qty:3,payout:3000}}},alex:{platform:'ozon',byPath:{[path]:{qty:2,payout:4000}}},defly_wb:{platform:'wb',byPath:{[path]:{qty:5,payout:15000}}}}};
+ const a=allocate([{path,qty:101,mean:2500}],basis,'fact',ids);assert.deepEqual(a.errors,[]);const r=a.rows[0];assert.equal(r.shops.reduce((n,s)=>n+s.qty,0),101);assert.equal(r.markets.reduce((n,m)=>n+m.qty,0),101);assert.equal(r.shops.reduce((n,s)=>n+s.amount,0),252500);assert.equal(r.markets.find(m=>m.id==='ozon').qty,51);assert.equal(r.markets.find(m=>m.id==='wb').qty,50);
+ const tax=taxonomy({defly:[{o:'A',cat:path},{o:'B',cat:'Дефлекторы / Окна / 3D'}]},[],['defly'],true);assert.deepEqual(tax.paths,[path,'Дефлекторы / Окна / 3D']);
+});

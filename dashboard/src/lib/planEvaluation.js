@@ -1,16 +1,17 @@
 import { SHOPS } from './cabinets.js';
 const shops = SHOPS.filter(s => s.platform === 'ozon');
 export const inPlanPath = (p, parent) => !parent || p === parent || p.startsWith(parent + ' / ');
+export const inPlanShop=(s,filter)=>!filter||filter.startsWith('market:')?( !filter || (s.platform||SHOPS.find(x=>x.id===s.id)?.platform)==filter.slice(7)):s.id===filter;
 export function planTotal(rows, shop = '') {
-  const items = rows.map(r => shop ? r.shops.find(s => s.id === shop) : r).filter(Boolean);
-  const qty = items.reduce((s, r) => s + r.qty, 0), amount = items.reduce((s, r) => s + r.amount, 0);
-  return { qty, amount, mean: qty > 0 ? amount / qty : null };
+  const items=shop?rows.flatMap(r=>r.shops.filter(s=>inPlanShop(s,shop))):rows;
+  const qty=items.reduce((s,r)=>s+r.qty,0),amount=items.reduce((s,r)=>s+r.amount,0);
+  return {qty,amount,mean:qty>0?amount/qty:null};
 }
 export function planActual(fact, rows, shop = '', path = '', date = '') {
   const paths = new Set(rows.filter(r => inPlanPath(r.path, path)).map(r => r.path));
   let qty = 0, payout = 0, knownShops = 0;
   const issues = [];
-  for (const s of shops.filter(s => !shop || s.id === shop)) {
+  for (const s of [...new Map(rows.flatMap(r=>r.shops).map(s=>[s.id,{...s,label:s.label||SHOPS.find(x=>x.id===s.id)?.label||s.id}])).values()].filter(s=>inPlanShop(s,shop))) {
     const f = fact?.shops?.[s.id];
     if (!f || f.error || f.partial) issues.push(`${s.label}: ${f?.error || 'неполный период финансов'}`);
     if (!f || f.error) continue;

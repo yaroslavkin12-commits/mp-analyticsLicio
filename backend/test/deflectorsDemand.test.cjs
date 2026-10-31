@@ -45,14 +45,14 @@ test('Адаптер Ozon: все пять кабинетов, SKU, вычет �
   assert.equal((await call('/journal', 'post', request)).status, 409); assert.equal(store.size, 0);
   units = 2;
   const saved = await call('/journal', 'post', request); assert.equal(saved.status, 200); assert.equal(saved.data.journal.length, 1);
-  const snapshot = saved.data.journal[0]; assert.equal(snapshot.total, 70); assert.equal(snapshot.items[0].q7, 63); assert.equal(snapshot.items[0].annual1c, 365); assert.equal(snapshot.demand.shops.length, 5);
+  const snapshot = saved.data.journal[0]; assert.equal(snapshot.total, 140); assert.equal(snapshot.items[0].q7, 63); assert.equal(snapshot.items[0].annual1c, 365); assert.equal(snapshot.demand.shops.length, 5);
   units = 3;
   const repeat = await call('/journal', 'post', request); assert.equal(repeat.status, 200); assert.equal(repeat.data.journal.length, 1);
   const modified = structuredClone(draft); modified.annual.items.a = 999;
   const edit = await call('/draft', 'post', { revision: 1, draft: modified }); assert.equal(edit.status, 200); assert.equal(edit.data.journal[0].items[0].annual1c, 365);
   assert.equal(edit.data.draft.annual.items.a, 999);
   const current = await call('/demand');
-  const manual = structuredClone(modified); manual.settings.source = 'manual'; manual.rows[0].sales = 300; manual.rows[0].manual = 10;
+  const manual = structuredClone(modified); manual.settings.source = 'manual'; manual.rows[0].sales = 300; manual.rows[0].manual = 140;
   const manualSnapshot = await call('/journal', 'post', { ...request, draft: manual, revision: 2, requestId: 'manual-journal-2', inventoryVersion: edit.data.inventory.version, demandVersion: current.data.version });
   assert.equal(manualSnapshot.status, 200); assert.equal(manualSnapshot.data.journal[0].items[0].q7, 98); assert.equal(manualSnapshot.data.journal[0].items[0].rate, 10);
   const previousSecret = process.env.ADS_SHEET_ID_DEFLY_WB;

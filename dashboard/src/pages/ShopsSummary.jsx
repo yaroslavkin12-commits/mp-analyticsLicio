@@ -223,7 +223,7 @@ export default function ShopsSummary({ active, cabinet }) {
                   const kids = [...V.kids].sort((a, b) => b.or - a.or);
                   return (
                     <React.Fragment key={s.id}>
-                      {row({ key: s.id, name: s.shop.label, sub: s.error || (s.fin?.error ? 'начисления не загрузились' : s.fin?.operational ? 'Продажи и возвраты WB · начисления пока не подключены' : s.fin?.source === 'wb' ? `Финансы по ${dayjs(s.fin.through).format('DD.MM.YYYY')} · налог ${s.fin.tax}%` : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : ''), color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
+                      {row({ key: s.id, name: s.shop.label, sub: s.error || ((s.cur.complete===false&&s.cur.coveredFrom?`Заказы ${dayjs(s.cur.coveredFrom).format('DD.MM')} — ${dayjs(s.cur.coveredTo).format('DD.MM')} · `:'')+(s.fin?.error ? 'начисления не загрузились' : s.fin?.operational ? 'Продажи и возвраты WB · начисления пока не подключены' : s.fin?.source === 'wb' ? `Финансы по ${dayjs(s.fin.through).format('DD.MM.YYYY')} · налог ${s.fin.tax}%` : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '')), color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
                       {isOpen && kids.map(x => row({ key: s.id + x.k, name: x.name, oq: x.oq, or: x.or, por: x.por, poq: x.poq, F: x.F, PF: x.PF, depth: 2, loading: !s.fin }))}
                     </React.Fragment>
                   );

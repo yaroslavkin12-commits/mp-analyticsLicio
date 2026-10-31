@@ -10,3 +10,11 @@ test('Срочность выше рекламы; внутри уровня ре
  assert.equal(priority2d({stock:null,transit:0,rate:2},s).priorityScore,null);
  assert.equal(priority2d({stock:0,transit:0,rate:0,favorite:false},s).priority,'Хватает');
 });
+
+test('Полная партия распределяется сверх текущей потребности; неполный ручной набор нельзя принять за полный',async()=>{
+ const {calculate2d,afterSubmission2d}=await import('../../dashboard/src/lib/deflectors2d.mjs');
+ const draft={settings:{multiple:10,periodDays:7,leadDays:7,salesDays:30,total:140,fill:true,requireFull:true},rows:[{offer:'A',sales:30,stock:100,transit:0,manual:null},{offer:'B',sales:60,stock:100,transit:0,manual:null}]};
+ const r=calculate2d(draft);assert.equal(r.total,140);assert.deepEqual(r.issues,[]);assert(r.rows.every(x=>x.quantity%10===0));
+ const fixed=afterSubmission2d(draft,['A','B']);assert(fixed.rows.every(r=>r.manual===0));assert(calculate2d(fixed).issues.length>0);
+ draft.rows[0].manual=10;draft.rows[1].manual=0;assert(calculate2d(draft).issues.length>0);
+});

@@ -4,8 +4,9 @@ const { query, getPool } = require('../db');
 const { SHOPS: DEFAULT_SHOPS, allocate } = require('../lib/ozonPlan');
 const data = require('../lib/ozonPlanData');
 const router = express.Router();
-const scopeOf = req => { const s = req.query.scope || req.body?.scope || 'ozon'; if (!['ozon', 'licio'].includes(s)) throw new Error('Неизвестная область плана'); return s; };
-const shopsOf = scope => scope === 'licio' ? ['licio'] : DEFAULT_SHOPS;
+const {CABINETS,isConnected}=require('../config/cabinets');
+const scopeOf = req => { const s = req.query.scope || req.body?.scope || 'ozon'; if (!['ozon', 'licio', 'marketplaces'].includes(s)) throw new Error('Неизвестная область плана'); return s; };
+const shopsOf = scope => scope==='licio'?['licio']:scope==='marketplaces'?Object.keys(CABINETS).filter(id=>CABINETS[id].family==='defly'&&['ozon','wb'].includes(CABINETS[id].platform)&&isConnected(id)):DEFAULT_SHOPS;
 const key = (month, scope = 'ozon') => `plan:${scope}:v2:${month}`;
 const previews = new Map();
 const empty = () => ({ schema: 2, revision: 0, activeId: null, versions: [] });
@@ -25,10 +26,11 @@ const wrap = fn => async (req, res) => {
 router.get('/', wrap(async req => {
   const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), state = await load(month, scope);
   const legacyRows = await query('SELECT key, value FROM app_settings WHERE key = ANY($1::text[])', [SHOPS.map(s => `plan:${s}:${month}`)]);
-  return { ...state, month, defaultPeriod: data.defaultPeriod(month), cutoff: data.cutoff(), legacy: legacyRows.map(r => ({ shop: r.key.split(':')[1], plan: JSON.parse(r.value) })) };
+  const prior=scope==='marketplaces'?await load(month,'ozon'):null;
+  return { ...state, migration:prior?.versions?.find(v=>v.id===prior.activeId)||null, shops:SHOPS.map(id=>({id,label:CABINETS[id].label,platform:CABINETS[id].platform})), month, defaultPeriod: scope==='marketplaces'?await data.marketPeriod(month):data.defaultPeriod(month), cutoff: data.cutoff(), legacy: legacyRows.map(r => ({ shop: r.key.split(':')[1], plan: JSON.parse(r.value) })) };
 }));
 router.get('/basis', wrap(async req => {
-  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), defaults = data.defaultPeriod(month);
+  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), defaults = scope==='marketplaces'?await data.marketPeriod(month):data.defaultPeriod(month);
   const source = req.query.source === 'forecast' ? 'forecast' : 'fact';
   return data.basis(req.query.from || defaults.from, req.query.to || defaults.to, source, Number(req.query.refresh) > 0, SHOPS);
 }));
@@ -40,8 +42,8 @@ router.post('/preview', wrap(async req => {
   const basis = await data.basis(from, to, source, false, SHOPS);
   const result = allocate(targets, basis, source, SHOPS);
   const known = new Set(basis.paths);
-  if (result.targets.some(t => !known.has(t.path))) result.errors.push('Категория отсутствует в текущем каталоге. Проверьте период и категории');
-  const id = randomUUID(), snapshot = { id, month, createdAt: new Date().toISOString(), methodology: 'pnl-v1; net-buyouts; largest-remainder; weighted-ratio-v1', basis: { from, to, source, asOf: basis.asOf, shops: Object.fromEntries(SHOPS.map(s => [s, { available: basis.shops[s].available, updatedAt: basis.shops[s].updatedAt, partial: basis.shops[s].partial, error: basis.shops[s].error }])) }, taxonomy: basis.taxonomy, ...result };
+  if (result.targets.some(t => !known.has(t.path)&&![...known].some(p=>p.startsWith(t.path+' / ')))) result.errors.push('Категория отсутствует в текущем каталоге. Проверьте период и категории');
+  const id = randomUUID(), snapshot = { id, month, createdAt: new Date().toISOString(), methodology: 'pnl-v1; net-buyouts; largest-remainder; weighted-ratio-v1', basis: { from, to, source, asOf: basis.asOf, shops: Object.fromEntries(SHOPS.map(s => [s, { available: basis.shops[s].available, updatedAt: basis.shops[s].updatedAt, partial: basis.shops[s].partial, error: basis.shops[s].error }])) }, taxonomy: Object.fromEntries(Object.entries(basis.taxonomy).map(([shop,offers])=>[shop,Object.fromEntries(Object.entries(offers).map(([offer,path])=>[offer,result.targets.find(t=>path===t.path||path.startsWith(t.path+' / '))?.path||path]))])), ...result };
   if (!result.errors.length) {
     previews.set(id, { scope, at: Date.now(), expectedRevision, snapshot });
     if (previews.size > 20) previews.delete(previews.keys().next().value);

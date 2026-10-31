@@ -51,8 +51,8 @@ async function call(path, body) {
 test('Черновик и журнал отдельны от чехлов; версия, повтор запроса и неизменность снимка', async () => {
   const draft = { settings, rows: [row('A', 300, 0), row('B', 300, 0)] };
   const save = await call('/draft', { revision: 0, draft }); assert.equal(save.status, 200); assert.equal(save.data.revision, 1); assert.equal(save.data.draft.settings.stockSource, 'live');
-  const request = { revision: 1, draft, offers: ['A'], requestId: 'test-request-1', date: '2026-10-29', expectedDate: '2026-11-05', inventoryVersion: save.data.inventory.version, columns: ['offer', 'quantity'], note: 'Подсорт' };
-  const fix = await call('/journal', request); assert.equal(fix.status, 200); assert.equal(fix.data.journal.length, 1); assert.equal(fix.data.journal[0].total, 70); assert.equal(fix.data.draft.rows[0].manual, 0); assert.equal(fix.data.draft.rows[1].manual, null);
+  const request = { revision: 1, draft, offers: ['A','B'], requestId: 'test-request-1', date: '2026-10-29', expectedDate: '2026-11-05', inventoryVersion: save.data.inventory.version, columns: ['offer', 'quantity'], note: 'Подсорт' };
+  const fix = await call('/journal', request); assert.equal(fix.status, 200); assert.equal(fix.data.journal.length, 1); assert.equal(fix.data.journal[0].total, 140); assert.equal(fix.data.draft.rows[0].manual, 0); assert.equal(fix.data.draft.rows[1].manual, 0);
   const changed = structuredClone(draft); changed.rows[0].manual = 10;
   const edit = await call('/draft', { revision: 2, draft: changed }); assert.equal(edit.status, 200); assert.equal(edit.data.journal[0].items[0].quantity, 70);
   const retry = await call('/journal', request); assert.equal(retry.status, 200); assert.equal(retry.data.revision, 3); assert.equal(retry.data.journal.length, 1);

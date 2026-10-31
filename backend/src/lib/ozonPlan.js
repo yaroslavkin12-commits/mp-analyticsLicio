@@ -2,19 +2,20 @@
 const SHOPS = ['defly', 'nabauto', 'alex', 'fullgas', 'accent'];
 const SEP = ' / ';
 const has = (obj, k) => Object.prototype.hasOwnProperty.call(obj || {}, k);
-function leafPath(path, branches) {
+function leafPath(path, branches, detailed = false) {
   const p = String(path || 'Без категории').split(SEP);
+  if(detailed&&p[0]==='Дефлекторы'&&p[1]==='Окна'&&['2D','3D'].includes(p[2]))return p.slice(0,3).join(SEP);
   return p.length > 1 ? p.slice(0, 2).join(SEP) : branches.has(p[0]) ? p[0] + SEP + 'Без подкатегории' : p[0];
 }
-function taxonomy(catalogs, extra = [], shops = SHOPS) {
+function taxonomy(catalogs, extra = [], shops = SHOPS, detailed = false) {
   const paths = [...Object.values(catalogs).flatMap(a => a.map(x => x.cat || 'Без категории')), ...extra];
   const branches = new Set(paths.filter(x => x.includes(SEP)).map(x => x.split(SEP)[0]));
   const byShop = {}, leaves = new Set(extra);
   for (const shop of shops) {
     byShop[shop] = {};
-    for (const a of catalogs[shop] || []) { const path = leafPath(a.cat, branches); byShop[shop][a.o] = path; leaves.add(path); }
+    for (const a of catalogs[shop] || []) { const path = leafPath(a.cat, branches, detailed); byShop[shop][a.o] = path; leaves.add(path); }
   }
-  return { byShop, paths: [...leaves].sort((a, b) => (b.startsWith('Чехлы') - a.startsWith('Чехлы')) || a.localeCompare(b, 'ru')), branches };
+  return { byShop, paths: [...leaves].sort((a, b) => (b.startsWith('Чехлы') - a.startsWith('Чехлы')) || a.localeCompare(b, 'ru')), branches, detailed };
 }
 function validateTargets(input, shops = SHOPS) {
   if (!Array.isArray(input) || !input.length || input.length > 200) throw new Error('Задайте хотя бы один план (не более 200 строк)');
@@ -49,9 +50,9 @@ function integerShares(total, weights) {
 function allocate(targetsInput, basis, source = 'fact', ids = SHOPS) {
   const targets = validateTargets(targetsInput, ids), rows = [], errors = [], warnings = [];
   for (const t of targets) {
-    const info = ids.map(id => ({ id, ...(basis.shops[id] || {}), metric: basis.shops[id]?.byPath?.[t.path] || { qty: 0, payout: 0 } }));
+    const info = ids.map(id => ({ id, ...(basis.shops[id] || {}), platform:basis.shops[id]?.platform||(id.endsWith('_wb')?'wb':'ozon'), metric: basis.shops[id]?.byPath?.[t.path] || { qty: 0, payout: 0 } }));
     if (t.qty === 0) {
-      rows.push({ path: t.path, qty: 0, mean: t.mean, amount: 0, factor: 1, shops: info.map(x => ({ id: x.id, label: x.label || x.id, qty: 0, share: 0, baseQty: x.metric.qty, baseMean: null, mean: null, amount: 0 })) });
+      rows.push({ path: t.path, qty: 0, mean: t.mean, amount: 0, factor: 1, shops: info.map(x => ({ id: x.id, platform:x.platform||'ozon', label: x.label || x.id, qty: 0, share: 0, baseQty: x.metric.qty, baseMean: null, mean: null, amount: 0 })) });
       continue;
     }
     const positive = info.reduce((s, x) => s + Math.max(0, x.metric.qty), 0);
@@ -63,7 +64,13 @@ function allocate(targetsInput, basis, source = 'fact', ids = SHOPS) {
     }
     if (!weights.some(w => w > 0)) issues.push('Нет положительных выкупов. Укажите относительные доли вручную');
     if (issues.length) { errors.push(...issues.map(s => `${t.path} · ${s}`)); continue; }
-    const quantities = integerShares(t.qty, weights);
+    let quantities = integerShares(t.qty, weights);
+    if(basis.hierarchical){
+      const groups=[...new Set(info.map(x=>x.platform||'ozon'))];
+      const totals=groups.map(p=>info.reduce((n,x,i)=>n+(x.platform===p?weights[i]:0),0));
+      const marketQty=integerShares(t.qty,totals);quantities=info.map(()=>0);
+      groups.forEach((p,mi)=>{const indices=info.map((x,i)=>x.platform===p?i:-1).filter(i=>i>=0);if(!marketQty[mi])return;const split=integerShares(marketQty[mi],indices.map(i=>weights[i]));indices.forEach((i,n)=>quantities[i]=split[n]);});
+    }
     const means = info.map(x => {
       if (has(t.means, x.id)) return t.means[x.id];
       const m = source === 'forecast' ? x.metric.forecast : x.metric;
@@ -75,12 +82,13 @@ function allocate(targetsInput, basis, source = 'fact', ids = SHOPS) {
     const baseTotal = quantities.reduce((s, q, i) => s + q * (means[i] || 0), 0);
     const factor = baseTotal > 0 ? t.qty * t.mean / baseTotal : 1;
     if (factor > 1.3 || factor < 0.7) warnings.push(`${t.path}: цель меняет базовое поступление на ${Math.round((factor - 1) * 100)}%. Проверьте достижимость`);
-    const shops = info.map((x, i) => ({ id: x.id, label: x.label || x.id, qty: quantities[i], share: weights[i] / weights.reduce((a, b) => a + b, 0), baseQty: x.metric.qty, baseMean: means[i], mean: quantities[i] ? means[i] * factor : null, amount: quantities[i] ? quantities[i] * means[i] * factor : 0, manualWeight: has(t.weights, x.id), manualMean: has(t.means, x.id) }));
+    const shops = info.map((x, i) => ({ id: x.id, platform:x.platform||'ozon', label: x.label || x.id, qty: quantities[i], share: weights[i] / weights.reduce((a, b) => a + b, 0), baseQty: x.metric.qty, baseMean: means[i], mean: quantities[i] ? means[i] * factor : null, amount: quantities[i] ? quantities[i] * means[i] * factor : 0, manualWeight: has(t.weights, x.id), manualMean: has(t.means, x.id) }));
     // Полная точность внутри; только отображение округляется. Убираем ошибку float
     // в общей сумме, не округляя средние каждого магазина до целых рублей.
     const last = shops.findLast(x => x.qty > 0);
     if (last) { last.amount += t.qty * t.mean - shops.reduce((s, x) => s + x.amount, 0); last.mean = last.amount / last.qty; }
-    rows.push({ path: t.path, qty: t.qty, mean: t.mean, amount: t.qty * t.mean, factor, shops });
+    const markets=[...new Set(shops.map(s=>s.platform))].map(id=>{const children=shops.filter(s=>s.platform===id),qty=children.reduce((n,s)=>n+s.qty,0),amount=children.reduce((n,s)=>n+s.amount,0);return {id,label:id==='wb'?'Wildberries':'Ozon',qty,amount,mean:qty?amount/qty:null,share:t.qty?qty/t.qty:0,shops:children};});
+    rows.push({ path: t.path, qty: t.qty, mean: t.mean, amount: t.qty * t.mean, factor, shops, markets });
   }
   return { targets, rows, errors: [...new Set(errors)], warnings: [...new Set(warnings)] };
 }

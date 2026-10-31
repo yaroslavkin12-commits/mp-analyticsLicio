@@ -10,5 +10,5 @@ test('WB: неполный период и неизвестная цена в с
  const s=wbShopSummary(input,{self:{'self|1':true}},{from:'2026-10-10',to:'2026-10-10'});
  assert.equal(s.cur.q,1);assert.equal(s.cur.r,null);
  const unknown=wbShopSummary(input,{}, {from:'2026-09-30',to:'2026-10-10'});
- assert.equal(unknown.cur.q,null);assert.equal(unknown.cur.r,null);assert.equal(unknown.cur.complete,false);
+ assert.equal(unknown.cur.q,3);assert.equal(unknown.cur.r,null);assert.equal(unknown.cur.complete,false);assert.equal(unknown.cur.coveredFrom,'2026-10-01');
 });

@@ -45,3 +45,9 @@
 .op-page .op-days td small{max-width:none;font-size:10px;line-height:1.4;margin-top:4px}
 @media(max-width:1100px){.op-page .op-money-kpis{grid-template-columns:1fr 1fr}.op-page .op-money-kpis>.a-kpi:last-child{grid-column:1 / -1}}
 @media(max-width:760px){.op-page table.op-days{--op-day-label:184px;--op-day-cell:108px}.op-page .op-money-kpis{grid-template-columns:1fr}.op-page .op-money-kpis .val{font-size:21px}}
+
+.op-drawer{position:fixed;inset:0 0 0 auto;margin:0;width:min(1180px,96vw);max-width:96vw;height:100dvh;max-height:100dvh;box-sizing:border-box;overflow:auto;border:0;border-left:1px solid var(--a-line2);padding:22px;background:var(--a-panel);color:var(--a-ink)}
+.op-drawer::backdrop{background:rgba(0,0,0,.5)}
+.op-heading .op-month{margin-left:auto}
+
+.op-drawer>*{flex-shrink:0}
