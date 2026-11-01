@@ -11,7 +11,7 @@ const row=(rrd='9007199254740993')=>'[{"reportId":142382026102312345,"rrdId":'+r
 test('Финансы WB: точные int64, денежные строки, проекция; короткая страница не завершает отчёт',()=>{
  const h=harness([{code:200,text:row()},{code:204}]);h.ctx.syncWbFinance();
  assert.equal(h.calls.length,2);assert.ok(h.calls[1].at-h.calls[0].at>=61000);
- assert.match(h.calls[1].opt.payload,/"rrdId":9007199254740993,/);assert.equal(JSON.parse(h.calls[0].opt.payload).period,'daily');
+ assert.match(h.calls[1].opt.payload,/"rrdId":9007199254740993,/);assert.equal(JSON.parse(h.calls[0].opt.payload).period,'daily');assert.equal(JSON.parse(h.calls[0].opt.payload).dateFrom,'2026-07-01T00:00:00+03:00');
  assert.equal(h.rows('finance')[0].id,'142382026102312345|9007199254740993');assert.equal(h.rows('finance')[0].forPay,'100.01');assert.equal(h.rows('finance')[0].ppvzSupplierInn,undefined);assert.equal(h.rows('finance')[0].bonusTypeName,'Оплата рекламы');assert.ok(JSON.parse(h.calls[0].opt.payload).fields.includes('bonusTypeName'));
  assert.equal(h.props.has('WB_FINANCE_JOB'),false);assert.equal(h.rows('status').length,1);assert.ok(!h.logs.join('').includes('secret-only-in-properties'));
 });

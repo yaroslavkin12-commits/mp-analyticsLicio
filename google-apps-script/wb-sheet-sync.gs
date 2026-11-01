@@ -305,10 +305,17 @@ function wbFinanceStage_(job, rows) {
   if (s.getLastRow()>values.length) s.getRange(values.length+1,1,s.getLastRow()-values.length,3).clearContent();
   SpreadsheetApp.flush();
 }
+// Сохраняем три полных прошлых месяца, а не скользящие 90 дней:
+// иначе в начале месяца может отсутствовать его первое число.
+function wbFinancePlanFrom_() {
+  var d = new Date(ymd_(0).slice(0,7)+'-01T00:00:00Z');
+  d.setUTCMonth(d.getUTCMonth()-3);
+  return d.toISOString().slice(0,10);
+}
 function syncWbFinance() { wbLock_('finance',function(){
   var props = PropertiesService.getScriptProperties(), saved=props.getProperty('WB_FINANCE_JOB'), job=saved?JSON.parse(saved):null;
   if (!job || Date.now()-job.startedAt>86400000) {
-    job={runId:Utilities.getUuid(),from:ymd_(90),to:ymd_(1),cursor:'0',startedAt:Date.now()};
+    job={runId:Utilities.getUuid(),from:wbFinancePlanFrom_(),to:ymd_(1),cursor:'0',startedAt:Date.now()};
     wbFinanceStage_(job,[]); props.setProperty('WB_FINANCE_JOB',JSON.stringify(job));
   }
   if(!/^\d+$/.test(job.cursor)) throw new Error('Неверный курсор финансов WB');

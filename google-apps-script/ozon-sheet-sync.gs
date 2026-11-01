@@ -1455,7 +1455,7 @@ function collectFinance_(cab, dates, agg, started, done) {
 function replaceDates_(sheetName, headers, rows, done, dateCol) {
   const sh = getSheet_(sheetName);
   const last = sh.getLastRow();
-  const cutoff = mskDate_(RETENTION_DAYS);
+  const cutoff = mskDate_(sheetName === SHEET_NAMES.finance ? 124 : RETENTION_DAYS);
   let old = [];
   if (last > 1) {
     old = sh.getRange(2, 1, last - 1, headers.length).getValues().filter(function (r) {
@@ -1503,8 +1503,18 @@ function syncFinanceContinue() {
   const left = JSON.parse(PropertiesService.getScriptProperties().getProperty('FIN_PENDING') || '[]');
   if (left.length) runFinance_(left);
 }
-// Полная загрузка — 45 дней (столько хранит вкладка); сервис хранит историю у себя.
+// Быстрая полная загрузка — 45 дней; расширенная история для плана загружается отдельно.
 function syncFinanceFull() { syncFinance(45); }
+// Разовая дозагрузка для общего плана: три прошлых календарных месяца
+// и уже завершённые дни текущего. Продолжения использует runFinance_.
+function syncFinancePlanHistory() {
+  if (getCabinets_().some(function (c) { return c.id === 'licio'; })) throw new Error('Дозагрузка общего плана — только в проектах Defly, NABauto, Alex, Fullgas и Accent. Licio не включён.');
+  const start = new Date(mskDate_(0).slice(0, 7) + '-01T00:00:00Z');
+  start.setUTCMonth(start.getUTCMonth() - 3);
+  const to = mskDate_(1), dates = [];
+  for (let d = start; d.toISOString().slice(0, 10) <= to; d = new Date(d.getTime() + 86400000)) dates.push(d.toISOString().slice(0, 10));
+  runFinance_(dates);
+}
 
 // ---------- Запись в таблицу ----------
 function getSheet_(name) {
