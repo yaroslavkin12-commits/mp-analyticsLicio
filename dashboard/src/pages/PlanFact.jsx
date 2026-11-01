@@ -54,7 +54,8 @@ export default function PlanFact({ active = true, cabinet }) {
   const [fact, setFact] = useState(null), [factBusy, setFactBusy] = useState(false), [factError, setFactError] = useState('');
   const [shop, setShop] = useState(''), [path, setPath] = useState('');
   const [refresh, setRefresh] = useState(0), [basisRefresh, setBasisRefresh] = useState(0);
-  const [showArchive, setShowArchive] = useState(false);
+  const factKey = useRef('');
+  const factInFlight = useRef(false);
   const fingerprint = JSON.stringify({ scope, month, targets, period, source, revision: state?.revision });
   const currentInput = useRef(fingerprint); currentInput.current = fingerprint;
   const fixed = state?.versions.find(v => v.id === state.activeId);
@@ -68,8 +69,8 @@ export default function PlanFact({ active = true, cabinet }) {
       if (off) return;
       const s = r.data.data, v = s.versions.find(x => x.id === s.activeId) || s.migration, draft = readDraft(month, scope);
       setTargets(draft?.targets || Object.fromEntries((v?.targets || []).map(t => [t.path, { ...t }])));
-      setPeriod(draft?.period || (v ? { from: v.basis.from, to: v.basis.to } : s.defaultPeriod));
-      setSource(draft?.source || v?.basis.source || 'fact');
+      setPeriod(scope==='licio' ? (draft?.period || (v ? { from: v.basis.from, to: v.basis.to } : s.defaultPeriod)) : s.defaultPeriod);
+      setSource(scope==='licio' ? (draft?.source || v?.basis.source || 'fact') : 'fact');
       if (draft && draft.revision !== s.revision) setNotice('На сервере есть новая версия. Локальный черновик сохранён; перед фиксацией сравните его с действующим планом.');
       if(s.migration&&!s.versions.length)setNotice('Прежний план Ozon сохранён. Его цели перенесены в черновик: проверьте распределение с Wildberries и зафиксируйте новую общую версию.');
       setState(s);
@@ -91,16 +92,21 @@ export default function PlanFact({ active = true, cabinet }) {
   useEffect(() => {
     if (!active || !state || !state.versions.length || state.month !== month || mode !== 'actual') return;
     let off = false;
-    setFact(null); setFactError(''); setFactBusy(true);
+    const key = `${scope}:${month}:${version}:${state.revision}`;
+    if (factKey.current !== key) setFact(null);
+    factKey.current = key; factInFlight.current = true;
+    setFactError(''); setFactBusy(true);
     getOzonPlanExecution({ scope, month, version: version || undefined, refresh }).then(r => { if (!off) setFact(r.data.data); })
-      .catch(e => { if (!off) setFactError(errorText(e)); }).finally(() => { if (!off) setFactBusy(false); });
+      .catch(e => { if (!off) setFactError(errorText(e)); }).finally(() => { if (!off) { factInFlight.current = false; setFactBusy(false); } });
     return () => { off = true; };
   }, [active, state?.revision, mode, month, version, refresh]);
 
   useEffect(()=>{
     if(!active||mode!=='actual')return;
-    const update=()=>setRefresh(v=>v+1),timer=setInterval(update,15*60*1000);
-    window.addEventListener('focus',update);return()=>{clearInterval(timer);window.removeEventListener('focus',update);};
+    const update=()=>{if(document.visibilityState!=='hidden'&&!factInFlight.current)setRefresh(v=>v+1);};
+    const timer=setInterval(update,60*1000);
+    window.addEventListener('focus',update);document.addEventListener('visibilitychange',update);
+    return()=>{clearInterval(timer);window.removeEventListener('focus',update);document.removeEventListener('visibilitychange',update);};
   },[active,mode]);
   const paths = useMemo(() => [...new Set([...(basis?.paths || []), ...Object.keys(targets), ...(fixed?.targets.map(t => t.path) || [])])].sort((a,b)=>categoryCompare(a.split(SEP)[0],b.split(SEP)[0])||a.localeCompare(b,'ru')), [basis, targets, fixed]);
   const tops = [...new Set(paths.map(p => p.split(SEP)[0]))];
@@ -111,7 +117,7 @@ export default function PlanFact({ active = true, cabinet }) {
     try {
       const s = (await getOzonPlan(dayjs(month + '-01').subtract(1, 'month').format('YYYY-MM'), scope)).data.data;
       const v = s.versions.find(x => x.id === s.activeId)||s.migration;
-      if (!v) { setNotice('В прошлом месяце нет общего плана. Старые планы кабинетов доступны в архиве.'); return; }
+      if (!v) { setNotice('В прошлом месяце нет общего плана.'); return; }
       setTargets(Object.fromEntries(v.targets.map(t => [t.path, { ...t, weights: {}, means: {} }]))); setPreview(null);
       setNotice('Цели прошлого месяца скопированы в черновик. Распределение нужно проверить и зафиксировать заново.');
     } catch (e) { setActionError(errorText(e)); }
@@ -135,13 +141,6 @@ export default function PlanFact({ active = true, cabinet }) {
     } catch (e) { setActionError(errorText(e)); }
     finally { setSaving(false); }
   };
-  const preset = kind => {
-    const to = state.cutoff;
-    if (kind === '30') setPeriod({ from: dayjs(to).subtract(29, 'day').format('YYYY-MM-DD'), to });
-    else if (kind === 'previous') { const p = dayjs(month + '-01').subtract(1, 'month'); setPeriod({ from: p.startOf('month').format('YYYY-MM-DD'), to: p.endOf('month').format('YYYY-MM-DD') }); }
-    else setPeriod(state.defaultPeriod);
-    setPreview(null);
-  };
   if (!state || state.month !== month) return <div className="mpui op-page"><h1>План / факт · Ozon и Wildberries</h1><div className={loadError ? 'op-alert bad' : 'a-empty'}>{loadError || 'Загружаем общий план…'}</div>{loadError && <button className="a-btn" onClick={() => window.location.reload()}>Обновить страницу</button>}</div>;
   const rows = viewed?.rows || [];
   const displayRows = [];
@@ -151,13 +150,13 @@ export default function PlanFact({ active = true, cabinet }) {
     for (const p of paths.filter(p => p === top || p.startsWith(top + SEP))) displayRows.push({ path: p, parent: false });
   }
   return <div className="mpui op-page">
-    <div className="op-heading"><div><h1>План / факт <span>{scope==='licio'?'Licio':'Ozon + WB'}</span></h1></div><label className="op-month">Месяц<input type="month" value={month} onChange={e => { if (e.target.value) setMonth(e.target.value); }} /></label><button className="a-btn primary" onClick={()=>setMode('plan')}>Настроить план</button></div>
+    <div className="page-sticky op-sticky"><div className="op-heading"><div><h1>План / факт <span>{scope==='licio'?'Licio':'Ozon + WB'}</span></h1></div><label className="op-month">Месяц<input type="month" value={month} onChange={e => { if (e.target.value) setMonth(e.target.value); }} /></label><div className="op-market-filter" role="group" aria-label="Маркетплейс">{[{id:'',label:'Все'},...([...new Set(SH.map(s=>s.platform))].map(p=>({id:'market:'+p,label:p==='wb'?'Wildberries':'Ozon'})))].map(m=><button key={m.id} className={(!shop&& !m.id)||shop===m.id?'active':''} aria-pressed={shop===m.id} onClick={()=>setShop(m.id)}>{m.label}</button>)}</div><div className="op-controls"><label>Магазины<select value={shop} onChange={e => setShop(e.target.value)}><option value="">{groupLabel}</option>{[...new Set(SH.map(s=>s.platform))].map(p=><optgroup key={p} label={p==='wb'?'Wildberries':'Ozon'}><option value={'market:'+p}>{p==='wb'?'Весь Wildberries':'Весь Ozon'}</option>{SH.filter(s=>s.platform===p).map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>)}</select></label><label>Версия<select value={version || state.activeId || ''} onChange={e => setVersion(e.target.value)}>{!state.versions.length && <option value="">План не задан</option>}{state.versions.map((v, i) => <option key={v.id} value={v.id}>{i + 1} · {stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</option>)}</select></label></div><button className="a-btn primary" onClick={()=>setMode('plan')}>Настроить план</button></div><CategoryNav tops={[...new Set(rows.map(r=>r.path.split(SEP)[0]))]} value={path} onChange={setPath} childrenOf={p=>[...new Set(rows.filter(r=>r.path.startsWith(p+SEP)).map(r=>r.path.split(SEP)[p.split(SEP).length]).filter(Boolean))]} /></div>
     {notice && <div className="op-alert" role="status">{notice}<button className="op-close" aria-label="Скрыть сообщение" onClick={() => setNotice('')}>×</button></div>}
     {actionError && <div className="op-alert bad" role="alert">{actionError}</div>}
     {mode === 'plan' ? <PlanEditor onClose={()=>setMode('actual')}>
-      <section className="a-card op-section"><div className="op-section-head"><div><h2>1. Общие цели на месяц</h2><p>Заполняйте подкатегории. Родительские итоги появятся сразу, даже если остальные строки пусты.</p></div><button className="a-btn" onClick={copy}>Взять цели прошлого месяца</button></div>
+      <section className="a-card op-section"><div className="op-section-head"><div><h2>План на месяц</h2></div><button className="a-btn" onClick={copy}>Взять цели прошлого месяца</button></div>
         <div className="op-summary"><span><b>{fmt(draftTotal.qty)}</b> выкупов</span><span><b>{rub(draftTotal.mean)}</b> за выкуп</span><small>План задан: {filled.length} из {paths.length} категорий · черновик сохраняется в этом браузере</small></div>
-        {!paths.length && <p className="op-muted">{basisBusy ? (scope==='licio' ? 'Загружаем категории Licio…' : 'Загружаем категории площадок и кабинетов…') : 'Категории появятся после загрузки базы распределения.'}</p>}
+        {!paths.length && <p className="op-muted">{basisBusy ? (scope==='licio' ? 'Загружаем категории Licio…' : 'Загружаем категории площадок и кабинетов…') : 'Категории ещё не загружены.'}</p>}
         {!!paths.length && <div className="op-scroll"><table className="op-table op-targets"><thead><tr><th>Категория</th><th>Подкатегория</th><th>Выкупы за месяц, шт.</th><th>Поступление за выкуп, ₽</th><th>Распределение</th></tr></thead><tbody>{displayRows.map((r, idx) => {
           const t = targets[r.path] || {}, children = filled.filter(x => inPath(x.path, r.path)), sum = total(children);
           return <React.Fragment key={r.path + idx}><tr className={r.parent ? 'op-parent' : ''}><td>{r.path.split(SEP)[0]}</td><td className="op-name">{r.parent?'Итого категории':r.path.split(SEP).slice(1).join(' › ')||r.path}{r.parent && <small>План задан: {r.children.filter(p => filled.some(x => x.path === p)).length} из {r.children.length}</small>}</td>
@@ -171,15 +170,10 @@ export default function PlanFact({ active = true, cabinet }) {
           </React.Fragment>;
         })}</tbody></table></div>}
       </section>
-      <section className="a-card op-section"><div className="op-section-head"><div><h2>2. База распределения</h2><p>Доли штук — по выкупам этой категории за вычетом возвратов. Цели поступления сохраняют соотношение средних магазинов.</p></div></div>
-        <div className="op-controls"><label>С<input type="date" value={period.from} onChange={e => setPeriod(p => ({ ...p, from: e.target.value }))} /></label><label>По<input type="date" max={state.cutoff} value={period.to} onChange={e => setPeriod(p => ({ ...p, to: e.target.value }))} /></label><button className="a-btn" onClick={() => preset('30')}>Последние 30 полных дней</button><button className="a-btn" onClick={() => preset('previous')}>Прошлый месяц</button><label>База поступления<select value={source} onChange={e => setSource(e.target.value)}><option value="fact">Фактическое поступление</option><option value="forecast">Прогноз из аналитики продаж</option></select></label><button className="a-btn" onClick={() => { setBasisRefresh(x => x + 1); setPreview(null); }}>Обновить базу</button></div>
-        <p className="op-muted">Даты площадок — по Москве. Выполнение включает свежие начисления по сегодня и уточняется при обновлении. Для базы используются полные загруженные дни. Для Ozon + WB конец базы ограничен доступными финансами WB. Прогноз использует модель и текущие коэффициенты «Аналитики продаж»; это ориентир, а не гарантия дохода.</p>
-        {basisBusy && <div className="op-alert" role="status">Собираем базу площадок и кабинетов… Это может занять до трёх минут.</div>}
-        {basisError && <div className="op-alert bad" role="alert">{basisError}</div>}
-        {basis && <div className="op-sources">{SH.map(s => { const b = basis.shops[s.id]; return <div key={s.id}><i style={{ background: s.color }} /><b>{s.label}</b><span className={b.error || b.partial ? 'op-bad' : 'op-muted'}>{b.error || (b.partial ? 'Неполный диапазон финансов' : 'Диапазон финансов покрывает период')}</span><small>Сбор: {stamp(b.updatedAt)}{b.forecastError ? ` · Прогноз недоступен: ${b.forecastError}` : ''}</small></div>; })}</div>}
-        <div className="op-actions"><button className="a-btn primary" disabled={!basis || basisBusy || previewBusy || saving} onClick={buildPreview}>{previewBusy ? 'Рассчитываем…' : fixed ? 'Предпросмотр нового распределения' : 'Предпросмотр распределения'}</button><span className="op-muted">Фиксация — отдельным действием после проверки.</span></div>
-      </section>
-      {preview && <section className="a-card op-section" aria-label="Предпросмотр распределения"><h2>3. Предпросмотр распределения</h2><p className="op-muted">{period.from} — {period.to} · {source === 'fact' ? 'по факту' : 'по прогнозу'} · исходные данные на {stamp(preview.basis.asOf)}</p>
+      {basisBusy && !paths.length && <div className="op-state" role="status">Загружаем категории…</div>}
+      {basisError && <div className="op-alert bad" role="alert">Не удалось подготовить распределение: {basisError}</div>}
+      <div className="op-actions"><button className="a-btn primary" disabled={!basis || basisBusy || previewBusy || saving} onClick={buildPreview}>{previewBusy ? 'Рассчитываем…' : 'Предпросмотр распределения'}</button></div>
+      {preview && <section className="a-card op-section" aria-label="Предпросмотр распределения"><h2>Предпросмотр распределения</h2><p className="op-muted">{period.from} — {period.to} · {source === 'fact' ? 'по факту' : 'по прогнозу'} · исходные данные на {stamp(preview.basis.asOf)}</p>
         {!!preview.errors.length && <div className="op-alert bad" role="alert"><b>Распределение пока нельзя зафиксировать</b><ul>{preview.errors.map(x => <li key={x}>{x}</li>)}</ul><p>Откройте «Доли и база» у соответствующей категории и уточните исходные значения.</p></div>}
         {preview.rows.map(r => <div className="op-preview-row" key={r.path}><h3>{r.path} <small>{fmt(r.qty)} шт. · {rub(r.mean)} за выкуп · коэффициент {fmt(r.factor, 4)}</small></h3><AllocationTable row={r} /></div>)}
         {!!preview.warnings.length && <div className="op-alert warn"><ul>{preview.warnings.map(x => <li key={x}>{x}</li>)}</ul><label className="op-check"><input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} />Учёл предупреждения, распределение подходит</label></div>}
@@ -189,15 +183,11 @@ export default function PlanFact({ active = true, cabinet }) {
       </section>}
     </PlanEditor> : null}
     <>
-      <section className="op-filterbar" aria-label="Фильтры выполнения"><div className="op-market-filter" role="group" aria-label="Маркетплейс">{[{id:'',label:'Все'},...([...new Set(SH.map(s=>s.platform))].map(p=>({id:'market:'+p,label:p==='wb'?'Wildberries':'Ozon'})))].map(m=><button key={m.id} className={(!shop&& !m.id)||shop===m.id?'active':''} aria-pressed={shop===m.id} onClick={()=>setShop(m.id)}>{m.label}</button>)}</div><div className="op-controls"><label>Магазины<select value={shop} onChange={e => setShop(e.target.value)}><option value="">{groupLabel}</option>{[...new Set(SH.map(s=>s.platform))].map(p=><optgroup key={p} label={p==='wb'?'Wildberries':'Ozon'}><option value={'market:'+p}>{p==='wb'?'Весь Wildberries':'Весь Ozon'}</option>{SH.filter(s=>s.platform===p).map(s=><option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>)}</select></label><label>Версия<select value={version || state.activeId || ''} onChange={e => setVersion(e.target.value)}>{!state.versions.length && <option value="">План не задан</option>}{state.versions.map((v, i) => <option key={v.id} value={v.id}>{i + 1} · {stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</option>)}</select></label><button className="a-btn" disabled={factBusy} onClick={() => setRefresh(x => x + 1)}>Обновить факт</button></div></section>
-      <CategoryNav tops={[...new Set(rows.map(r=>r.path.split(SEP)[0]))]} value={path} onChange={setPath} childrenOf={p=>[...new Set(rows.filter(r=>r.path.startsWith(p+SEP)).map(r=>r.path.split(SEP)[p.split(SEP).length]).filter(Boolean))]} />
+
       {!viewed && <><div className="op-alert">Общий план ещё не зафиксирован. Нажмите «Настроить план», заполните цели и проверьте распределение.</div><PlanDashboard shops={SH} rows={[]} fact={{ shops: {} }} month={month} shop={shop} path={path} elapsed={0} days={dayjs(month+'-01').daysInMonth()} empty /></>}
-      {factBusy && <div className="op-alert" role="status">Загружаем фактические результаты площадок и кабинетов…</div>}
+      {factBusy && !fact && <div className="op-alert" role="status">Загружаем фактические результаты площадок и кабинетов…</div>}
       {factError && <div className="op-alert bad" role="alert">Не удалось загрузить факт: {factError}. Нулевые результаты не подставлены.</div>}
       {fact && viewed && <PlanExecution shops={SH} groupLabel={groupLabel} month={month} viewed={viewed} paths={paths} fact={fact} shop={shop} path={path} setPath={setPath} />}
     </>
-    {state.migration&&<details className="a-card op-section"><summary>Прежний общий план Ozon · сохранён без изменений</summary><p className="op-muted">Эта версия не включала WB. Её показатели не складываются с новым общим планом.</p>{state.migration.rows.map(r=><div key={r.path}><h3>{r.path}</h3><AllocationTable row={r}/></div>)}</details>}
-    <details className="a-card op-section"><summary>История общего плана · {state.versions.length} версий</summary>{!state.versions.length && <p className="op-muted">Версии появятся после первой фиксации.</p>}{state.versions.slice().reverse().map(v => <div className="op-history" key={v.id}><div><b>{stamp(v.createdAt)}{v.id === state.activeId ? ' · действующая' : ''}</b><small>{v.basis.from} — {v.basis.to} · {v.basis.source === 'fact' ? 'факт' : 'прогноз'} · {v.targets.length} категорий{v.note ? ` · ${v.note}` : ''}</small></div><button className="a-btn" onClick={() => { setVersion(v.id); setMode('actual'); }}>Посмотреть выполнение</button><button className="a-btn" onClick={() => { setTargets(Object.fromEntries(v.targets.map(t => [t.path, { ...t }]))); setPeriod({ from: v.basis.from, to: v.basis.to }); setSource(v.basis.source); setPreview(null); setMode('plan'); setNotice('Цели выбранной версии открыты как черновик. Действующая версия не изменена.'); }}>Взять в черновик</button></div>)}</details>
-    <details className="a-card op-section" open={showArchive} onToggle={e => setShowArchive(e.currentTarget.open)}><summary>Прежние планы кабинетов · {state.legacy?.length || 0} · сохранены без изменений</summary><p className="op-muted">Это независимые планы старой страницы. Они не складываются с общим планом автоматически. Для другого месяца измените месяц вверху.</p>{state.legacy?.map(x => <div key={x.shop}><h3>{SH.find(s => s.id === x.shop)?.label || x.shop}</h3><div className="op-scroll"><table className="op-table"><thead><tr><th>Строка</th><th>Выкупы, шт.</th><th>Поступление за выкуп</th><th>Другие сохранённые метрики</th></tr></thead><tbody>{Object.entries(x.plan).map(([p, t]) => <tr key={p}><td>{p}</td><td>{fmt(t.salesQty)}</td><td>{rub(t.payout)}</td><td>{Object.entries(t).filter(([k]) => !['salesQty', 'payout'].includes(k)).map(([k, v]) => `${({ orders: 'Заказы, шт.', revenue: 'Заказы, ₽', sales: 'Выкупы, ₽', profit: 'Прибыль, ₽', margin: 'Маржа, %' })[k] || k}: ${fmt(v)}`).join(' · ')}</td></tr>)}</tbody></table></div></div>)}</details>
   </div>;
 }

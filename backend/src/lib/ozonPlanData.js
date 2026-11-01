@@ -18,10 +18,23 @@ function defaultPeriod(month) {
   const to = prev < cutoff() ? prev : cutoff();
   return { from: dayjs(to).subtract(29, 'day').format('YYYY-MM-DD'), to };
 }
-async function marketPeriod(month){
-  const base=defaultPeriod(month),wb=(await require('./wbBridge').readMeta()).find(d=>d.kind==='finance');
-  const to=wb?.meta.to&&wb.meta.to<base.to?wb.meta.to:base.to;
-  return {from:dayjs(to).subtract(29,'day').format('YYYY-MM-DD'),to};
+// Три последних завершённых календарных месяца, общих для подключённых
+// площадок. Неполный последний месяц не участвует; отсутствие начала
+// диапазона проверяется report(), а не подменяется короткой историей.
+async function marketPeriod(month, ids = Object.keys(CABINETS).filter(id => CABINETS[id].family === 'defly' && ['ozon','wb'].includes(CABINETS[id].platform) && isConnected(id))) {
+  let limit = [dayjs(month + '-01').subtract(1, 'day').format('YYYY-MM-DD'), cutoff()].sort()[0];
+  const ozon = ids.filter(id => CABINETS[id].platform === 'ozon');
+  if (ozon.length) {
+    const ranges = await query(`SELECT cabinet, MIN(date)::text mn, MAX(date)::text mx FROM finance_daily WHERE cabinet = ANY($1::text[]) GROUP BY cabinet`, [ozon]);
+    for (const r of ranges) if (validDate(r.mx) && r.mx < limit) limit = r.mx;
+  }
+  if (ids.some(id => CABINETS[id].platform === 'wb')) {
+    const wb = (await require('./wbBridge').readMeta()).find(d => d.kind === 'finance');
+    if (validDate(wb?.meta.to) && wb.meta.to < limit) limit = wb.meta.to;
+  }
+  let end = dayjs(limit);
+  if (end.format('YYYY-MM-DD') !== end.endOf('month').format('YYYY-MM-DD')) end = end.startOf('month').subtract(1, 'day');
+  return { from: end.startOf('month').subtract(2, 'month').format('YYYY-MM-DD'), to: end.format('YYYY-MM-DD') };
 }
 function checkPeriod(from, to) {
   if (!validDate(from) || !validDate(to) || from > to || dayjs(to).diff(from, 'day') > 91) throw new Error('Период базы: от 1 до 92 дней');

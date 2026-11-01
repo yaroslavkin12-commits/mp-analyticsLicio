@@ -27,10 +27,10 @@ router.get('/', wrap(async req => {
   const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), state = await load(month, scope);
   const legacyRows = await query('SELECT key, value FROM app_settings WHERE key = ANY($1::text[])', [SHOPS.map(s => `plan:${s}:${month}`)]);
   const prior=scope==='marketplaces'?await load(month,'ozon'):null;
-  return { ...state, migration:prior?.versions?.find(v=>v.id===prior.activeId)||null, shops:SHOPS.map(id=>({id,label:CABINETS[id].label,platform:CABINETS[id].platform})), month, defaultPeriod: scope==='marketplaces'?await data.marketPeriod(month):data.defaultPeriod(month), cutoff: data.cutoff(), legacy: legacyRows.map(r => ({ shop: r.key.split(':')[1], plan: JSON.parse(r.value) })) };
+  return { ...state, migration:prior?.versions?.find(v=>v.id===prior.activeId)||null, shops:SHOPS.map(id=>({id,label:CABINETS[id].label,platform:CABINETS[id].platform})), month, defaultPeriod: scope==='marketplaces'?await data.marketPeriod(month, SHOPS):data.defaultPeriod(month), cutoff: data.cutoff(), legacy: legacyRows.map(r => ({ shop: r.key.split(':')[1], plan: JSON.parse(r.value) })) };
 }));
 router.get('/basis', wrap(async req => {
-  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), defaults = scope==='marketplaces'?await data.marketPeriod(month):data.defaultPeriod(month);
+  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), defaults = scope==='marketplaces'?await data.marketPeriod(month, SHOPS):data.defaultPeriod(month);
   const source = req.query.source === 'forecast' ? 'forecast' : 'fact';
   return data.basis(req.query.from || defaults.from, req.query.to || defaults.to, source, Number(req.query.refresh) > 0, SHOPS);
 }));
