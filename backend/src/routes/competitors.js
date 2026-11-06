@@ -293,7 +293,9 @@ router.post('/agent/serp', async (req, res) => {
     await ensure();
     const b = req.body || {};
     const rows = (Array.isArray(b.rows) ? b.rows : []).filter(r => /^\d{1,15}$/.test(String(r.sku || '')));
-    if (!b.query || !rows.length) return res.status(400).json({ success: false, error: 'Пустая выдача' });
+    if (!b.query) return res.status(400).json({ success: false, error: 'Нет запроса' });
+    // Пустая выдача (по запросу в регионе ничего не нашлось) — не ошибка: просто нечего сохранять.
+    if (!rows.length) return res.json({ success: true, data: { rows: 0, empty: true } });
     const date = mskDate(), cabinet = b.cabinet || 'defly', region = cut(shortRegion(b.region) || '—', 80), q = cut(String(b.query).trim(), 200);
     const n = await bulkUpsert('serp_snapshot', ['cabinet', 'date', 'region', 'query', 'sku', 'position', 'total', 'name', 'seller', 'status', 'cpc', 'strategy', 'cpo', 'relevance', 'rating', 'reviews', 'price', 'popularity', 'promo', 'delivery'],
       rows.map(r => [cabinet, date, region, q, String(r.sku), numOrNull(r.position), numOrNull(b.total), cut(r.name, 512), cut(r.seller, 200), cut(r.status, 60), numOrNull(r.cpc), cut(r.strategy, 120), cut(r.cpo, 40),

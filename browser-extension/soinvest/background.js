@@ -303,7 +303,8 @@ async function runAgent(reason, force) {
       if (res.status === 401 || res.status === 403) throw new Error('нет входа в кабинет Ozon (откройте seller.ozon.ru и войдите)');
       if (res.status !== 200) { st.error = 'выдача «' + d.task.query + '»: ' + (res.error || res.status); continue; }
       const ir = await fetch(server + '/api/competitors/agent/serp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: d.task.cabinet, query: d.task.query, region: d.reg.title, total: res.total, rows: res.rows }) });
-      if (ir.ok) { done[d.key] = Date.now(); st.serpOk++; } else st.error = 'сервис не принял выдачу (' + ir.status + ')';
+      if (ir.ok) { done[d.key] = Date.now(); st.serpOk++; }
+      else { const ij = await ir.json().catch(() => ({})); st.error = 'сервис не принял выдачу «' + d.task.query + '» (' + d.reg.title.split(',')[0] + '): ' + (ij.error || ir.status); }
       st.serpDone = done;
       await chrome.storage.local.set({ agentState: { ...st } });
       await sleep(2500 + Math.random() * 2500);
