@@ -14,13 +14,18 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create('soinvest', { delayInMinutes: 1, periodInMinutes: 60 });
+  chrome.alarms.create('cards', { delayInMinutes: 3, periodInMinutes: 360 });
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create('soinvest', { delayInMinutes: 2, periodInMinutes: 60 });
+  chrome.alarms.create('cards', { delayInMinutes: 5, periodInMinutes: 360 });
 });
-chrome.alarms.onAlarm.addListener(a => { if (a.name === 'soinvest') run('по расписанию'); });
+chrome.alarms.onAlarm.addListener(a => {
+  if (a.name === 'soinvest') run('по расписанию');
+  if (a.name === 'cards') runCards('по расписанию');
+});
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
-  if (msg && msg.type === 'runNow') { run('вручную').then(() => reply({ ok: true })); return true; }
+  if (msg && msg.type === 'runNow') { run('вручную').then(() => runCards('вручную')).then(() => reply({ ok: true })); return true; }
   return false;
 });
 
@@ -115,5 +120,100 @@ async function run(reason) {
     if (tab && tab.created) chrome.tabs.remove(tab.id).catch(() => {});
     status.finished = new Date().toISOString();
     await chrome.storage.local.set({ lastRun: status });
+  }
+}
+
+
+// ── Карточки конкурентов с витрины ozon.ru ───────────────────────────────
+// Раз в 6 часов: берём у сервиса список SKU (конкуренты и наши товары, у
+// которых они есть), открываем карточки внутри вкладки ozon.ru — так же,
+// как их открывает сам сайт, с вашего браузера — и отправляем в сервис
+// только главное фото, название, цену и рейтинг. Так сервис видит, когда
+// конкурент сменил главное фото или цену.
+async function ozonTab() {
+  const tabs = await chrome.tabs.query({ url: 'https://www.ozon.ru/*' });
+  const ready = tabs.find(t => t.status === 'complete');
+  if (ready) return { id: ready.id, created: false };
+  const tab = await chrome.tabs.create({ url: 'https://www.ozon.ru/', active: false });
+  await new Promise(resolve => {
+    const t = setTimeout(resolve, 30000);
+    chrome.tabs.onUpdated.addListener(function l(id, info) {
+      if (id === tab.id && info.status === 'complete') { clearTimeout(t); chrome.tabs.onUpdated.removeListener(l); resolve(); }
+    });
+  });
+  await sleep(2000);
+  return { id: tab.id, created: true };
+}
+
+async function readCard(tabId, sku) {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    args: [String(sku)],
+    func: async sku => {
+      const out = { sku };
+      const pick = (o, ...keys) => { for (const k of keys) if (o && o[k] != null && o[k] !== '') return o[k]; return null; };
+      try {
+        const r = await fetch('/api/entrypoint-api.bx/page/json/v2?url=' + encodeURIComponent('/product/' + sku + '/'), { credentials: 'include', headers: { accept: 'application/json' } });
+        out.status = r.status;
+        if (r.ok) {
+          const j = await r.json();
+          const ws = j.widgetStates || {};
+          for (const k of Object.keys(ws)) {
+            let o; try { o = JSON.parse(ws[k]); } catch (e) { continue; }
+            if (k.startsWith('webGallery') && !out.photo) out.photo = pick(o, 'coverImage') || (o.images && o.images[0] && (o.images[0].src || o.images[0].url)) || null;
+            if (k.startsWith('webProductHeading') && !out.title) out.title = pick(o, 'title');
+            if (k.startsWith('webPrice') && !out.price) { out.price = pick(o, 'price'); out.cardPrice = pick(o, 'cardPrice'); }
+            if (k.startsWith('webReviewProductScore') && out.rating == null) { out.rating = pick(o, 'totalScore', 'score'); out.reviews = pick(o, 'reviewsCount', 'count'); }
+          }
+          if (!out.photo && j.seo && Array.isArray(j.seo.meta)) { const m = j.seo.meta.find(x => x.property === 'og:image'); if (m) out.photo = m.content; }
+          if (!out.title && j.seo && j.seo.title) out.title = j.seo.title;
+        }
+      } catch (e) { out.err = String(e && e.message || e); }
+      // Запасной путь: обычная страница товара, картинка из og:image.
+      if (!out.photo) {
+        try {
+          const h = await (await fetch('/product/' + sku + '/', { credentials: 'include' })).text();
+          const m = /<meta[^>]+property="og:image"[^>]+content="([^"]+)"/.exec(h) || /<meta[^>]+content="([^"]+)"[^>]+property="og:image"/.exec(h);
+          if (m) out.photo = m[1];
+        } catch (e) { out.err = String(e && e.message || e); }
+      }
+      if (out.photo && out.photo.startsWith('//')) out.photo = 'https:' + out.photo;
+      return out;
+    },
+  });
+  return res && res.result ? res.result : { sku, err: 'нет ответа от вкладки' };
+}
+
+async function runCards(reason) {
+  const status = { at: new Date().toISOString(), reason, asked: 0, got: 0, error: null };
+  let tab = null;
+  try {
+    const server = await getServer();
+    const r = await fetch(server + '/api/competitors/skus');
+    if (!r.ok) throw new Error('сервис не ответил (' + r.status + ')');
+    const skus = (await r.json()).data || [];
+    status.asked = skus.length;
+    if (!skus.length) return;
+    tab = await ozonTab();
+    const cards = [];
+    for (const sku of skus) {
+      const c = await readCard(tab.id, sku);
+      if (c.photo || c.title || c.price) cards.push(c);
+      else if (!status.error) status.error = 'не удалось прочитать карточку ' + sku + (c.status ? ' (ответ ' + c.status + ')' : '') + (c.err ? ': ' + c.err : '');
+      await sleep(1500 + Math.random() * 1500);
+    }
+    status.got = cards.length;
+    if (cards.length) {
+      const ir = await fetch(server + '/api/competitors/cards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cards }) });
+      const ij = await ir.json().catch(() => ({}));
+      if (!ir.ok || !ij.success) status.error = 'сервис не принял карточки: ' + (ij.error || ir.status);
+    }
+  } catch (e) {
+    status.error = String(e && e.message || e);
+  } finally {
+    if (tab && tab.created) chrome.tabs.remove(tab.id).catch(() => {});
+    status.finished = new Date().toISOString();
+    await chrome.storage.local.set({ lastCards: status });
   }
 }

@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 4000;
 
 app.use(cors());
 app.use(require('compression')());
-app.use(express.json({ limit: '10mb', verify: (req, res, buffer) => { if (req.originalUrl.split('?')[0] === '/api/wb/import') req.wbRawBody = buffer; } }));
+app.use(express.json({ limit: '10mb', verify: (req, res, buffer) => { const p = req.originalUrl.split('?')[0]; if (p === '/api/wb/import' || p === '/api/queries/ingest') req.wbRawBody = buffer; } }));
 
 app.use((req, res, next) => { if ((req.query.cabinet || req.body?.cabinet) === 'defly_wb' && /^\/api\/(finance|sales|ads|promo|discounts|stocks|queries|orders)(\/|$)/.test(req.path)) return res.status(409).json({ success: false, error: 'Этот раздел Ozon не используется для WB. Финансы Defly WB пока не подключены.' }); next(); });
 

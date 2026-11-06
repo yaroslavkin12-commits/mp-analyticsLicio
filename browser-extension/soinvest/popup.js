@@ -14,6 +14,8 @@ async function render() {
       ? `<span class="bad">${st.error}</span>`
       : `<span class="ok">${st.matched} из ${st.asked} товаров</span>`}</div>`;
   }
+  const { lastCards } = await chrome.storage.local.get('lastCards');
+  if (lastCards) html += `<div class="row" style="margin-top:8px"><span>Карточки конкурентов</span>${lastCards.error && !lastCards.got ? `<span class="bad">${lastCards.error}</span>` : `<span class="ok">${lastCards.got} из ${lastCards.asked} · ${fmt(lastCards.finished || lastCards.at)}</span>`}</div>`;
   el.innerHTML = html;
 }
 

@@ -1142,8 +1142,8 @@ function postRetry_(url, headers, body, label) {
 // тогда день не записываем (иначе он сохранится неполным).
 function collectQueriesDay_(cab, ctx, d, deadline) {
   const out = [];
-  // Две группы: рекламируемые товары — до 100 запросов в день (полная
-  // картина для ставок), остальные — 15 самых частотных.
+  // Две группы: рекламируемые товары — все запросы (полная картина для
+  // ставок), остальные — 15 самых частотных.
   const groups = [[ctx.adSkus || [], ctx.adLimit || QUERIES_AD_LIMIT], [ctx.otherSkus || ctx.skus, 15]];
   for (let gi = 0; gi < groups.length; gi++) {
     const list = groups[gi][0];
@@ -1156,8 +1156,11 @@ function collectQueriesDay_(cab, ctx, d, deadline) {
           data = postRetry_('https://api-seller.ozon.ru/v1/analytics/product-queries/details', ctx.headers,
             { date_from: d + 'T00:00:00Z', date_to: d + 'T23:59:59Z', skus: list.slice(i, i + 100), limit_by_sku: limit, page: page, page_size: 100 }, 'Запросы ' + d);
         } catch (e) {
-          // Если Ozon не примет 100 — дальше берём 50, потом 15.
-          if (limit > 15 && /HTTP 400/.test(e.message)) { limit = limit > 50 ? 50 : 15; ctx.adLimit = limit; Logger.log('Запросы ' + cab.id + ': limit_by_sku уменьшен до ' + limit + ' — ' + e.message); page--; continue; }
+          // Если Ozon не примет такой лимит — пробуем меньше: 500, 100, 50, 15.
+          if (limit > 15 && /HTTP 400/.test(e.message)) {
+            limit = QUERIES_LIMIT_STEPS.filter(function (x) { return x < limit; })[0] || 15; ctx.adLimit = limit;
+            Logger.log('Запросы ' + cab.id + ': Ozon не принял, беру до ' + limit + ' запросов на товар — ' + e.message); page--; continue;
+          }
           throw e;
         }
         const items = data.queries || data.items || (data.result && (data.result.queries || data.result.items)) || [];
@@ -1178,9 +1181,11 @@ function collectQueriesDay_(cab, ctx, d, deadline) {
   }
   return out;
 }
-// Сколько запросов в день брать по рекламируемым товарам (Ozon в кабинете
-// показывает до 100 запросов на товар).
-const QUERIES_AD_LIMIT = 100;
+// По рекламируемым товарам берём все запросы, какие отдаст Ozon (просим до
+// 1000 на товар; если Ozon не примет — 500, 100, 50, 15). По остальным —
+// 15 самых частотных, чтобы скрипт укладывался в суточный лимит Google.
+const QUERIES_AD_LIMIT = 1000;
+const QUERIES_LIMIT_STEPS = [500, 100, 50, 15];
 // Рекламируемые SKU магазина: товары запущенных кампаний (вкладки Campaigns
 // и CampaignSkus) и товары с включённой оплатой за заказ (CpoProducts).
 function adSkus_(cabId) {
@@ -1209,9 +1214,14 @@ function syncQueries(days, skipLoaded) {
   const window = typeof days === 'number' ? days : 2;
   const started = Date.now();
   const deadline = started + 250000;
-  const have = {};
-  const sh = getSheet_(SHEET_NAMES.queries);
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) { have[r[0] + '|' + String(r[1]).slice(0, 10)] = true; });
+  // Прямая отправка в сервис (если задан QUERIES_SYNC_SECRET) — вкладка
+  // Queries тогда не нужна; иначе, как раньше, — через вкладку.
+  const push = queriesPush_();
+  const have = push ? pushedDays_() : {};
+  if (!push) {
+    const sh = getSheet_(SHEET_NAMES.queries);
+    if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) { have[r[0] + '|' + String(r[1]).slice(0, 10)] = true; });
+  }
   const dates = [];
   for (let i = 1; i <= window; i++) dates.push(mskDate_(i));
   const ctx = {};
@@ -1221,12 +1231,12 @@ function syncQueries(days, skipLoaded) {
     try {
       const skus = Object.keys(skusOf_(cab)), ad = adSkus_(cab.id);
       ctx[cab.id] = { headers: headers, skus: skus, adSkus: skus.filter(function (s) { return ad[s]; }), otherSkus: skus.filter(function (s) { return !ad[s]; }), sampled: false };
-      Logger.log('Запросы ' + cab.id + ': SKU ' + skus.length + ', из них в рекламе ' + ctx[cab.id].adSkus.length + ' (до ' + QUERIES_AD_LIMIT + ' запросов в день)');
+      Logger.log('Запросы ' + cab.id + ': SKU ' + skus.length + ', из них в рекламе ' + ctx[cab.id].adSkus.length + ' (по ним — все запросы)');
     }
     catch (e) { Logger.log('Запросы ' + cab.id + ': ' + e.message); }
   });
   const rows = [];
-  let left = 0, doneN = 0, timeUp = false;
+  let left = 0, doneN = 0, timeUp = false, sent = 0;
   for (let di = 0; di < dates.length; di++) {
     const d = dates[di];
     Object.keys(ctx).forEach(function (id) {
@@ -1236,15 +1246,56 @@ function syncQueries(days, skipLoaded) {
       try {
         const r = collectQueriesDay_(cab, ctx[id], d, deadline);
         if (r === null) { timeUp = true; left++; return; }
-        Array.prototype.push.apply(rows, r);
+        if (push) { sent += pushQueries_(push, id, d, r); have[id + '|' + d] = true; savePushedDays_(have); }
+        else Array.prototype.push.apply(rows, r);
         doneN++;
-        Logger.log('Запросы ' + id + ' ' + d + ': строк ' + r.length);
+        Logger.log('Запросы ' + id + ' ' + d + ': строк ' + r.length + (push ? ' — отправлено в сервис' : ''));
       } catch (e) { left++; Logger.log('Запросы ' + id + ' ' + d + ': ' + e.message + ' — повторю в следующий запуск'); }
     });
   }
+  if (push) { Logger.log('syncQueries: дней (кабинет×день) ' + doneN + ', отправлено в сервис строк ' + sent + ', осталось: ' + left); return left; }
   const total = appendQueries_(rows);
   Logger.log('syncQueries: загружено дней (кабинет×день) ' + doneN + ', строк ' + rows.length + ' (всего во вкладке ' + total + '), осталось: ' + left);
   return left;
+}
+// ---------- Прямая отправка запросов в сервис ----------
+// Свойства скрипта: QUERIES_SYNC_SECRET — тот же секрет, что в Render
+// Environment (не короче 32 символов); QUERIES_PUSH_URL — адрес приёма
+// (по умолчанию — сервис на Render).
+function queriesPush_() {
+  const p = PropertiesService.getScriptProperties();
+  const secret = p.getProperty('QUERIES_SYNC_SECRET');
+  if (!secret) return null;
+  return { secret: secret, url: p.getProperty('QUERIES_PUSH_URL') || 'https://mp-analyticslicio-1.onrender.com/api/queries/ingest' };
+}
+function pushedDays_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('QUERIES_PUSHED') || '{}') || {}; } catch (e) { return {}; }
+}
+function savePushedDays_(have) {
+  // Помним только последние 20 дней — этого хватает, чтобы не слать дни повторно.
+  const cut = mskDate_(20), out = {};
+  Object.keys(have).forEach(function (k) { if (k.split('|')[1] >= cut) out[k] = true; });
+  PropertiesService.getScriptProperties().setProperty('QUERIES_PUSHED', JSON.stringify(out));
+}
+function hex_(bytes) { return bytes.map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join(''); }
+function pushQueries_(push, cabId, date, rows) {
+  let n = 0;
+  for (let i = 0; i < rows.length || i === 0; i += 5000) {
+    const body = JSON.stringify({ cabinet: cabId, date: date, rows: rows.slice(i, i + 5000).map(function (r) { return r.slice(2); }) });
+    for (let attempt = 0; ; attempt++) {
+      const ts = String(Date.now());
+      const sig = hex_(Utilities.computeHmacSha256Signature(ts + '.' + body, push.secret, Utilities.Charset.UTF_8));
+      let resp = null, err = '';
+      try { resp = UrlFetchApp.fetch(push.url, { method: 'post', contentType: 'application/json; charset=utf-8', payload: body, muteHttpExceptions: true, headers: { 'X-Sync-Timestamp': ts, 'X-Sync-Signature': sig } }); }
+      catch (e) { err = e.message; }
+      const code = resp ? resp.getResponseCode() : 0;
+      if (code === 200) { n += (JSON.parse(resp.getContentText()).data || {}).rows || 0; break; }
+      // Сервис мог «просыпаться» или быть занят — повторяем; ошибки подписи — нет.
+      if (attempt >= 4 || code === 401 || code === 400 || code === 503) throw new Error('сервис не принял запросы: ' + (code || err) + ' ' + (resp ? resp.getContentText().slice(0, 200) : ''));
+      Utilities.sleep(5000 * (attempt + 1));
+    }
+  }
+  return n;
 }
 // Первичная загрузка за 14 дней. За один запуск успевает 1–2 дня, поэтому
 // сама ставит себе продолжение через минуту (не больше 25 раз подряд).

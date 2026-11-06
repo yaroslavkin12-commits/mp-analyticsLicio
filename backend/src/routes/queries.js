@@ -4,7 +4,9 @@ const dayjs = require('dayjs');
 const { query } = require('../db');
 const { ORDER } = require('../lib/categories');
 const { meta } = require('./finance');
+const crypto = require('crypto');
 const { ensureFinTables } = require('../collectors/ads/sheetSync');
+const { bulkUpsert } = require('../collectors/ads/ozonHttp');
 
 const num = v => Number(v) || 0;
 const r2 = v => Math.round(v * 100) / 100;
@@ -56,6 +58,39 @@ router.get('/series', async (req, res) => {
       WHERE cabinet = $1 AND date >= $2 AND sku = ANY($3::bigint[])${cond} ORDER BY date`, params) : [];
     res.json({ success: true, data: rows.map(r => [r.d, r.query, r.position == null ? null : num(r.position), num(r.searches), num(r.clicks), num(r.orders)]) });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/queries/ingest — поисковые запросы напрямую из Google-скрипта,
+// минуя Google-таблицу (у неё предел ячеек). Скрипт сам ходит в Ozon, сюда
+// присылает готовые строки одного дня частями. Защита — подпись HMAC общим
+// секретом QUERIES_SYNC_SECRET (в Render Environment и в свойствах скрипта).
+// Тело: {cabinet, date, rows: [[sku, query, position, searches, views, clicks, orders, revenue, conversion], …]}.
+// Строки дня дописываются/обновляются по ключу (кабинет, дата, SKU, запрос) и
+// хранятся в базе без срока давности.
+function verifySync(raw, ts, sig) {
+  const secret = process.env.QUERIES_SYNC_SECRET;
+  if (!secret || secret.length < 32) throw Object.assign(new Error('На сервере не задан QUERIES_SYNC_SECRET (не короче 32 символов)'), { status: 503 });
+  if (!raw || !/^\d{13}$/.test(String(ts || '')) || Math.abs(Date.now() - Number(ts)) > 600000 || !/^[a-f0-9]{64}$/i.test(sig || '')) throw Object.assign(new Error('Неверная подпись'), { status: 401 });
+  const expected = crypto.createHmac('sha256', secret).update(String(ts) + '.' + raw.toString('utf8')).digest();
+  if (!crypto.timingSafeEqual(expected, Buffer.from(sig, 'hex'))) throw Object.assign(new Error('Неверная подпись'), { status: 401 });
+}
+router.post('/ingest', async (req, res) => {
+  try {
+    verifySync(req.wbRawBody, req.get('X-Sync-Timestamp'), req.get('X-Sync-Signature'));
+    await ensureFinTables();
+    const { cabinet, date, rows } = req.body || {};
+    if (!/^[a-z_]{2,32}$/.test(cabinet || '') || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !Array.isArray(rows) || rows.length > 20000) return res.status(400).json({ success: false, error: 'Некорректные данные' });
+    const out = [];
+    for (const r of rows) {
+      if (!Array.isArray(r) || !/^\d{1,15}$/.test(String(r[0])) || !r[1]) continue;
+      const pos = Number(r[2]);
+      out.push([cabinet, date, String(r[0]), String(r[1]).slice(0, 200), pos > 0 ? Math.round(pos * 100) / 100 : null,
+        Math.round(num(r[3])), Math.round(num(r[4])), Math.round(num(r[5])), Math.round(num(r[6])), num(r[7]), r[8] === '' || r[8] == null ? null : num(r[8])]);
+    }
+    const n = out.length ? await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], out, ['cabinet', 'date', 'sku', 'query']) : 0;
+    require('../lib/dataVersion').bump();
+    res.json({ success: true, data: { rows: n } });
+  } catch (e) { if (!e.status) console.error(e); res.status(e.status || 500).json({ success: false, error: e.message }); }
 });
 
 // GET /api/queries/arts?cabinet=&dateFrom=&dateTo= — товары, у которых есть
