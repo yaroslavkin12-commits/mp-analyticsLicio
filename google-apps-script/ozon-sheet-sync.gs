@@ -1230,8 +1230,10 @@ function syncQueries(days, skipLoaded) {
     if (!headers) return;
     try {
       const skus = Object.keys(skusOf_(cab)), ad = adSkus_(cab.id);
-      ctx[cab.id] = { headers: headers, skus: skus, adSkus: skus.filter(function (s) { return ad[s]; }), otherSkus: skus.filter(function (s) { return !ad[s]; }), sampled: false };
-      Logger.log('Запросы ' + cab.id + ': SKU ' + skus.length + ', из них в рекламе ' + ctx[cab.id].adSkus.length + ' (по ним — все запросы)');
+      // Без прямой отправки строки идут во вкладку — там предел ячеек Google,
+      // поэтому по рекламным товарам тогда берём до 100 запросов, а не все.
+      ctx[cab.id] = { headers: headers, skus: skus, adSkus: skus.filter(function (s) { return ad[s]; }), otherSkus: skus.filter(function (s) { return !ad[s]; }), adLimit: push ? QUERIES_AD_LIMIT : 100, sampled: false };
+      Logger.log('Запросы ' + cab.id + ': SKU ' + skus.length + ', из них в рекламе ' + ctx[cab.id].adSkus.length + (push ? ' (по ним — все запросы, прямо в сервис)' : ' (по ним — до 100 запросов, через вкладку Queries: QUERIES_SYNC_SECRET не задан)'));
     }
     catch (e) { Logger.log('Запросы ' + cab.id + ': ' + e.message); }
   });
