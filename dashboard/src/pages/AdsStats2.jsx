@@ -674,14 +674,28 @@ function EditCell({ value, fmt, bg, manual, onSave }) {
 export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys }) {
   const ref = useRef(null);
   const [openSub, setOpenSub] = useState(false);
+  const [expanded, setExpanded] = useState({});
   const today = dayjs().format('YYYY-MM-DD');
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
-  const rows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
+  const availableRows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
     // Строки стратегий — только если у товара за период был такой расход.
     && !(r.onlyWhenNonZero && !dates.some(d => (model.byDate[d]?.[r.key] || 0) > 0))
     && !(r.hideEmpty && !dates.some(d => (model.byDate[d]?.[r.spendKey || r.key] || 0) > 0))
     // Самовыкупы — под «+» у строки заказов, чтобы не перегружать таблицу.
     && !(r.toggleOf && !openSub)));
+  // Вложенность определяется теми же уровнями, что и отступы строк.
+  // У каждого родителя свой переключатель; все детали изначально закрыты.
+  const parents = new Map(), ancestors = [], annotated = [];
+  for (const row of availableRows) {
+    if (row.block) { ancestors.length = 0; annotated.push({ row, parents: [] }); continue; }
+    const level = Number(row.sub) || 0;
+    while (ancestors.length && ancestors.at(-1).level >= level) ancestors.pop();
+    const chain = ancestors.map(x => x.key);
+    if (chain.length && !row.toggleOf) parents.set(chain.at(-1), true);
+    annotated.push({ row, parents: row.toggleOf ? [] : chain });
+    ancestors.push({ key: row.key, level });
+  }
+  const rows = annotated.filter(x => x.parents.every(k => expanded[k])).map(x => x.row);
   const selfN = dates.reduce((s, d) => s + (model.byDate[d]?.selfQ || 0), 0);
   return (
     <div className="a-days" ref={ref}>
@@ -702,7 +716,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
             const label = mode === 'ads' && row.adsLabel ? row.adsLabel : row.label;
             return (
               <tr key={row.key} className={row.sub ? `sub${row.sub === 2 ? ' sub2' : ''}` : ''}>
-                <td className="lbl" title={row.hint || undefined} style={row.hint ? { textDecoration: 'underline dotted var(--a-line2)', textUnderlineOffset: 3 } : undefined}>{row.sub === 2 ? '· ' : row.sub ? '— ' : ''}{label}
+                <td className="lbl" title={row.hint || undefined} style={row.hint ? { textDecoration: 'underline dotted var(--a-line2)', textUnderlineOffset: 3 } : undefined}>{parents.has(row.key) ? <button type="button" className="a-day-expand" aria-expanded={!!expanded[row.key]} onClick={() => setExpanded(v => ({ ...v, [row.key]: !v[row.key] }))}><span aria-hidden="true">{expanded[row.key] ? '▾' : '▸'}</span> {label}</button> : <>{row.sub === 2 ? '· ' : row.sub ? '— ' : ''}{label}</>}
                   {row.key === 'orders' && selfN > 0 && <button type="button" className="a-subtg" onClick={e => { e.stopPropagation(); setOpenSub(v => !v); }} title="Самовыкупы: из заказов убраны">{openSub ? '−' : '+'} сам. {fmtInt(selfN)}</button>}</td>
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {

@@ -354,3 +354,8 @@ tr:hover .a-ungroup { opacity: 1; }
 
 .mpui .ads-top h1{font-size:20px}
 .mpui .ads-top .a-seg button,.mpui .ads-top .a-fresh{font-size:11px}
+
+/* Сворачивание детализации в таблице по дням. */
+.a-day-expand{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left;max-width:100%;}
+.a-day-expand:hover{color:var(--a-accent,var(--accent-oz));}
+.a-day-expand:focus-visible{outline:2px solid var(--accent-oz);outline-offset:2px;}
