@@ -223,3 +223,11 @@ export const setSelfBuyout = (cabinet, items, on) => api.post('/orders/self', { 
 export const getSalesSummary = (dateFrom, dateTo, cabinet) => api.get('/sales/summary', { params: { dateFrom, dateTo, cabinet, includeWb: cabinet === 'licio' ? undefined : '1' }, timeout: 120000 });
 
 export const getDeflectors2dInventory = receivingCabinet => api.get('/production/deflectors2d/inventory', { params: { receivingCabinet } });
+
+// Конкуренты во «Позициях в поиске» (данные из отчётов кабинета Ozon)
+export const getCompetitors = (cabinet, offerId) => api.get('/competitors', { params: { cabinet, offerId } });
+export const getSerp = (cabinet, query, region) => api.get('/competitors/serp', { params: { cabinet, query, region } });
+export const addCompetitor = (cabinet, offerId, sku, label) => api.post('/competitors', { cabinet, offerId, sku, label });
+export const removeCompetitor = (cabinet, offerId, sku) => api.delete('/competitors', { params: { cabinet, offerId, sku } });
+export const saveSkuPhoto = (cabinet, sku, photo) => api.post('/competitors/photo', { cabinet, sku, photo });
+export const importCompetitorReport = (cabinet, payload) => api.post('/competitors/import', { cabinet, ...payload }, { timeout: 60000 });

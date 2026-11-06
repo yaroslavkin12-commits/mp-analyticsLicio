@@ -1142,26 +1142,61 @@ function postRetry_(url, headers, body, label) {
 // тогда день не записываем (иначе он сохранится неполным).
 function collectQueriesDay_(cab, ctx, d, deadline) {
   const out = [];
-  for (let i = 0; i < ctx.skus.length; i += 100) {
-    for (let page = 0; page < 50; page++) {
-      if (Date.now() > deadline) return null;
-      const data = postRetry_('https://api-seller.ozon.ru/v1/analytics/product-queries/details', ctx.headers,
-        { date_from: d + 'T00:00:00Z', date_to: d + 'T23:59:59Z', skus: ctx.skus.slice(i, i + 100), limit_by_sku: 15, page: page, page_size: 100 }, 'Запросы ' + d);
-      const items = data.queries || data.items || (data.result && (data.result.queries || data.result.items)) || [];
-      if (!ctx.sampled && items.length) { ctx.sampled = true; Logger.log('Запросы ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 600)); }
-      items.forEach(function (q) {
-        // Без позиции (товар не показан по запросу) — для отчёта бесполезно, а места занимает много.
-        if (!(Number(q.position) > 0) && !(Number(q.order_count) > 0)) return;
-        out.push([cab.id, d, String(q.sku || ''), String(q.query || q.search_query || q.text || '').slice(0, 200),
-          Number(q.position != null ? q.position : q.avg_position) || '', Number(q.unique_search_users != null ? q.unique_search_users : q.searches) || 0,
-          Number(q.unique_view_users != null ? q.unique_view_users : q.views) || 0, Number(q.clicks != null ? q.clicks : q.to_pdp) || 0,
-          Number(q.order_count != null ? q.order_count : q.orders) || 0, Number(q.gmv != null ? q.gmv : q.revenue) || 0, Number(q.view_conversion != null ? q.view_conversion : q.conversion) || 0]);
-      });
-      const pages = data.page_count || (data.result && data.result.page_count) || 0;
-      if (items.length < 100 || (pages && page + 1 >= pages)) break;
-      Utilities.sleep(300);
+  // Две группы: рекламируемые товары — до 100 запросов в день (полная
+  // картина для ставок), остальные — 15 самых частотных.
+  const groups = [[ctx.adSkus || [], ctx.adLimit || QUERIES_AD_LIMIT], [ctx.otherSkus || ctx.skus, 15]];
+  for (let gi = 0; gi < groups.length; gi++) {
+    const list = groups[gi][0];
+    let limit = groups[gi][1];
+    for (let i = 0; i < list.length; i += 100) {
+      for (let page = 0; page < 200; page++) {
+        if (Date.now() > deadline) return null;
+        let data;
+        try {
+          data = postRetry_('https://api-seller.ozon.ru/v1/analytics/product-queries/details', ctx.headers,
+            { date_from: d + 'T00:00:00Z', date_to: d + 'T23:59:59Z', skus: list.slice(i, i + 100), limit_by_sku: limit, page: page, page_size: 100 }, 'Запросы ' + d);
+        } catch (e) {
+          // Если Ozon не примет 100 — дальше берём 50, потом 15.
+          if (limit > 15 && /HTTP 400/.test(e.message)) { limit = limit > 50 ? 50 : 15; ctx.adLimit = limit; Logger.log('Запросы ' + cab.id + ': limit_by_sku уменьшен до ' + limit + ' — ' + e.message); page--; continue; }
+          throw e;
+        }
+        const items = data.queries || data.items || (data.result && (data.result.queries || data.result.items)) || [];
+        if (!ctx.sampled && items.length) { ctx.sampled = true; Logger.log('Запросы ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 600)); }
+        items.forEach(function (q) {
+          // Без позиции (товар не показан по запросу) — для отчёта бесполезно, а места занимает много.
+          if (!(Number(q.position) > 0) && !(Number(q.order_count) > 0)) return;
+          out.push([cab.id, d, String(q.sku || ''), String(q.query || q.search_query || q.text || '').slice(0, 200),
+            Number(q.position != null ? q.position : q.avg_position) || '', Number(q.unique_search_users != null ? q.unique_search_users : q.searches) || 0,
+            Number(q.unique_view_users != null ? q.unique_view_users : q.views) || 0, Number(q.clicks != null ? q.clicks : q.to_pdp) || 0,
+            Number(q.order_count != null ? q.order_count : q.orders) || 0, Number(q.gmv != null ? q.gmv : q.revenue) || 0, Number(q.view_conversion != null ? q.view_conversion : q.conversion) || 0]);
+        });
+        const pages = data.page_count || (data.result && data.result.page_count) || 0;
+        if (items.length < 100 || (pages && page + 1 >= pages)) break;
+        Utilities.sleep(300);
+      }
     }
   }
+  return out;
+}
+// Сколько запросов в день брать по рекламируемым товарам (Ozon в кабинете
+// показывает до 100 запросов на товар).
+const QUERIES_AD_LIMIT = 100;
+// Рекламируемые SKU магазина: товары запущенных кампаний (вкладки Campaigns
+// и CampaignSkus) и товары с включённой оплатой за заказ (CpoProducts).
+function adSkus_(cabId) {
+  const out = {};
+  try {
+    const running = {};
+    getSheet_(SHEET_NAMES.campaigns).getDataRange().getValues().forEach(function (r, i) {
+      if (i && String(r[0]) === cabId && String(r[3]) === 'CAMPAIGN_STATE_RUNNING') running[String(r[1])] = true;
+    });
+    getSheet_(SHEET_NAMES.campaignSkus).getDataRange().getValues().forEach(function (r, i) {
+      if (i && String(r[0]) === cabId && running[String(r[1])] && r[2]) out[String(r[2])] = true;
+    });
+    getSheet_(SHEET_NAMES.cpoProducts).getDataRange().getValues().forEach(function (r, i) {
+      if (i && String(r[0]) === cabId && String(r[3]) === '1' && r[1]) out[String(r[1])] = true;
+    });
+  } catch (e) { Logger.log('Рекламируемые товары ' + cabId + ': ' + e.message); }
   return out;
 }
 // Дни идут от свежих к старым. Строки дописываются в конец вкладки (без
@@ -1170,7 +1205,7 @@ function collectQueriesDay_(cab, ctx, d, deadline) {
 // при повторе берёт последнюю строку. День кабинета пишется только целиком.
 // Уже загруженные дни кабинета пропускаются (кроме двух последних — их Ozon
 // ещё досчитывает).
-function syncQueries(days) {
+function syncQueries(days, skipLoaded) {
   const window = typeof days === 'number' ? days : 2;
   const started = Date.now();
   const deadline = started + 250000;
@@ -1183,7 +1218,11 @@ function syncQueries(days) {
   getCabinets_().forEach(function (cab) {
     const headers = sellerHeaders_(cab);
     if (!headers) return;
-    try { ctx[cab.id] = { headers: headers, skus: Object.keys(skusOf_(cab)), sampled: false }; Logger.log('Запросы ' + cab.id + ': SKU ' + ctx[cab.id].skus.length); }
+    try {
+      const skus = Object.keys(skusOf_(cab)), ad = adSkus_(cab.id);
+      ctx[cab.id] = { headers: headers, skus: skus, adSkus: skus.filter(function (s) { return ad[s]; }), otherSkus: skus.filter(function (s) { return !ad[s]; }), sampled: false };
+      Logger.log('Запросы ' + cab.id + ': SKU ' + skus.length + ', из них в рекламе ' + ctx[cab.id].adSkus.length + ' (до ' + QUERIES_AD_LIMIT + ' запросов в день)');
+    }
     catch (e) { Logger.log('Запросы ' + cab.id + ': ' + e.message); }
   });
   const rows = [];
@@ -1191,7 +1230,7 @@ function syncQueries(days) {
   for (let di = 0; di < dates.length; di++) {
     const d = dates[di];
     Object.keys(ctx).forEach(function (id) {
-      if (di >= 2 && have[id + '|' + d]) return;
+      if ((di >= 2 || skipLoaded) && have[id + '|' + d]) return;
       if (timeUp) { left++; return; }
       const cab = getCabinets_().filter(function (c) { return c.id === id; })[0];
       try {
@@ -1228,7 +1267,9 @@ function compactQueriesOnce() {
   ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'compactQueriesOnce') ScriptApp.deleteTrigger(t); });
   compactQueries();
 }
-const QUERIES_RETENTION_DAYS = 30;
+// Во вкладке храним 10 дней: история остаётся в базе сервиса, а таблица
+// не упирается в предел ячеек Google.
+const QUERIES_RETENTION_DAYS = 10;
 function appendQueries_(rows) {
   const sh = getSheet_(SHEET_NAMES.queries);
   const W = QUERIES_HEADERS.length;
@@ -1688,7 +1729,23 @@ function T_syncGeo() { return timed_('syncGeo', syncGeo); }
 function T_syncFinance() { return timed_('syncFinance', syncFinance); }
 function T_syncStocksWh() { return timed_('syncStocksWh', syncStocksWh); }
 function T_compactQueries() { return timed_('compactQueries', compactQueries); }
-function T_syncQueries() { return timed_('syncQueries', syncQueries); }
+function T_syncQueries() { return timed_('syncQueries', syncQueriesDaily); }
+// Ежедневный сбор: вчера и позавчера (и пропущенные дни за 3 дня). Если не
+// успел за один запуск — сам ставит продолжение через минуту (до 6 раз).
+function syncQueriesDaily() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncQueriesDaily') ScriptApp.deleteTrigger(t); });
+  const props = PropertiesService.getScriptProperties();
+  const today = mskDate_(0);
+  const runs = props.getProperty('QUERIES_DAY') === today ? Number(props.getProperty('QUERIES_DAY_RUNS') || 0) + 1 : 1;
+  props.setProperty('QUERIES_DAY', today); props.setProperty('QUERIES_DAY_RUNS', String(runs));
+  // Продолжение не перезагружает дни, уже записанные первым запуском.
+  const left = syncQueries(runs === 1 ? 2 : 3, runs > 1);
+  if (left > 0 && runs < 6) {
+    ScriptApp.newTrigger('syncQueriesDaily').timeBased().after(60 * 1000).create();
+    Logger.log('syncQueriesDaily: не успел (' + left + '), продолжу через минуту');
+  }
+  return left;
+}
 function T_syncAnalyticsHistory() { return timed_('syncAnalyticsHistory', syncAnalyticsHistory); }
 function T_syncMonthly() { return timed_('syncMonthly', syncMonthly); }
 
@@ -1728,7 +1785,7 @@ function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const fn = t.getHandlerFunction();
     const base = fn.replace(/^T_/, '');
-    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh', 'syncQueries', 'syncMonthly', 'compactQueries', 'syncQueriesFull'].indexOf(base) !== -1) ScriptApp.deleteTrigger(t);
+    if (['syncRecent', 'syncDaily', 'syncOrders', 'syncCpoOrders', 'syncSkuHistory', 'syncGeo', 'syncFinance', 'syncStocksWh', 'syncQueries', 'syncMonthly', 'compactQueries', 'syncQueriesFull', 'syncQueriesDaily'].indexOf(base) !== -1) ScriptApp.deleteTrigger(t);
   });
   // У бесплатного аккаунта Google суммарное время работы триггеров
   // ограничено (около 90 минут в сутки) — поэтому расписание пореже.

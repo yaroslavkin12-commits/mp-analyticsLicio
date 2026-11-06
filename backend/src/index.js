@@ -130,6 +130,7 @@ app.use('/api/stocks', require('./routes/stocks'));
 app.use('/api/digest', require('./routes/digest'));
 app.use('/api/plan', require('./routes/plan'));
 app.use('/api/queries', require('./routes/queries'));
+app.use('/api/competitors', require('./routes/competitors'));
 app.use('/api/tracked-articles', require('./routes/trackedArticles'));
 // Какие настройки заданы на ЭТОМ сервере (только да/нет, без значений) —
 // чтобы сравнить два сервиса Render между собой.

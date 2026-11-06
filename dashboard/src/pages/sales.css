@@ -529,3 +529,30 @@
 .mpui .sp-qc{display:inline-flex;gap:8px;margin-left:14px;text-transform:none;letter-spacing:0;font-weight:400}
 .mpui .sp-qc .a-input{padding:2px 8px;font-size:11.5px;width:160px}
 @media (max-width:700px){.mpui table.sp-dt .lbl{width:200px;min-width:200px;max-width:200px}.mpui table.sp-dt .tot{left:200px}}
+/* Сравнение с конкурентами */
+.mpui .sp-tabs{margin-left:auto}
+.mpui .sc-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;margin-bottom:12px}
+.mpui .sc-add{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mpui .sc-add .a-input{padding:5px 8px}
+.mpui .a-btn.dis{opacity:.6;pointer-events:none}
+.mpui .sc-log{padding:8px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.8}
+.mpui .sc-log .bad{color:var(--a-bad,#e5484d)}
+.mpui table.a-t.sc-t{min-width:0;width:100%}
+.mpui .sc-t td,.mpui .sc-t th{vertical-align:middle}
+.mpui .sc-t .sc-name{min-width:220px;max-width:340px;white-space:normal;line-height:1.35}
+.mpui .sc-t .sc-name .muted{font-size:11.5px}
+.mpui .sc-t tr.sc-our td{background:hsla(140,55%,42%,.10)}
+.mpui .sc-t tr.sc-comp td{background:hsla(210,65%,52%,.10)}
+.mpui .sc-d{font-size:10.5px;color:var(--a-ink3)}
+.mpui .sc-d.up{color:hsl(140 55% 48%)}
+.mpui .sc-d.down{color:hsl(0 65% 60%)}
+.mpui .sc-ph{position:relative}
+.mpui .sc-phb{width:48px;height:48px;border-radius:8px;border:1px dashed var(--a-line2);background:var(--a-panel2);padding:0;cursor:pointer;overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--a-ink3);font-size:10.5px}
+.mpui .sc-phb img{width:100%;height:100%;object-fit:cover}
+.mpui .sc-pop{position:fixed;z-index:50;width:300px;background:var(--a-panel);border:1px solid var(--a-line2);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.mpui .sc-t td,.mpui .sc-t th{text-align:left}
+.mpui .sc-t td.r,.mpui .sc-t th.r{text-align:right}
+.mpui .sc-t a{color:inherit;text-decoration:none}
+.mpui .sc-t a:hover{text-decoration:underline}
+.mpui .sc-t a.muted{color:var(--a-ink3)}
+.mpui .sc-pop .a-hint{white-space:normal;font-size:11.5px;line-height:1.4}

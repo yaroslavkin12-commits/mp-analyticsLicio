@@ -4,6 +4,7 @@ import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryF
 import { fmtInt, fmtPct, fmtBy, heatColor, useTip, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, Kpi, Empty, inPath, matchQ, OTHER } from './finShared';
 import { FREQ, FREQ_LABEL, DEFAULT_FREQ, freqOf, isTarget, productProfile } from '../lib/queryGroups';
+import SearchCompetitors from './SearchCompetitors';
 import './ads2.css';
 import './sales.css';
 
@@ -295,6 +296,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const [th, setTh] = useState(DEFAULT_FREQ);
   const [gsel, setGsel] = useState('target');
   const [openQ, setOpenQ] = useState({});
+  const [tab, setTab] = useState('q');
 
   useEffect(() => {
     setData(null); setErr(null); setAds(null); setOpenQ({});
@@ -388,10 +390,10 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
           {options.map(a => <option key={a.o} value={a.o}>{a.o} — {a.short}</option>)}
         </select>
         <div className="sp-name">{data?.name || art?.n || ''}</div>
-        <button type="button" className="a-btn" disabled title="Следующий этап: загрузка отчётов Ozon по конкурентам">+ Конкурент (скоро)</button>
+        <span className="a-seg sp-tabs">{[['q', 'Поисковые запросы'], ['c', 'Сравнение с конкурентами']].map(([k, l]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</span>
       </div>
 
-      {err ? <Empty>Не удалось загрузить: {err}</Empty> : !data ? <div className="a-hint" style={{ padding: 20 }}>Загрузка…</div> : !queries.length ? (
+      {tab === 'c' ? <SearchCompetitors cabinet={cabinet} offer={offer} tip={tip} /> : err ? <Empty>Не удалось загрузить: {err}</Empty> : !data ? <div className="a-hint" style={{ padding: 20 }}>Загрузка…</div> : !queries.length ? (
         <Empty>За выбранный период по этому товару нет данных о поисковых запросах.</Empty>
       ) : (
         <>
