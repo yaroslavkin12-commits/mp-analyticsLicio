@@ -56,6 +56,11 @@ export function heatColor(v, min, max, direction) {
   t = Math.max(0, Math.min(1, t));
   return `hsla(${120 * t}, 62%, 42%, 0.32)`;
 }
+function priceHeatColor(v, min, max) {
+  if (!Number.isFinite(v)) return 'transparent';
+  const level = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0.5;
+  return `rgba(139, 92, 246, ${0.08 + level * 0.30})`;
+}
 function positionHeatColor(v) {
   if (!Number.isFinite(v) || v <= 0) return 'transparent';
   // Постоянные ориентиры: выбросы не сжимают цвета позиций в первых десятках.
@@ -608,14 +613,14 @@ export function Funnel({ totals, prev, mode }) {
 
 // ── Таблица по дням: все метрики, цвета по строкам (как раньше) ──────────
 const DAY_ROWS = [
+  { block: 'Цены текущие', tone: 'rev', prices: true },
+  { key: 'sellerPrice', label: 'Предельная цена', fmt: 'money', total: 'avg', prices: true, hint: 'Цена продавца до скидки Ozon. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Насыщенность фиолетового показывает уровень цены в выбранном периоде, без оценки «лучше/хуже».' },
+  { key: 'clientPrice', label: 'Цена клиента', fmt: 'money', total: 'avg', prices: true, hint: 'Цена для покупателя с Ozon-картой. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Насыщенность фиолетового показывает уровень цены в выбранном периоде, без оценки «лучше/хуже».' },
   { block: 'Заказы и остаток', tone: 'rev' },
   { key: 'revenue', label: 'Заказы, ₽', fmt: 'money', good: 'up', editable: true },
   { key: 'orders', label: 'Заказы, шт', fmt: 'int', good: 'up', editable: true },
   { key: 'selfQ', label: 'самовыкупы (не в заказах)', fmt: 'int', sub: true, hideEmpty: true, toggleOf: 'orders', hint: 'Отмечены в «Ленте заказов»: из заказов и ДРР убраны, их комиссия, эквайринг, налог и сервисный сбор 20 ₽ (FBS) вычтены из прогнозируемой прибыли' },
   { key: 'stock', label: 'Остаток, шт', fmt: 'int', good: 'up', total: 'last' },
-  { block: 'Цены текущие', tone: 'rev', prices: true },
-  { key: 'sellerPrice', label: 'Предельная цена', fmt: 'money2', total: 'avg', prices: true, hint: 'Цена продавца до скидки Ozon. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными.' },
-  { key: 'clientPrice', label: 'Цена клиента', fmt: 'money2', total: 'avg', prices: true, hint: 'Цена для покупателя с Ozon-картой. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными.' },
   { block: 'Трафик и позиции', tone: 'traffic' },
   { key: 'position', label: 'Позиция в поиске', fmt: 'pos', good: 'down', editable: true, total: 'avg', onlyAll: true },
   { key: 'views', label: 'Показы', fmt: 'int', good: 'up', editable: true },
@@ -635,7 +640,7 @@ const DAY_ROWS = [
   ...STRAT_PARTS.map(p => ({ key: 'spend' + p.k, label: p.t, fmt: 'money0', good: 'up', sub: 2, clicks: 'clicks' + p.k, hideEmpty: true })),
   { key: 'spendCpo', label: 'оплата за заказ', fmt: 'money0', good: 'up', sub: true, hint: 'Оплата за заказ стоит в дне заказа — так видно эффективность дня. Ozon списывает её позже, в день выкупа: в P&L и финансах эти суммы в других днях' },
   { key: 'drr', label: 'ДРР', fmt: 'pct', good: 'down', hint: 'Расход / сумма заказов (без учёта выкупа)' },
-  { key: 'drrB', label: 'ДРР с учётом выкупа', fmt: 'pct', good: 'down', hint: 'Расход / (сумма заказов × % выкупа артикула) — сколько реклама будет стоить с каждой продажи. Так же считается ДРР в «Цены и маржа» и калькуляторе' },
+  { key: 'drrB', label: 'ДРР с учётом выкупа', fmt: 'pct', good: 'down', sub: true, hint: 'Расход / (сумма заказов × % выкупа артикула) — сколько реклама будет стоить с каждой продажи. Так же считается ДРР в «Цены и маржа» и калькуляторе' },
   { block: 'Прогноз', tone: 'rev' },
   { key: 'profitF', label: 'Прогнозируемая прибыль после рекламы, ₽', fmt: 'money0', good: 'up', hint: 'С заказов дня: ожидаемая выручка (с % выкупа) минус комиссия, логистика, эквайринг, хранение, себестоимость, налог и реклама — как в «Юнит-экономике». Самовыкупы в заказы не входят, но их комиссия, эквайринг, налог и сервисный сбор 20 ₽ за FBS-отправление вычитаются как расход (логистики у самовыкупа нет)' },
 ];
@@ -728,7 +733,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {
                   const d = dates[i];
-                  const bg = row.prices ? undefined : heatColor(v, min, max, row.good);
+                  const bg = row.prices ? priceHeatColor(v, min, max) : heatColor(v, min, max, row.good);
                   if ((row.key === 'drr' || row.key === 'drrB') && (v === null || v === undefined)) {
                     const spent = model.byDate[d]?.spend > 0;
                     return <td key={d} style={{ color: 'var(--a-ink3)' }} title={spent ? 'Был расход, заказов не было' : ''}>{spent ? '×' : '—'}</td>;
