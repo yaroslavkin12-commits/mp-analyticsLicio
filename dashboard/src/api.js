@@ -168,7 +168,10 @@ export const previewOzonPlan = data => api.post('/plan/ozon/preview', data, { ti
 export const fixOzonPlan = data => api.post('/plan/ozon/fix', data);
 export const getOzonPlanExecution = params => api.get('/plan/ozon/execution', { params, timeout: 180000 });
 export const getQueries = (cabinet, p) => api.get('/queries/data', { params: { cabinet, ...p }, timeout: 90000 });
-export const getQuerySeries = (cabinet, offerId, q, days) => api.get('/queries/series', { params: { cabinet, offerId, query: q, days } });
+export const getQueryArts = (cabinet, p) => api.get('/queries/arts', { params: { cabinet, ...p } });
+export const getQueryArticle = (cabinet, offerId, p) => api.get('/queries/article', { params: { cabinet, offerId, ...p }, timeout: 60000 });
+export const saveQueryGroup = (cabinet, query, group) => api.post('/queries/groups', { cabinet, query, group });
+export const getQuerySeries =(cabinet, offerId, q, days) => api.get('/queries/series', { params: { cabinet, offerId, query: q, days } });
 export const getSeason = cabinet => api.get('/queries/season', { params: { cabinet }, timeout: 90000 });
 export const getRestock = (cabinet, days = 14) => api.get('/tracked-articles/restock', { params: { cabinet, days } });
 export const saveRestockSettings = (cabinet, s) => api.post('/tracked-articles/restock/settings', { cabinet, ...s });

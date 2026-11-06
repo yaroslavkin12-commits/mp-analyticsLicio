@@ -58,6 +58,74 @@ router.get('/series', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
+// GET /api/queries/arts?cabinet=&dateFrom=&dateTo= — товары, у которых есть
+// данные по запросам: [индекс артикула, запросов, искали (сумма по
+// запросам), увидели, заказы, сумма]. Для выбора артикула.
+router.get('/arts', async (req, res) => {
+  try {
+    await ensureFinTables();
+    const cabinet = req.query.cabinet || 'defly';
+    const to = req.query.dateTo || dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+    const from = req.query.dateFrom || dayjs(to).subtract(13, 'day').format('YYYY-MM-DD');
+    const m = await meta(cabinet);
+    const rows = await query(`SELECT sku, COUNT(DISTINCT query)::int n, SUM(searches)::int s, SUM(views)::int v, SUM(orders)::int o, SUM(revenue) r
+      FROM search_query_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY sku`, [cabinet, from, to]);
+    const agg = new Map();
+    for (const r of rows) {
+      const o = m.offerBySku.get(String(r.sku)); if (!o) continue;
+      const ai = m.art(o);
+      const a = agg.get(ai) || [ai, 0, 0, 0, 0, 0];
+      a[1] = Math.max(a[1], num(r.n)); a[2] += num(r.s); a[3] += num(r.v); a[4] += num(r.o); a[5] += Math.round(num(r.r));
+      agg.set(ai, a);
+    }
+    res.json({ success: true, data: { from, to, articles: m.articles, order: ORDER[cabinet] || [], rows: [...agg.values()] } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Ручные группы запросов: app_settings query_groups:<кабинет> = { запрос: группа }.
+const GROUP_KEYS = ['target', 'model', 'type', 'other'];
+async function loadGroups(cabinet) {
+  const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [`query_groups:${cabinet}`]).catch(() => []);
+  try { return JSON.parse(rows[0]?.value || '{}') || {}; } catch (e) { return {}; }
+}
+
+// GET /api/queries/article?cabinet=&offerId=&dateFrom=&dateTo= — все запросы
+// товара по дням: [дата, запрос, позиция, искали, увидели, переходы, заказы,
+// сумма]. Если у артикула несколько SKU: «искали» — максимум (это одни и те
+// же люди), позиция — лучшая, остальное складывается.
+router.get('/article', async (req, res) => {
+  try {
+    await ensureFinTables();
+    const cabinet = req.query.cabinet || 'defly';
+    const offerId = String(req.query.offerId || '');
+    const to = req.query.dateTo || dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+    const from = req.query.dateFrom || dayjs(to).subtract(13, 'day').format('YYYY-MM-DD');
+    const cat = await query(`SELECT sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = $2`, [cabinet, offerId]);
+    const skus = cat.filter(r => r.sku != null).map(r => num(r.sku));
+    const rows = skus.length ? await query(`SELECT date::text d, query, MIN(position) p, MAX(searches)::int s, SUM(views)::int v, SUM(clicks)::int c, SUM(orders)::int o, SUM(revenue) r
+      FROM search_query_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 AND sku = ANY($4::bigint[])
+      GROUP BY date, query ORDER BY date`, [cabinet, from, to, skus]) : [];
+    res.json({ success: true, data: {
+      offerId, name: cat.find(r => r.product_name)?.product_name || '', from, to,
+      rows: rows.map(r => [r.d, r.query, r.p == null ? null : r2(num(r.p)), num(r.s), num(r.v), num(r.c), num(r.o), Math.round(num(r.r))]),
+      groups: await loadGroups(cabinet),
+    } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/queries/groups {cabinet, query, group} — отнести запрос к группе
+// вручную; group = null — вернуть автоматическую.
+router.post('/groups', async (req, res) => {
+  try {
+    const { cabinet = 'defly', query: q, group } = req.body || {};
+    if (!q || (group != null && !GROUP_KEYS.includes(group))) return res.status(400).json({ success: false, error: 'Нужны запрос и группа' });
+    const g = await loadGroups(cabinet);
+    if (group == null) delete g[q]; else g[String(q).slice(0, 200)] = group;
+    await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [`query_groups:${cabinet}`, JSON.stringify(g)]);
+    res.json({ success: true, data: g });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /api/queries/season?cabinet= — продажи по месяцам: [ai, monthIdx, revenue, orders].
 router.get('/season', async (req, res) => {
   try {
