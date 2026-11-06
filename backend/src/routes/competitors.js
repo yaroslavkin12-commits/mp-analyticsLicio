@@ -53,7 +53,9 @@ router.get('/', async (req, res) => {
       query(`SELECT sku, photo FROM sku_photos WHERE cabinet = $1 AND sku = ANY($2::bigint[])`, [cabinet, all]),
       query(`SELECT sku, report_date::text d, window_days w, name, seller, brand, data FROM market_snapshot WHERE cabinet = $1 AND sku = ANY($2::bigint[]) ORDER BY report_date`, [cabinet, all]),
       // Запросы, по которым есть снимки выдачи с нашим товаром или конкурентом.
-      query(`SELECT query, region, MAX(date)::text last, COUNT(DISTINCT date)::int n FROM serp_snapshot WHERE cabinet = $1 AND sku = ANY($2::bigint[]) GROUP BY query, region ORDER BY MAX(date) DESC, query`, [cabinet, all]),
+      // Все загруженные выдачи магазина (раньше — только где есть наши SKU или
+      // конкуренты: из-за этого выдача «пропадала», если товара в ней не было).
+      query(`SELECT query, region, MAX(date)::text last, COUNT(DISTINCT date)::int n FROM serp_snapshot WHERE cabinet = $1 GROUP BY query, region ORDER BY MAX(date) DESC, query LIMIT 300`, [cabinet]),
     ]) : [[], [], []];
     const cards = all.length ? await query(`SELECT sku, date::text d, photo, title, price, card_price, rating, reviews, checked_at FROM sku_cards WHERE sku = ANY($1::bigint[]) ORDER BY sku, date`, [all]) : [];
     const cardOf = {};

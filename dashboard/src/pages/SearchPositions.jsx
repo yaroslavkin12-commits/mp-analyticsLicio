@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getAdsEvents, getAdsStats, latestOnly } from '../api';
+import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getQuerySample, getAdsEvents, getAdsStats, latestOnly } from '../api';
 import { fmtInt, fmtPct, fmtBy, heatColor, useTip, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, Kpi, Empty, inPath, matchQ, OTHER } from './finShared';
 import { FREQ, FREQ_LABEL, DEFAULT_FREQ, freqOf, isTarget, productProfile } from '../lib/queryGroups';
@@ -397,6 +397,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
         <Empty>За выбранный период по этому товару нет данных о поисковых запросах.</Empty>
       ) : (
         <>
+          {setStats.all.c === 0 && setStats.all.o === 0 && <ZeroWarn cabinet={cabinet} />}
           <div className="sp-groups">
             {SETS.map(g => {
               const st = setStats[g.key];
@@ -426,6 +427,21 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
         </>
       )}
     </>
+  );
+}
+
+// Переходов и заказов по запросам нет совсем — скорее всего, Ozon называет
+// эти поля иначе, чем ждёт скрипт. Показываем пример ответа Ozon.
+function ZeroWarn({ cabinet }) {
+  const [s, setS] = useState(undefined);
+  useEffect(() => { getQuerySample(cabinet).then(r => setS(r.data.data)).catch(() => setS(null)); }, [cabinet]);
+  return (
+    <div className="a-card sp-warn">
+      <b>По запросам за период нет ни одного перехода в карточку и ни одного заказа.</b> Поэтому CTR, конверсия в заказ, заказы и сумма — нули.
+      Скорее всего, Ozon присылает эти поля под другими названиями, чем ждал скрипт. Новая версия скрипта понимает больше вариантов и присылает в сервис пример ответа Ozon.
+      {s ? <div className="sp-sample">Пример ответа Ozon от {String(s.at).slice(0, 10)}: <code>{s.sample}</code></div>
+        : s === null ? <div className="a-hint" style={{ marginTop: 6 }}>Пример ответа ещё не приходил: он появится после первого запуска новой версии скрипта с прямой отправкой.</div> : null}
+    </div>
   );
 }
 

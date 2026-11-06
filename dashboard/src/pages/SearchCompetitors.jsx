@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { getCompetitors, getSerp, addCompetitor, removeCompetitor, saveSkuPhoto, saveCompetitorView, importCompetitorReport, latestOnly } from '../api';
 import { fmtInt, fmtPct } from './AdsStats2';
 import { Empty } from './finShared';
+import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { parseOzonReport } from '../lib/ozonReports';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -178,26 +179,59 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
     const ord = new Map((data.view?.order || []).map((k, i) => [k, i]));
     return list.map((x, i) => ({ x, i })).sort((a, b) => (ord.has(a.x.sku) ? ord.get(a.x.sku) : 1e3 + a.i) - (ord.has(b.x.sku) ? ord.get(b.x.sku) : 1e3 + b.i)).map(o => o.x);
   }, [data, win, cabinet]);
-  const move = async (sku, dir) => {
-    const order = items.map(x => x.sku), i = order.indexOf(sku), j = i + dir;
-    if (j < 0 || j >= order.length) return;
-    [order[i], order[j]] = [order[j], order[i]];
+  // Порядок строк — перетаскиванием (как в «Рекламе»).
+  const [dragKey, setDragKey] = useState(null), [overKey, setOverKey] = useState(null);
+  const reorder = async (from, to) => {
+    if (!from || !to || from === to) return;
+    const order = items.map(x => x.sku);
+    order.splice(order.indexOf(to), 0, order.splice(order.indexOf(from), 1)[0]);
     setData(d => ({ ...d, view: { ...(d.view || {}), order } }));
     await saveCompetitorView(cabinet, offer, { order }).catch(() => load());
   };
+  // Выдача для сравнения: запрос и регион, последний снимок — место, ставка, популярность, соответствие.
+  const [serpSel, setSerpSel] = useState('');
+  const [serpMap, setSerpMap] = useState(null);
+  useEffect(() => {
+    const qs = data?.serpQueries || [];
+    if (!qs.length) { setSerpSel(''); return; }
+    if (!qs.some(q => `${q.query}|${q.region}` === serpSel)) {
+      const pick = qs.find(q => q.region.startsWith('Москва')) || qs[0];
+      setSerpSel(`${pick.query}|${pick.region}`);
+    }
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!serpSel) { setSerpMap(null); return; }
+    const [q, r] = serpSel.split('|');
+    getSerp(cabinet, q, r).then(res => {
+      const rows = res.data.data || [];
+      const last = rows.reduce((m, x) => (x.d > m ? x.d : m), '');
+      setSerpMap({ date: last, by: new Map(rows.filter(x => x.d === last).map(x => [x.sku, x])) });
+    }).catch(() => setSerpMap(null));
+  }, [cabinet, serpSel]);
   const rename = async (x, text) => {
     if (x.kind === 'comp') await addCompetitor(cabinet, offer, x.sku, text);
     await saveCompetitorView(cabinet, offer, { label: { sku: x.sku, text } });
     load();
   };
-  // Лучшие значения по колонкам — для зелёной подсветки.
-  const best = useMemo(() => {
-    const b = {};
-    for (const c of MCOLS) if (BEST[c.k]) b[c.k] = bestOf(items.map(x => (x.last ? valOf(c, x.last.data) : null)), BEST[c.k]);
-    b.cur = bestOf(items.map(x => (x.card ? x.card.cardPrice ?? x.card.price : null)), 'down');
-    b.rating = bestOf(items.map(x => x.card?.rating ?? null), 'up');
-    return b;
-  }, [items]);
+  // Колонки сравнения: цена и рейтинг с витрины, место/ставка из выдачи, показатели отчёта.
+  const cols = useMemo(() => {
+    const sv = (x, k) => serpMap?.by.get(x.sku)?.[k] ?? null;
+    return [
+      { k: 'cur', l: 'Цена сейчас', best: 'down', f: money, get: x => (x.card ? x.card.cardPrice ?? x.card.price : null), hint: 'Цена на сайте сейчас (с Ozon-картой) — по данным расширения' },
+      { k: 'rating', l: 'Рейтинг', best: 'up', get: x => x.card?.rating ?? null, f: (v, x) => (v == null ? '—' : `${String(v).replace('.', ',')}${x.card?.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}`), hint: 'Рейтинг и число отзывов — по данным расширения' },
+      ...(serpMap ? [
+        { k: 'pos', l: 'Место', best: 'down', serp: true, get: x => sv(x, 'position'), f: v => (v == null ? '—' : v), hint: 'Место в выдаче по выбранному запросу и региону' },
+        { k: 'cpc', l: 'Ставка', serp: true, get: x => sv(x, 'cpc'), f: v => (v == null ? '—' : `${String(v).replace('.', ',')} ₽`), hint: 'Ставка за клик в выдаче (из отчёта «Результаты по запросу»)' },
+        { k: 'pop', l: 'Популярность', best: 'up', serp: true, get: x => sv(x, 'popularity'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Популярность товара по этому запросу (Ozon)' },
+        { k: 'rel', l: 'Соответствие', best: 'up', serp: true, get: x => sv(x, 'relevance'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Насколько карточка соответствует запросу (Ozon)' },
+      ] : []),
+      ...MCOLS.map(c => ({ k: c.k, l: c.l, best: BEST[c.k] || null, f: v => c.f(v), get: x => (x.last ? valOf(c, x.last.data) : null), hint: c.hint, diff: c.diff, m: c })),
+    ];
+  }, [serpMap]);
+  const best = useMemo(() => Object.fromEntries(cols.filter(c => c.best).map(c => [c.k, bestOf(items.map(c.get), c.best)])), [cols, items]);
+  const ctl = useTableCtl('sc-cmp');
+  const rows = useMemo(() => ctl.apply(items, (x, k) => (k === 'name' ? x.label : (cols.find(c => c.k === k)?.get(x) ?? null))), [ctl, items, cols]);
+  const dragOn = !ctl.changed;
   const known = useMemo(() => new Set(items.map(x => x.sku)), [items]);
   const dates = useMemo(() => [...new Set(items.flatMap(x => x.list.map(m => m.date)))].sort(), [items]);
 
@@ -234,37 +268,52 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
       )}
 
       <div className="a-card">
-        <div className="sp-tbar"><b>Сравнение за {win} дней — по последнему загруженному отчёту</b></div>
+        <div className="sp-tbar" style={{ flexWrap: 'wrap' }}>
+          <b>Сравнение за {win} дней</b>
+          {(data.serpQueries || []).length > 0 && (
+            <label className="a-hint" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>место и ставка по запросу
+              <select className="a-input" value={serpSel} onChange={e => setSerpSel(e.target.value)} style={{ width: 'auto', maxWidth: 360 }}>
+                {data.serpQueries.map(q => <option key={q.query + q.region} value={`${q.query}|${q.region}`}>{q.query} · {q.region} · {dd(q.last)}</option>)}
+              </select>
+            </label>
+          )}
+          <ResetCtl ctl={ctl} />
+        </div>
         <div className="a-scroll">
-          <table className="a-t sc-t">
-            <thead><tr><th /><th />{['Товар'].map(h => <th key={h}>{h}</th>)}<th className="r" title="Цена на сайте сейчас (с Ozon-картой) — по данным расширения">Цена сейчас</th><th title="Рейтинг и число отзывов — по данным расширения">Рейтинг</th><th>Отчёт от</th>{MCOLS.map(c => <th key={c.k} className="r" title={c.hint}>{c.l}</th>)}<th /></tr></thead>
+          <table className="a-t sc-t sc-cmp no-sh">
+            <thead><tr>
+              <th className="stk s0" /><th className="stk s1" />
+              <ThCtl ctl={ctl} k="name" className="stk s2" filter={false}>Товар</ThCtl>
+              {cols.map(c => <ThCtl key={c.k} ctl={ctl} k={c.k} hint={c.hint} className={`r ${c.serp ? 'sc-serp' : ''}`}>{c.l}</ThCtl>)}
+              <th>Отчёт от</th><th />
+            </tr></thead>
             <tbody>
-              {items.map((x, idx) => (
-                <tr key={x.sku} className={x.own ? 'sc-our' : ''}>
-                  <td className="sc-mv">
-                    <button type="button" disabled={idx === 0} onClick={() => move(x.sku, -1)} title="Выше">▲</button>
-                    <button type="button" disabled={idx === items.length - 1} onClick={() => move(x.sku, 1)} title="Ниже">▼</button>
-                  </td>
-                  <td><Photo sku={x.sku} src={x.photo} auto={!x.manualPhoto && !!x.card?.photo} onSave={savePhoto} /></td>
-                  <td className="sc-name">
-                    <Label x={x} onSave={t => rename(x, t)} /> {x.own && x.label !== (SHOP[cabinet] || cabinet) && <span className="sc-own" title="Наш товар">{SHOP[cabinet] || 'наш'}</span>} <a href={ozonUrl(x.sku)} target="_blank" rel="noreferrer" className="muted">{x.sku}</a>
-                    <div className="muted sc-short" title={x.name}>{x.short || '—'}</div>
+              {rows.map(x => (
+                <tr key={x.sku} className={`${x.own ? 'sc-our' : ''} ${dragKey === x.sku ? 'dragging' : ''} ${overKey === x.sku && dragKey && dragKey !== x.sku ? 'dropover' : ''}`}
+                  draggable={dragOn}
+                  onDragStart={dragOn ? () => setDragKey(x.sku) : undefined}
+                  onDragOver={dragOn ? e => { e.preventDefault(); setOverKey(x.sku); } : undefined}
+                  onDrop={dragOn ? e => { e.preventDefault(); reorder(dragKey, x.sku); setDragKey(null); setOverKey(null); } : undefined}
+                  onDragEnd={dragOn ? () => { setDragKey(null); setOverKey(null); } : undefined}>
+                  <td className="stk s0 sc-grip">{dragOn ? <span className="a-handle" title="Перетащите, чтобы поменять порядок">⠿</span> : null}</td>
+                  <td className="stk s1"><Photo sku={x.sku} src={x.photo} auto={!x.manualPhoto && !!x.card?.photo} onSave={savePhoto} /></td>
+                  <td className="stk s2 sc-name">
+                    <div className="sc-l1"><Label x={x} onSave={t => rename(x, t)} />{x.own && x.label !== (SHOP[cabinet] || cabinet) && <span className="sc-own" title="Наш товар">{SHOP[cabinet] || 'наш'}</span>}</div>
+                    <div className="muted sc-short" title={`${x.name}\nSKU ${x.sku}${x.seller && !x.own ? ' · ' + x.seller : ''}`}><a href={ozonUrl(x.sku)} target="_blank" rel="noreferrer">{x.short || x.sku}</a></div>
                     {x.card?.photoChanged && (Date.now() - Date.parse(x.card.photoChanged)) < 14 * 864e5 && <div className="sc-flag">фото сменилось {dd(x.card.photoChanged)}</div>}
                   </td>
-                  <td className={`n r ${best.cur != null && x.card && (x.card.cardPrice ?? x.card.price) === best.cur ? 'sc-best' : ''}`} title={x.card ? `обновлено ${dd(x.card.date)}` : 'Расширение ещё не собирало эту карточку'}>{x.card ? money(x.card.cardPrice ?? x.card.price) : '—'}</td>
-                  <td className={`n ${best.rating != null && x.card?.rating === best.rating ? 'sc-best' : ''}`}>{x.card?.rating != null ? `${String(x.card.rating).replace('.', ',')}${x.card.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}` : '—'}</td>
-                  <td className="n">{x.last ? dd(x.last.date) : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
-                  {MCOLS.map(c => {
-                    const v = x.last ? valOf(c, x.last.data) : null;
-                    const p = x.prev && c.diff ? valOf(c, x.prev.data) : null;
+                  {cols.map(c => {
+                    const v = c.get(x);
+                    const p = c.diff && x.prev ? valOf(c.m, x.prev.data) : null;
                     const d = v != null && p != null ? v - p : null;
                     return (
-                      <td key={c.k} className={`n r ${best[c.k] != null && v === best[c.k] ? 'sc-best' : ''}`}>
-                        {c.f(v)}
+                      <td key={c.k} className={`n r ${c.serp ? 'sc-serp' : ''} ${best[c.k] != null && v === best[c.k] ? 'sc-best' : ''}`}>
+                        {c.f(v, x)}
                         {d != null && <div className={`sc-d ${d > 0 ? 'up' : d < 0 ? 'down' : ''}`} title={`К отчёту от ${dd(x.prev.date)}: это новый день минус день, выпавший из окна ${win} дней — не продажи одного дня`}>{d > 0 ? '+' : ''}{fmtInt(d)}</div>}
                       </td>
                     );
                   })}
+                  <td className="n">{x.last ? dd(x.last.date) : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
                   <td>{x.kind === 'comp' && <button type="button" className="sp-reset" title="Убрать из сравнения" onClick={() => remove(x.sku)}>×</button>}</td>
                 </tr>
               ))}
@@ -272,7 +321,7 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
           </table>
         </div>
         <div className="a-hint" style={{ padding: '6px 12px 10px' }}>
-          Зелёным — лучшее значение в колонке (для цены и ДРР — самое низкое). Подписи меняются карандашом ✎, порядок строк — стрелками ▲▼. Все цифры — из отчёта Ozon «Аналитика → Товары на Ozon» за {win} дней. Для честного сравнения скачивайте его и по нашему товару, в тот же день. Мелкая цифра под значением — разница с прошлым отчётом:
+          Зелёным — лучшее значение в колонке (для цены и ДРР — самое низкое). Подписи меняются карандашом ✎, порядок строк — перетаскиванием за ⠿ (когда не включена сортировка). Клик по названию колонки: по убыванию → по возрастанию → как было; воронка — фильтр «от … до …». Место, ставка, популярность и соответствие — из последнего загруженного отчёта «Результаты по запросу» для выбранного запроса и региона. Все цифры — из отчёта Ozon «Аналитика → Товары на Ozon» за {win} дней. Для честного сравнения скачивайте его и по нашему товару, в тот же день. Мелкая цифра под значением — разница с прошлым отчётом:
           это «новый день минус день, выпавший из окна», а не продажи одного дня. Точные дни по нашему товару — во вкладке «Поисковые запросы».
         </div>
       </div>

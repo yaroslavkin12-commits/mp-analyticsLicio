@@ -170,6 +170,7 @@ export const getOzonPlanExecution = params => api.get('/plan/ozon/execution', { 
 export const getQueries = (cabinet, p) => api.get('/queries/data', { params: { cabinet, ...p }, timeout: 90000 });
 export const getQueryArts = (cabinet, p) => api.get('/queries/arts', { params: { cabinet, ...p } });
 export const getQueryArticle = (cabinet, offerId, p) => api.get('/queries/article', { params: { cabinet, offerId, ...p }, timeout: 60000 });
+export const getQuerySample = cabinet => api.get('/queries/sample', { params: { cabinet } });
 export const saveQueryFreq = (cabinet, hi, mid) => api.post('/queries/freq', { cabinet, hi, mid });
 export const saveQueryGroup = (cabinet, query, group) => api.post('/queries/groups', { cabinet, query, group });
 export const getQuerySeries =(cabinet, offerId, q, days) => api.get('/queries/series', { params: { cabinet, offerId, query: q, days } });

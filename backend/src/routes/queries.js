@@ -88,9 +88,19 @@ router.post('/ingest', async (req, res) => {
         Math.round(num(r[3])), Math.round(num(r[4])), Math.round(num(r[5])), Math.round(num(r[6])), num(r[7]), r[8] === '' || r[8] == null ? null : num(r[8])]);
     }
     const n = out.length ? await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], out, ['cabinet', 'date', 'sku', 'query']) : 0;
+    if (req.body.sample) await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [`queries_sample:${cabinet}`, JSON.stringify({ at: new Date().toISOString(), date, sample: String(req.body.sample).slice(0, 1500) })]).catch(() => {});
     require('../lib/dataVersion').bump();
     res.json({ success: true, data: { rows: n } });
   } catch (e) { if (!e.status) console.error(e); res.status(e.status || 500).json({ success: false, error: e.message }); }
+});
+
+// GET /api/queries/sample?cabinet= — пример ответа Ozon по запросам (какие поля пришли).
+router.get('/sample', async (req, res) => {
+  try {
+    const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [`queries_sample:${req.query.cabinet || 'defly'}`]).catch(() => []);
+    res.json({ success: true, data: rows[0] ? JSON.parse(rows[0].value) : null });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // GET /api/queries/arts?cabinet=&dateFrom=&dateTo= — товары, у которых есть

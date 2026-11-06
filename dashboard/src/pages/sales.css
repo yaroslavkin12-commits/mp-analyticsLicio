@@ -572,3 +572,29 @@
 .mpui .sc-own{display:inline-block;font-size:10px;font-weight:700;color:var(--a-accent);border:1px solid var(--a-accent);border-radius:4px;padding:0 4px;line-height:14px}
 .mpui .sc-t .sc-short{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
 .mpui .sc-t .sc-name{min-width:200px}
+
+/* Сравнение: закреплённые слева перетаскивание, фото и товар */
+.mpui table.a-t.sc-cmp{width:max-content;min-width:100%}
+.mpui .sc-cmp .stk{position:sticky;z-index:2;background:var(--a-panel)}
+.mpui .sc-cmp thead .stk{z-index:3}
+.mpui .sc-cmp .s0{left:0;width:22px;min-width:22px;max-width:22px;padding-left:4px!important;padding-right:0!important}
+.mpui .sc-cmp .s1{left:22px;width:72px;min-width:72px;max-width:72px}
+.mpui .sc-cmp .s2{left:94px;width:190px;min-width:190px;max-width:190px;box-shadow:inset -1px 0 0 var(--a-line)}
+.mpui .sc-cmp tr.sc-our .stk{background:var(--a-panel2)}
+.mpui .sc-cmp tr.sc-our .s0{box-shadow:inset 3px 0 0 var(--a-accent)}
+.mpui .sc-cmp .sc-name{white-space:normal}
+.mpui .sc-cmp .sc-l1{display:flex;align-items:center;gap:4px;white-space:nowrap;overflow:hidden}
+.mpui .sc-cmp .sc-l1 b{overflow:hidden;text-overflow:ellipsis}
+.mpui .sc-cmp .sc-short{max-width:180px}
+.mpui .sc-cmp .sc-grip .a-handle{cursor:grab;color:var(--a-ink3)}
+.mpui .sc-cmp tr.dragging{opacity:.4}
+.mpui .sc-cmp tr.dropover td{box-shadow:inset 0 2px 0 var(--a-accent)}
+.mpui .sc-cmp td.sc-serp,.mpui .sc-cmp th.sc-serp{background:hsla(210,65%,52%,.06)}
+
+.mpui .sp-warn{padding:10px 14px;margin-bottom:12px;border-left:4px solid hsl(40 85% 55%);font-size:12.5px;line-height:1.5}
+.mpui .sp-sample{margin-top:6px;font-size:11.5px;color:var(--a-ink2);word-break:break-all}
+.mpui .sp-sample code{font-size:11px}
+.mpui table.a-t.sc-cmp > thead th.stk,.mpui table.a-t.sc-cmp > tbody td.stk{position:sticky}
+.mpui table.a-t.sc-cmp > thead th.stk{background:var(--a-panel);z-index:4}
+.mpui table.a-t.sc-cmp > thead th:not(.stk){z-index:1}
+.mpui table.a-t.sc-cmp > thead th.stk{z-index:6}

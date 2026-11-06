@@ -1164,14 +1164,16 @@ function collectQueriesDay_(cab, ctx, d, deadline) {
           throw e;
         }
         const items = data.queries || data.items || (data.result && (data.result.queries || data.result.items)) || [];
-        if (!ctx.sampled && items.length) { ctx.sampled = true; Logger.log('Запросы ' + cab.id + ': пример ' + JSON.stringify(items[0]).slice(0, 600)); }
+        if (!ctx.sampled && items.length) { ctx.sampled = true; ctx.sample = JSON.stringify(items[0]).slice(0, 1500); Logger.log('Запросы ' + cab.id + ': пример ' + ctx.sample); }
         items.forEach(function (q) {
           // Без позиции (товар не показан по запросу) — для отчёта бесполезно, а места занимает много.
           if (!(Number(q.position) > 0) && !(Number(q.order_count) > 0)) return;
+          // Названия полей у Ozon менялись — берём первое найденное.
           out.push([cab.id, d, String(q.sku || ''), String(q.query || q.search_query || q.text || '').slice(0, 200),
-            Number(q.position != null ? q.position : q.avg_position) || '', Number(q.unique_search_users != null ? q.unique_search_users : q.searches) || 0,
-            Number(q.unique_view_users != null ? q.unique_view_users : q.views) || 0, Number(q.clicks != null ? q.clicks : q.to_pdp) || 0,
-            Number(q.order_count != null ? q.order_count : q.orders) || 0, Number(q.gmv != null ? q.gmv : q.revenue) || 0, Number(q.view_conversion != null ? q.view_conversion : q.conversion) || 0]);
+            pickNum_(q, ['position', 'avg_position']) || '', pickNum_(q, ['unique_search_users', 'searches', 'search_users']),
+            pickNum_(q, ['unique_view_users', 'views', 'view_users']), pickNum_(q, ['clicks', 'to_pdp', 'unique_to_pdp_users', 'unique_pdp_users', 'pdp', 'session_view_pdp', 'card_views']),
+            pickNum_(q, ['order_count', 'orders', 'ordered_units', 'orders_count', 'unique_order_users']), pickNum_(q, ['gmv', 'revenue', 'ordered_amount', 'order_sum', 'orders_sum']),
+            pickNum_(q, ['view_conversion', 'conversion', 'to_pdp_conversion', 'search_to_pdp_conversion'])]);
         });
         const pages = data.page_count || (data.result && data.result.page_count) || 0;
         if (items.length < 100 || (pages && page + 1 >= pages)) break;
@@ -1184,6 +1186,10 @@ function collectQueriesDay_(cab, ctx, d, deadline) {
 // По рекламируемым товарам берём все запросы, какие отдаст Ozon (просим до
 // 1000 на товар; если Ozon не примет — 500, 100, 50, 15). По остальным —
 // 15 самых частотных, чтобы скрипт укладывался в суточный лимит Google.
+function pickNum_(o, keys) {
+  for (let i = 0; i < keys.length; i++) { const v = o[keys[i]]; if (v !== undefined && v !== null && v !== '') return Number(v) || 0; }
+  return 0;
+}
 const QUERIES_AD_LIMIT = 1000;
 const QUERIES_LIMIT_STEPS = [500, 100, 50, 15];
 // Рекламируемые SKU магазина: товары запущенных кампаний (вкладки Campaigns
@@ -1248,7 +1254,7 @@ function syncQueries(days, skipLoaded) {
       try {
         const r = collectQueriesDay_(cab, ctx[id], d, deadline);
         if (r === null) { timeUp = true; left++; return; }
-        if (push) { sent += pushQueries_(push, id, d, r); have[id + '|' + d] = true; savePushedDays_(have); }
+        if (push) { sent += pushQueries_(push, id, d, r, ctx[id].sample); ctx[id].sample = null; have[id + '|' + d] = true; savePushedDays_(have); }
         else Array.prototype.push.apply(rows, r);
         doneN++;
         Logger.log('Запросы ' + id + ' ' + d + ': строк ' + r.length + (push ? ' — отправлено в сервис' : ''));
@@ -1280,10 +1286,11 @@ function savePushedDays_(have) {
   PropertiesService.getScriptProperties().setProperty('QUERIES_PUSHED', JSON.stringify(out));
 }
 function hex_(bytes) { return bytes.map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join(''); }
-function pushQueries_(push, cabId, date, rows) {
+function pushQueries_(push, cabId, date, rows, sample) {
   let n = 0;
   for (let i = 0; i < rows.length || i === 0; i += 5000) {
-    const body = JSON.stringify({ cabinet: cabId, date: date, rows: rows.slice(i, i + 5000).map(function (r) { return r.slice(2); }) });
+    // sample — пример ответа Ozon как есть (для проверки названий полей в сервисе).
+    const body = JSON.stringify({ cabinet: cabId, date: date, rows: rows.slice(i, i + 5000).map(function (r) { return r.slice(2); }), sample: i === 0 && sample ? sample : undefined });
     for (let attempt = 0; ; attempt++) {
       const ts = String(Date.now());
       const sig = hex_(Utilities.computeHmacSha256Signature(ts + '.' + body, push.secret, Utilities.Charset.UTF_8));
