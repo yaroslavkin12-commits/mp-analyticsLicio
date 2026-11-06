@@ -311,16 +311,29 @@ async function runAgent(reason, force) {
     if (marketDue) {
       let ok = 0, asked = 0;
       for (const g of t.market) {
-        for (const [period, win] of [['weekly', 7], ['monthly', 28]]) {
-          const items = [];
+        // 7 дней — period 'weekly'. Как кабинет называет «28 дней», проверяем по очереди
+        // и запоминаем рабочее значение. Фильтр категорий не передаём — поиск по SKU
+        // идёт по всем категориям (как после «сбросить» в кабинете).
+        const { period28 } = await chrome.storage.local.get('period28');
+        for (const win of [7, 28]) {
+          const items = [], empty = [];
+          let periods = win === 7 ? ['weekly'] : (period28 ? [period28] : ['monthly', 'four_weeks', 'month', 'days_28', 'last_28_days']);
           for (const sku of g.skus) {
             asked++;
-            const res = await inSeller(tab.id, marketInPage, [String(g.companyId), sku, period]);
-            if (res.status === 200) { items.push(...res.items); if (res.items.length) ok++; }
-            else if (!st.error) st.error = '«Товары на Ozon» (' + win + ' дн.): ' + (res.error || res.status);
+            let res = null;
+            for (const period of periods) {
+              res = await inSeller(tab.id, marketInPage, [String(g.companyId), sku, period]);
+              if (res.status === 200) { if (win === 28 && periods.length > 1) { periods = [period]; await chrome.storage.local.set({ period28: period }); } break; }
+              if (res.status !== 400) break;
+            }
+            if (res && res.status === 200) {
+              // Пустой ответ — за этот период у товара не было заказов: так и сохраняем.
+              if (res.items.length) items.push(...res.items); else empty.push(String(sku));
+              ok++;
+            } else if (!st.error) st.error = '«Товары на Ozon» (' + win + ' дн.): ' + ((res && (res.error || res.status)) || 'нет ответа');
             await sleep(1500 + Math.random() * 1500);
           }
-          if (items.length) await fetch(server + '/api/competitors/agent/market', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: g.cabinet, window: win, items }) });
+          if (items.length || empty.length) await fetch(server + '/api/competitors/agent/market', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: g.cabinet, window: win, items, empty }) });
         }
       }
       st.marketOk = ok; st.marketAsked = asked;

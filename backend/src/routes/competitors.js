@@ -330,10 +330,13 @@ router.post('/agent/market', async (req, res) => {
     const b = req.body || {};
     const w = Number(b.window) === 28 ? 28 : 7;
     const items = (Array.isArray(b.items) ? b.items : []).filter(x => /^\d{1,15}$/.test(String(x.sku || ''))).slice(0, 500);
-    if (!items.length) return res.status(400).json({ success: false, error: 'Пусто' });
+    // empty — SKU, по которым Ozon вернул пустую строку: заказов за окно не было.
+    const empty = (Array.isArray(b.empty) ? b.empty : []).map(String).filter(x => /^\d{1,15}$/.test(x) && !items.some(o => String(o.sku) === x)).slice(0, 500);
+    if (!items.length && !empty.length) return res.status(400).json({ success: false, error: 'Пусто' });
     const date = mskDate();
     const n = await bulkUpsert('market_snapshot', ['cabinet', 'sku', 'report_date', 'window_days', 'name', 'seller', 'brand', 'data', 'loaded_at'],
-      items.map(o => [b.cabinet || 'defly', String(o.sku), date, w, cut(o.name || o.skuName, 512), cut(o.sellerName || o.seller || o.brand, 200), cut(o.brand, 200), JSON.stringify({ ...mapMarketRaw(o), _raw: o, _src: 'ext' }), new Date()]),
+      [...items.map(o => [b.cabinet || 'defly', String(o.sku), date, w, cut(o.name || o.skuName, 512), cut(o.sellerName || o.seller || o.brand, 200), cut(o.brand, 200), JSON.stringify({ ...mapMarketRaw(o), _raw: o, _src: 'ext' }), new Date()]),
+       ...empty.map(sku => [b.cabinet || 'defly', sku, date, w, null, null, null, JSON.stringify({ rev: 0, qty: 0, _empty: true, _src: 'ext' }), new Date()])],
       ['cabinet', 'sku', 'report_date', 'window_days']);
     res.json({ success: true, data: { rows: n } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }

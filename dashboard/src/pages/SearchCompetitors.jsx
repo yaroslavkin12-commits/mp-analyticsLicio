@@ -225,7 +225,8 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
       { k: 'rating', g: 'Витрина', l: 'рейтинг', best: 'up', get: x => x.card?.rating ?? null, f: (v, x) => (v == null ? '—' : `${String(v).replace('.', ',')}${x.card?.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}`), hint: 'Рейтинг и число отзывов — по данным расширения' }] : []),
       ...(show.serp && serpMap ? [
         { k: 'pos', g: 'Выдача', l: 'место', best: 'down', serp: true, get: x => sv(x, 'position'), f: v => (v == null ? '—' : v), hint: 'Место в выдаче по выбранному запросу и региону' },
-        { k: 'cpc', g: 'Выдача', l: 'ставка', serp: true, get: x => sv(x, 'cpc'), f: v => (v == null ? '—' : `${String(v).replace('.', ',')} ₽`), hint: 'Ставка за клик в выдаче (из отчёта «Результаты по запросу»)' },
+        { k: 'cpc', g: 'Выдача', l: 'за клик', serp: true, get: x => sv(x, 'cpc'), f: (v, x) => (v == null ? (sv(x, 'status') ? <span className="muted">не продвигается</span> : '—') : <>{`${String(v).replace('.', ',')} ₽`}{sv(x, 'strategy') && <div className="sc-d">{String(sv(x, 'strategy')).replace(/стоимость клика/i, 'цена клика')}</div>}</>), hint: 'Ставка «Оплата за клик» в выдаче и стратегия' },
+        { k: 'cpo', g: 'Выдача', l: 'за заказ', serp: true, get: x => { const t = sv(x, 'cpo'); const m = /([\d,.]+)\s*%/.exec(t || ''); return m ? Number(m[1].replace(',', '.')) : null; }, f: (v, x) => (v != null ? `${String(v).replace('.', ',')}%` : (sv(x, 'cpo') || '—')), hint: 'Ставка «Оплата за заказ» в выдаче' },
         { k: 'pop', g: 'Выдача', l: 'популярн.', best: 'up', serp: true, get: x => sv(x, 'popularity'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Популярность товара по этому запросу (Ozon)' },
         { k: 'rel', g: 'Выдача', l: 'соответств.', best: 'up', serp: true, get: x => sv(x, 'relevance'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Насколько карточка соответствует запросу (Ozon)' },
       ] : []),
@@ -327,7 +328,7 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
                       </td>
                     );
                   })}
-                  <td className="n c gs">{x.last ? dd(x.last.date) : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
+                  <td className="n c gs">{x.last ? <>{dd(x.last.date)}{x.last.data?._empty && <div className="sc-d" title={`Ozon вернул пустую строку: за ${win} дней у товара не было заказов`}>нет заказов</div>}</> : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
                   <td>{x.kind === 'comp' && <button type="button" className="sp-reset" title="Убрать из сравнения" onClick={() => remove(x.sku)}>×</button>}</td>
                 </tr>
               ))}
