@@ -215,20 +215,23 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
     load();
   };
   // Колонки сравнения: цена и рейтинг с витрины, место/ставка из выдачи, показатели отчёта.
+  // Необязательные группы колонок: «Витрина» и «Выдача» — по переключателю (помним в браузере).
+  const [show, setShowRaw] = useState(() => { try { return JSON.parse(localStorage.getItem('sc-show') || '{}') || {}; } catch (e) { return {}; } });
+  const setShow = (k, v) => setShowRaw(o => { const n = { ...o, [k]: v }; try { localStorage.setItem('sc-show', JSON.stringify(n)); } catch (e) { /* без памяти */ } return n; });
   const cols = useMemo(() => {
     const sv = (x, k) => serpMap?.by.get(x.sku)?.[k] ?? null;
     return [
-      { k: 'cur', g: 'Витрина', l: 'цена', best: 'down', f: money, get: x => (x.card ? x.card.cardPrice ?? x.card.price : null), hint: 'Цена на сайте сейчас (с Ozon-картой) — по данным расширения' },
-      { k: 'rating', g: 'Витрина', l: 'рейтинг', best: 'up', get: x => x.card?.rating ?? null, f: (v, x) => (v == null ? '—' : `${String(v).replace('.', ',')}${x.card?.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}`), hint: 'Рейтинг и число отзывов — по данным расширения' },
-      ...(serpMap ? [
+      ...(show.vit ? [{ k: 'cur', g: 'Витрина', l: 'цена', best: 'down', f: money, get: x => (x.card ? x.card.cardPrice ?? x.card.price : null), hint: 'Цена на сайте сейчас (с Ozon-картой) — по данным расширения' },
+      { k: 'rating', g: 'Витрина', l: 'рейтинг', best: 'up', get: x => x.card?.rating ?? null, f: (v, x) => (v == null ? '—' : `${String(v).replace('.', ',')}${x.card?.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}`), hint: 'Рейтинг и число отзывов — по данным расширения' }] : []),
+      ...(show.serp && serpMap ? [
         { k: 'pos', g: 'Выдача', l: 'место', best: 'down', serp: true, get: x => sv(x, 'position'), f: v => (v == null ? '—' : v), hint: 'Место в выдаче по выбранному запросу и региону' },
         { k: 'cpc', g: 'Выдача', l: 'ставка', serp: true, get: x => sv(x, 'cpc'), f: v => (v == null ? '—' : `${String(v).replace('.', ',')} ₽`), hint: 'Ставка за клик в выдаче (из отчёта «Результаты по запросу»)' },
         { k: 'pop', g: 'Выдача', l: 'популярн.', best: 'up', serp: true, get: x => sv(x, 'popularity'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Популярность товара по этому запросу (Ozon)' },
         { k: 'rel', g: 'Выдача', l: 'соответств.', best: 'up', serp: true, get: x => sv(x, 'relevance'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Насколько карточка соответствует запросу (Ozon)' },
       ] : []),
-      ...MCOLS.map(c => ({ k: c.k, g: c.g, l: c.s, best: BEST[c.k] || null, f: v => c.f(v), get: x => (x.last ? valOf(c, x.last.data) : null), hint: c.hint, diff: c.diff, m: c })),
+      ...MCOLS.filter(c => c.k !== 'adDays').map(c => ({ k: c.k, g: c.g, l: c.s, best: BEST[c.k] || null, f: v => c.f(v), get: x => (x.last ? valOf(c, x.last.data) : null), hint: c.hint, diff: c.diff, m: c })),
     ];
-  }, [serpMap]);
+  }, [serpMap, show.vit, show.serp]);
   const groups = useMemo(() => {
     const out = [];
     cols.forEach(c => { const last = out[out.length - 1]; if (last && last.g === c.g) last.n++; else { out.push({ g: c.g, n: 1 }); c.gs = true; } });
@@ -276,13 +279,15 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
       <div className="a-card">
         <div className="sp-tbar" style={{ flexWrap: 'wrap' }}>
           <b>Сравнение за {win} дней</b>
-          {(data.serpQueries || []).length > 0 && (
-            <label className="a-hint" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>место и ставка по запросу
-              <select className="a-input" value={serpSel} onChange={e => setSerpSel(e.target.value)} style={{ width: 'auto', maxWidth: 360 }}>
-                {data.serpQueries.map(q => <option key={q.query + q.region} value={`${q.query}|${q.region}`}>{q.query} · {q.region} · {dd(q.last)}</option>)}
-              </select>
-            </label>
-          )}
+          <span className="sc-tg">
+            <button type="button" className={show.vit ? 'on' : ''} onClick={() => setShow('vit', !show.vit)} title="Цена на сайте и рейтинг — по данным расширения">{show.vit ? '−' : '+'} Витрина</button>
+            <button type="button" className={show.serp ? 'on' : ''} onClick={() => setShow('serp', !show.serp)} title="Место, ставка, популярность и соответствие из отчёта «Результаты по запросу»">{show.serp ? '−' : '+'} Выдача</button>
+          </span>
+          {show.serp && ((data.serpQueries || []).length > 0 ? (
+            <select className="a-input" value={serpSel} onChange={e => setSerpSel(e.target.value)} style={{ width: 'auto', maxWidth: 360 }}>
+              {data.serpQueries.map(q => <option key={q.query + q.region} value={`${q.query}|${q.region}`}>{q.query} · {q.region} · {dd(q.last)}</option>)}
+            </select>
+          ) : <span className="a-hint">загрузите отчёт «Результаты по запросу»</span>)}
           <ResetCtl ctl={ctl} />
         </div>
         <div className="a-scroll">

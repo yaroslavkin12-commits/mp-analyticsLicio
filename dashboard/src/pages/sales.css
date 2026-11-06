@@ -607,3 +607,11 @@
 .mpui table.a-t.sc-cmp > thead tr.sc-grp th.stk{text-transform:none;letter-spacing:0;font-size:12px;vertical-align:bottom;text-align:left}
 .mpui .sc-cmp td.n{padding-left:10px;padding-right:10px}
 .mpui .sc-cmp tbody tr:hover td:not(.sc-best):not(.stk){background-color:hsla(220,20%,60%,.06)}
+.mpui .sc-tg{display:inline-flex;gap:6px}
+.mpui .sc-tg button{font:inherit;font-size:12px;border:1px dashed var(--a-line2);background:none;color:var(--a-ink2);border-radius:7px;padding:3px 9px;cursor:pointer}
+.mpui .sc-tg button.on{border-style:solid;border-color:var(--a-accent);color:var(--a-ink)}
+.mpui .sp-chev{flex:0 0 auto;border:0;background:none;color:var(--a-ink3);cursor:pointer;padding:0 2px;font-size:11px}
+.mpui .sp-qbtn{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.mpui .sp-qbtn:hover{color:var(--a-accent);text-decoration:underline dotted}
+.mpui .sp-qbtn.on{font-weight:700}
+.mpui .sp-dt tr.sp-focus td.lbl,.mpui .sp-qt tr.sp-focus td{background:hsla(45,90%,55%,.12)}

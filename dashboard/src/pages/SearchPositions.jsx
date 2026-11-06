@@ -295,6 +295,10 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const [groups, setGroups] = useState({});
   const [th, setTh] = useState(DEFAULT_FREQ);
   const [gsel, setGsel] = useState('target');
+  // Один запрос в фокусе: сводные строки таблицы по дням — только по нему.
+  const [focusQ, setFocusQ] = useState(null);
+  const daysRef = useRef(null);
+  const focus = q => { setFocusQ(q); if (q && daysRef.current) daysRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
   const [openQ, setOpenQ] = useState({});
   const [tab, setTab] = useState('q');
 
@@ -340,10 +344,11 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   }, [queries]);
 
   const inSet = useMemo(() => queries.filter(SETS.find(s => s.key === gsel).test), [queries, gsel]);
+  const sumSet = useMemo(() => (focusQ ? queries.filter(x => x.q === focusQ) : inSet), [focusQ, queries, inSet]);
   const byDate = useMemo(() => {
     const out = {};
     for (const d of dates) {
-      const day = sumDay(inSet.map(x => x.days[d]).filter(Boolean));
+      const day = sumDay(sumSet.map(x => x.days[d]).filter(Boolean));
       const a = ads?.byDate?.[d];
       Object.assign(day, a ? { adR: a.revenue || 0, adO: a.orders || 0, spend: a.spend || 0, adV: a.views || 0, adPdp: a.pdpViews || 0, adC: a.cart || 0 }
         : { adR: null, adO: null, spend: null, adV: null, adPdp: null, adC: null });
@@ -355,7 +360,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
       out[d] = day;
     }
     return out;
-  }, [dates, inSet, ads]);
+  }, [dates, sumSet, ads]);
 
   const toggleTarget = async x => {
     const prev = groups;
@@ -402,7 +407,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
             {SETS.map(g => {
               const st = setStats[g.key];
               return (
-                <button key={g.key} type="button" className={`sp-g ${gsel === g.key ? 'on' : ''} g-${g.key}`} onClick={() => { setGsel(g.key); setShowAll(false); }} title={g.hint}>
+                <button key={g.key} type="button" className={`sp-g ${gsel === g.key ? 'on' : ''} g-${g.key}`} onClick={() => { setGsel(g.key); setShowAll(false); setFocusQ(null); }} title={g.hint}>
                   <span className="t">{g.label} <span className="muted">· {st.q} запр.{g.key !== 'hiOther' ? ` (ВЧ ${st.fq[0]} · СЧ ${st.fq[1]} · НЧ ${st.fq[2]})` : ''}</span></span>
                   <span className="big">{fmtInt(st.s)}<small> искали</small></span>
                   <span className="row2">увидели {fmtInt(st.v)} · охват {fmtPct(st.reach)}</span>
@@ -413,17 +418,20 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
             })}
           </div>
 
-          <div className="a-card">
+          <div className="a-card" ref={daysRef} style={{ scrollMarginTop: 190 }}>
             <div className="sp-tbar">
-              <b>По дням — {SET_LABEL[gsel].toLowerCase()}</b>
+              {focusQ ? <>
+                <b>По дням — запрос «{focusQ}»</b>
+                <button type="button" className="a-btn sm" onClick={() => setFocusQ(null)}>← все: {SET_LABEL[gsel].toLowerCase()}</button>
+              </> : <b>По дням — {SET_LABEL[gsel].toLowerCase()}</b>}
               {ads === null && <span className="a-hint">данные «Рекламы» загружаются…</span>}
             </div>
             <SpDaysTable dates={dates} byDate={byDate} events={events} queries={tableQ} openQ={openQ}
-              toggleQ={q => setOpenQ(v => ({ ...v, [q]: !v[q] }))} onToggle={toggleTarget} tip={tip}
+              toggleQ={q => setOpenQ(v => ({ ...v, [q]: !v[q] }))} onToggle={toggleTarget} tip={tip} focusQ={focusQ} onFocus={q => focus(focusQ === q ? null : q)}
               more={inSet.length > LIMIT ? <button type="button" className="a-btn sm" onClick={() => setShowAll(v => !v)}>{showAll ? `только первые ${LIMIT}` : `показать все ${inSet.length}`}</button> : null} />
           </div>
 
-          <QueryList queries={queries} th={th} setTh={saveTh} onToggle={toggleTarget} onReset={resetTarget} days={dates.length} />
+          <QueryList queries={queries} th={th} setTh={saveTh} onToggle={toggleTarget} onReset={resetTarget} days={dates.length} focusQ={focusQ} onFocus={q => focus(focusQ === q ? null : q)} />
         </>
       )}
     </>
@@ -447,7 +455,7 @@ function ZeroWarn({ cabinet }) {
 
 // Таблица по дням: сверху сводные строки по выбранному набору запросов,
 // снизу — позиция по каждому запросу (раскрывается: искали, увидели, заказы).
-function SpDaysTable({ dates, byDate, events, queries, openQ, toggleQ, onToggle, tip, more }) {
+function SpDaysTable({ dates, byDate, events, queries, openQ, toggleQ, onToggle, tip, more, focusQ, onFocus }) {
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
   const evBy = useMemo(() => {
@@ -513,10 +521,11 @@ function SpDaysTable({ dates, byDate, events, queries, openQ, toggleQ, onToggle,
             const open = !!openQ[x.q];
             return (
               <React.Fragment key={x.q}>
-                <tr className="sp-q">
+                <tr className={`sp-q ${focusQ === x.q ? 'sp-focus' : ''}`}>
                   <td className="lbl" title={`${x.q}: позиция по дням. Искали ${fmtInt(x.tot.s)}, увидели ${fmtInt(x.tot.v)}, заказов ${fmtInt(x.tot.o)} за период`}>
                     <TargetBox x={x} onToggle={onToggle} />
-                    <button type="button" className="a-day-expand" aria-expanded={open} onClick={() => toggleQ(x.q)}><span aria-hidden="true">{open ? '▾' : '▸'}</span> {x.q}</button>
+                    <button type="button" className="sp-chev" aria-expanded={open} onClick={() => toggleQ(x.q)} title="Раскрыть: искали, увидели, переходы, заказы">{open ? '▾' : '▸'}</button>
+                    <button type="button" className={`a-day-expand sp-qbtn ${focusQ === x.q ? 'on' : ''}`} onClick={() => onFocus(x.q)} title="Показать всю статистику по этому запросу (нажмите ещё раз — вернуться к группе)">{x.q}</button>
                     <FreqTag f={x.f} />
                   </td>
                   <td className="tot" title="Средняя позиция за период">{fmtBy(x.tot.p, 'pos')}</td>
@@ -554,7 +563,7 @@ const QCOLS = [
   { key: 'o', label: 'Заказы', get: x => x.tot.o },
   { key: 'r', label: 'Сумма', get: x => x.tot.r },
 ];
-function QueryList({ queries, th, setTh, onToggle, onReset, days }) {
+function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocus }) {
   const [sort, setSort] = useState({ key: 's', dir: -1 });
   const [find, setFind] = useState('');
   const [onlyT, setOnlyT] = useState('all');
@@ -596,9 +605,9 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days }) {
           <thead><tr><th title="Целевой запрос">✓</th>{QCOLS.map(head)}</tr></thead>
           <tbody>
             {list.map(x => (
-              <tr key={x.q} className="row">
+              <tr key={x.q} className={`row ${focusQ === x.q ? 'sp-focus' : ''}`}>
                 <td><TargetBox x={x} onToggle={onToggle} />{x.manual && <button type="button" className="sp-reset" title="Убрать ручную отметку — вернуть подсказку" onClick={() => onReset(x)}>↺</button>}</td>
-                <td className="sp-qn">{x.q}</td>
+                <td className="sp-qn"><button type="button" className={`sp-qbtn ${focusQ === x.q ? 'on' : ''}`} onClick={() => onFocus(x.q)} title="Показать всю статистику по этому запросу по дням (ещё раз — вернуться)">{x.q}</button></td>
                 <td className="n r"><FreqTag f={x.f} /> {fmtInt(x.per30)}</td>
                 <td className="n r">{fmtInt(x.tot.s)}</td><td className="n r">{fmtInt(x.tot.v)}</td><td className="n r">{fmtPct(x.tot.reach)}</td>
                 <td className="r">{pill(x.tot.p)}</td><td className="r"><PosDelta p1={x.p1} p2={x.p2} /></td>
