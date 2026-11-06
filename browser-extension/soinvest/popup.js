@@ -15,8 +15,21 @@ async function renderCards() {
   }
   el.innerHTML = html;
 }
+async function renderAgent() {
+  const { agentState: a } = await chrome.storage.local.get('agentState');
+  const el = document.getElementById('agent');
+  let html = '<div class="row"><b>Выдача и «Товары на Ozon»</b><span></span></div>';
+  if (!a) html += '<div class="muted">Ещё не запускалось. Сбор идёт сам: выдача — раз в 4 часа, «Товары на Ozon» — раз в день после 10:00.</div>';
+  else {
+    if (a.running) html += '<div class="muted">Идёт сбор… выдача ' + (a.serpOk || 0) + ' из ' + (a.serpAsked || '?') + '</div>';
+    else html += `<div class="row"><span>${fmt(a.finished || a.at)}</span><span class="ok">${a.note ? a.note : 'выдача ' + (a.serpOk || 0) + ' из ' + (a.serpAsked || 0)}</span></div>`;
+    if (a.marketDate) html += `<div class="row"><span>«Товары на Ozon»</span><span class="ok">${a.marketDate.slice(8)}.${a.marketDate.slice(5, 7)} · ${a.marketOk || 0} из ${a.marketAsked || 0}</span></div>`;
+    if (a.error) html += `<div class="bad" style="margin-top:6px">${a.error}</div>`;
+  }
+  el.innerHTML = html;
+}
 async function render() {
-  renderCards();
+  renderCards(); renderAgent();
   document.getElementById('ver').textContent = 'v' + chrome.runtime.getManifest().version;
   const { lastRun, server } = await chrome.storage.local.get(['lastRun', 'server']);
   const srv = document.getElementById('server'); if (document.activeElement !== srv) srv.value = server || DEFAULT_SERVER;
@@ -48,5 +61,13 @@ document.getElementById('runCards').addEventListener('click', async () => {
   b.disabled = true; b.textContent = 'Собираю карточки…';
   await chrome.runtime.sendMessage({ type: 'runCards' }).catch(() => {});
   b.disabled = false; b.textContent = 'Обновить карточки конкурентов';
+  render();
+});
+
+document.getElementById('runAgent').addEventListener('click', async () => {
+  const b = document.getElementById('runAgent');
+  b.disabled = true; b.textContent = 'Собираю…';
+  await chrome.runtime.sendMessage({ type: 'runAgent' }).catch(() => {});
+  b.disabled = false; b.textContent = 'Собрать выдачу и «Товары на Ozon» сейчас';
   render();
 });

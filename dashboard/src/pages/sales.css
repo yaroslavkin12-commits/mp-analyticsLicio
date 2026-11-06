@@ -615,3 +615,9 @@
 .mpui .sp-qbtn:hover{color:var(--a-accent);text-decoration:underline dotted}
 .mpui .sp-qbtn.on{font-weight:700}
 .mpui .sp-dt tr.sp-focus td.lbl,.mpui .sp-qt tr.sp-focus td{background:hsla(45,90%,55%,.12)}
+
+.mpui .sp-trk{font:inherit;font-size:11.5px;border:1px dashed var(--a-line2);background:none;color:var(--a-ink3);border-radius:6px;padding:1px 7px;cursor:pointer;white-space:nowrap}
+.mpui .sp-trk.on{border-style:solid;border-color:hsl(140 55% 42%);color:hsl(140 55% 45%)}
+.mpui .sp-regs{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:12px;color:var(--a-ink3)}
+.mpui .sp-regs button{font:inherit;font-size:11.5px;border:1px solid var(--a-line);background:none;color:var(--a-ink3);border-radius:6px;padding:1px 7px;cursor:pointer}
+.mpui .sp-regs button.on{border-color:var(--a-accent);color:var(--a-ink)}

@@ -77,7 +77,8 @@ router.get('/', async (req, res) => {
       view: await loadView(cabinet, offerId),
       photos: Object.fromEntries(photos.map(r => [String(r.sku), r.photo])),
       cards: cardOf,
-      market: market.map(r => ({ sku: String(r.sku), date: r.d, window: Number(r.w), name: r.name, seller: r.seller, brand: r.brand, data: r.data || {} })),
+      market: market.map(r => ({ sku: String(r.sku), date: r.d, window: Number(r.w), name: r.name, seller: r.seller, brand: r.brand,
+        data: r.data && r.data._raw ? { ...mapMarketRaw(r.data._raw), _src: 'ext', _keys: Object.keys(r.data._raw) } : (r.data || {}) })),
       serpQueries: serpQ.map(r => ({ query: r.query, region: r.region, last: r.last, n: r.n })),
     } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
@@ -205,6 +206,135 @@ router.post('/import', async (req, res) => {
           numOrNull(r.relevance), numOrNull(r.rating), numOrNull(r.reviews), numOrNull(r.price), numOrNull(r.popularity), cut(r.promo, 20), cut(r.delivery, 40)]),
         ['cabinet', 'date', 'region', 'query', 'sku']);
     } else return res.status(400).json({ success: false, error: 'Неизвестный тип отчёта' });
+    res.json({ success: true, data: { rows: n } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── Автосбор расширением: выдача по отслеживаемым запросам и «Товары на Ozon» ──
+// Регионы — как в кабинете Ozon («Видимость в поиске → Что влияет на место»).
+const REGIONS = [
+  ['Москва', '0c5b2444-70a0-4932-980c-b4dc0d3f02b5', 55.728138, 37.425808],
+  ['Санкт-Петербург', 'c2deb16a-0330-4f05-821f-1d09c93331e6', 59.939095, 30.315868],
+  ['Екатеринбург, Свердловская область', '2763c110-cb8b-416a-9dac-ad28a55b4402', 56.838013, 60.597466],
+  ['Пермь, Пермский Край', 'a309e4ce-2f36-4106-b1ca-53e0f48a6d95', 58.010258, 56.234203],
+  ['Новосибирск, Новосибирская область', '8dea00e3-9aab-4d8e-887c-ef2aaa546456', 55.030197, 82.920433],
+  ['Казань, Татарстан республика', '93b3df57-4c89-44df-ac42-96f05e9cd3b9', 55.796288, 49.108795],
+  ['Челябинск, Челябинская область', 'a376e68d-724a-4472-be7c-891bdb09ae32', 55.160263, 61.400806],
+  ['Краснодар, Краснодарский Край', '7dfa745e-aa19-4688-b121-b655c11e482f', 45.035469, 38.975311],
+  ['Самара, Самарская область', 'bb035cc3-1dc2-4627-9d25-a1bf2d4b936b', 53.195538, 50.101784],
+].map(([title, uuid, latitude, longitude]) => ({ title, uuid, latitude, longitude, areaId: '0', fullAddress: false }));
+const shortRegion = t => String(t || '').split(',')[0];
+const mskDate = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date());
+async function getSetting(key, def) {
+  const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [key]).catch(() => []);
+  try { return rows[0] ? JSON.parse(rows[0].value) : def; } catch (e) { return def; }
+}
+const setSetting = (key, v) => query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(v)]);
+
+// GET /api/competitors/tracking?cabinet=&offerId= — отслеживаемые запросы артикула и регионы магазина.
+router.get('/tracking', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    res.json({ success: true, data: {
+      queries: await getSetting(`serp_track:${cabinet}:${req.query.offerId || ''}`, []),
+      regions: await getSetting(`serp_regions:${cabinet}`, ['Москва']),
+      allRegions: REGIONS.map(r => shortRegion(r.title)),
+    } });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+// POST /api/competitors/tracking {cabinet, offerId, query, on} | {cabinet, regions: [...]}
+router.post('/tracking', async (req, res) => {
+  try {
+    const { cabinet = 'defly', offerId, query: q, on, regions } = req.body || {};
+    if (Array.isArray(regions)) {
+      const ok = regions.map(String).filter(r => REGIONS.some(x => shortRegion(x.title) === r));
+      await setSetting(`serp_regions:${cabinet}`, ok.length ? ok : ['Москва']);
+    }
+    if (offerId && q) {
+      const key = `serp_track:${cabinet}:${offerId}`;
+      const list = (await getSetting(key, [])).filter(x => x !== q);
+      if (on) list.push(String(q).slice(0, 200));
+      await setSetting(key, list.slice(0, 50));
+      // Отслеживаемые артикулы — чтобы расширение знало, где искать.
+      const idx = await getSetting(`serp_track_offers:${cabinet}`, []);
+      const next = idx.filter(o => o !== offerId); if (list.length) next.push(offerId);
+      await setSetting(`serp_track_offers:${cabinet}`, next);
+    }
+    res.json({ success: true });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// GET /api/competitors/agent-tasks — что собрать расширению: выдача (запрос × регион) и
+// «Товары на Ozon» (SKU конкурентов и наших товаров, у которых они есть).
+router.get('/agent-tasks', async (req, res) => {
+  try {
+    await ensure();
+    const ids = await require('./discounts').companyIds();
+    const serp = [], market = [];
+    for (const [cabinet, companyId] of Object.entries(ids)) {
+      const regions = (await getSetting(`serp_regions:${cabinet}`, ['Москва'])).map(r => REGIONS.find(x => shortRegion(x.title) === r)).filter(Boolean);
+      for (const offerId of await getSetting(`serp_track_offers:${cabinet}`, [])) {
+        const qs = await getSetting(`serp_track:${cabinet}:${offerId}`, []);
+        if (!qs.length) continue;
+        const skus = (await query(`SELECT sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = $2 AND sku IS NOT NULL`, [cabinet, offerId])).map(r => String(r.sku));
+        for (const q of qs) serp.push({ cabinet, companyId, offerId, query: q, skus, regions });
+      }
+      const rows = await query(`SELECT DISTINCT sku FROM search_competitors WHERE cabinet = $1
+        UNION SELECT DISTINCT c.sku FROM ad_product_catalog c JOIN search_competitors s ON s.cabinet = c.cabinet AND s.offer_id = c.offer_id WHERE c.cabinet = $1 AND c.platform = 'ozon' AND c.sku IS NOT NULL`, [cabinet]);
+      if (rows.length) market.push({ cabinet, companyId, skus: rows.map(r => String(r.sku)) });
+    }
+    res.json({ success: true, data: { serp, market, serpEveryHours: 4, marketHour: 10, date: mskDate() } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/competitors/agent/serp {cabinet, query, region, total, rows: [...]} — выдача от расширения.
+router.post('/agent/serp', async (req, res) => {
+  try {
+    await ensure();
+    const b = req.body || {};
+    const rows = (Array.isArray(b.rows) ? b.rows : []).filter(r => /^\d{1,15}$/.test(String(r.sku || '')));
+    if (!b.query || !rows.length) return res.status(400).json({ success: false, error: 'Пустая выдача' });
+    const date = mskDate(), cabinet = b.cabinet || 'defly', region = cut(shortRegion(b.region) || '—', 80), q = cut(String(b.query).trim(), 200);
+    const n = await bulkUpsert('serp_snapshot', ['cabinet', 'date', 'region', 'query', 'sku', 'position', 'total', 'name', 'seller', 'status', 'cpc', 'strategy', 'cpo', 'relevance', 'rating', 'reviews', 'price', 'popularity', 'promo', 'delivery'],
+      rows.map(r => [cabinet, date, region, q, String(r.sku), numOrNull(r.position), numOrNull(b.total), cut(r.name, 512), cut(r.seller, 200), cut(r.status, 60), numOrNull(r.cpc), cut(r.strategy, 120), cut(r.cpo, 40),
+        numOrNull(r.relevance), numOrNull(r.rating), numOrNull(r.reviews), numOrNull(r.price), numOrNull(r.popularity), cut(r.promo, 20), cut(r.delivery, 40)]),
+      ['cabinet', 'date', 'region', 'query', 'sku']);
+    // Фото из выдачи — заодно в карточки (если расширение их ещё не собирало сегодня).
+    const ph = rows.filter(r => /^https:\/\//.test(String(r.photo || ''))).map(r => [String(r.sku), date, String(r.photo).slice(0, 600), cut(r.name, 512), numOrNull(r.price), new Date()]);
+    if (ph.length) await query(`INSERT INTO sku_cards (sku, date, photo, title, price, checked_at) SELECT * FROM UNNEST($1::bigint[], $2::date[], $3::text[], $4::varchar[], $5::numeric[], $6::timestamp[]) ON CONFLICT (sku, date) DO NOTHING`,
+      [ph.map(r => r[0]), ph.map(r => r[1]), ph.map(r => r[2]), ph.map(r => r[3]), ph.map(r => r[4]), ph.map(r => r[5])]).catch(e => console.error('serp photos', e.message));
+    res.json({ success: true, data: { rows: n } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// «Товары на Ozon» из внутреннего метода кабинета → наши ключи. Сырой ответ
+// хранится целиком (data._raw), поэтому сопоставление можно уточнить позже.
+const pickRaw = (o, keys) => { for (const k of keys) if (o[k] !== undefined && o[k] !== null && o[k] !== '') return numOrNull(o[k]); return null; };
+function mapMarketRaw(o) {
+  return {
+    rev: pickRaw(o, ['gmvSum', 'soldSum']), qty: pickRaw(o, ['soldCount', 'ordersCount']), avgPrice: pickRaw(o, ['avgPrice', 'avgGmv']), minPrice: pickRaw(o, ['minSellerPrice']),
+    revDyn: pickRaw(o, ['salesDynamics']), stock: pickRaw(o, ['stock']), lost: pickRaw(o, ['sumMissedGmv']),
+    views: pickRaw(o, ['qtyView', 'qtyViews', 'viewsCount', 'hitsView', 'showsCount', 'sumView', 'impressions']),
+    searchViews: pickRaw(o, ['qtyViewSearch', 'qtyViewSearchCatalog', 'searchViews', 'hitsViewSearch', 'viewsSearchCatalog']),
+    pdp: pickRaw(o, ['qtyViewPdp', 'sessionCount', 'hitsViewPdp']), cartPdp: pickRaw(o, ['pdpToCartConversion', 'convToCartPdp']), cartSearch: pickRaw(o, ['convToCart', 'convToCartSearch']),
+    convOrder: pickRaw(o, ['convViewToOrder', 'convToOrder', 'conversionViewToOrder', 'viewToOrderConversion']),
+    drr: pickRaw(o, ['drr', 'adsShare', 'advShare', 'promotionShare', 'adRevenueShare', 'advertisingCostShare']),
+    buyout: pickRaw(o, ['buyoutPercent', 'redemptionPercent', 'buyoutShare', 'redemptionRate']),
+  };
+}
+router.mapMarketRaw = mapMarketRaw;
+// POST /api/competitors/agent/market {cabinet, window, items: [ответ кабинета]}
+router.post('/agent/market', async (req, res) => {
+  try {
+    await ensure();
+    const b = req.body || {};
+    const w = Number(b.window) === 28 ? 28 : 7;
+    const items = (Array.isArray(b.items) ? b.items : []).filter(x => /^\d{1,15}$/.test(String(x.sku || ''))).slice(0, 500);
+    if (!items.length) return res.status(400).json({ success: false, error: 'Пусто' });
+    const date = mskDate();
+    const n = await bulkUpsert('market_snapshot', ['cabinet', 'sku', 'report_date', 'window_days', 'name', 'seller', 'brand', 'data', 'loaded_at'],
+      items.map(o => [b.cabinet || 'defly', String(o.sku), date, w, cut(o.name || o.skuName, 512), cut(o.sellerName || o.seller || o.brand, 200), cut(o.brand, 200), JSON.stringify({ ...mapMarketRaw(o), _raw: o, _src: 'ext' }), new Date()]),
+      ['cabinet', 'sku', 'report_date', 'window_days']);
     res.json({ success: true, data: { rows: n } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });

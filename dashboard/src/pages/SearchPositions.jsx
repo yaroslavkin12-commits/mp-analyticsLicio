@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getQuerySample, getAdsEvents, getAdsStats, latestOnly } from '../api';
+import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getQuerySample, getSerpTracking, saveSerpTracking, getAdsEvents, getAdsStats, latestOnly } from '../api';
 import { fmtInt, fmtPct, fmtBy, heatColor, useTip, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, Kpi, Empty, inPath, matchQ, OTHER } from './finShared';
 import { FREQ, FREQ_LABEL, DEFAULT_FREQ, freqOf, isTarget, productProfile } from '../lib/queryGroups';
@@ -297,6 +297,20 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const [gsel, setGsel] = useState('target');
   // Один запрос в фокусе: сводные строки таблицы по дням — только по нему.
   const [focusQ, setFocusQ] = useState(null);
+  // Отслеживание выдачи (собирает браузерное расширение): запросы артикула и регионы магазина.
+  const [track, setTrack] = useState({ queries: [], regions: ['Москва'], allRegions: [] });
+  useEffect(() => { getSerpTracking(cabinet, offer).then(r => setTrack(r.data.data)).catch(() => {}); }, [cabinet, offer]);
+  const toggleTrack = async q => {
+    const on = !track.queries.includes(q);
+    setTrack(t => ({ ...t, queries: on ? [...t.queries, q] : t.queries.filter(x => x !== q) }));
+    await saveSerpTracking(cabinet, { offerId: offer, query: q, on }).catch(() => {});
+  };
+  const toggleRegion = async rg => {
+    const regions = track.regions.includes(rg) ? track.regions.filter(x => x !== rg) : [...track.regions, rg];
+    if (!regions.length) return;
+    setTrack(t => ({ ...t, regions }));
+    await saveSerpTracking(cabinet, { regions }).catch(() => {});
+  };
   const daysRef = useRef(null);
   const focus = q => { setFocusQ(q); if (q && daysRef.current) daysRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
   const [openQ, setOpenQ] = useState({});
@@ -431,7 +445,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
               more={inSet.length > LIMIT ? <button type="button" className="a-btn sm" onClick={() => setShowAll(v => !v)}>{showAll ? `только первые ${LIMIT}` : `показать все ${inSet.length}`}</button> : null} />
           </div>
 
-          <QueryList queries={queries} th={th} setTh={saveTh} onToggle={toggleTarget} onReset={resetTarget} days={dates.length} focusQ={focusQ} onFocus={q => focus(focusQ === q ? null : q)} />
+          <QueryList queries={queries} th={th} setTh={saveTh} onToggle={toggleTarget} onReset={resetTarget} days={dates.length} focusQ={focusQ} onFocus={q => focus(focusQ === q ? null : q)} track={track} onTrack={toggleTrack} onRegion={toggleRegion} />
         </>
       )}
     </>
@@ -563,7 +577,7 @@ const QCOLS = [
   { key: 'o', label: 'Заказы', get: x => x.tot.o },
   { key: 'r', label: 'Сумма', get: x => x.tot.r },
 ];
-function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocus }) {
+function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocus, track, onTrack, onRegion }) {
   const [sort, setSort] = useState({ key: 's', dir: -1 });
   const [find, setFind] = useState('');
   const [onlyT, setOnlyT] = useState('all');
@@ -595,6 +609,9 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
         <input className="a-input" placeholder="найти запрос" value={find} onChange={e => setFind(e.target.value)} style={{ width: 180, padding: '4px 8px' }} />
         <span className="a-seg">{[['all', 'Все'], ['t', 'Целевые'], ['n', 'Нецелевые']].map(([k, l]) => <button key={k} type="button" className={onlyT === k ? 'on' : ''} onClick={() => setOnlyT(k)}>{l}</button>)}</span>
         <span className="a-seg">{[['', 'Любая'], ...FREQ.map(f => [f.key, f.label])].map(([k, l]) => <button key={k || 'any'} type="button" className={fq === k ? 'on' : ''} onClick={() => setFq(k)}>{l}</button>)}</span>
+        <span className="sp-regs" title="В каких регионах отслеживать выдачу (для всех отслеживаемых запросов магазина)">выдача в регионах:
+          {(track.allRegions.length ? track.allRegions : ['Москва']).map(rg => <button key={rg} type="button" className={track.regions.includes(rg) ? 'on' : ''} onClick={() => onRegion(rg)}>{rg}</button>)}
+        </span>
         <span className="a-hint sp-th" title="Сколько людей искали по запросу за 30 дней">
           ВЧ от <input className="a-input" type="number" min="1" value={hi} onChange={e => setHi(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} />
           · СЧ от <input className="a-input" type="number" min="1" value={mid} onChange={e => setMid(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} /> искавших за 30 дн.
@@ -602,7 +619,7 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
       </div>
       <div className="a-scroll">
         <table className="a-t sp-qt">
-          <thead><tr><th title="Целевой запрос">✓</th>{QCOLS.map(head)}</tr></thead>
+          <thead><tr><th title="Целевой запрос">✓</th>{QCOLS.map(head)}<th title="Отслеживать выдачу: место, ставки и конкуренты по этому запросу (собирает расширение, раз в 4 часа)">Выдача</th></tr></thead>
           <tbody>
             {list.map(x => (
               <tr key={x.q} className={`row ${focusQ === x.q ? 'sp-focus' : ''}`}>
@@ -613,14 +630,15 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
                 <td className="r">{pill(x.tot.p)}</td><td className="r"><PosDelta p1={x.p1} p2={x.p2} /></td>
                 <td className="n r">{fmtPct(x.tot.ctr)}</td><td className="n r">{fmtPct(x.tot.toOrder)}</td>
                 <td className="n r">{fmtInt(x.tot.o)}</td><td className="n r">{x.tot.r ? fmtInt(x.tot.r) : '—'}</td>
+                <td className="c"><button type="button" className={`sp-trk ${track.queries.includes(x.q) ? 'on' : ''}`} onClick={() => onTrack(x.q)} title={track.queries.includes(x.q) ? 'Выдача отслеживается — нажмите, чтобы выключить' : 'Отслеживать выдачу по этому запросу'}>{track.queries.includes(x.q) ? '● следим' : '○'}</button></td>
               </tr>
             ))}
-            {!list.length && <tr><td colSpan={QCOLS.length + 1} className="muted">Ничего не найдено</td></tr>}
+            {!list.length && <tr><td colSpan={QCOLS.length + 2} className="muted">Ничего не найдено</td></tr>}
           </tbody>
         </table>
       </div>
       <div className="a-hint" style={{ padding: '6px 12px 10px' }}>
-        Галочка — целевой запрос. Бледная галочка — подсказка по названию товара (наш тип товара + наша модель); поставьте или снимите её — отметка закрепится (↺ вернёт подсказку). Отметки общие для всех товаров магазина.
+        Галочка — целевой запрос. Бледная галочка — подсказка по названию товара (наш тип товара + наша модель); поставьте или снимите её — отметка закрепится (↺ вернёт подсказку). Отметки общие для всех товаров магазина. «Выдача» — включить отслеживание: расширение раз в 4 часа само снимает выдачу по запросу в выбранных регионах (место, ставки, стратегии, конкуренты); смотрите во вкладке «Сравнение с конкурентами».
         Частота пересчитана на 30 дней из выбранного периода ({days} дн.). Сейчас Ozon отдаёт сервису до 15 самых частотных запросов товара в день — хвост может быть неполным.
       </div>
     </div>

@@ -233,3 +233,5 @@ export const removeCompetitor = (cabinet, offerId, sku) => api.delete('/competit
 export const saveCompetitorView = (cabinet, offerId, body) => api.post('/competitors/view', { cabinet, offerId, ...body });
 export const saveSkuPhoto = (cabinet, sku, photo) => api.post('/competitors/photo', { cabinet, sku, photo });
 export const importCompetitorReport = (cabinet, payload) => api.post('/competitors/import', { cabinet, ...payload }, { timeout: 60000 });
+export const getSerpTracking = (cabinet, offerId) => api.get('/competitors/tracking', { params: { cabinet, offerId } });
+export const saveSerpTracking = (cabinet, body) => api.post('/competitors/tracking', { cabinet, ...body });

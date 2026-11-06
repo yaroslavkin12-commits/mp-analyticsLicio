@@ -387,4 +387,5 @@ router.post('/settings', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+router.companyIds = companyIds;
 module.exports = router;

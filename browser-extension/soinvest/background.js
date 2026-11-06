@@ -215,3 +215,129 @@ async function runCards(reason) {
     await chrome.storage.local.set({ lastCards: status });
   }
 }
+
+// ── Выдача по отслеживаемым запросам и «Товары на Ozon» из кабинета ─────────
+// То же, что страницы кабинета «Видимость в поиске → Что влияет на место» и
+// «Аналитика конкурентов → Товары на Ozon», только по расписанию: запрос идёт
+// из вкладки seller.ozon.ru с вашим входом. Выдача — раз в несколько часов,
+// «Товары на Ozon» — раз в день после 10:00 (если браузер был закрыт — как
+// только откроется). В сервис уходят только цифры выдачи и товаров.
+const mskNow = () => { const d = new Date(Date.now() + 3 * 3600e3); return { date: d.toISOString().slice(0, 10), hour: d.getUTCHours() }; };
+
+async function inSeller(tabId, func, args) {
+  const [res] = await withTimeout(chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', args, func }), 60000, 'кабинет');
+  return res && res.result ? res.result : { status: 0, error: 'нет ответа от вкладки' };
+}
+
+// Выполняется внутри seller.ozon.ru: выдача по запросу в регионе → компактные строки.
+async function explainInPage(companyId, query, skus, coordinates) {
+  try {
+    const r = await fetch('/api/search-query-analytics/v2/external/explanation_by_id', {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'x-o3-app-name': 'seller-ui', 'x-o3-language': 'ru', 'x-o3-company-id': String(companyId), 'x-o3-page-type': 'analytics-search' },
+      body: JSON.stringify({ sellerId: String(companyId), query, skus, sortOption: { headerKey: 'position', direction: 'SortDirectionAscending' }, coordinates, itemsPerPage: '200', pageNumber: '1', onlyCurSellerItems: false, applicationScope: 'SCOPE_BIG_OZON' }),
+    });
+    if (r.status !== 200) return { status: r.status, error: (await r.text()).slice(0, 200) };
+    const o = await r.json();
+    const keys = (o.headers || []).map(h => h.key);
+    const cell = (it, k) => { const i = keys.indexOf(k); const v = i >= 0 && it.values[i] && it.values[i].values ? it.values[i].values[0] : null; return v || {}; };
+    const txt = c => (c.label && c.label.value) || (c.badge && c.badge.text) || (c.button && c.button.text) || '';
+    const num = t => { const s = String(t || '').replace(/[\s  -‏ ]/g, '').replace(',', '.').replace(/[^\d.]/g, ''); return s ? Number(s) : null; };
+    const rows = (o.items || []).map(it => {
+      const info = cell(it, 'itemInfo').itemInfo || {};
+      const cpc = cell(it, 'promotionCpcRate'), rev = cell(it, 'reviews');
+      return {
+        sku: String(it.sku || info.sku || ''), position: num(txt(cell(it, 'position'))), name: info.name || '', seller: info.sellerName || '', photo: info.pictureUrl || '',
+        status: txt(cell(it, 'promotionStatus')), cpc: /₽/.test(txt(cpc)) ? num(txt(cpc)) : null, strategy: /₽/.test(txt(cpc)) ? ((cpc.label && cpc.label.subvalue) || '').replace(/\s+/g, ' ') : '',
+        // «Включить» — это кнопка у нашего товара: оплата за заказ выключена.
+        cpo: txt(cell(it, 'promotionCpoRate')) === 'Включить' ? 'Выключено' : txt(cell(it, 'promotionCpoRate')), relevance: num(txt(cell(it, 'textRelevance'))), rating: num(txt(rev)),
+        reviews: num(((rev.label && rev.label.subvalue) || '').replace(/шт.*/, '')), price: num(txt(cell(it, 'price'))), popularity: num(txt(cell(it, 'generalPopularity'))),
+        promo: txt(cell(it, 'salePromotions')), delivery: txt(cell(it, 'deliveryPeriod')),
+      };
+    });
+    return { status: 200, total: o.totalNumberOfItems, rows };
+  } catch (e) { return { status: 0, error: String(e && e.message || e) }; }
+}
+
+// Выполняется внутри seller.ozon.ru: «Товары на Ozon» по одному SKU (period: weekly — 7 дней, monthly — 28).
+async function marketInPage(companyId, sku, period) {
+  try {
+    const r = await fetch('https://api.seller.ozon.ru/api/site/seller-analytics/what_to_sell/data/v3', {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'x-o3-app-name': 'seller-ui', 'x-o3-language': 'ru', 'x-o3-company-id': String(companyId), 'x-o3-page-type': 'analytics_platform' },
+      body: JSON.stringify({ limit: '50', offset: '0', filter: { stock: 'any_stock', period, sku: String(sku) }, sort: { key: 'sum_gmv_desc' } }),
+    });
+    if (r.status !== 200) return { status: r.status, error: (await r.text()).slice(0, 200) };
+    const o = await r.json();
+    return { status: 200, items: (o.items || []).filter(x => String(x.sku) === String(sku)) };
+  } catch (e) { return { status: 0, error: String(e && e.message || e) }; }
+}
+
+let agentBusy = false;
+async function runAgent(reason, force) {
+  if (agentBusy) return;
+  agentBusy = true;
+  const { agentState = {} } = await chrome.storage.local.get('agentState');
+  const st = { ...agentState, at: new Date().toISOString(), reason, running: true, error: null };
+  await chrome.storage.local.set({ agentState: st });
+  let tab = null;
+  try {
+    const server = await getServer();
+    const r = await withTimeout(fetch(server + '/api/competitors/agent-tasks'), 60000, 'сервис');
+    if (!r.ok) throw new Error('сервис не ответил (' + r.status + ')');
+    const t = (await r.json()).data || {};
+    const now = mskNow();
+    const done = st.serpDone || {};
+    // Выдача: каждые serpEveryHours часов по каждому запросу и региону.
+    const due = [];
+    for (const task of t.serp || []) for (const reg of task.regions || []) {
+      const key = task.cabinet + '|' + task.query + '|' + reg.title;
+      if (force || !done[key] || Date.now() - done[key] > (t.serpEveryHours || 4) * 3600e3) due.push({ task, reg, key });
+    }
+    const marketDue = (t.market || []).length && (force || (now.hour >= (t.marketHour || 10) && st.marketDate !== now.date));
+    if (!due.length && !marketDue) { st.note = 'всё уже собрано'; return; }
+    tab = await sellerTab();
+    st.serpOk = 0; st.serpAsked = due.length;
+    for (const d of due) {
+      const res = await inSeller(tab.id, explainInPage, [String(d.task.companyId), d.task.query, d.task.skus, d.reg]);
+      if (res.status === 401 || res.status === 403) throw new Error('нет входа в кабинет Ozon (откройте seller.ozon.ru и войдите)');
+      if (res.status !== 200) { st.error = 'выдача «' + d.task.query + '»: ' + (res.error || res.status); continue; }
+      const ir = await fetch(server + '/api/competitors/agent/serp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: d.task.cabinet, query: d.task.query, region: d.reg.title, total: res.total, rows: res.rows }) });
+      if (ir.ok) { done[d.key] = Date.now(); st.serpOk++; } else st.error = 'сервис не принял выдачу (' + ir.status + ')';
+      st.serpDone = done;
+      await chrome.storage.local.set({ agentState: { ...st } });
+      await sleep(2500 + Math.random() * 2500);
+    }
+    if (marketDue) {
+      let ok = 0, asked = 0;
+      for (const g of t.market) {
+        for (const [period, win] of [['weekly', 7], ['monthly', 28]]) {
+          const items = [];
+          for (const sku of g.skus) {
+            asked++;
+            const res = await inSeller(tab.id, marketInPage, [String(g.companyId), sku, period]);
+            if (res.status === 200) { items.push(...res.items); if (res.items.length) ok++; }
+            else if (!st.error) st.error = '«Товары на Ozon» (' + win + ' дн.): ' + (res.error || res.status);
+            await sleep(1500 + Math.random() * 1500);
+          }
+          if (items.length) await fetch(server + '/api/competitors/agent/market', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: g.cabinet, window: win, items }) });
+        }
+      }
+      st.marketOk = ok; st.marketAsked = asked;
+      if (ok) st.marketDate = now.date;
+    }
+  } catch (e) {
+    st.error = String(e && e.message || e);
+  } finally {
+    if (tab && tab.created) chrome.tabs.remove(tab.id).catch(() => {});
+    st.running = false; st.finished = new Date().toISOString();
+    await chrome.storage.local.set({ agentState: st });
+    agentBusy = false;
+  }
+}
+chrome.alarms.get('agent', a => { if (!a) chrome.alarms.create('agent', { delayInMinutes: 4, periodInMinutes: 30 }); });
+chrome.alarms.onAlarm.addListener(a => { if (a.name === 'agent') runAgent('по расписанию'); });
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg && msg.type === 'runAgent') { runAgent('вручную', true).then(() => reply({ ok: true })); return true; }
+  return false;
+});
