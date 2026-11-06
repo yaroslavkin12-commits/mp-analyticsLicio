@@ -503,9 +503,21 @@
 .mpui .sp-g .big small{font-size:11px;font-weight:500;color:var(--a-ink3)}
 .mpui .sp-g .row2{font-size:11.5px;color:var(--a-ink2);font-family:var(--a-num)}
 .mpui .g-target{border-left-color:hsl(140 55% 42%)}
-.mpui .g-model{border-left-color:hsl(210 65% 52%)}
-.mpui .g-type{border-left-color:hsl(40 80% 50%)}
-.mpui .g-other{border-left-color:var(--a-ink3)}
+.mpui .g-hiOther{border-left-color:hsl(210 65% 52%)}
+.mpui .g-restOther{border-left-color:hsl(40 80% 50%)}
+.mpui .g-all{border-left-color:var(--a-ink3)}
+.mpui .sp-fq{display:inline-block;min-width:24px;text-align:center;font-size:10px;font-weight:700;border-radius:4px;padding:1px 4px;font-family:var(--a-ui)}
+.mpui .fq-hi{background:hsla(210,65%,52%,.22);color:hsl(210 70% 62%)}
+.mpui .fq-mid{background:hsla(40,80%,50%,.22);color:hsl(40 85% 55%)}
+.mpui .fq-lo{background:var(--a-panel2);color:var(--a-ink3)}
+.mpui .sp-tg{flex:0 0 auto;margin:0 2px 0 0;cursor:pointer;accent-color:hsl(140 55% 42%)}
+.mpui .sp-th{display:inline-flex;align-items:center;gap:6px}
+.mpui .sp-th .a-input{width:70px;padding:2px 6px}
+.mpui .sp-list{margin-top:12px}
+.mpui table.a-t.sp-qt{min-width:900px}
+.mpui .sp-qt .sp-qn{max-width:360px;white-space:normal;text-align:left}
+.mpui .sp-qt th:nth-child(2){text-align:left}
+.mpui .sp-qt td:first-child{white-space:nowrap;text-align:left}
 .mpui .sp-tbar{display:flex;align-items:center;gap:12px;padding:10px 12px 4px}
 .mpui table.sp-dt .lbl{width:300px;min-width:300px;max-width:300px}
 .mpui table.sp-dt .tot{left:300px}
@@ -514,6 +526,6 @@
 .mpui .sp-gsel{flex:0 0 auto;font-size:10.5px;padding:1px 2px;border-radius:5px;border:1px solid var(--a-line);border-left-width:3px;background:var(--a-panel);color:var(--a-ink2);max-width:104px}
 .mpui .sp-reset{flex:0 0 auto;border:0;background:none;color:var(--a-accent);cursor:pointer;font-size:16px;line-height:1;padding:0 2px}
 .mpui .sp-dt td.sp-ev{color:var(--a-accent);cursor:default}
-.mpui .sp-qc{display:inline-flex;gap:8px;margin-left:14px;text-transform:none;letter-spacing:0;font-weight:400;position:sticky;left:220px}
+.mpui .sp-qc{display:inline-flex;gap:8px;margin-left:14px;text-transform:none;letter-spacing:0;font-weight:400}
 .mpui .sp-qc .a-input{padding:2px 8px;font-size:11.5px;width:160px}
 @media (max-width:700px){.mpui table.sp-dt .lbl{width:200px;min-width:200px;max-width:200px}.mpui table.sp-dt .tot{left:200px}}

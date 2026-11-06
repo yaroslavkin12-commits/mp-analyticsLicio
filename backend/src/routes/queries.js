@@ -109,7 +109,24 @@ router.get('/article', async (req, res) => {
       offerId, name: cat.find(r => r.product_name)?.product_name || '', from, to,
       rows: rows.map(r => [r.d, r.query, r.p == null ? null : r2(num(r.p)), num(r.s), num(r.v), num(r.c), num(r.o), Math.round(num(r.r))]),
       groups: await loadGroups(cabinet),
+      freq: await loadFreq(cabinet),
     } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Пороги частотности (искали за 30 дней): app_settings query_freq:<кабинет> = {hi, mid}.
+async function loadFreq(cabinet) {
+  const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [`query_freq:${cabinet}`]).catch(() => []);
+  try { const v = JSON.parse(rows[0]?.value || 'null'); return v && v.hi > 0 && v.mid > 0 ? v : null; } catch (e) { return null; }
+}
+// POST /api/queries/freq {cabinet, hi, mid}
+router.post('/freq', async (req, res) => {
+  try {
+    const { cabinet = 'defly' } = req.body || {};
+    const hi = Math.round(Number(req.body?.hi)), mid = Math.round(Number(req.body?.mid));
+    if (!(hi > 0 && mid > 0 && mid < hi)) return res.status(400).json({ success: false, error: 'Порог ВЧ должен быть больше порога СЧ' });
+    await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [`query_freq:${cabinet}`, JSON.stringify({ hi, mid })]);
+    res.json({ success: true, data: { hi, mid } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 

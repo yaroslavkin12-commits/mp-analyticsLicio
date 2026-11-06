@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, getAdsEvents, getAdsStats, latestOnly } from '../api';
+import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getAdsEvents, getAdsStats, latestOnly } from '../api';
 import { fmtInt, fmtPct, fmtBy, heatColor, useTip, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, Kpi, Empty, inPath, matchQ, OTHER } from './finShared';
-import { QUERY_GROUPS, GROUP_LABEL, productProfile, autoGroup } from '../lib/queryGroups';
+import { FREQ, FREQ_LABEL, DEFAULT_FREQ, freqOf, isTarget, productProfile } from '../lib/queryGroups';
 import './ads2.css';
 import './sales.css';
 
@@ -238,8 +238,17 @@ function sumDay(list) {
     s += x.s; v += x.v; c += x.c; o += x.o; r += x.r;
     if (x.p !== null && x.p > 0) { wp += x.p * Math.max(1, x.s); ws += Math.max(1, x.s); }
   }
-  return { s, v, c, o, r, p: ws ? wp / ws : null, reach: s > 0 ? v / s * 100 : null, toCard: v > 0 ? c / v * 100 : null, toOrder: v > 0 ? o / v * 100 : null, n: list.length };
+  return { s, v, c, o, r, p: ws ? wp / ws : null, reach: s > 0 ? v / s * 100 : null, ctr: v > 0 ? c / v * 100 : null, crO: c > 0 ? o / c * 100 : null, toOrder: v > 0 ? o / v * 100 : null, n: list.length };
 }
+
+// Наборы запросов для плиток и таблицы по дням.
+const SETS = [
+  { key: 'target', label: 'Целевые', hint: 'Отмеченные вами (или подсказанные) целевые запросы — главный трафик товара', test: x => x.t },
+  { key: 'hiOther', label: 'ВЧ нецелевые', hint: 'Высокочастотные запросы, которые не отмечены целевыми: запас трафика для роста через ставку и бюджет', test: x => !x.t && x.f === 'hi' },
+  { key: 'restOther', label: 'СЧ и НЧ нецелевые', hint: 'Средне- и низкочастотные нецелевые запросы', test: x => !x.t && x.f !== 'hi' },
+  { key: 'all', label: 'Все запросы', hint: 'Все запросы товара за период', test: () => true },
+];
+const SET_LABEL = Object.fromEntries(SETS.map(s => [s.key, s.label]));
 
 const DAY_ROWS = [
   { block: 'Спрос и видимость', tone: 'traffic' },
@@ -247,19 +256,35 @@ const DAY_ROWS = [
   { key: 'v', label: 'Увидели товар', fmt: 'int', good: 'up', hint: 'Сколько из них увидели наш товар в выдаче' },
   { key: 'reach', label: 'Охват спроса', fmt: 'pct', good: 'up', ratio: ['v', 's'], hint: 'Увидели / искали: какую часть спроса мы забираем' },
   { key: 'p', label: 'Средняя позиция', fmt: 'pos', good: 'down', avgW: true, hint: 'Средняя позиция по запросам, взвешенная по числу искавших. Меньше — выше' },
-  { block: 'Конверсии', tone: 'conv' },
-  { key: 'toCard', label: 'В карточку', fmt: 'pct', good: 'up', ratio: ['c', 'v'], hint: 'Перешли в карточку / увидели товар' },
-  { key: 'toOrder', label: 'В заказ', fmt: 'pct', good: 'up', ratio: ['o', 'v'], hint: 'Заказали / увидели товар — как «Конверсия из поиска в заказ» в отчёте Ozon' },
+  { block: 'Конверсии по запросам', tone: 'conv' },
+  { key: 'ctr', label: 'CTR (в карточку)', fmt: 'pct', good: 'up', ratio: ['c', 'v'], hint: 'Перешли в карточку / увидели товар — как «Конверсия из поиска в карточку» у Ozon' },
+  { key: 'crO', label: 'CR из карточки в заказ', fmt: 'pct', good: 'up', ratio: ['o', 'c'], hint: 'Заказали / перешли в карточку. Корзин по запросам Ozon не отдаёт — CR в корзину есть только по товару целиком (ниже)' },
+  { key: 'toOrder', label: 'Из поиска в заказ', fmt: 'pct', good: 'up', ratio: ['o', 'v'], hint: 'Заказали / увидели товар — как «Конверсия из поиска в заказ» у Ozon' },
   { block: 'Заказы из поиска', tone: 'rev' },
   { key: 'o', label: 'Заказы, шт', fmt: 'int', good: 'up', hint: 'Заказано товаров по этим запросам' },
   { key: 'r', label: 'Заказы, ₽', fmt: 'money', good: 'up' },
   { key: 'shareO', label: 'Доля в заказах товара', fmt: 'pct', good: 'up', ratio: ['o', 'adO'], hint: 'Заказы по запросам / все заказы товара за день (из «Рекламы»)' },
   { block: 'Товар целиком — из «Рекламы»', tone: 'spend' },
-  { key: 'adR', label: 'Все заказы, ₽', fmt: 'money', good: 'up', hint: 'Все заказы товара (поиск, рекомендации, реклама), без самовыкупов' },
+  { key: 'adV', label: 'Показы', fmt: 'int', good: 'up', hint: 'Все показы товара: поиск, каталог, рекомендации' },
+  { key: 'adCtr', label: 'CTR', fmt: 'pct', good: 'up', ratio: ['adPdp', 'adV'], hint: 'Переходы в карточку / показы — как в «Рекламе»' },
+  { key: 'adCart', label: 'CR в корзину', fmt: 'pct', good: 'up', ratio: ['adC', 'adPdp'], hint: 'Корзины / переходы в карточку' },
+  { key: 'adCro', label: 'CR в заказ', fmt: 'pct', good: 'up', ratio: ['adO', 'adC'], hint: 'Заказы / корзины' },
+  { key: 'adR', label: 'Все заказы, ₽', fmt: 'money', good: 'up', hint: 'Все заказы товара, без самовыкупов' },
   { key: 'adO', label: 'Все заказы, шт', fmt: 'int', good: 'up', sub: true },
   { key: 'spend', label: 'Расход на рекламу, ₽', fmt: 'money0', good: 'neutral' },
   { key: 'drr', label: 'ДРР', fmt: 'pct', good: 'down', ratio: ['spend', 'adR'], hint: 'Расход / все заказы товара, ₽ — как в «Рекламе»' },
 ];
+
+function FreqTag({ f }) {
+  return <span className={`sp-fq fq-${f}`} title={FREQ.find(x => x.key === f)?.title}>{FREQ_LABEL[f]}</span>;
+}
+function TargetBox({ x, onToggle }) {
+  return (
+    <input type="checkbox" className="sp-tg" checked={x.t} onChange={() => onToggle(x)}
+      title={x.manual ? 'Отмечено вами. Снимите или поставьте галочку, чтобы поменять' : 'Подсказка по названию товара — поставьте или снимите галочку, чтобы закрепить вручную'}
+      style={x.manual ? undefined : { opacity: 0.55 }} />
+  );
+}
 
 function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, dateTo, tip }) {
   const [data, setData] = useState(null);
@@ -267,15 +292,14 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const [ads, setAds] = useState(null);
   const [events, setEvents] = useState([]);
   const [groups, setGroups] = useState({});
+  const [th, setTh] = useState(DEFAULT_FREQ);
   const [gsel, setGsel] = useState('target');
   const [openQ, setOpenQ] = useState({});
-  const [showAll, setShowAll] = useState(false);
-  const [qFilter, setQFilter] = useState('');
 
   useEffect(() => {
-    setData(null); setErr(null); setAds(null); setOpenQ({}); setShowAll(false);
+    setData(null); setErr(null); setAds(null); setOpenQ({});
     const ok = latestOnly('sp-art:' + cabinet);
-    getQueryArticle(cabinet, offer, { dateFrom, dateTo }).then(ok(r => { setData(r.data.data); setGroups(r.data.data.groups || {}); })).catch(ok(e => setErr(e.response?.data?.error || e.message)));
+    getQueryArticle(cabinet, offer, { dateFrom, dateTo }).then(ok(r => { setData(r.data.data); setGroups(r.data.data.groups || {}); if (r.data.data.freq) setTh(r.data.data.freq); })).catch(ok(e => setErr(e.response?.data?.error || e.message)));
     getAdsEvents(cabinet, dateFrom, dateTo).then(r => setEvents((r.data.data || []).filter(e => e.offerId === offer))).catch(() => setEvents([]));
     const okAds = latestOnly('sp-ads:' + cabinet);
     getAdsStats(cabinet, { dateFrom, dateTo }).then(okAds(r => setAds((r.data.data?.articles || []).find(a => a.offerId === offer) || {}))).catch(okAds(() => setAds({})));
@@ -286,54 +310,74 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
     for (let d = dayjs(dateFrom); !d.isAfter(dayjs(dateTo)); d = d.add(1, 'day')) out.push(d.format('YYYY-MM-DD'));
     return out;
   }, [dateFrom, dateTo]);
+  const mid = dates[Math.floor((dates.length - 1) / 2)];
 
   const profile = useMemo(() => productProfile(data?.name || art?.n || ''), [data, art]);
-  const groupOf = useCallback(q => groups[q] || autoGroup(q, profile), [groups, profile]);
 
-  // Запросы: по каждому — значения по дням и итог за период.
+  // Запросы: по каждому — значения по дням, итог, позиция в 1-й и 2-й половине периода.
   const queries = useMemo(() => {
     if (!data) return [];
     const m = new Map();
     for (const [d, q, p, s, v, c, o, r] of data.rows) {
-      const x = m.get(q) || { q, days: {}, list: [] };
+      const x = m.get(q) || { q, days: {}, list: [], h1: [], h2: [] };
       const day = { p, s, v, c, o, r };
-      x.days[d] = day; x.list.push(day);
+      x.days[d] = day; x.list.push(day); (d <= mid ? x.h1 : x.h2).push(day);
       m.set(q, x);
     }
-    return [...m.values()].map(x => ({ ...x, g: groupOf(x.q), manual: !!groups[x.q], tot: sumDay(x.list) })).sort((a, b) => b.tot.s - a.tot.s || b.tot.o - a.tot.o);
-  }, [data, groupOf, groups]);
+    const k = 30 / Math.max(1, dates.length);
+    return [...m.values()].map(x => {
+      const tot = sumDay(x.list);
+      return { ...x, tot, p1: sumDay(x.h1).p, p2: sumDay(x.h2).p, per30: tot.s * k, f: freqOf(tot.s * k, th), manual: groups[x.q] || null, t: isTarget(x.q, groups[x.q], profile) };
+    }).sort((a, b) => b.tot.s - a.tot.s || b.tot.o - a.tot.o);
+  }, [data, groups, profile, th, dates.length, mid]);
 
-  const groupStats = useMemo(() => {
+  const setStats = useMemo(() => {
     const out = {};
-    for (const g of [...QUERY_GROUPS.map(x => x.key), 'all']) out[g] = sumDay(queries.filter(x => g === 'all' || x.g === g).flatMap(x => x.list));
+    for (const st of SETS) { const list = queries.filter(st.test); out[st.key] = { ...sumDay(list.flatMap(x => x.list)), q: list.length, fq: FREQ.map(f => list.filter(x => x.f === f.key).length) }; }
     return out;
   }, [queries]);
 
-  const inGroup = useMemo(() => queries.filter(x => gsel === 'all' || x.g === gsel), [queries, gsel]);
+  const inSet = useMemo(() => queries.filter(SETS.find(s => s.key === gsel).test), [queries, gsel]);
   const byDate = useMemo(() => {
     const out = {};
     for (const d of dates) {
-      const day = sumDay(inGroup.map(x => x.days[d]).filter(Boolean));
+      const day = sumDay(inSet.map(x => x.days[d]).filter(Boolean));
       const a = ads?.byDate?.[d];
-      Object.assign(day, { adR: a ? a.revenue || 0 : null, adO: a ? a.orders || 0 : null, spend: a ? a.spend || 0 : null });
+      Object.assign(day, a ? { adR: a.revenue || 0, adO: a.orders || 0, spend: a.spend || 0, adV: a.views || 0, adPdp: a.pdpViews || 0, adC: a.cart || 0 }
+        : { adR: null, adO: null, spend: null, adV: null, adPdp: null, adC: null });
       day.drr = a && day.adR > 0 ? day.spend / day.adR * 100 : null;
       day.shareO = a && day.adO > 0 ? day.o / day.adO * 100 : null;
+      day.adCtr = a && day.adV > 0 ? day.adPdp / day.adV * 100 : null;
+      day.adCart = a && day.adPdp > 0 ? day.adC / day.adPdp * 100 : null;
+      day.adCro = a && day.adC > 0 ? day.adO / day.adC * 100 : null;
       out[d] = day;
     }
     return out;
-  }, [dates, inGroup, ads]);
+  }, [dates, inSet, ads]);
 
-  const setGroup = async (q, g) => {
+  const toggleTarget = async x => {
     const prev = groups;
-    const next = { ...groups };
-    if (g === null) delete next[q]; else next[q] = g;
+    const g = x.t ? 'other' : 'target';
+    // Если ручная отметка совпала бы с подсказкой — всё равно закрепляем: владелец так решил.
+    const next = { ...groups, [x.q]: g };
     setGroups(next);
-    try { const r = await saveQueryGroup(cabinet, q, g); setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
+    try { const r = await saveQueryGroup(cabinet, x.q, g); setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
+  };
+  const resetTarget = async x => {
+    const prev = groups;
+    const next = { ...groups }; delete next[x.q];
+    setGroups(next);
+    try { const r = await saveQueryGroup(cabinet, x.q, null); setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
+  };
+  const saveTh = async v => {
+    const prev = th;
+    setTh(v);
+    try { await saveQueryFreq(cabinet, v.hi, v.mid); } catch (e) { setTh(prev); }
   };
 
-  const qf = qFilter.trim().toLowerCase();
-  const shownQ = inGroup.filter(x => !qf || x.q.toLowerCase().includes(qf));
-  const LIMIT = 40;
+  const LIMIT = 30;
+  const [showAll, setShowAll] = useState(false);
+  const tableQ = inSet.slice(0, showAll ? 1000 : LIMIT);
 
   return (
     <>
@@ -344,6 +388,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
           {options.map(a => <option key={a.o} value={a.o}>{a.o} — {a.short}</option>)}
         </select>
         <div className="sp-name">{data?.name || art?.n || ''}</div>
+        <button type="button" className="a-btn" disabled title="Следующий этап: загрузка отчётов Ozon по конкурентам">+ Конкурент (скоро)</button>
       </div>
 
       {err ? <Empty>Не удалось загрузить: {err}</Empty> : !data ? <div className="a-hint" style={{ padding: 20 }}>Загрузка…</div> : !queries.length ? (
@@ -351,14 +396,14 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
       ) : (
         <>
           <div className="sp-groups">
-            {[...QUERY_GROUPS, { key: 'all', label: 'Все запросы', hint: 'Все запросы товара' }].map(g => {
-              const st = groupStats[g.key];
+            {SETS.map(g => {
+              const st = setStats[g.key];
               return (
-                <button key={g.key} type="button" className={`sp-g ${gsel === g.key ? 'on' : ''} g-${g.key}`} onClick={() => setGsel(g.key)} title={g.hint}>
-                  <span className="t">{g.label} <span className="muted">· {st.n ? queries.filter(x => g.key === 'all' || x.g === g.key).length : 0} запр.</span></span>
+                <button key={g.key} type="button" className={`sp-g ${gsel === g.key ? 'on' : ''} g-${g.key}`} onClick={() => { setGsel(g.key); setShowAll(false); }} title={g.hint}>
+                  <span className="t">{g.label} <span className="muted">· {st.q} запр.{g.key !== 'hiOther' ? ` (ВЧ ${st.fq[0]} · СЧ ${st.fq[1]} · НЧ ${st.fq[2]})` : ''}</span></span>
                   <span className="big">{fmtInt(st.s)}<small> искали</small></span>
                   <span className="row2">увидели {fmtInt(st.v)} · охват {fmtPct(st.reach)}</span>
-                  <span className="row2">позиция {pos(st.p)} · в заказ {fmtPct(st.toOrder)}</span>
+                  <span className="row2">позиция {pos(st.p)} · CTR {fmtPct(st.ctr)} · в заказ {fmtPct(st.toOrder)}</span>
                   <span className="row2">заказы {fmtInt(st.o)} шт · {fmtInt(st.r)} ₽</span>
                 </button>
               );
@@ -367,30 +412,24 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
 
           <div className="a-card">
             <div className="sp-tbar">
-              <b>По дням — {gsel === 'all' ? 'все запросы' : GROUP_LABEL[gsel].toLowerCase()}</b>
+              <b>По дням — {SET_LABEL[gsel].toLowerCase()}</b>
               {ads === null && <span className="a-hint">данные «Рекламы» загружаются…</span>}
             </div>
-            <SpDaysTable dates={dates} byDate={byDate} events={events} queries={shownQ.slice(0, showAll ? 1000 : LIMIT)} openQ={openQ}
-              toggleQ={q => setOpenQ(v => ({ ...v, [q]: !v[q] }))} setGroup={setGroup} tip={tip}
-              qControls={
-                <span className="sp-qc">
-                  <input className="a-input" placeholder="найти запрос" value={qFilter} onChange={e => setQFilter(e.target.value)} />
-                  {shownQ.length > LIMIT && <button type="button" className="a-btn sm" onClick={() => setShowAll(v => !v)}>{showAll ? `только первые ${LIMIT}` : `показать все ${shownQ.length}`}</button>}
-                </span>
-              } />
+            <SpDaysTable dates={dates} byDate={byDate} events={events} queries={tableQ} openQ={openQ}
+              toggleQ={q => setOpenQ(v => ({ ...v, [q]: !v[q] }))} onToggle={toggleTarget} tip={tip}
+              more={inSet.length > LIMIT ? <button type="button" className="a-btn sm" onClick={() => setShowAll(v => !v)}>{showAll ? `только первые ${LIMIT}` : `показать все ${inSet.length}`}</button> : null} />
           </div>
-          <div className="a-hint">
-            Группы определяются автоматически по названию товара: <b>целевые</b> — наш тип товара и наша модель; <b>модель без типа</b> — «хавал м6»; <b>тип без модели</b> — «чехлы на сиденья»;
-            <b> прочие</b> — чужие модели и мусор. Группу любого запроса можно поменять в таблице — ручной выбор отмечен точкой и действует для всех товаров магазина.
-            Сейчас Ozon отдаёт сервису только самые частотные запросы товара (до 15 в день), поэтому часть хвоста может не попасть.
-          </div>
+
+          <QueryList queries={queries} th={th} setTh={saveTh} onToggle={toggleTarget} onReset={resetTarget} days={dates.length} />
         </>
       )}
     </>
   );
 }
 
-function SpDaysTable({ dates, byDate, events, queries, openQ, toggleQ, setGroup, tip, qControls }) {
+// Таблица по дням: сверху сводные строки по выбранному набору запросов,
+// снизу — позиция по каждому запросу (раскрывается: искали, увидели, заказы).
+function SpDaysTable({ dates, byDate, events, queries, openQ, toggleQ, onToggle, tip, more }) {
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
   const evBy = useMemo(() => {
@@ -450,24 +489,22 @@ function SpDaysTable({ dates, byDate, events, queries, openQ, toggleQ, setGroup,
               return <td key={d} className={ev ? 'sp-ev' : ''} onMouseEnter={ev ? e => tip.show(e, <div>{ev.map((t, i) => <div key={i}>• {t}</div>)}</div>) : undefined} onMouseLeave={ev ? tip.hide : undefined}>{ev ? `● ${ev.length}` : ''}</td>;
             })}
           </tr>
-          <tr className="blk tone-traffic"><td colSpan={dates.length + 2}><span className="blk-l">Позиция по запросам</span>{qControls}</td></tr>
+          <tr className="blk tone-traffic"><td colSpan={dates.length + 2}><span className="blk-l">Позиция по каждому запросу · в «Итого» — средняя позиция за период</span><span className="sp-qc">{more}</span></td></tr>
           {queries.map(x => {
             const vals = dates.map(d => x.days[d]?.p ?? null);
             const open = !!openQ[x.q];
             return (
               <React.Fragment key={x.q}>
                 <tr className="sp-q">
-                  <td className="lbl" title={`${x.q} — искали ${fmtInt(x.tot.s)}, увидели ${fmtInt(x.tot.v)}, заказов ${fmtInt(x.tot.o)}`}>
+                  <td className="lbl" title={`${x.q}: позиция по дням. Искали ${fmtInt(x.tot.s)}, увидели ${fmtInt(x.tot.v)}, заказов ${fmtInt(x.tot.o)} за период`}>
+                    <TargetBox x={x} onToggle={onToggle} />
                     <button type="button" className="a-day-expand" aria-expanded={open} onClick={() => toggleQ(x.q)}><span aria-hidden="true">{open ? '▾' : '▸'}</span> {x.q}</button>
-                    <select className={`sp-gsel g-${x.g}`} value={x.g} onChange={e => setGroup(x.q, e.target.value)} title={x.manual ? 'Группа выбрана вручную' : 'Группа определена автоматически — можно поменять'}>
-                      {QUERY_GROUPS.map(g => <option key={g.key} value={g.key}>{g.label}</option>)}
-                    </select>
-                    {x.manual && <button type="button" className="sp-reset" title="Вернуть автоматическую группу" onClick={() => setGroup(x.q, null)}>•</button>}
+                    <FreqTag f={x.f} />
                   </td>
-                  <td className="tot">{fmtBy(x.tot.p, 'pos')}</td>
+                  <td className="tot" title="Средняя позиция за период">{fmtBy(x.tot.p, 'pos')}</td>
                   {vals.map((v, i) => <td key={dates[i]} style={{ background: posHeat(v) }}>{fmtBy(v, 'pos')}</td>)}
                 </tr>
-                {open && [['s', 'искали', 'int', 'up'], ['v', 'увидели', 'int', 'up'], ['o', 'заказы, шт', 'int', 'up'], ['r', 'заказы, ₽', 'money', 'up']].map(([k, l, f, g]) => (
+                {open && [['s', 'искали', 'int', 'up'], ['v', 'увидели', 'int', 'up'], ['c', 'перешли в карточку', 'int', 'up'], ['o', 'заказы, шт', 'int', 'up'], ['r', 'заказы, ₽', 'money', 'up']].map(([k, l, f, g]) => (
                   <tr key={k} className="sub">
                     <td className="lbl">— {l}</td>
                     <td className="tot">{fmtBy(x.tot[k], f)}</td>
@@ -480,6 +517,85 @@ function SpDaysTable({ dates, byDate, events, queries, openQ, toggleQ, setGroup,
           {!queries.length && <tr><td className="lbl muted">Нет запросов</td><td className="tot" colSpan={dates.length + 1} /></tr>}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// Список всех запросов товара за период: отметка «целевой», частотность,
+// итоги и сортировка по любой колонке.
+const QCOLS = [
+  { key: 'q', label: 'Запрос', get: x => x.q, text: true },
+  { key: 'f', label: 'Частота', get: x => x.per30, hint: 'Искали за 30 дней (пересчёт периода) и класс: ВЧ / СЧ / НЧ' },
+  { key: 's', label: 'Искали', get: x => x.tot.s },
+  { key: 'v', label: 'Увидели', get: x => x.tot.v },
+  { key: 'reach', label: 'Охват', get: x => x.tot.reach, hint: 'Увидели / искали' },
+  { key: 'p', label: 'Позиция', get: x => x.tot.p, asc: true, hint: 'Средняя за период, взвешенная по искавшим' },
+  { key: 'd', label: 'Динамика', get: x => (x.p1 != null && x.p2 != null ? x.p1 - x.p2 : null), hint: 'Позиция во второй половине периода к первой: ▲ — поднялись' },
+  { key: 'ctr', label: 'CTR', get: x => x.tot.ctr, hint: 'Перешли в карточку / увидели' },
+  { key: 'toOrder', label: 'В заказ', get: x => x.tot.toOrder, hint: 'Заказали / увидели' },
+  { key: 'o', label: 'Заказы', get: x => x.tot.o },
+  { key: 'r', label: 'Сумма', get: x => x.tot.r },
+];
+function QueryList({ queries, th, setTh, onToggle, onReset, days }) {
+  const [sort, setSort] = useState({ key: 's', dir: -1 });
+  const [find, setFind] = useState('');
+  const [onlyT, setOnlyT] = useState('all');
+  const [fq, setFq] = useState('');
+  const [hi, setHi] = useState(String(th.hi)), [mid, setMid] = useState(String(th.mid));
+  useEffect(() => { setHi(String(th.hi)); setMid(String(th.mid)); }, [th]);
+  const ff = find.trim().toLowerCase();
+  const col = QCOLS.find(c => c.key === sort.key);
+  const list = queries.filter(x => (!ff || x.q.toLowerCase().includes(ff)) && (onlyT === 'all' || (onlyT === 't') === x.t) && (!fq || x.f === fq))
+    .sort((a, b) => {
+      const va = col.get(a), vb = col.get(b);
+      if (col.text) return sort.dir * String(va).localeCompare(String(vb), 'ru');
+      if (va == null && vb == null) return 0; if (va == null) return 1; if (vb == null) return -1;
+      return sort.dir * (va - vb);
+    });
+  const head = c => (
+    <th key={c.key} className={c.text ? '' : 'r'} title={c.hint} style={{ cursor: 'pointer', whiteSpace: 'nowrap' }}
+      onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key ? -s.dir : (c.text || c.asc ? 1 : -1) }))}>
+      {c.label}{sort.key === c.key ? (sort.dir > 0 ? ' ↑' : ' ↓') : ''}
+    </th>
+  );
+  const applyTh = () => { const h = Math.round(Number(hi)), m = Math.round(Number(mid)); if (h > 0 && m > 0 && m < h) setTh({ hi: h, mid: m }); else { setHi(String(th.hi)); setMid(String(th.mid)); } };
+  const nT = queries.filter(x => x.t).length;
+  return (
+    <div className="a-card sp-list">
+      <div className="sp-tbar" style={{ flexWrap: 'wrap' }}>
+        <b>Все запросы товара за период · {queries.length}</b>
+        <span className="a-hint">целевых {nT}</span>
+        <input className="a-input" placeholder="найти запрос" value={find} onChange={e => setFind(e.target.value)} style={{ width: 180, padding: '4px 8px' }} />
+        <span className="a-seg">{[['all', 'Все'], ['t', 'Целевые'], ['n', 'Нецелевые']].map(([k, l]) => <button key={k} type="button" className={onlyT === k ? 'on' : ''} onClick={() => setOnlyT(k)}>{l}</button>)}</span>
+        <span className="a-seg">{[['', 'Любая'], ...FREQ.map(f => [f.key, f.label])].map(([k, l]) => <button key={k || 'any'} type="button" className={fq === k ? 'on' : ''} onClick={() => setFq(k)}>{l}</button>)}</span>
+        <span className="a-hint sp-th" title="Сколько людей искали по запросу за 30 дней">
+          ВЧ от <input className="a-input" type="number" min="1" value={hi} onChange={e => setHi(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} />
+          · СЧ от <input className="a-input" type="number" min="1" value={mid} onChange={e => setMid(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} /> искавших за 30 дн.
+        </span>
+      </div>
+      <div className="a-scroll">
+        <table className="a-t sp-qt">
+          <thead><tr><th title="Целевой запрос">✓</th>{QCOLS.map(head)}</tr></thead>
+          <tbody>
+            {list.map(x => (
+              <tr key={x.q} className="row">
+                <td><TargetBox x={x} onToggle={onToggle} />{x.manual && <button type="button" className="sp-reset" title="Убрать ручную отметку — вернуть подсказку" onClick={() => onReset(x)}>↺</button>}</td>
+                <td className="sp-qn">{x.q}</td>
+                <td className="n r"><FreqTag f={x.f} /> {fmtInt(x.per30)}</td>
+                <td className="n r">{fmtInt(x.tot.s)}</td><td className="n r">{fmtInt(x.tot.v)}</td><td className="n r">{fmtPct(x.tot.reach)}</td>
+                <td className="r">{pill(x.tot.p)}</td><td className="r"><PosDelta p1={x.p1} p2={x.p2} /></td>
+                <td className="n r">{fmtPct(x.tot.ctr)}</td><td className="n r">{fmtPct(x.tot.toOrder)}</td>
+                <td className="n r">{fmtInt(x.tot.o)}</td><td className="n r">{x.tot.r ? fmtInt(x.tot.r) : '—'}</td>
+              </tr>
+            ))}
+            {!list.length && <tr><td colSpan={QCOLS.length + 1} className="muted">Ничего не найдено</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="a-hint" style={{ padding: '6px 12px 10px' }}>
+        Галочка — целевой запрос. Бледная галочка — подсказка по названию товара (наш тип товара + наша модель); поставьте или снимите её — отметка закрепится (↺ вернёт подсказку). Отметки общие для всех товаров магазина.
+        Частота пересчитана на 30 дней из выбранного периода ({days} дн.). Сейчас Ozon отдаёт сервису до 15 самых частотных запросов товара в день — хвост может быть неполным.
+      </div>
     </div>
   );
 }
