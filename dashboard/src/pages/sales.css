@@ -598,3 +598,12 @@
 .mpui table.a-t.sc-cmp > thead th.stk{background:var(--a-panel);z-index:4}
 .mpui table.a-t.sc-cmp > thead th:not(.stk){z-index:1}
 .mpui table.a-t.sc-cmp > thead th.stk{z-index:6}
+/* Сравнение: группы колонок, выравнивание по центру, разделители */
+.mpui table.a-t.sc-cmp th.c,.mpui table.a-t.sc-cmp td.c{text-align:center}
+.mpui table.a-t.sc-cmp > thead th.c{white-space:nowrap;font-size:11.5px;padding:6px 10px}
+.mpui table.a-t.sc-cmp > thead th.c .tt-in{justify-content:center}
+.mpui .sc-cmp .gs{box-shadow:inset 1px 0 0 var(--a-line2)}
+.mpui table.a-t.sc-cmp > thead tr.sc-grp th{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--a-ink2);text-align:center;padding:7px 8px 3px;border-bottom:0}
+.mpui table.a-t.sc-cmp > thead tr.sc-grp th.stk{text-transform:none;letter-spacing:0;font-size:12px;vertical-align:bottom;text-align:left}
+.mpui .sc-cmp td.n{padding-left:10px;padding-right:10px}
+.mpui .sc-cmp tbody tr:hover td:not(.sc-best):not(.stk){background-color:hsla(220,20%,60%,.06)}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { getCompetitors, getSerp, addCompetitor, removeCompetitor, saveSkuPhoto, saveCompetitorView, importCompetitorReport, latestOnly } from '../api';
 import { fmtInt, fmtPct } from './AdsStats2';
 import { Empty } from './finShared';
@@ -37,19 +38,19 @@ function bestOf(values, dir) {
 
 // Показатели отчёта «Товары на Ozon», которые сравниваем.
 const MCOLS = [
-  { k: 'rev', l: 'Заказы, ₽', f: money, diff: true, hint: 'Заказано на сумму за окно отчёта' },
-  { k: 'qty', l: 'Заказы, шт', f: fmtInt, diff: true },
-  { k: 'avgPrice', l: 'Ср. цена', f: money },
-  { k: 'views', l: 'Показы', f: fmtInt, diff: true, hint: 'Показы всего: поиск, каталог, рекомендации' },
-  { k: 'searchViews', l: 'Просм. в поиске', f: fmtInt, diff: true, hint: 'Просмотры в поиске и каталоге' },
-  { k: 'pdp', l: 'Просм. карточки', f: fmtInt, diff: true },
-  { k: 'ctr', l: 'CTR', f: pct, calc: d => (d.views > 0 && d.pdp != null ? d.pdp / d.views * 100 : null), hint: 'Просмотры карточки / показы — посчитано сервисом' },
-  { k: 'cartPdp', l: 'В корзину из карточки', f: pct },
-  { k: 'convOrder', l: 'Показ → заказ', f: pct, hint: 'Конверсия из показа в заказ (Ozon)' },
-  { k: 'drr', l: 'ДРР', f: pct, hint: 'Доля рекламных расходов от суммы заказов (Ozon)' },
-  { k: 'adDays', l: 'Дней с продвиж.', f: v => v || '—' },
-  { k: 'buyout', l: 'Выкуп', f: pct },
-  { k: 'stock', l: 'Остаток', f: fmtInt },
+  { k: 'rev', g: 'Заказы', s: '₽', l: 'Заказы, ₽', f: money, diff: true, hint: 'Заказано на сумму за окно отчёта' },
+  { k: 'qty', g: 'Заказы', s: 'шт', l: 'Заказы, шт', f: fmtInt, diff: true },
+  { k: 'avgPrice', g: 'Заказы', s: 'ср. цена', l: 'Ср. цена', f: money },
+  { k: 'views', g: 'Трафик', s: 'показы', l: 'Показы', f: fmtInt, diff: true, hint: 'Показы всего: поиск, каталог, рекомендации' },
+  { k: 'searchViews', g: 'Трафик', s: 'в поиске', l: 'Просм. в поиске', f: fmtInt, diff: true, hint: 'Просмотры в поиске и каталоге' },
+  { k: 'pdp', g: 'Трафик', s: 'карточка', l: 'Просм. карточки', f: fmtInt, diff: true },
+  { k: 'ctr', g: 'Конверсии', s: 'CTR', l: 'CTR', f: pct, calc: d => (d.views > 0 && d.pdp != null ? d.pdp / d.views * 100 : null), hint: 'Просмотры карточки / показы — посчитано сервисом' },
+  { k: 'cartPdp', g: 'Конверсии', s: 'в корзину', l: 'В корзину из карточки', hint: 'В корзину из карточки (Ozon)', f: pct },
+  { k: 'convOrder', g: 'Конверсии', s: 'показ→заказ', l: 'Показ → заказ', f: pct, hint: 'Конверсия из показа в заказ (Ozon)' },
+  { k: 'drr', g: 'Реклама', s: 'ДРР', l: 'ДРР', f: pct, hint: 'Доля рекламных расходов от суммы заказов (Ozon)' },
+  { k: 'adDays', g: 'Реклама', s: 'дней', l: 'Дней с продвиж.', hint: 'Дней с продвижением за окно отчёта', f: v => v || '—' },
+  { k: 'buyout', g: 'Выкуп и остаток', s: 'выкуп', l: 'Выкуп', f: pct },
+  { k: 'stock', g: 'Выкуп и остаток', s: 'остаток', l: 'Остаток', f: fmtInt },
 ];
 const valOf = (c, d) => (c.calc ? c.calc(d || {}) : (d || {})[c.k] ?? null);
 
@@ -101,7 +102,7 @@ function Photo({ sku, src, auto, onSave }) {
       <button ref={btn} type="button" className="sc-phb" onClick={() => setOpen(v => !v)} title={auto ? 'Главное фото с Ozon — обновляется само (расширение). Нажмите, чтобы поставить своё' : 'Фото товара: подтянется само, когда расширение откроет карточку на Ozon; можно вставить вручную'}>
         {src ? <img src={src} alt="" /> : <span>фото</span>}
       </button>
-      {open && (
+      {open && createPortal(
         <div className="sc-pop" style={{ top: open.top, left: open.left }} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) take(f); }}>
           <input autoFocus className="a-input" placeholder="Ctrl+V — картинка или ссылка" onPaste={onPaste} onKeyDown={e => e.key === 'Escape' && setOpen(false)} />
           <div className="a-hint">Обычно фото подтягивается само: расширение раз в 6 часов открывает карточку на Ozon и замечает смену главного фото. Вручную — только если нужно своё: вставьте картинку (Ctrl+V), ссылку или перетащите файл.</div>
@@ -111,8 +112,8 @@ function Photo({ sku, src, auto, onSave }) {
             <button type="button" className="a-btn sm" onClick={() => setOpen(false)}>Закрыть</button>
             <span className="a-hint">{msg}</span>
           </div>
-        </div>
-      )}
+        </div>,
+        btn.current?.closest('.mpui') || document.body)}
     </div>
   );
 }
@@ -217,17 +218,22 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
   const cols = useMemo(() => {
     const sv = (x, k) => serpMap?.by.get(x.sku)?.[k] ?? null;
     return [
-      { k: 'cur', l: 'Цена сейчас', best: 'down', f: money, get: x => (x.card ? x.card.cardPrice ?? x.card.price : null), hint: 'Цена на сайте сейчас (с Ozon-картой) — по данным расширения' },
-      { k: 'rating', l: 'Рейтинг', best: 'up', get: x => x.card?.rating ?? null, f: (v, x) => (v == null ? '—' : `${String(v).replace('.', ',')}${x.card?.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}`), hint: 'Рейтинг и число отзывов — по данным расширения' },
+      { k: 'cur', g: 'Витрина', l: 'цена', best: 'down', f: money, get: x => (x.card ? x.card.cardPrice ?? x.card.price : null), hint: 'Цена на сайте сейчас (с Ozon-картой) — по данным расширения' },
+      { k: 'rating', g: 'Витрина', l: 'рейтинг', best: 'up', get: x => x.card?.rating ?? null, f: (v, x) => (v == null ? '—' : `${String(v).replace('.', ',')}${x.card?.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}`), hint: 'Рейтинг и число отзывов — по данным расширения' },
       ...(serpMap ? [
-        { k: 'pos', l: 'Место', best: 'down', serp: true, get: x => sv(x, 'position'), f: v => (v == null ? '—' : v), hint: 'Место в выдаче по выбранному запросу и региону' },
-        { k: 'cpc', l: 'Ставка', serp: true, get: x => sv(x, 'cpc'), f: v => (v == null ? '—' : `${String(v).replace('.', ',')} ₽`), hint: 'Ставка за клик в выдаче (из отчёта «Результаты по запросу»)' },
-        { k: 'pop', l: 'Популярность', best: 'up', serp: true, get: x => sv(x, 'popularity'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Популярность товара по этому запросу (Ozon)' },
-        { k: 'rel', l: 'Соответствие', best: 'up', serp: true, get: x => sv(x, 'relevance'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Насколько карточка соответствует запросу (Ozon)' },
+        { k: 'pos', g: 'Выдача', l: 'место', best: 'down', serp: true, get: x => sv(x, 'position'), f: v => (v == null ? '—' : v), hint: 'Место в выдаче по выбранному запросу и региону' },
+        { k: 'cpc', g: 'Выдача', l: 'ставка', serp: true, get: x => sv(x, 'cpc'), f: v => (v == null ? '—' : `${String(v).replace('.', ',')} ₽`), hint: 'Ставка за клик в выдаче (из отчёта «Результаты по запросу»)' },
+        { k: 'pop', g: 'Выдача', l: 'популярн.', best: 'up', serp: true, get: x => sv(x, 'popularity'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Популярность товара по этому запросу (Ozon)' },
+        { k: 'rel', g: 'Выдача', l: 'соответств.', best: 'up', serp: true, get: x => sv(x, 'relevance'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Насколько карточка соответствует запросу (Ozon)' },
       ] : []),
-      ...MCOLS.map(c => ({ k: c.k, l: c.l, best: BEST[c.k] || null, f: v => c.f(v), get: x => (x.last ? valOf(c, x.last.data) : null), hint: c.hint, diff: c.diff, m: c })),
+      ...MCOLS.map(c => ({ k: c.k, g: c.g, l: c.s, best: BEST[c.k] || null, f: v => c.f(v), get: x => (x.last ? valOf(c, x.last.data) : null), hint: c.hint, diff: c.diff, m: c })),
     ];
   }, [serpMap]);
+  const groups = useMemo(() => {
+    const out = [];
+    cols.forEach(c => { const last = out[out.length - 1]; if (last && last.g === c.g) last.n++; else { out.push({ g: c.g, n: 1 }); c.gs = true; } });
+    return out;
+  }, [cols]);
   const best = useMemo(() => Object.fromEntries(cols.filter(c => c.best).map(c => [c.k, bestOf(items.map(c.get), c.best)])), [cols, items]);
   const ctl = useTableCtl('sc-cmp');
   const rows = useMemo(() => ctl.apply(items, (x, k) => (k === 'name' ? x.label : (cols.find(c => c.k === k)?.get(x) ?? null))), [ctl, items, cols]);
@@ -281,12 +287,15 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
         </div>
         <div className="a-scroll">
           <table className="a-t sc-t sc-cmp no-sh">
-            <thead><tr>
-              <th className="stk s0" /><th className="stk s1" />
-              <ThCtl ctl={ctl} k="name" className="stk s2" filter={false}>Товар</ThCtl>
-              {cols.map(c => <ThCtl key={c.k} ctl={ctl} k={c.k} hint={c.hint} className={`r ${c.serp ? 'sc-serp' : ''}`}>{c.l}</ThCtl>)}
-              <th>Отчёт от</th><th />
-            </tr></thead>
+            <thead>
+              <tr className="sc-grp">
+                <th className="stk s0" rowSpan={2} /><th className="stk s1" rowSpan={2} />
+                <ThCtl ctl={ctl} k="name" className="stk s2" filter={false} dnd={{ rowSpan: 2 }}>Товар</ThCtl>
+                {groups.map(g => <th key={g.g} colSpan={g.n} className={`gs ${g.g === 'Выдача' ? 'sc-serp' : ''}`} title={g.g === 'Выдача' && serpSel ? serpSel.replace('|', ' · ') : undefined}>{g.g === 'Выдача' && serpSel ? `Выдача · ${serpSel.split('|')[0]}` : g.g}</th>)}
+                <th rowSpan={2} className="gs">Отчёт от</th><th rowSpan={2} />
+              </tr>
+              <tr>{cols.map(c => <ThCtl key={c.k} ctl={ctl} k={c.k} hint={c.hint} className={`c ${c.serp ? 'sc-serp' : ''} ${c.gs ? 'gs' : ''}`}>{c.l}</ThCtl>)}</tr>
+            </thead>
             <tbody>
               {rows.map(x => (
                 <tr key={x.sku} className={`${x.own ? 'sc-our' : ''} ${dragKey === x.sku ? 'dragging' : ''} ${overKey === x.sku && dragKey && dragKey !== x.sku ? 'dropover' : ''}`}
@@ -307,13 +316,13 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
                     const p = c.diff && x.prev ? valOf(c.m, x.prev.data) : null;
                     const d = v != null && p != null ? v - p : null;
                     return (
-                      <td key={c.k} className={`n r ${c.serp ? 'sc-serp' : ''} ${best[c.k] != null && v === best[c.k] ? 'sc-best' : ''}`}>
+                      <td key={c.k} className={`n c ${c.gs ? 'gs' : ''} ${c.serp ? 'sc-serp' : ''} ${best[c.k] != null && v === best[c.k] ? 'sc-best' : ''}`}>
                         {c.f(v, x)}
                         {d != null && <div className={`sc-d ${d > 0 ? 'up' : d < 0 ? 'down' : ''}`} title={`К отчёту от ${dd(x.prev.date)}: это новый день минус день, выпавший из окна ${win} дней — не продажи одного дня`}>{d > 0 ? '+' : ''}{fmtInt(d)}</div>}
                       </td>
                     );
                   })}
-                  <td className="n">{x.last ? dd(x.last.date) : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
+                  <td className="n c gs">{x.last ? dd(x.last.date) : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
                   <td>{x.kind === 'comp' && <button type="button" className="sp-reset" title="Убрать из сравнения" onClick={() => remove(x.sku)}>×</button>}</td>
                 </tr>
               ))}

@@ -160,13 +160,16 @@ async function readCard(tabId, sku) {
         out.title = (h1 && h1.textContent.trim()) || meta('og:title') || title;
         const pb = w('webPrice');
         if (pb) {
-          const nums = [...pb.innerText.matchAll(/(\d[\d\s   ]*)\s*₽/g)].map(m => Number(m[1].replace(/\D/g, ''))).filter(Boolean);
+          // Ozon разделяет тысячи разными «тонкими» пробелами — убираем все пробелы, иначе
+          // «6 177 ₽» читалось как «77 ₽». Рассрочку («520 ₽/мес») и суммы меньше 100 ₽ не берём.
+          const flat = pb.innerText.replace(/[\s\u00a0\u2000-\u200f\u202f\u205f\u3000]+/g, '');
+          const nums = [...flat.matchAll(/(\d+)₽(?!\/)/g)].map(m => Number(m[1])).filter(v => v >= 100);
           // Первая цена — с Ozon-картой, вторая — без карты.
           if (nums.length) { out.cardPrice = nums[0]; out.price = nums[1] || nums[0]; }
         }
         const sc = w('webSingleProductScore') || w('webReviewProductScore');
         if (sc) {
-          const m = /(\d[.,]\d)\D+(\d[\d\s  ]*)/.exec(sc.innerText);
+          const m = /(\d[.,]\d)\D+(\d[\d\s\u00a0\u2000-\u200f\u202f]*)/.exec(sc.innerText);
           if (m) { out.rating = m[1].replace(',', '.'); out.reviews = m[2].replace(/\D/g, ''); }
         }
         if (!out.photo && !out.price) out.err = 'на странице не нашлись фото и цена (заголовок: «' + title.slice(0, 60) + '»)';
