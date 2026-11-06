@@ -12,10 +12,12 @@
   details{margin-top:10px}
 </style></head>
 <body>
-  <h1>Соинвест Ozon</h1>
-  <div class="muted">Раз в час берёт цены на витрине из кабинета seller.ozon.ru (нужно быть в нём залогиненным) и отправляет в сервис.</div>
+  <h1>Соинвест и конкуренты Ozon <span class="muted" id="ver"></span></h1>
+  <div class="muted">Раз в час берёт цены на витрине из кабинета seller.ozon.ru (нужно быть в нём залогиненным), а раз в 6 часов — фото, цену и рейтинг конкурентов с ozon.ru, и отправляет в сервис.</div>
   <div id="status" style="margin-top:10px"></div>
-  <button id="run">Собрать сейчас</button>
+  <button id="run">Собрать цены сейчас</button>
+  <div id="cards" style="margin-top:12px"></div>
+  <button id="runCards">Обновить карточки конкурентов</button>
   <details><summary class="muted">Адрес сервиса</summary><input id="server"></details>
   <script src="popup.js"></script>
 </body></html>

@@ -25,7 +25,8 @@ chrome.alarms.onAlarm.addListener(a => {
   if (a.name === 'cards') runCards('по расписанию');
 });
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
-  if (msg && msg.type === 'runNow') { run('вручную').then(() => runCards('вручную')).then(() => reply({ ok: true })); return true; }
+  if (msg && msg.type === 'runNow') { run('вручную').then(() => reply({ ok: true })); return true; }
+  if (msg && msg.type === 'runCards') { runCards('вручную').then(() => reply({ ok: true })); return true; }
   return false;
 });
 
@@ -195,11 +196,12 @@ async function runCards(reason) {
     const skus = (await r.json()).data || [];
     status.asked = skus.length;
     if (!skus.length) return;
+    await chrome.storage.local.set({ lastCards: { ...status, running: true } });
     tab = await ozonTab();
     const cards = [];
     for (const sku of skus) {
       const c = await readCard(tab.id, sku);
-      if (c.photo || c.title || c.price) cards.push(c);
+      if (c.photo || c.title || c.price) { cards.push(c); await chrome.storage.local.set({ lastCards: { ...status, got: cards.length, running: true } }); }
       else if (!status.error) status.error = 'не удалось прочитать карточку ' + sku + (c.status ? ' (ответ ' + c.status + ')' : '') + (c.err ? ': ' + c.err : '');
       await sleep(1500 + Math.random() * 1500);
     }
