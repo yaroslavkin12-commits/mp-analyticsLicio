@@ -7,6 +7,7 @@ async function renderCards() {
   const el = document.getElementById('cards');
   let html = '<div class="row"><b>Карточки конкурентов</b><span></span></div>';
   if (!c) html += '<div class="muted">Ещё не собирались — нажмите кнопку ниже.</div>';
+  else if (c.running && Date.now() - Date.parse(c.at) > 10 * 60000) html += '<div class="bad">Сбор прервался (браузер выгрузил расширение) — нажмите кнопку ещё раз.</div>';
   else if (c.running) html += `<div class="muted">Идёт сбор… ${c.got || 0} из ${c.asked || '?'}</div>`;
   else {
     html += `<div class="row"><span>${fmt(c.finished || c.at)}</span>${c.asked ? `<span class="${c.got ? 'ok' : 'bad'}">${c.got} из ${c.asked} карточек</span>` : '<span class="muted">в сервисе нет конкурентов</span>'}</div>`;

@@ -126,95 +126,88 @@ async function run(reason) {
 
 
 // ── Карточки конкурентов с витрины ozon.ru ───────────────────────────────
-// Раз в 6 часов: берём у сервиса список SKU (конкуренты и наши товары, у
-// которых они есть), открываем карточки внутри вкладки ozon.ru — так же,
-// как их открывает сам сайт, с вашего браузера — и отправляем в сервис
-// только главное фото, название, цену и рейтинг. Так сервис видит, когда
-// конкурент сменил главное фото или цену.
-async function ozonTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://www.ozon.ru/*' });
-  const ready = tabs.find(t => t.status === 'complete');
-  if (ready) return { id: ready.id, created: false };
-  const tab = await chrome.tabs.create({ url: 'https://www.ozon.ru/', active: false });
-  await new Promise(resolve => {
-    const t = setTimeout(resolve, 30000);
-    chrome.tabs.onUpdated.addListener(function l(id, info) {
-      if (id === tab.id && info.status === 'complete') { clearTimeout(t); chrome.tabs.onUpdated.removeListener(l); resolve(); }
-    });
+// Раз в 6 часов (и по кнопке): берём у сервиса список SKU (конкуренты и наши
+// товары, у которых они есть), по очереди открываем их карточки в отдельной
+// фоновой вкладке ozon.ru — как обычный покупатель в вашем браузере — и
+// читаем со страницы главное фото, название, цену и рейтинг. В сервис
+// уходят только эти поля. Вкладка своя: ваши открытые вкладки не трогаем.
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, bad) => setTimeout(() => bad(new Error(what + ': нет ответа за ' + Math.round(ms / 1000) + ' с')), ms))]);
+function waitComplete(tabId, ms) {
+  return new Promise(resolve => {
+    const t = setTimeout(() => { chrome.tabs.onUpdated.removeListener(l); resolve(false); }, ms);
+    function l(id, info) { if (id === tabId && info.status === 'complete') { clearTimeout(t); chrome.tabs.onUpdated.removeListener(l); resolve(true); } }
+    chrome.tabs.onUpdated.addListener(l);
   });
-  await sleep(2000);
-  return { id: tab.id, created: true };
 }
 
 async function readCard(tabId, sku) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: 'MAIN',
-    args: [String(sku)],
-    func: async sku => {
-      const out = { sku };
-      const pick = (o, ...keys) => { for (const k of keys) if (o && o[k] != null && o[k] !== '') return o[k]; return null; };
-      try {
-        const r = await fetch('/api/entrypoint-api.bx/page/json/v2?url=' + encodeURIComponent('/product/' + sku + '/'), { credentials: 'include', headers: { accept: 'application/json' } });
-        out.status = r.status;
-        if (r.ok) {
-          const j = await r.json();
-          const ws = j.widgetStates || {};
-          for (const k of Object.keys(ws)) {
-            let o; try { o = JSON.parse(ws[k]); } catch (e) { continue; }
-            if (k.startsWith('webGallery') && !out.photo) out.photo = pick(o, 'coverImage') || (o.images && o.images[0] && (o.images[0].src || o.images[0].url)) || null;
-            if (k.startsWith('webProductHeading') && !out.title) out.title = pick(o, 'title');
-            if (k.startsWith('webPrice') && !out.price) { out.price = pick(o, 'price'); out.cardPrice = pick(o, 'cardPrice'); }
-            if (k.startsWith('webReviewProductScore') && out.rating == null) { out.rating = pick(o, 'totalScore', 'score'); out.reviews = pick(o, 'reviewsCount', 'count'); }
-          }
-          if (!out.photo && j.seo && Array.isArray(j.seo.meta)) { const m = j.seo.meta.find(x => x.property === 'og:image'); if (m) out.photo = m.content; }
-          if (!out.title && j.seo && j.seo.title) out.title = j.seo.title;
+  try {
+    await chrome.tabs.update(tabId, { url: 'https://www.ozon.ru/product/' + sku + '/' });
+    await waitComplete(tabId, 30000);
+    await sleep(2500); // цена и рейтинг дорисовываются после загрузки
+    const [res] = await withTimeout(chrome.scripting.executeScript({
+      target: { tabId },
+      args: [String(sku)],
+      func: sku => {
+        const out = { sku };
+        const meta = p => (document.querySelector('meta[property="' + p + '"]') || {}).content || null;
+        const w = name => document.querySelector('[data-widget="' + name + '"]');
+        const title = document.title || '';
+        if (/доступ ограничен|antibot|captcha|проверка/i.test(title + ' ' + (document.body ? document.body.innerText.slice(0, 300) : ''))) { out.err = 'Ozon показал проверку «я не робот» — откройте ozon.ru в браузере и пройдите её'; return out; }
+        out.photo = meta('og:image');
+        if (!out.photo) { const img = document.querySelector('[data-widget="webGallery"] img'); if (img) out.photo = img.currentSrc || img.src; }
+        const h1 = document.querySelector('[data-widget="webProductHeading"] h1') || document.querySelector('h1');
+        out.title = (h1 && h1.textContent.trim()) || meta('og:title') || title;
+        const pb = w('webPrice');
+        if (pb) {
+          const nums = [...pb.innerText.matchAll(/(\d[\d\s   ]*)\s*₽/g)].map(m => Number(m[1].replace(/\D/g, ''))).filter(Boolean);
+          // Первая цена — с Ozon-картой, вторая — без карты.
+          if (nums.length) { out.cardPrice = nums[0]; out.price = nums[1] || nums[0]; }
         }
-      } catch (e) { out.err = String(e && e.message || e); }
-      // Запасной путь: обычная страница товара, картинка из og:image.
-      if (!out.photo) {
-        try {
-          const h = await (await fetch('/product/' + sku + '/', { credentials: 'include' })).text();
-          const m = /<meta[^>]+property="og:image"[^>]+content="([^"]+)"/.exec(h) || /<meta[^>]+content="([^"]+)"[^>]+property="og:image"/.exec(h);
-          if (m) out.photo = m[1];
-        } catch (e) { out.err = String(e && e.message || e); }
-      }
-      if (out.photo && out.photo.startsWith('//')) out.photo = 'https:' + out.photo;
-      return out;
-    },
-  });
-  return res && res.result ? res.result : { sku, err: 'нет ответа от вкладки' };
+        const sc = w('webSingleProductScore') || w('webReviewProductScore');
+        if (sc) {
+          const m = /(\d[.,]\d)\D+(\d[\d\s  ]*)/.exec(sc.innerText);
+          if (m) { out.rating = m[1].replace(',', '.'); out.reviews = m[2].replace(/\D/g, ''); }
+        }
+        if (!out.photo && !out.price) out.err = 'на странице не нашлись фото и цена (заголовок: «' + title.slice(0, 60) + '»)';
+        if (out.photo && out.photo.startsWith('//')) out.photo = 'https:' + out.photo;
+        return out;
+      },
+    }), 20000, 'чтение страницы');
+    return res && res.result ? res.result : { sku, err: 'вкладка не ответила' };
+  } catch (e) { return { sku, err: String(e && e.message || e) }; }
 }
 
 async function runCards(reason) {
   const status = { at: new Date().toISOString(), reason, asked: 0, got: 0, error: null };
-  let tab = null;
+  let tabId = null;
   try {
     const server = await getServer();
-    const r = await fetch(server + '/api/competitors/skus');
+    const r = await withTimeout(fetch(server + '/api/competitors/skus'), 60000, 'сервис');
     if (!r.ok) throw new Error('сервис не ответил (' + r.status + ')');
     const skus = (await r.json()).data || [];
     status.asked = skus.length;
     if (!skus.length) return;
     await chrome.storage.local.set({ lastCards: { ...status, running: true } });
-    tab = await ozonTab();
+    tabId = (await chrome.tabs.create({ url: 'about:blank', active: false })).id;
     const cards = [];
     for (const sku of skus) {
-      const c = await readCard(tab.id, sku);
-      if (c.photo || c.title || c.price) { cards.push(c); await chrome.storage.local.set({ lastCards: { ...status, got: cards.length, running: true } }); }
-      else if (!status.error) status.error = 'не удалось прочитать карточку ' + sku + (c.status ? ' (ответ ' + c.status + ')' : '') + (c.err ? ': ' + c.err : '');
-      await sleep(1500 + Math.random() * 1500);
+      const c = await readCard(tabId, sku);
+      if (c.photo || c.title || c.price) cards.push(c);
+      if (c.err && !status.error) status.error = 'карточка ' + sku + ': ' + c.err;
+      await chrome.storage.local.set({ lastCards: { ...status, got: cards.length, running: true } });
+      await sleep(1000 + Math.random() * 1500);
     }
     status.got = cards.length;
     if (cards.length) {
-      const ir = await fetch(server + '/api/competitors/cards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cards }) });
+      const ir = await withTimeout(fetch(server + '/api/competitors/cards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cards }) }), 60000, 'сервис');
       const ij = await ir.json().catch(() => ({}));
       if (!ir.ok || !ij.success) status.error = 'сервис не принял карточки: ' + (ij.error || ir.status);
     }
   } catch (e) {
     status.error = String(e && e.message || e);
   } finally {
-    if (tab && tab.created) chrome.tabs.remove(tab.id).catch(() => {});
+    if (tabId) chrome.tabs.remove(tabId).catch(() => {});
     status.finished = new Date().toISOString();
     await chrome.storage.local.set({ lastCards: status });
   }
