@@ -46,6 +46,8 @@ router.get('/', async (req, res) => {
     const cat = await query(`SELECT sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = $2 AND sku IS NOT NULL`, [cabinet, offerId]);
     const ourSkus = cat.map(r => Number(r.sku));
     const comps = await query(`SELECT sku, label, created_at FROM search_competitors WHERE cabinet = $1 AND offer_id = $2 ORDER BY created_at`, [cabinet, offerId]);
+    // «Конкурент», который на самом деле наш товар (другая наша карточка) — помечаем.
+    const ownComp = comps.length ? new Set((await query(`SELECT sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku = ANY($2::bigint[])`, [cabinet, comps.map(r => String(r.sku))])).map(r => String(r.sku))) : new Set();
     const all = [...new Set([...ourSkus, ...comps.map(r => Number(r.sku))])];
     const [photos, market, serpQ] = all.length ? await Promise.all([
       query(`SELECT sku, photo FROM sku_photos WHERE cabinet = $1 AND sku = ANY($2::bigint[])`, [cabinet, all]),
@@ -69,12 +71,34 @@ router.get('/', async (req, res) => {
     for (const m of market) if (m.name) names.set(String(m.sku), { name: m.name, seller: m.seller });
     res.json({ success: true, data: {
       our: ourSkus.map(s => ({ sku: String(s), name: cat.find(r => Number(r.sku) === s)?.product_name || '' })),
-      competitors: comps.map(r => ({ sku: String(r.sku), label: r.label || '', ...(names.get(String(r.sku)) || {}) })),
+      competitors: comps.map(r => ({ sku: String(r.sku), label: r.label || '', ours: ownComp.has(String(r.sku)), ...(names.get(String(r.sku)) || {}) })),
+      view: await loadView(cabinet, offerId),
       photos: Object.fromEntries(photos.map(r => [String(r.sku), r.photo])),
       cards: cardOf,
       market: market.map(r => ({ sku: String(r.sku), date: r.d, window: Number(r.w), name: r.name, seller: r.seller, brand: r.brand, data: r.data || {} })),
       serpQueries: serpQ.map(r => ({ query: r.query, region: r.region, last: r.last, n: r.n })),
     } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Подписи строк и их порядок в сравнении: app_settings comp_view:<кабинет>:<артикул> = {labels: {sku: подпись}, order: [sku…]}.
+async function loadView(cabinet, offerId) {
+  const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [`comp_view:${cabinet}:${offerId}`]).catch(() => []);
+  try { const v = JSON.parse(rows[0]?.value || '{}') || {}; return { labels: v.labels || {}, order: Array.isArray(v.order) ? v.order : [] }; } catch (e) { return { labels: {}, order: [] }; }
+}
+// POST /api/competitors/view {cabinet, offerId, label?: {sku, text}, order?: [sku…]}
+router.post('/view', async (req, res) => {
+  try {
+    const { cabinet = 'defly', offerId, label, order } = req.body || {};
+    if (!offerId) return res.status(400).json({ success: false, error: 'Нет артикула' });
+    const v = await loadView(cabinet, String(offerId));
+    if (label && /^\d{1,15}$/.test(String(label.sku || ''))) {
+      const t = String(label.text || '').trim().slice(0, 60);
+      if (t) v.labels[String(label.sku)] = t; else delete v.labels[String(label.sku)];
+    }
+    if (Array.isArray(order)) v.order = order.map(String).filter(x => /^\d{1,15}$/.test(x)).slice(0, 200);
+    await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [`comp_view:${cabinet}:${offerId}`, JSON.stringify(v)]);
+    res.json({ success: true, data: v });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 

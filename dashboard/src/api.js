@@ -229,5 +229,6 @@ export const getCompetitors = (cabinet, offerId) => api.get('/competitors', { pa
 export const getSerp = (cabinet, query, region) => api.get('/competitors/serp', { params: { cabinet, query, region } });
 export const addCompetitor = (cabinet, offerId, sku, label) => api.post('/competitors', { cabinet, offerId, sku, label });
 export const removeCompetitor = (cabinet, offerId, sku) => api.delete('/competitors', { params: { cabinet, offerId, sku } });
+export const saveCompetitorView = (cabinet, offerId, body) => api.post('/competitors/view', { cabinet, offerId, ...body });
 export const saveSkuPhoto = (cabinet, sku, photo) => api.post('/competitors/photo', { cabinet, sku, photo });
 export const importCompetitorReport = (cabinet, payload) => api.post('/competitors/import', { cabinet, ...payload }, { timeout: 60000 });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { getCompetitors, getSerp, addCompetitor, removeCompetitor, saveSkuPhoto, importCompetitorReport, latestOnly } from '../api';
+import { getCompetitors, getSerp, addCompetitor, removeCompetitor, saveSkuPhoto, saveCompetitorView, importCompetitorReport, latestOnly } from '../api';
 import { fmtInt, fmtPct } from './AdsStats2';
 import { Empty } from './finShared';
 import { parseOzonReport } from '../lib/ozonReports';
@@ -18,6 +18,21 @@ const money = v => (v == null ? '—' : `${fmtInt(v)} ₽`);
 const pct = v => (v == null ? '—' : fmtPct(v));
 const dd = d => (d ? `${d.slice(8)}.${d.slice(5, 7)}` : '—');
 const ozonUrl = sku => `https://www.ozon.ru/product/${sku}/`;
+const SHOP = { defly: 'Defly', nabauto: 'NABauto', alex: 'Alex', fullgas: 'Fullgas', accent: 'Accent Line', licio: 'Licio' };
+// Короткое название: до первой запятой, без «- ПРОДАВЕЦ -» в начале, не длиннее ~42 знаков.
+function shortName(n) {
+  let t = String(n || '').replace(/^\s*-[^-]{2,40}-\s*/, '').split(/,|\s\/\s|\(/)[0].trim();
+  if (t.length > 42) t = t.slice(0, 42).replace(/\s+\S*$/, '') + '…';
+  return t || String(n || '');
+}
+// Лучшее значение в колонке подсвечиваем зелёным: 'up' — больше лучше, 'down' — меньше лучше.
+const BEST = { rev: 'up', qty: 'up', avgPrice: 'down', views: 'up', searchViews: 'up', pdp: 'up', ctr: 'up', cartPdp: 'up', convOrder: 'up', drr: 'down', buyout: 'up' };
+function bestOf(values, dir) {
+  const ok = values.filter(v => v != null && Number.isFinite(v));
+  if (ok.length < 2) return null;
+  const b = dir === 'up' ? Math.max(...ok) : Math.min(...ok);
+  return ok.every(v => v === b) ? null : b;
+}
 
 // Показатели отчёта «Товары на Ozon», которые сравниваем.
 const MCOLS = [
@@ -49,6 +64,18 @@ async function shrink(blob) {
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
     return c.toDataURL('image/jpeg', 0.82);
   } finally { URL.revokeObjectURL(url); }
+}
+// Подпись строки: нажмите ✎, чтобы переименовать (пусто — вернуть исходную).
+function Label({ x, onSave }) {
+  const [edit, setEdit] = useState(false);
+  const [t, setT] = useState(x.label);
+  useEffect(() => setT(x.label), [x.label]);
+  if (edit) return (
+    <input autoFocus className="a-input sc-lbl" value={t} onChange={e => setT(e.target.value)}
+      onBlur={() => { setEdit(false); if (t.trim() !== x.label) onSave(t.trim()); }}
+      onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') { setT(x.label); setEdit(false); } }} />
+  );
+  return <><b>{x.label}</b><button type="button" className="sc-edit" title="Переименовать" onClick={() => setEdit(true)}>✎</button></>;
 }
 function Photo({ sku, src, auto, onSave }) {
   const [open, setOpenRaw] = useState(null);
@@ -133,19 +160,44 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
     load();
   };
 
-  // Строки сравнения: наши SKU, затем конкуренты.
+  // Строки сравнения: наши SKU и конкуренты, в сохранённом порядке.
   const items = useMemo(() => {
     if (!data) return [];
     const snaps = new Map();
     for (const m of data.market) { if (m.window !== win) continue; (snaps.get(m.sku) || snaps.set(m.sku, []).get(m.sku)).push(m); }
-    const mk = (sku, kind, label, name, seller) => {
+    const labels = data.view?.labels || {};
+    const mk = (sku, kind, label, name, seller, own) => {
       const list = (snaps.get(sku) || []).sort((a, b) => (a.date < b.date ? -1 : 1));
       const last = list[list.length - 1] || null, prev = list[list.length - 2] || null;
       const card = (data.cards || {})[sku] || null;
-      return { sku, kind, label, name: last?.name || card?.title || name || '', seller: last?.seller || seller || '', last, prev, list, card, manualPhoto: data.photos[sku] || null, photo: data.photos[sku] || card?.photo || null };
+      const full = last?.name || card?.title || name || '';
+      return { sku, kind, own, label: labels[sku] || label, name: full, short: shortName(full), seller: last?.seller || seller || '', last, prev, list, card, manualPhoto: data.photos[sku] || null, photo: data.photos[sku] || card?.photo || null };
     };
-    return [...data.our.map(o => mk(o.sku, 'our', 'Мы', o.name, 'Defly')), ...data.competitors.map(c => mk(c.sku, 'comp', c.label, c.name, c.seller))];
-  }, [data, win]);
+    const shop = SHOP[cabinet] || cabinet;
+    const list = [...data.our.map(o => mk(o.sku, 'our', shop, o.name, shop, true)), ...data.competitors.map(c => mk(c.sku, 'comp', c.label || c.seller || 'Конкурент', c.name, c.seller, !!c.ours))];
+    const ord = new Map((data.view?.order || []).map((k, i) => [k, i]));
+    return list.map((x, i) => ({ x, i })).sort((a, b) => (ord.has(a.x.sku) ? ord.get(a.x.sku) : 1e3 + a.i) - (ord.has(b.x.sku) ? ord.get(b.x.sku) : 1e3 + b.i)).map(o => o.x);
+  }, [data, win, cabinet]);
+  const move = async (sku, dir) => {
+    const order = items.map(x => x.sku), i = order.indexOf(sku), j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    setData(d => ({ ...d, view: { ...(d.view || {}), order } }));
+    await saveCompetitorView(cabinet, offer, { order }).catch(() => load());
+  };
+  const rename = async (x, text) => {
+    if (x.kind === 'comp') await addCompetitor(cabinet, offer, x.sku, text);
+    await saveCompetitorView(cabinet, offer, { label: { sku: x.sku, text } });
+    load();
+  };
+  // Лучшие значения по колонкам — для зелёной подсветки.
+  const best = useMemo(() => {
+    const b = {};
+    for (const c of MCOLS) if (BEST[c.k]) b[c.k] = bestOf(items.map(x => (x.last ? valOf(c, x.last.data) : null)), BEST[c.k]);
+    b.cur = bestOf(items.map(x => (x.card ? x.card.cardPrice ?? x.card.price : null)), 'down');
+    b.rating = bestOf(items.map(x => x.card?.rating ?? null), 'up');
+    return b;
+  }, [items]);
   const known = useMemo(() => new Set(items.map(x => x.sku)), [items]);
   const dates = useMemo(() => [...new Set(items.flatMap(x => x.list.map(m => m.date)))].sort(), [items]);
 
@@ -185,25 +237,29 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
         <div className="sp-tbar"><b>Сравнение за {win} дней — по последнему загруженному отчёту</b></div>
         <div className="a-scroll">
           <table className="a-t sc-t">
-            <thead><tr><th />{['Товар'].map(h => <th key={h}>{h}</th>)}<th className="r" title="Цена на сайте сейчас (с Ozon-картой) — по данным расширения">Цена сейчас</th><th title="Рейтинг и число отзывов — по данным расширения">Рейтинг</th><th>Отчёт от</th>{MCOLS.map(c => <th key={c.k} className="r" title={c.hint}>{c.l}</th>)}<th /></tr></thead>
+            <thead><tr><th /><th />{['Товар'].map(h => <th key={h}>{h}</th>)}<th className="r" title="Цена на сайте сейчас (с Ozon-картой) — по данным расширения">Цена сейчас</th><th title="Рейтинг и число отзывов — по данным расширения">Рейтинг</th><th>Отчёт от</th>{MCOLS.map(c => <th key={c.k} className="r" title={c.hint}>{c.l}</th>)}<th /></tr></thead>
             <tbody>
-              {items.map(x => (
-                <tr key={x.sku} className={x.kind === 'our' ? 'sc-our' : ''}>
+              {items.map((x, idx) => (
+                <tr key={x.sku} className={x.own ? 'sc-our' : ''}>
+                  <td className="sc-mv">
+                    <button type="button" disabled={idx === 0} onClick={() => move(x.sku, -1)} title="Выше">▲</button>
+                    <button type="button" disabled={idx === items.length - 1} onClick={() => move(x.sku, 1)} title="Ниже">▼</button>
+                  </td>
                   <td><Photo sku={x.sku} src={x.photo} auto={!x.manualPhoto && !!x.card?.photo} onSave={savePhoto} /></td>
                   <td className="sc-name">
-                    <b>{x.kind === 'our' ? 'Мы' : (x.label || x.seller || 'Конкурент')}</b> <a href={ozonUrl(x.sku)} target="_blank" rel="noreferrer" className="muted">{x.sku}</a>
-                    <div className="muted">{x.seller && x.kind !== 'our' ? `${x.seller} · ` : ''}{x.name || '—'}</div>
+                    <Label x={x} onSave={t => rename(x, t)} /> {x.own && x.label !== (SHOP[cabinet] || cabinet) && <span className="sc-own" title="Наш товар">{SHOP[cabinet] || 'наш'}</span>} <a href={ozonUrl(x.sku)} target="_blank" rel="noreferrer" className="muted">{x.sku}</a>
+                    <div className="muted sc-short" title={x.name}>{x.short || '—'}</div>
                     {x.card?.photoChanged && (Date.now() - Date.parse(x.card.photoChanged)) < 14 * 864e5 && <div className="sc-flag">фото сменилось {dd(x.card.photoChanged)}</div>}
                   </td>
-                  <td className="n r" title={x.card ? `обновлено ${dd(x.card.date)}` : 'Расширение ещё не собирало эту карточку'}>{x.card ? money(x.card.cardPrice ?? x.card.price) : '—'}</td>
-                  <td className="n">{x.card?.rating != null ? `${String(x.card.rating).replace('.', ',')}${x.card.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}` : '—'}</td>
+                  <td className={`n r ${best.cur != null && x.card && (x.card.cardPrice ?? x.card.price) === best.cur ? 'sc-best' : ''}`} title={x.card ? `обновлено ${dd(x.card.date)}` : 'Расширение ещё не собирало эту карточку'}>{x.card ? money(x.card.cardPrice ?? x.card.price) : '—'}</td>
+                  <td className={`n ${best.rating != null && x.card?.rating === best.rating ? 'sc-best' : ''}`}>{x.card?.rating != null ? `${String(x.card.rating).replace('.', ',')}${x.card.reviews != null ? ` (${fmtInt(x.card.reviews)})` : ''}` : '—'}</td>
                   <td className="n">{x.last ? dd(x.last.date) : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
                   {MCOLS.map(c => {
                     const v = x.last ? valOf(c, x.last.data) : null;
                     const p = x.prev && c.diff ? valOf(c, x.prev.data) : null;
                     const d = v != null && p != null ? v - p : null;
                     return (
-                      <td key={c.k} className="n r">
+                      <td key={c.k} className={`n r ${best[c.k] != null && v === best[c.k] ? 'sc-best' : ''}`}>
                         {c.f(v)}
                         {d != null && <div className={`sc-d ${d > 0 ? 'up' : d < 0 ? 'down' : ''}`} title={`К отчёту от ${dd(x.prev.date)}: это новый день минус день, выпавший из окна ${win} дней — не продажи одного дня`}>{d > 0 ? '+' : ''}{fmtInt(d)}</div>}
                       </td>
@@ -216,7 +272,7 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
           </table>
         </div>
         <div className="a-hint" style={{ padding: '6px 12px 10px' }}>
-          Все цифры — из отчёта Ozon «Аналитика → Товары на Ozon» за {win} дней. Для честного сравнения скачивайте его и по нашему товару, в тот же день. Мелкая цифра под значением — разница с прошлым отчётом:
+          Зелёным — лучшее значение в колонке (для цены и ДРР — самое низкое). Подписи меняются карандашом ✎, порядок строк — стрелками ▲▼. Все цифры — из отчёта Ozon «Аналитика → Товары на Ozon» за {win} дней. Для честного сравнения скачивайте его и по нашему товару, в тот же день. Мелкая цифра под значением — разница с прошлым отчётом:
           это «новый день минус день, выпавший из окна», а не продажи одного дня. Точные дни по нашему товару — во вкладке «Поисковые запросы».
         </div>
       </div>
@@ -237,8 +293,8 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
                 {items.map(x => {
                   const by = new Map(x.list.map(m => [m.date, m]));
                   return (
-                    <tr key={x.sku} className={x.kind === 'our' ? 'sc-our' : ''}>
-                      <td><b>{x.kind === 'our' ? 'Мы' : (x.label || x.seller)}</b> <span className="muted">{x.sku}</span></td>
+                    <tr key={x.sku} className={x.own ? 'sc-our' : ''}>
+                      <td><b>{x.label}</b> <span className="muted">{x.sku}</span></td>
                       {dates.map((d, i) => {
                         const m = by.get(d);
                         let v = m ? valOf(mcol, m.data) : null;
@@ -287,14 +343,14 @@ function SerpBlock({ cabinet, queries, items, onAdd }) {
       .then(list => { setByRegion(Object.fromEntries(list)); setRegion(rg => (cur.regions.some(r => r.region === rg) ? rg : cur.regions[0].region)); });
   }, [cabinet, cur?.query, cur?.regions.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const mark = useMemo(() => new Map(items.map(x => [x.sku, x])), [items]);
-  const ours = new Set(items.filter(x => x.kind === 'our').map(x => x.sku));
+  const ours = new Set(items.filter(x => x.own).map(x => x.sku));
   const regions = cur ? cur.regions.map(r => r.region) : [];
   const lastOf = rg => { const rows = byRegion?.[rg] || []; const d = rows.reduce((m, r) => (r.d > m ? r.d : m), ''); return { d, rows: rows.filter(r => r.d === d) }; };
   const rows = byRegion?.[region] || [];
   const dates = [...new Set(rows.map(r => r.d))].sort();
   const { d: last, rows: lastRows } = lastOf(region);
   const shown = all ? lastRows : lastRows.filter(r => mark.has(r.sku) || ours.has(r.sku) || (r.position != null && r.position <= 10));
-  const name = x => (x.kind === 'our' ? 'Мы' : x.label || x.seller || x.sku);
+  const name = x => x.label || x.seller || x.sku;
   return (
     <div className="a-card" style={{ marginTop: 12 }}>
       <div className="sp-tbar" style={{ flexWrap: 'wrap' }}>
@@ -314,7 +370,7 @@ function SerpBlock({ cabinet, queries, items, onAdd }) {
               <thead><tr><th>Позиция по регионам · последний снимок</th>{regions.map(rg => <th key={rg} className={`r ${rg === region ? 'on' : ''}`} style={{ cursor: 'pointer' }} onClick={() => setRegion(rg)} title="Показать выдачу этого региона">{rg}<div className="muted">{dd(lastOf(rg).d)}</div></th>)}</tr></thead>
               <tbody>
                 {items.map(x => (
-                  <tr key={x.sku} className={x.kind === 'our' ? 'sc-our' : ''}>
+                  <tr key={x.sku} className={x.own ? 'sc-our' : ''}>
                     <td><b>{name(x)}</b> <span className="muted">{x.sku}</span></td>
                     {regions.map(rg => {
                       const r = lastOf(rg).rows.find(y => y.sku === x.sku);
@@ -361,7 +417,7 @@ function SerpBlock({ cabinet, queries, items, onAdd }) {
                   {items.map(x => {
                     const by = new Map(rows.filter(r => r.sku === x.sku).map(r => [r.d, r]));
                     if (!by.size) return null;
-                    return <tr key={x.sku} className={x.kind === 'our' ? 'sc-our' : ''}><td><b>{name(x)}</b> <span className="muted">{x.sku}</span></td>{dates.map(d => <td key={d} className="n r">{by.get(d)?.position ?? '—'}{by.get(d)?.cpc != null && <div className="muted">{String(by.get(d).cpc).replace('.', ',')} ₽</div>}</td>)}</tr>;
+                    return <tr key={x.sku} className={x.own ? 'sc-our' : ''}><td><b>{name(x)}</b> <span className="muted">{x.sku}</span></td>{dates.map(d => <td key={d} className="n r">{by.get(d)?.position ?? '—'}{by.get(d)?.cpc != null && <div className="muted">{String(by.get(d).cpc).replace('.', ',')} ₽</div>}</td>)}</tr>;
                   })}
                 </tbody>
               </table>
