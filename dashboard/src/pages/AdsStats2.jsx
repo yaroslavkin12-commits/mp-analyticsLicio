@@ -275,6 +275,10 @@ function buildModel(articles, dates, mode, unknown = false) {
       if (any) { raw.expRev = er; raw.profitF = pf; }
     }
     byDate[d] = { ...derive(raw, mode), stock: stockKnown ? stock : null, position: posN ? posSum / posN : null };
+    for (const key of ['sellerPrice', 'clientPrice']) {
+      const prices = articles.map(a => a.byDate[d]?.[key]).filter(v => Number.isFinite(v) && v > 0);
+      byDate[d][key] = prices.length ? prices.reduce((s, v) => s + v, 0) / prices.length : null;
+    }
     if (articles.length === 1) {
       const src = articles[0].byDate[d] || {};
       byDate[d].manual = src.manual || {};
@@ -609,6 +613,9 @@ const DAY_ROWS = [
   { key: 'orders', label: 'Заказы, шт', fmt: 'int', good: 'up', editable: true },
   { key: 'selfQ', label: 'самовыкупы (не в заказах)', fmt: 'int', sub: true, hideEmpty: true, toggleOf: 'orders', hint: 'Отмечены в «Ленте заказов»: из заказов и ДРР убраны, их комиссия, эквайринг, налог и сервисный сбор 20 ₽ (FBS) вычтены из прогнозируемой прибыли' },
   { key: 'stock', label: 'Остаток, шт', fmt: 'int', good: 'up', total: 'last' },
+  { block: 'Цены текущие', tone: 'rev', prices: true },
+  { key: 'sellerPrice', label: 'Предельная цена', fmt: 'money2', total: 'avg', prices: true, hint: 'Цена продавца до скидки Ozon. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными.' },
+  { key: 'clientPrice', label: 'Цена клиента', fmt: 'money2', total: 'avg', prices: true, hint: 'Цена для покупателя с Ozon-картой. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными.' },
   { block: 'Трафик и позиции', tone: 'traffic' },
   { key: 'position', label: 'Позиция в поиске', fmt: 'pos', good: 'down', editable: true, total: 'avg', onlyAll: true },
   { key: 'views', label: 'Показы', fmt: 'int', good: 'up', editable: true },
@@ -671,13 +678,13 @@ function EditCell({ value, fmt, bg, manual, onSave }) {
   );
 }
 
-export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys }) {
+export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys, showPrices = false }) {
   const ref = useRef(null);
   const [openSub, setOpenSub] = useState(false);
   const [expanded, setExpanded] = useState({});
   const today = dayjs().format('YYYY-MM-DD');
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
-  const availableRows = DAY_ROWS.filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
+  const availableRows = DAY_ROWS.filter(r => !r.prices || showPrices).filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
     // Строки стратегий — только если у товара за период был такой расход.
     && !(r.onlyWhenNonZero && !dates.some(d => (model.byDate[d]?.[r.key] || 0) > 0))
     && !(r.hideEmpty && !dates.some(d => (model.byDate[d]?.[r.spendKey || r.key] || 0) > 0))
@@ -721,7 +728,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {
                   const d = dates[i];
-                  const bg = heatColor(v, min, max, row.good);
+                  const bg = row.prices ? undefined : heatColor(v, min, max, row.good);
                   if ((row.key === 'drr' || row.key === 'drrB') && (v === null || v === undefined)) {
                     const spent = model.byDate[d]?.spend > 0;
                     return <td key={d} style={{ color: 'var(--a-ink3)' }} title={spent ? 'Был расход, заказов не было' : ''}>{spent ? '×' : '—'}</td>;
@@ -1000,7 +1007,7 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
             </button>
           )}
         </h4>
-        <DaysTable dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
+        <DaysTable showPrices dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
           onManualSave={offerId ? (d, k, v) => onManualSave(offerId, d, k, v) : null} />
       </div>
       <div className="a-box wide">
@@ -1096,7 +1103,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
           ))}
         </span>}
       </div>
-      {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable dates={dates} model={all} mode={mode} />:<React.Fragment>
+      {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable showPrices dates={dates} model={all} mode={mode} />:<React.Fragment>
       {metric === 'position' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }} title="Цветовая шкала постоянная и не зависит от периода, фильтров и крайних значений. Между ориентирами цвет меняется плавно.">
         <span>Цвет позиции:</span>
         {[[10, '1–10'], [30, '30'], [60, '60 и выше']].map(([v, label]) => <span key={v}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: positionHeatColor(v) }} />{label}</span>)}

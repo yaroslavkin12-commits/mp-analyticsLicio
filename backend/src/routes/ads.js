@@ -1210,6 +1210,12 @@ router.get('/stats', async (req, res) => {
       catOfOffer[o] = { cat: ovMap.get(o) || autoPath(cabinet, nameByOfferId.get(o), o).join(' / '), name: nameByOfferId.get(o) || null };
     }
 
+    await require('../lib/priceEvents').ensurePriceDaily();
+    const dailyPrices = await require('../lib/dailyAdPrices').dailyAdPrices(cabinet, from, to, articlesOut.map(a => a.offerId).filter(Boolean));
+    for (const article of articlesOut) for (const date of dates) {
+      const prices = dailyPrices.get(`${article.offerId}|${date}`);
+      if (prices) Object.assign(article.byDate[date], prices);
+    }
     res.json({ success: true, data: { dates, articles: articlesOut, cpoCharge, catOfOffer } });
   } catch (e) {
     console.error(e);

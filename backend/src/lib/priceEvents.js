@@ -32,6 +32,7 @@ const mskDay = () => dayjs().add(3, 'hour').toISOString().slice(0, 10);
 async function recordPrices(cabinet, rows) {
   try {
     await ensurePriceDaily();
+    await require('./dailyAdPrices').recordDailyAdPrices(cabinet, rows);
     const d = mskDay();
     const vals = [];
     for (const r of rows) {
