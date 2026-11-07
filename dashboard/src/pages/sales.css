@@ -621,3 +621,7 @@
 .mpui .sp-regs{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:12px;color:var(--a-ink3)}
 .mpui .sp-regs button{font:inherit;font-size:11.5px;border:1px solid var(--a-line);background:none;color:var(--a-ink3);border-radius:6px;padding:1px 7px;cursor:pointer}
 .mpui .sp-regs button.on{border-color:var(--a-accent);color:var(--a-ink)}
+
+.mpui .sc-cmp .sc-sku{font-family:var(--a-num);font-size:11px;color:var(--a-ink3);display:flex;align-items:center;gap:4px;margin-top:1px}
+.mpui .sc-cmp .sc-sku a{color:inherit;text-decoration:none}
+.mpui .sc-cmp .sc-sku a:hover{color:var(--a-accent);text-decoration:underline}

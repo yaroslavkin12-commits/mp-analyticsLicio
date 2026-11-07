@@ -320,7 +320,8 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
                   <td className="stk s1"><Photo sku={x.sku} src={x.photo} auto={!x.manualPhoto && !!x.card?.photo} onSave={savePhoto} /></td>
                   <td className="stk s2 sc-name">
                     <div className="sc-l1"><Label x={x} onSave={t => rename(x, t)} />{x.own && x.label !== (SHOP[cabinet] || cabinet) && <span className="sc-own" title="Наш товар">{SHOP[cabinet] || 'наш'}</span>}</div>
-                    <div className="muted sc-short" title={`${x.name}\nSKU ${x.sku}${x.seller && !x.own ? ' · ' + x.seller : ''}`}><a href={ozonUrl(x.sku)} target="_blank" rel="noreferrer">{x.short || x.sku}</a></div>
+                    <div className="muted sc-short" title={`${x.name}${x.seller && !x.own ? '\nПродавец: ' + x.seller : ''}`}>{x.seller && !x.own ? `${x.seller} · ` : ''}{x.short || '—'}</div>
+                    <div className="sc-sku" data-no-art><a href={ozonUrl(x.sku)} target="_blank" rel="noreferrer" title="Открыть карточку на Ozon">{x.sku}</a><span className="art-cp" data-copy={x.sku} title="Скопировать артикул Ozon">⧉</span></div>
                     {x.card?.photoChanged && (Date.now() - Date.parse(x.card.photoChanged)) < 14 * 864e5 && <div className="sc-flag">фото сменилось {dd(x.card.photoChanged)}</div>}
                   </td>
                   {cols.map(c => {
