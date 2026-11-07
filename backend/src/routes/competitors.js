@@ -316,15 +316,24 @@ function mapMarketRaw(o) {
   return {
     rev: pickRaw(o, ['gmvSum', 'soldSum']), qty: pickRaw(o, ['soldCount', 'ordersCount']), avgPrice: pickRaw(o, ['avgPrice', 'avgGmv']), minPrice: pickRaw(o, ['minSellerPrice']),
     revDyn: pickRaw(o, ['salesDynamics']), stock: pickRaw(o, ['stock']), lost: pickRaw(o, ['sumMissedGmv']),
-    views: pickRaw(o, ['qtyView', 'qtyViews', 'viewsCount', 'hitsView', 'showsCount', 'sumView', 'impressions']),
-    searchViews: pickRaw(o, ['qtyViewSearch', 'qtyViewSearchCatalog', 'searchViews', 'hitsViewSearch', 'viewsSearchCatalog']),
-    pdp: pickRaw(o, ['qtyViewPdp', 'sessionCount', 'hitsViewPdp']), cartPdp: pickRaw(o, ['pdpToCartConversion', 'convToCartPdp']), cartSearch: pickRaw(o, ['convToCart', 'convToCartSearch']),
+    views: pickRaw(o, ['views', 'qtyView', 'qtyViews', 'viewsCount', 'hitsView', 'showsCount', 'sumView', 'impressions']),
+    searchViews: pickRaw(o, ['sessionCountSearch', 'qtyViewSearch', 'qtyViewSearchCatalog', 'searchViews', 'hitsViewSearch', 'viewsSearchCatalog']),
+    pdp: pickRaw(o, ['qtyViewPdp', 'sessionCount', 'hitsViewPdp']), cartPdp: pickRaw(o, ['pdpToCartConversion', 'convToCartPdp']), cartSearch: pickRaw(o, ['convToCartSearch', 'convToCart']), ctrOzon: pickRaw(o, ['convViewToPdp']),
     convOrder: pickRaw(o, ['convViewToOrder', 'convToOrder', 'conversionViewToOrder', 'viewToOrderConversion']),
     drr: pickRaw(o, ['drr', 'adsShare', 'advShare', 'promotionShare', 'adRevenueShare', 'advertisingCostShare']),
-    buyout: pickRaw(o, ['buyoutPercent', 'redemptionPercent', 'buyoutShare', 'redemptionRate']),
+    buyout: pickRaw(o, ['nullableRedemptionRate', 'buyoutPercent', 'redemptionPercent', 'buyoutShare', 'redemptionRate']),
   };
 }
 router.mapMarketRaw = mapMarketRaw;
+// GET /api/competitors/raw?cabinet=&sku= — последний сырой ответ «Товаров на Ozon» по SKU (для проверки полей).
+router.get('/raw', async (req, res) => {
+  try {
+    await ensure();
+    const rows = await query(`SELECT DISTINCT ON (window_days) window_days w, report_date::text d, data->'_raw' raw FROM market_snapshot
+      WHERE cabinet = $1 AND sku = $2 AND data ? '_raw' ORDER BY window_days, report_date DESC`, [req.query.cabinet || 'defly', String(req.query.sku || '').replace(/\D/g, '') || '0']);
+    res.json({ success: true, data: rows });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
 // POST /api/competitors/agent/market {cabinet, window, items: [ответ кабинета]}
 router.post('/agent/market', async (req, res) => {
   try {

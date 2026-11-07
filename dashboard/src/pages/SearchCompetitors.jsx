@@ -28,7 +28,7 @@ function shortName(n) {
   return t || String(n || '');
 }
 // Лучшее значение в колонке подсвечиваем зелёным: 'up' — больше лучше, 'down' — меньше лучше.
-const BEST = { rev: 'up', qty: 'up', avgPrice: 'down', views: 'up', searchViews: 'up', pdp: 'up', ctr: 'up', cartPdp: 'up', convOrder: 'up', drr: 'down', buyout: 'up' };
+const BEST = { rev: 'up', qty: 'up', avgPrice: 'down', views: 'up', searchViews: 'up', pdp: 'up', carts: 'up', ctr: 'up', cartPdp: 'up', crOrder: 'up', drr: 'down', buyout: 'up' };
 function bestOf(values, dir) {
   const ok = values.filter(v => v != null && Number.isFinite(v));
   if (ok.length < 2) return null;
@@ -41,17 +41,23 @@ const MCOLS = [
   { k: 'rev', g: 'Заказы', s: '₽', l: 'Заказы, ₽', f: money, diff: true, hint: 'Заказано на сумму за окно отчёта' },
   { k: 'qty', g: 'Заказы', s: 'шт', l: 'Заказы, шт', f: fmtInt, diff: true },
   { k: 'avgPrice', g: 'Заказы', s: 'ср. цена', l: 'Ср. цена', f: money },
-  { k: 'views', g: 'Трафик', s: 'показы', l: 'Показы', f: fmtInt, diff: true, hint: 'Показы всего: поиск, каталог, рекомендации' },
-  { k: 'searchViews', g: 'Трафик', s: 'в поиске', l: 'Просм. в поиске', f: fmtInt, diff: true, hint: 'Просмотры в поиске и каталоге' },
-  { k: 'pdp', g: 'Трафик', s: 'карточка', l: 'Просм. карточки', f: fmtInt, diff: true },
-  { k: 'ctr', g: 'Конверсии', s: 'CTR', l: 'CTR', f: pct, calc: d => (d.views > 0 && d.pdp != null ? d.pdp / d.views * 100 : null), hint: 'Просмотры карточки / показы — посчитано сервисом' },
-  { k: 'cartPdp', g: 'Конверсии', s: 'в корзину', l: 'В корзину из карточки', hint: 'В корзину из карточки (Ozon)', f: pct },
-  { k: 'convOrder', g: 'Конверсии', s: 'показ→заказ', l: 'Показ → заказ', f: pct, hint: 'Конверсия из показа в заказ (Ozon)' },
+  { k: 'views', g: 'Трафик', s: 'показы', l: 'Показы', f: fmtInt, diff: true, hint: 'Показы всего: поиск, каталог, рекомендации (Ozon)' },
+  { k: 'searchViews', g: 'Трафик', s: 'в поиске', l: 'Показы в поиске', f: fmtInt, diff: true, hint: 'Показы в поиске и каталоге (Ozon)' },
+  { k: 'pdp', g: 'Трафик', s: 'клики', l: 'Клики', f: fmtInt, diff: true, hint: 'Клики — переходы в карточку товара (Ozon)' },
+  { k: 'carts', g: 'Трафик', s: 'корзины', l: 'Корзины', f: fmtInt, diff: true, calc: carts, hint: 'Корзины — расчётно: клики × «в корзину из карточки» + показы в поиске × «в корзину из поиска» (Ozon даёт только проценты)' },
+  { k: 'ctr', g: 'Конверсии', s: 'CTR', l: 'CTR', f: pct, calc: d => (d.views > 0 && d.pdp != null ? d.pdp / d.views * 100 : null), hint: 'Клики / показы' },
+  { k: 'cartPdp', g: 'Конверсии', s: 'в корзину', l: 'В корзину', hint: 'Из карточки в корзину — процент от Ozon', f: pct },
+  { k: 'crOrder', g: 'Конверсии', s: 'в заказ', l: 'В заказ', f: pct, calc: d => { const c = carts(d); return c > 0 && d.qty != null ? d.qty / c * 100 : null; }, hint: 'Заказы / корзины (корзины — расчётные)' },
   { k: 'drr', g: 'Реклама', s: 'ДРР', l: 'ДРР', f: pct, hint: 'Доля рекламных расходов от суммы заказов (Ozon)' },
   { k: 'adDays', g: 'Реклама', s: 'дней', l: 'Дней с продвиж.', hint: 'Дней с продвижением за окно отчёта', f: v => v || '—' },
   { k: 'buyout', g: 'Выкуп и остаток', s: 'выкуп', l: 'Выкуп', f: pct },
   { k: 'stock', g: 'Выкуп и остаток', s: 'остаток', l: 'Остаток', f: fmtInt },
 ];
+// Корзины в штуках Ozon не отдаёт — считаем из кликов и процентов «в корзину».
+function carts(d) {
+  if (!d || d.pdp == null || d.cartPdp == null) return null;
+  return d.pdp * d.cartPdp / 100 + (d.searchViews != null && d.cartSearch != null ? d.searchViews * d.cartSearch / 100 : 0);
+}
 const valOf = (c, d) => (c.calc ? c.calc(d || {}) : (d || {})[c.k] ?? null);
 
 // Фото: вставка (Ctrl+V), перетаскивание файла или ссылка. Картинка
