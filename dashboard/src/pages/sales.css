@@ -625,3 +625,17 @@
 .mpui .sc-cmp .sc-sku{font-family:var(--a-num);font-size:11px;color:var(--a-ink3);display:flex;align-items:center;gap:4px;margin-top:1px}
 .mpui .sc-cmp .sc-sku a{color:inherit;text-decoration:none}
 .mpui .sc-cmp .sc-sku a:hover{color:var(--a-accent);text-decoration:underline}
+
+/* Позиции: группы ключей, плитки и график как в кабинете Ozon */
+.mpui .sp-nav{margin:0 0 10px}
+.mpui .sp-nav .muted{font-weight:400;color:var(--a-ink3);margin-left:3px}
+.mpui .sp-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:12px}
+.mpui .sp-kpi{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;background:var(--a-panel);border:1px solid var(--a-line);border-radius:12px;padding:11px 13px;cursor:pointer;color:var(--a-ink);font:inherit}
+.mpui .sp-kpi:hover{border-color:var(--a-line2)}
+.mpui .sp-kpi.on{box-shadow:0 0 0 2px var(--a-accent) inset}
+.mpui .sp-kpi .l{font-size:11.5px;color:var(--a-ink2);line-height:1.3}
+.mpui .sp-kpi .v{font-family:var(--a-num);font-size:20px;font-weight:700}
+.mpui .sp-kpi .d{font-size:11px;font-weight:500;margin-left:6px;color:var(--a-ink3)}
+.mpui .sp-kpi .d.good{color:hsl(140 55% 45%)}
+.mpui .sp-kpi .d.bad{color:hsl(0 65% 60%)}
+.mpui .sp-chart{margin-bottom:12px;padding-bottom:6px}

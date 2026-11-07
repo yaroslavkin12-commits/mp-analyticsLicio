@@ -273,6 +273,26 @@ async function marketInPage(companyId, sku, period) {
   } catch (e) { return { status: 0, error: String(e && e.message || e) }; }
 }
 
+// Выполняется внутри seller.ozon.ru: «Аналитика товара → Запросы товара» за один день
+// (полный список запросов, страницами по 100) → строки с числами.
+async function productQueriesInPage(companyId, sku, from, to, page) {
+  try {
+    const r = await fetch('/api/search-query-analytics/v2/cjm/get-top-queries-by-sku', {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json', accept: 'application/json', 'x-o3-app-name': 'seller-ui', 'x-o3-language': 'ru', 'x-o3-company-id': String(companyId), 'x-o3-page-type': 'analytics-search' },
+      body: JSON.stringify({ seller_id: String(companyId), application_scope: [], page_number: page, period_from: from, period_to: to, search: '', queries_per_page: 100, seller_sku: String(sku), sort_by: 'METRICS_TYPE_UNIQUE_VIEW_USERS', sort_direction: 'DESCENDING' }),
+    });
+    if (r.status !== 200) return { status: r.status, error: (await r.text()).slice(0, 200) };
+    const o = await r.json();
+    const num = v => { const s = String((v && v.value) ?? v ?? '').replace(/[\s\u00a0\u2000-\u200f\u202f₽%]/g, '').replace(',', '.'); return s && !isNaN(Number(s)) ? Number(s) : 0; };
+    const rows = (o.queries || []).map(q => { const v = q.values || {}; return { query: q.query, position: num(v.searchPosition), searches: num(v.uniqueSearchUsers), views: num(v.uniqueViewUsers), ctr: num(v.queryCtrInteract), orders: num(v.uniqueOrdersCount), gmv: num(v.gmv) }; });
+    return { status: 200, rows };
+  } catch (e) { return { status: 0, error: String(e && e.message || e) }; }
+}
+// Границы дня по Москве в UTC: 00:00 МСК = 21:00 UTC предыдущего дня.
+const mskDayRange = d => { const t = Date.parse(d + 'T00:00:00Z') - 3 * 3600e3; return [new Date(t).toISOString(), new Date(t + 86400e3 - 1).toISOString()]; };
+const mskDaysBack = n => { const out = []; const now = mskNow().date; for (let i = 1; i <= n; i++) out.push(new Date(Date.parse(now + 'T00:00:00Z') - i * 86400e3).toISOString().slice(0, 10)); return out; };
+
 let agentBusy = false;
 async function runAgent(reason, force) {
   if (agentBusy) return;
@@ -295,7 +315,16 @@ async function runAgent(reason, force) {
       if (force || !done[key] || Date.now() - done[key] > (t.serpEveryHours || 4) * 3600e3) due.push({ task, reg, key });
     }
     const marketDue = (t.market || []).length && (force || (now.hour >= (t.marketHour || 10) && st.marketDate !== now.date));
-    if (!due.length && !marketDue) { st.note = 'всё уже собрано'; return; }
+    // Запросы товаров: вчера и позавчера — каждый раз заново (Ozon досчитывает), пропущенные дни за 14 дней — дозагрузка.
+    const { qDone = {} } = await chrome.storage.local.get('qDone');
+    const qJobs = [];
+    const recent = mskDaysBack(2), back = mskDaysBack(t.queriesBackfillDays || 14);
+    for (const g of t.queries || []) for (const sku of g.skus) for (const d of back) {
+      const key = g.cabinet + '|' + sku + '|' + d;
+      const fresh = recent.includes(d) && (!qDone[key] || Date.now() - qDone[key] > 6 * 3600e3);
+      if (fresh || !qDone[key]) qJobs.push({ g, sku, d, key });
+    }
+    if (!due.length && !marketDue && !qJobs.length) { st.note = 'всё уже собрано'; return; }
     tab = await sellerTab();
     st.serpOk = 0; st.serpAsked = due.length;
     for (const d of due) {
@@ -309,6 +338,30 @@ async function runAgent(reason, force) {
       await chrome.storage.local.set({ agentState: { ...st } });
       await sleep(2500 + Math.random() * 2500);
     }
+    // За один запуск — не больше 120 обращений к кабинету по запросам: остальное доберём в следующие запуски.
+    let qBudget = 120; st.qOk = 0; st.qLeft = qJobs.length;
+    for (const j of qJobs) {
+      if (qBudget <= 0) break;
+      const [from, to] = mskDayRange(j.d);
+      const rows = [];
+      let fail = null;
+      for (let page = 0; page < 30 && qBudget > 0; page++) {
+        qBudget--;
+        const res = await inSeller(tab.id, productQueriesInPage, [String(j.g.companyId), j.sku, from, to, page]);
+        if (res.status === 401 || res.status === 403) throw new Error('нет входа в кабинет Ozon (откройте seller.ozon.ru и войдите)');
+        if (res.status !== 200) { fail = res.error || res.status; break; }
+        rows.push(...res.rows);
+        await sleep(900 + Math.random() * 900);
+        if (res.rows.length < 100) break;
+      }
+      if (fail) { st.error = 'запросы товара ' + j.sku + ': ' + fail; continue; }
+      const ir = await fetch(server + '/api/queries/ingest-ext', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: j.g.cabinet, sku: j.sku, date: j.d, rows }) });
+      if (ir.ok) { qDone[j.key] = Date.now(); st.qOk++; st.qLeft--; }
+      else st.error = 'сервис не принял запросы товара ' + j.sku + ' (' + ir.status + ')';
+      // Чистим память старше 20 дней.
+      await chrome.storage.local.set({ qDone, agentState: { ...st } });
+    }
+    { const cut = mskDaysBack(20).pop(); for (const k of Object.keys(qDone)) if (k.split('|')[2] < cut) delete qDone[k]; await chrome.storage.local.set({ qDone }); }
     if (marketDue) {
       let ok = 0, asked = 0;
       for (const g of t.market) {

@@ -95,6 +95,29 @@ router.post('/ingest', async (req, res) => {
   } catch (e) { if (!e.status) console.error(e); res.status(e.status || 500).json({ success: false, error: e.message }); }
 });
 
+// POST /api/queries/ingest-ext {cabinet, sku, date, rows: [{query, position, searches, views, ctr, orders, gmv}]}
+// — полный список запросов товара за день из кабинета Ozon (собирает браузерное
+// расширение «Аналитика товара → Запросы товара»: там все запросы, а не 15 лучших,
+// и есть конверсия в карточку). День товара заменяется целиком.
+router.post('/ingest-ext', async (req, res) => {
+  try {
+    await ensureFinTables();
+    const { cabinet = 'defly', sku, date, rows } = req.body || {};
+    if (!/^[a-z_]{2,32}$/.test(cabinet) || !/^\d{1,15}$/.test(String(sku || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !Array.isArray(rows) || rows.length > 20000) return res.status(400).json({ success: false, error: 'Некорректные данные' });
+    const out = [];
+    for (const r of rows) {
+      if (!r || !r.query) continue;
+      const v = Math.round(num(r.views)), ctr = num(r.ctr), pos = num(r.position);
+      out.push([cabinet, date, String(sku), String(r.query).slice(0, 200), pos > 0 ? Math.round(pos * 100) / 100 : null, Math.round(num(r.searches)), v,
+        Math.round(v * ctr / 100), Math.round(num(r.orders)), num(r.gmv), ctr || null]);
+    }
+    await query(`DELETE FROM search_query_daily WHERE cabinet = $1 AND date = $2 AND sku = $3`, [cabinet, date, String(sku)]);
+    const n = out.length ? await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], out, ['cabinet', 'date', 'sku', 'query']) : 0;
+    require('../lib/dataVersion').bump();
+    res.json({ success: true, data: { rows: n } });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
 // GET /api/queries/sample?cabinet= — пример ответа Ozon по запросам (какие поля пришли).
 router.get('/sample', async (req, res) => {
   try {
@@ -147,7 +170,10 @@ router.get('/article', async (req, res) => {
     const from = req.query.dateFrom || dayjs(to).subtract(13, 'day').format('YYYY-MM-DD');
     const cat = await query(`SELECT sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = $2`, [cabinet, offerId]);
     const skus = cat.filter(r => r.sku != null).map(r => num(r.sku));
-    const rows = skus.length ? await query(`SELECT date::text d, query, MIN(position) p, MAX(searches)::int s, SUM(views)::int v, SUM(clicks)::int c, SUM(orders)::int o, SUM(revenue) r
+    // Переходов (кликов) API Ozon не отдаёт — только «конверсию из поиска в карточку»
+    // (view_conversion, в процентах). Тогда переходы = увидели × конверсия.
+    const rows = skus.length ? await query(`SELECT date::text d, query, MIN(position) p, MAX(searches)::int s, SUM(views)::int v,
+        SUM(CASE WHEN clicks > 0 THEN clicks WHEN conversion > 0 THEN ROUND(views * conversion / 100.0) ELSE 0 END)::int c, SUM(orders)::int o, SUM(revenue) r
       FROM search_query_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 AND sku = ANY($4::bigint[])
       GROUP BY date, query ORDER BY date`, [cabinet, from, to, skus]) : [];
     res.json({ success: true, data: {

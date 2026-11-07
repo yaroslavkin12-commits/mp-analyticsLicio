@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getQuerySample, getSerpTracking, saveSerpTracking, getAdsEvents, getAdsStats, latestOnly } from '../api';
+import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getSerpTracking, saveSerpTracking, getAdsEvents, getAdsStats, latestOnly } from '../api';
 import { fmtInt, fmtPct, fmtBy, heatColor, useTip, ChartPane, niceScale, CAT_COLORS } from './AdsStats2';
 import { useCats, useGroups, FinHeader, Kpi, Empty, inPath, matchQ, OTHER } from './finShared';
 import { FREQ, FREQ_LABEL, DEFAULT_FREQ, freqOf, isTarget, productProfile } from '../lib/queryGroups';
@@ -316,6 +316,15 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const [openQ, setOpenQ] = useState({});
   const [tab, setTab] = useState('q');
 
+  // Прошлый период той же длины — для «+12%» у плиток, как в кабинете Ozon.
+  const [prevData, setPrevData] = useState(null);
+  useEffect(() => {
+    const len = dayjs(dateTo).diff(dayjs(dateFrom), 'day') + 1;
+    const pTo = dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(dateFrom).subtract(len, 'day').format('YYYY-MM-DD');
+    setPrevData(null);
+    getQueryArticle(cabinet, offer, { dateFrom: pFrom, dateTo: pTo }).then(r => setPrevData(r.data.data)).catch(() => setPrevData(null));
+  }, [cabinet, offer, dateFrom, dateTo]);
+  const [metric, setMetric] = useState('v');
   useEffect(() => {
     setData(null); setErr(null); setAds(null); setOpenQ({});
     const ok = latestOnly('sp-art:' + cabinet);
@@ -376,6 +385,25 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
     return out;
   }, [dates, sumSet, ads]);
 
+  const prevSum = useMemo(() => {
+    if (!prevData) return null;
+    const m = new Map();
+    for (const [, q, p, sx, v, c, o, r] of prevData.rows) { const l = m.get(q) || []; l.push({ p, s: sx, v, c, o, r }); m.set(q, l); }
+    const cur = new Map(queries.map(x => [x.q, x]));
+    const test = SETS.find(st => st.key === gsel).test;
+    const k = 30 / Math.max(1, dates.length);
+    const list = [];
+    for (const [q, days] of m) {
+      if (focusQ && q !== focusQ) continue;
+      const known = cur.get(q);
+      const t0 = sumDay(days);
+      const x = known ? { t: known.t, f: known.f } : { t: isTarget(q, groups[q], profile), f: freqOf(t0.s * k, th) };
+      if (focusQ || test(x)) list.push(...days);
+    }
+    return sumDay(list);
+  }, [prevData, queries, gsel, focusQ, groups, profile, th, dates.length]);
+  const curSum = useMemo(() => sumDay(sumSet.flatMap(x => x.list)), [sumSet]);
+
   const toggleTarget = async x => {
     const prev = groups;
     const g = x.t ? 'other' : 'target';
@@ -416,21 +444,19 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
         <Empty>За выбранный период по этому товару нет данных о поисковых запросах.</Empty>
       ) : (
         <>
-          {setStats.all.c === 0 && setStats.all.o === 0 && <ZeroWarn cabinet={cabinet} />}
-          <div className="sp-groups">
-            {SETS.map(g => {
-              const st = setStats[g.key];
-              return (
-                <button key={g.key} type="button" className={`sp-g ${gsel === g.key ? 'on' : ''} g-${g.key}`} onClick={() => { setGsel(g.key); setShowAll(false); setFocusQ(null); }} title={g.hint}>
-                  <span className="t">{g.label} <span className="muted">· {st.q} запр.{g.key !== 'hiOther' ? ` (ВЧ ${st.fq[0]} · СЧ ${st.fq[1]} · НЧ ${st.fq[2]})` : ''}</span></span>
-                  <span className="big">{fmtInt(st.s)}<small> искали</small></span>
-                  <span className="row2">увидели {fmtInt(st.v)} · охват {fmtPct(st.reach)}</span>
-                  <span className="row2">позиция {pos(st.p)} · CTR {fmtPct(st.ctr)} · в заказ {fmtPct(st.toOrder)}</span>
-                  <span className="row2">заказы {fmtInt(st.o)} шт · {fmtInt(st.r)} ₽</span>
-                </button>
-              );
-            })}
-          </div>
+          {setStats.all.c === 0 && setStats.all.o === 0 && <ZeroWarn />}
+          <nav className="category-nav sp-nav">
+            <div className="category-nav-top"><div className="category-nav-categories">
+              {SETS.map(g => {
+                const st = setStats[g.key];
+                return <button key={g.key} type="button" className={gsel === g.key && !focusQ ? 'on' : ''} title={`${g.hint}. Запросов: ${st.q}${g.key !== 'hiOther' ? ` (ВЧ ${st.fq[0]}, СЧ ${st.fq[1]}, НЧ ${st.fq[2]})` : ''}`}
+                  onClick={() => { setGsel(g.key); setShowAll(false); setFocusQ(null); }}>{g.label} <span className="muted">{st.q}</span></button>;
+              })}
+              {focusQ && <button type="button" className="on" onClick={() => setFocusQ(null)} title="Вернуться к группе">запрос «{focusQ}» ×</button>}
+            </div></div>
+          </nav>
+          <SpKpis cur={curSum} prev={prevSum} metric={metric} setMetric={setMetric} />
+          <SpChart dates={dates} byDate={byDate} metric={metric} setMetric={setMetric} events={events} tip={tip} />
 
           <div className="a-card" ref={daysRef} style={{ scrollMarginTop: 190 }}>
             <div className="sp-tbar">
@@ -452,17 +478,61 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   );
 }
 
+// Плитки, как в кабинете Ozon: значение за период и изменение к прошлому периоду той же длины.
+const KPIS = [
+  { k: 's', l: 'Сколько покупателей искало', f: v => fmtInt(v), good: 'up' },
+  { k: 'v', l: 'Сколько покупателей увидело', f: v => fmtInt(v), good: 'up' },
+  { k: 'p', l: 'Позиция в поиске', f: v => pos(v), good: 'down', abs: true },
+  { k: 'ctr', l: 'Конверсия из поиска в карточку', f: v => fmtPct(v), good: 'up', pp: true },
+  { k: 'toOrder', l: 'Конверсия из поиска в заказ', f: v => (v == null ? '—' : `${v.toFixed(2).replace('.', ',')}%`), good: 'up', pp: true },
+  { k: 'o', l: 'Заказано товаров по запросам', f: v => fmtInt(v), good: 'up' },
+  { k: 'r', l: 'Заказано на сумму по запросам', f: v => `${fmtInt(v)} ₽`, good: 'up' },
+];
+function SpKpis({ cur, prev, metric, setMetric }) {
+  return (
+    <div className="sp-kpis">
+      {KPIS.map(m => {
+        const v = cur[m.k], p = prev ? prev[m.k] : null;
+        let delta = null, good = null;
+        if (v != null && p != null) {
+          if (m.abs) { delta = Math.round(v - p); good = delta === 0 ? null : (delta < 0) === (m.good === 'down'); }
+          else if (p > 0) { delta = Math.round((v - p) / p * 100); good = delta === 0 ? null : (delta > 0) === (m.good === 'up'); }
+        }
+        return (
+          <button key={m.k} type="button" className={`sp-kpi ${metric === m.k ? 'on' : ''}`} onClick={() => setMetric(m.k)} title="Показать на графике по дням">
+            <span className="l">{m.l}</span>
+            <span className="v">{m.f(v)}{delta != null && <span className={`d ${good === true ? 'good' : good === false ? 'bad' : ''}`}>{delta > 0 ? '+' : ''}{delta}{m.abs ? '' : '%'}</span>}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+// График по дням выбранного показателя (клик по плитке выбирает показатель).
+function SpChart({ dates, byDate, metric, setMetric, events, tip }) {
+  const m = KPIS.find(x => x.k === metric) || KPIS[1];
+  const values = dates.map(d => { const v = byDate[d]?.[m.k]; return v == null || (m.k === 'p' && !(v > 0)) ? null : v; });
+  const nums = values.filter(v => v != null);
+  if (!nums.length) return null;
+  const ser = [{ key: m.k, label: m.l, fmt: m.k === 'p' ? 'pos' : (m.k === 'ctr' || m.k === 'toOrder') ? 'pct' : 'int', kind: 'line', side: 'left', color: 'var(--s-c1)', values, scale: niceScale(Math.min(...nums), Math.max(...nums), m.k === 'p') }];
+  return (
+    <div className="a-card sp-chart">
+      <div className="sp-tbar"><b>Динамика:</b>
+        <select className="a-input" value={m.k} onChange={e => setMetric(e.target.value)} style={{ width: 'auto' }}>{KPIS.map(x => <option key={x.k} value={x.k}>{x.l.toLowerCase()}</option>)}</select>
+        <span className="a-hint">по дням · точки сверху — журнал изменений</span>
+      </div>
+      <ChartPane dates={dates} series={ser} events={events.map(e => ({ id: e.id, date: e.date, text: e.text }))} tip={tip} height={220} showX onHover={() => {}} hoverIdx={null} />
+    </div>
+  );
+}
+
 // Переходов и заказов по запросам нет совсем — скорее всего, Ozon называет
 // эти поля иначе, чем ждёт скрипт. Показываем пример ответа Ozon.
-function ZeroWarn({ cabinet }) {
-  const [s, setS] = useState(undefined);
-  useEffect(() => { getQuerySample(cabinet).then(r => setS(r.data.data)).catch(() => setS(null)); }, [cabinet]);
+function ZeroWarn() {
   return (
     <div className="a-card sp-warn">
-      <b>По запросам за период нет ни одного перехода в карточку и ни одного заказа.</b> Поэтому CTR, конверсия в заказ, заказы и сумма — нули.
-      Скорее всего, Ozon присылает эти поля под другими названиями, чем ждал скрипт. Новая версия скрипта понимает больше вариантов и присылает в сервис пример ответа Ozon.
-      {s ? <div className="sp-sample">Пример ответа Ozon от {String(s.at).slice(0, 10)}: <code>{s.sample}</code></div>
-        : s === null ? <div className="a-hint" style={{ marginTop: 6 }}>Пример ответа ещё не приходил: он появится после первого запуска новой версии скрипта с прямой отправкой.</div> : null}
+      <b>По запросам за период нет переходов и заказов.</b> API Ozon отдаёт только 15 главных запросов в день и без переходов — основная часть заказов идёт с «длинного хвоста» и сюда не попадает.
+      Полный список запросов с конверсиями и заказами (как в кабинете Ozon) собирает расширение «Соинвест» версии 1.4.0 — для товаров в рекламе и отслеживаемых, за последние 14 дней. Обновите расширение и держите открытой вкладку seller.ozon.ru.
     </div>
   );
 }

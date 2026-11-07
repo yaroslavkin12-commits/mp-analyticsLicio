@@ -283,7 +283,16 @@ router.get('/agent-tasks', async (req, res) => {
         UNION SELECT DISTINCT c.sku FROM ad_product_catalog c JOIN search_competitors s ON s.cabinet = c.cabinet AND s.offer_id = c.offer_id WHERE c.cabinet = $1 AND c.platform = 'ozon' AND c.sku IS NOT NULL`, [cabinet]);
       if (rows.length) market.push({ cabinet, companyId, skus: rows.map(r => String(r.sku)) });
     }
-    res.json({ success: true, data: { serp, market, serpEveryHours: 4, marketHour: 10, date: mskDate() } });
+    // Запросы товара из кабинета (полный список) — по товарам в запущенных РК и по отслеживаемым артикулам.
+    const qsku = [];
+    for (const [cabinet, companyId] of Object.entries(ids)) {
+      const rows = await query(`SELECT DISTINCT s.sku FROM ad_campaign_skus s JOIN ad_campaigns c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.campaign_id = s.campaign_id
+        WHERE s.cabinet = $1 AND s.platform = 'ozon' AND c.state = 'CAMPAIGN_STATE_RUNNING'`, [cabinet]).catch(() => []);
+      const set = new Set(rows.map(r => String(r.sku)));
+      for (const t of serp.filter(x => x.cabinet === cabinet)) t.skus.forEach(x => set.add(x));
+      if (set.size) qsku.push({ cabinet, companyId, skus: [...set] });
+    }
+    res.json({ success: true, data: { serp, market, queries: qsku, queriesBackfillDays: 14, serpEveryHours: 4, marketHour: 10, date: mskDate() } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 

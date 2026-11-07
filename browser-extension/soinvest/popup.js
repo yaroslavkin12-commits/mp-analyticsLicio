@@ -23,6 +23,7 @@ async function renderAgent() {
   else {
     if (a.running) html += '<div class="muted">Идёт сбор… выдача ' + (a.serpOk || 0) + ' из ' + (a.serpAsked || '?') + '</div>';
     else html += `<div class="row"><span>${fmt(a.finished || a.at)}</span><span class="ok">${a.note ? a.note : 'выдача ' + (a.serpOk || 0) + ' из ' + (a.serpAsked || 0)}</span></div>`;
+    if (a.qOk != null) html += `<div class="row"><span>Запросы товаров (дни)</span><span class="ok">${a.qOk} загружено${a.qLeft > 0 ? ' · осталось ' + a.qLeft : ''}</span></div>`;
     if (a.marketDate) html += `<div class="row"><span>«Товары на Ozon»</span><span class="ok">${a.marketDate.slice(8)}.${a.marketDate.slice(5, 7)} · ${a.marketOk || 0} из ${a.marketAsked || 0}</span></div>`;
     if (a.error) html += `<div class="bad" style="margin-top:6px">${a.error}</div>`;
   }
