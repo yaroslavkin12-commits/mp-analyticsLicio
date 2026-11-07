@@ -330,7 +330,7 @@ router.get('/raw', async (req, res) => {
   try {
     await ensure();
     const rows = await query(`SELECT DISTINCT ON (window_days) window_days w, report_date::text d, data->'_raw' raw FROM market_snapshot
-      WHERE cabinet = $1 AND sku = $2 AND data ? '_raw' ORDER BY window_days, report_date DESC`, [req.query.cabinet || 'defly', String(req.query.sku || '').replace(/\D/g, '') || '0']);
+      WHERE cabinet = $1 AND sku = $2 AND data->'_raw' IS NOT NULL ORDER BY window_days, report_date DESC`, [req.query.cabinet || 'defly', String(req.query.sku || '').replace(/\D/g, '') || '0']);
     res.json({ success: true, data: rows });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
