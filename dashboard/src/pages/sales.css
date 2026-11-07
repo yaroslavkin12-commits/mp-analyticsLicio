@@ -639,3 +639,7 @@
 .mpui .sp-kpi .d.good{color:hsl(140 55% 45%)}
 .mpui .sp-kpi .d.bad{color:hsl(0 65% 60%)}
 .mpui .sp-chart{margin-bottom:12px;padding-bottom:6px}
+
+.mpui .sc-tr{font-weight:600}
+.mpui .sc-tr.up{color:hsl(140 55% 45%)}
+.mpui .sc-tr.down{color:hsl(0 65% 60%)}

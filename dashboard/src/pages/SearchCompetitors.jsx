@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getCompetitors, getSerp, addCompetitor, removeCompetitor, saveSkuPhoto, saveCompetitorView, importCompetitorReport, latestOnly } from '../api';
@@ -38,7 +39,7 @@ function bestOf(values, dir) {
 
 // Показатели отчёта «Товары на Ozon», которые сравниваем.
 const MCOLS = [
-  { k: 'rev', g: 'Заказы', s: '₽', l: 'Заказы, ₽', f: money, diff: true, hint: 'Заказано на сумму за окно отчёта' },
+  { k: 'rev', g: 'Заказы', s: '₽', l: 'Заказы, ₽', f: money, diff: true, hint: 'Заказано на сумму за окно отчёта — по цене, которую платят покупатели (со скидками Ozon). В других разделах наша выручка считается по цене продавца, поэтому там она выше' },
   { k: 'qty', g: 'Заказы', s: 'шт', l: 'Заказы, шт', f: fmtInt, diff: true },
   { k: 'avgPrice', g: 'Заказы', s: 'ср. цена', l: 'Ср. цена', f: money },
   { k: 'views', g: 'Трафик', s: 'показы', l: 'Показы', f: fmtInt, diff: true, hint: 'Показы всего: поиск, каталог, рекомендации (Ozon)' },
@@ -53,6 +54,17 @@ const MCOLS = [
   { k: 'buyout', g: 'Выкуп и остаток', s: 'выкуп', l: 'Выкуп', f: pct },
   { k: 'stock', g: 'Выкуп и остаток', s: 'остаток', l: 'Остаток', f: fmtInt },
 ];
+// Заказы в день: среднее за 7 и за 28 дней и тренд — из двух отчётов «Товары на Ozon».
+// Окно Ozon заканчивается позавчера (сегодня и вчера в отчёт не входят).
+const perDay = (m, w) => (m && m.data && m.data.qty != null ? m.data.qty / w : null);
+const fmtDay = v => (v == null ? '—' : v >= 10 ? fmtInt(v) : v.toFixed(1).replace('.', ','));
+const trendOf = x => { const a = perDay(x.l7, 7), b = perDay(x.l28, 28); return a != null && b > 0 ? Math.round((a / b - 1) * 100) : null; };
+const PERDAY = [
+  { k: 'd7', g: 'Заказы в день', l: 'за 7 дн', best: 'up', get: x => perDay(x.l7, 7), f: fmtDay, hint: 'Среднее число заказов в день за последние 7 дней отчёта (по позавчера). Точность ±1–2 шт. за неделю' },
+  { k: 'd28', g: 'Заказы в день', l: 'за 28 дн', best: 'up', get: x => perDay(x.l28, 28), f: fmtDay, hint: 'Среднее число заказов в день за 28 дней отчёта (по позавчера)' },
+  { k: 'trend', g: 'Заказы в день', l: 'тренд', get: trendOf, f: v => (v == null ? '—' : <span className={v >= 15 ? 'sc-tr up' : v <= -15 ? 'sc-tr down' : 'sc-tr'}>{v > 0 ? '↑ +' : v < 0 ? '↓ ' : ''}{v}%</span>), hint: 'Последняя неделя против среднего за 28 дней: ↑ — продажи растут, ↓ — падают. Меньше ±15% — без заметных изменений' },
+];
+
 // Корзины в штуках Ozon не отдаёт — считаем из кликов и процентов «в корзину».
 function carts(d) {
   if (!d || d.pdp == null || d.cartPdp == null) return null;
@@ -179,7 +191,9 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
       const last = list[list.length - 1] || null, prev = list[list.length - 2] || null;
       const card = (data.cards || {})[sku] || null;
       const full = last?.name || card?.title || name || '';
-      return { sku, kind, own, label: labels[sku] || label, name: full, short: shortName(full), seller: last?.seller || seller || '', last, prev, list, card, manualPhoto: data.photos[sku] || null, photo: data.photos[sku] || card?.photo || null };
+      const lastOf = w => (data.market || []).filter(m => m.sku === sku && m.window === w).reduce((a, m) => (!a || m.date > a.date ? m : a), null);
+      const l7 = lastOf(7), l28 = lastOf(28);
+      return { sku, kind, own, l7, l28, label: labels[sku] || label, name: full, short: shortName(full), seller: last?.seller || seller || '', last, prev, list, card, manualPhoto: data.photos[sku] || null, photo: data.photos[sku] || card?.photo || null };
     };
     const shop = SHOP[cabinet] || cabinet;
     const list = [...data.our.map(o => mk(o.sku, 'our', shop, o.name, shop, true)), ...data.competitors.map(c => mk(c.sku, 'comp', c.label || c.seller || 'Конкурент', c.name, c.seller, !!c.ours))];
@@ -237,7 +251,7 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
         { k: 'rel', g: 'Выдача', l: 'соответств.', best: 'up', serp: true, get: x => sv(x, 'relevance'), f: v => (v == null ? '—' : String(v).replace('.', ',')), hint: 'Насколько карточка соответствует запросу (Ozon)' },
       ] : []),
       ...MCOLS.filter(c => c.k !== 'adDays').map(c => ({ k: c.k, g: c.g, l: c.s, best: BEST[c.k] || null, f: v => c.f(v), get: x => (x.last ? valOf(c, x.last.data) : null), hint: c.hint, diff: c.diff, m: c })),
-    ];
+    ].flatMap(c => (c.k === 'avgPrice' ? [c, ...PERDAY] : [c]));
   }, [serpMap, show.vit, show.serp]);
   const groups = useMemo(() => {
     const out = [];
@@ -335,7 +349,7 @@ export default function SearchCompetitors({ cabinet, offer, tip }) {
                       </td>
                     );
                   })}
-                  <td className="n c gs">{x.last ? <>{dd(x.last.date)}{x.last.data?._empty && <div className="sc-d" title={`Ozon вернул пустую строку: за ${win} дней у товара не было заказов`}>нет заказов</div>}</> : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
+                  <td className="n c gs">{x.last ? <>{dd(x.last.date)}<div className="sc-d" title="Ozon не включает в отчёт сегодня и вчера">данные по {dd(dayjs(x.last.date).subtract(2, 'day').format('YYYY-MM-DD'))}</div>{x.last.data?._empty && <div className="sc-d" title={`Ozon вернул пустую строку: за ${win} дней у товара не было заказов`}>нет заказов</div>}</> : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
                   <td>{x.kind === 'comp' && <button type="button" className="sp-reset" title="Убрать из сравнения" onClick={() => remove(x.sku)}>×</button>}</td>
                 </tr>
               ))}
