@@ -359,3 +359,5 @@ tr:hover .a-ungroup { opacity: 1; }
 .a-day-expand{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:left;max-width:100%;}
 .a-day-expand:hover{color:var(--a-accent,var(--accent-oz));}
 .a-day-expand:focus-visible{outline:2px solid var(--accent-oz);outline-offset:2px;}
+
+.mpui .a-trsew{display:block;font-size:10px;color:var(--a-ink2);white-space:nowrap;margin-top:1px}

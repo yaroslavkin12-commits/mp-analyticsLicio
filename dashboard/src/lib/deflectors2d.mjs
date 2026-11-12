@@ -22,6 +22,7 @@ export function validate2d(input) {
     seen.add(offer.toLowerCase());
     return { offer, name: String(r.name || '').slice(0, 500), sales: integer(r.sales, 'Продажи', 0, 100000000, true),
       stock: integer(r.stock, 'Остаток', 0, 100000000, true), transit: integer(r.transit, 'В пути', 0, 100000000, true),
+      transitManual: integer(r.transitManual, 'В пути вручную', 0, 100000000, true),
       manual: integer(r.manual, 'Подсорт вручную', 0, 1000000, true), enabled: r.enabled !== false, favorite: r.favorite === true, note: String(r.note || '').slice(0, 500) };
   });
   let annual = null;
@@ -79,6 +80,9 @@ export function calculate2d(input, demand = null, inventory = null) {
     if (inventory) {
       r.transit = settings.transitSource === 'manual' ? (original.transit === null ? null : original.transit + (live?.productionTransit ?? 0)) : live?.transit ?? 0;
     }
+    // Ручная правка «В пути» в таблице — итоговое количество, заменяет расчёт.
+    r.transitAuto = r.transit;
+    if (original.transitManual !== null && original.transitManual !== undefined) r.transit = original.transitManual;
     if (settings.stockSource === 'live') r.stock = live?.stock ?? null;
     const ozon = demand?.articles?.find(a => a.offer.toLowerCase() === r.offer.toLowerCase());
     const rate = settings.source === 'ozon' ? (ozon?.rate ?? null) : r.sales === null ? null : r.sales / settings.salesDays;

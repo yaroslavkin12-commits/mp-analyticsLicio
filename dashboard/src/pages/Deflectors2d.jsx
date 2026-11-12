@@ -6,6 +6,7 @@ import ColumnPicker from '../components/ColumnPicker';
 import { calculate2d, PERIODS_2D } from '../lib/deflectors2d.mjs';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt } from './AdsStats2';
+import { carModel } from '../lib/carModel';
 import './production.css';
 
 const fmt = v => v == null ? '—' : v.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
@@ -37,6 +38,22 @@ function ExportDialog({ plan, selected, setSelected, busy, error, date, setDate,
       {!plan.past && !plan.tableOnly && <><button className="a-btn ghost" disabled={busy || !date} onClick={submit}>Зафиксировать и скачать</button><button className="a-btn" disabled={busy || !date} onClick={fix}>{busy ? 'Сохранение…' : 'Зафиксировать'}</button></>}
     </div>
   </dialog>;
+}
+
+// «В пути»: число как у остальных колонок; клик — правка вручную (итоговое
+// количество), ↺ — вернуть расчёт (заявки + реклама).
+function TransitCell({ r, onSave }) {
+  const [edit, setEdit] = useState(false), [v, setV] = useState('');
+  const manual = r.transitManual !== null && r.transitManual !== undefined;
+  if (edit) {
+    const done = ok => { setEdit(false); if (!ok) return; const n = v === '' ? null : Math.max(0, Math.round(Number(v))); if (n === null || Number.isFinite(n)) onSave(n); };
+    return <input className="a-input d2-num" autoFocus type="number" min="0" value={v} aria-label={`В пути: ${r.offer}`}
+      onChange={e => setV(e.target.value)} onBlur={() => done(true)} onKeyDown={e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); }} />;
+  }
+  return <span className="d2-transit">
+    <button type="button" className={`d2-transit-v ${manual ? 'manual' : ''}`} title={manual ? `Введено вручную. По заявкам и рекламе: ${fmt(r.transitAuto)}. Нажмите, чтобы изменить` : 'Нажмите, чтобы ввести вручную'} onClick={() => { setV(r.transit ?? ''); setEdit(true); }}>{fmt(r.transit)}</button>
+    {manual && <button type="button" className="tt-reset" aria-label={`Вернуть расчёт в пути: ${r.offer}`} title={`Вернуть расчёт: ${fmt(r.transitAuto)}`} onClick={() => onSave(null)}>↺</button>}
+  </span>;
 }
 
 export default function Deflectors2d({ nav }) {
@@ -160,7 +177,8 @@ export default function Deflectors2d({ nav }) {
   const displayedColumns = [...new Set(tableColumns)].filter(k => COLUMNS.some(c => c[0] === k) && k !== 'offer' && (k !== 'sales' || s.source !== 'ozon'));
   const cell = (r, k) => {
     if (k === 'quantity') return <>{numeric(r, 'manual', 'Подсорт', s.multiple)}{r.manual !== null && <button className="tt-reset" aria-label={`Автоматическое количество: ${r.offer}`} onClick={() => patch(r.offer, { manual: null })}>↺</button>}</>;
-    if (k === 'transit' && transitSource === 'manual') return <>{numeric({ ...r, transit: r.legacyTransit }, 'transit', 'Прежний ручной ввод в пути')}<small className="pr-sub2">Всего с заявками: {fmt(r.transit)}</small></>;
+    if (k === 'transit') return <TransitCell r={r} onSave={v => patch(r.offer, { transitManual: v })} />;
+    if (k === 'name') return <span className="d2-model" title={r.name}>{carModel(r.name) || '—'}</span>;
     if (k === 'stock' && r.staleStock) return <span title={`Последний снимок: ${r.stockDate}`}>—<small className="pr-sub2">от {dayjs(r.stockDate).format('DD.MM')}</small></span>;
     if (k === 'recommended' && r.need === null) return <span title={r.stock === null ? 'Нет актуального остатка' : r.rate === null ? 'Нет полного периода продаж' : 'Неизвестно количество в пути'}>—</span>;
     if (k === 'sales') return numeric(r, 'sales', 'Продажи');
@@ -184,7 +202,7 @@ export default function Deflectors2d({ nav }) {
         <label><input type="checkbox" checked={s.source === 'ozon'} onChange={e => setting('source', e.target.checked ? 'ozon' : 'manual')} /> Продажи всех кабинетов</label>
         {s.source !== 'ozon' && <label>Период продаж, дней<input className="a-input d2-num" type="number" value={s.salesDays} onChange={e => setting('salesDays', Number(e.target.value))} /></label>}
         <span className="a-hint">Распределяется весь заданный объём с учётом кратности.</span></div>
-        <div className="a-hint">Приоритет: сначала срочность (3000 / 2000 / 1000), затем реклама (+100), дефицит запаса (до +60) и рост последних 7 дней к предыдущим 7 (до +30). Балл сортируется и фильтруется в заголовке колонки. Рекомендации — по темпу продаж 7/14/30 дней; прибыль и реклама пока не меняют количество. «В пути» = открытые заявки + выбранный ручной источник; два ручных источника не складываются. Остатки загружаются из раздела «Остатки» выбранного кабинета и не редактируются здесь. Поступления определяются по событиям роста остатков выбранного кабинета.</div>
+        <div className="a-hint">Приоритет: сначала срочность (3000 / 2000 / 1000), затем реклама (+100), дефицит запаса (до +60) и рост последних 7 дней к предыдущим 7 (до +30). Балл сортируется и фильтруется в заголовке колонки. Рекомендации — по темпу продаж 7/14/30 дней; прибыль и реклама пока не меняют количество. «В пути» = открытые заявки + выбранный ручной источник; два ручных источника не складываются. Число «В пути» в таблице можно поправить вручную — нажмите на него; ↺ возвращает расчёт. Остатки загружаются из раздела «Остатки» выбранного кабинета и не редактируются здесь. Поступления определяются по событиям роста остатков выбранного кабинета.</div>
       </details><button className="a-btn" onClick={()=>setDraft(v=>({...v,settings:{...v.settings,fill:true,requireFull:true},rows:v.rows.map(r=>({...r,manual:null}))}))}>Распределить весь объём</button><button className="a-btn ghost" disabled={!dirty || preview.invalid} onClick={save}>Сохранить</button><button className="a-btn ghost" onClick={() => { loadDemand(true); refreshInventory(); }}>Обновить данные</button><button className="a-btn ghost" onClick={() => { if (!dirty || window.confirm('Загрузить серверную версию вместо локальных правок?')) load(false); }}>Загрузить с сервера</button></div>
     </div>
     <div className="a-card pr-card">
@@ -194,7 +212,7 @@ export default function Deflectors2d({ nav }) {
       <div className="a-bar d2-table-tools"><span className="a-hint">{shown.length} из {preview.rows.length} артикулов</span><ColumnPicker columns={COLUMNS.filter(([k]) => k !== 'offer')} value={tableColumns} onChange={setTableColumns} /></div>
 
       <div className="a-scroll"><table className="a-t pr-t d2-table"><thead><tr><th title="Артикул в рекламе">★</th><ThCtl ctl={ctl} k="offer" filter={false}>Артикул</ThCtl>{displayedColumns.map(k => <ThCtl key={k} ctl={ctl} k={k} filter={!['name','note','rateWindow'].includes(k)}>{COLUMNS.find(c => c[0] === k)?.[1]}</ThCtl>)}</tr></thead><tbody>
-      {shown.map(r => <tr key={r.offer} className={`${r.quantity > 0 ? 'pr-in-order' : ''} ${selected === r.offer ? 'd2-selected' : ''}`}><td><button className={`pr-star ${r.favorite ? 'on' : ''}`} aria-label={`В рекламе: ${r.offer}`} title="Артикул используется в рекламе" aria-pressed={r.favorite} onClick={() => patch(r.offer, {favorite:!r.favorite})}>★</button></td><td><button className="d2-article" onClick={() => setSelected(v => v === r.offer ? '' : r.offer)} aria-pressed={selected === r.offer}><b>{r.offer}</b><small className="pr-sub2">{r.name}</small></button></td>{displayedColumns.map(k => <td key={k} className="n r">{cell(r,k)}</td>)}</tr>)}
+      {shown.map(r => <tr key={r.offer} className={`${r.quantity > 0 ? 'pr-in-order' : ''} ${selected === r.offer ? 'd2-selected' : ''}`}><td><button className={`pr-star ${r.favorite ? 'on' : ''}`} aria-label={`В рекламе: ${r.offer}`} title="Артикул используется в рекламе" aria-pressed={r.favorite} onClick={() => patch(r.offer, {favorite:!r.favorite})}>★</button></td><td><button className="d2-article" onClick={() => setSelected(v => v === r.offer ? '' : r.offer)} aria-pressed={selected === r.offer}><b>{r.offer}</b><small className="pr-sub2 d2-model" title={r.name}>{carModel(r.name)}</small></button></td>{displayedColumns.map(k => <td key={k} className={k === 'name' || k === 'note' ? '' : 'n c'}>{cell(r,k)}</td>)}</tr>)}
       {!shown.length && <tr><td colSpan={displayedColumns.length+2}>Нет артикулов по выбранным фильтрам.</td></tr>}</tbody></table></div>
       <div className="a-bar d2-footer"><span>К подаче: <b>{fmt(preview.total)} / {fmt(s.total)} шт.</b>{dirty && <small className="pr-sub2">Есть несохранённые правки</small>}</span><button className="a-btn ghost" disabled={!canExport || !preview.total} onClick={() => openExport(preview.rows)}>Весь подсорт</button><button className="a-btn" disabled={!canExport || !shown.some(r => r.quantity > 0)} onClick={() => openExport(shown)}>Зафиксировать подсорт</button></div>
       {preview.issues.map(t => <div key={t} role="alert" className="s-down">{t}</div>)}{preview.over > 0 && <div className="s-down">Лимит превышен на {fmt(preview.over)} шт.</div>}

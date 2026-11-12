@@ -130,3 +130,15 @@
 .mpui .d2-dynamics small{font-size:11px}
 
 .mpui .d2-date-chips .a-btn.on{background:var(--a-accent);color:var(--a-accent-ink);border-color:var(--a-accent)}
+
+/* Дефлекторы 2D: всё по центру, модель в одну строку, «В пути» как число */
+.mpui .d2-table th, .mpui .d2-table td.n.c { text-align: center; }
+.mpui .d2-table th .tt-th, .mpui .d2-table th > div { justify-content: center; }
+.mpui .d2-table .d2-article { text-align: center; width: 100%; }
+.mpui .d2-table .d2-article .d2-model { margin: 0 auto; }
+.mpui .d2-model { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; display: block; }
+.mpui .d2-table td { vertical-align: middle; }
+.mpui .d2-transit { display: inline-flex; align-items: center; gap: 4px; }
+.mpui .d2-transit-v { background: none; border: 0; padding: 2px 6px; border-radius: 6px; color: inherit; font: inherit; cursor: pointer; }
+.mpui .d2-transit-v:hover { background: var(--a-hover, rgba(127,127,127,.12)); }
+.mpui .d2-transit-v.manual { text-decoration: underline dotted; }

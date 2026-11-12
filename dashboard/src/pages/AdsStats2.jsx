@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import {
-  getAdsStats, saveCampaignTarget, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder, getAdsTransit, saveAdsTransit,
+  getAdsStats, saveCampaignTarget, getAdsDataStatus, collectAds, saveManualAdsMetric, getAdsOrder, saveAdsOrder, getAdsTransit, saveAdsTransit, getSewing,
   getAdsGroups, addAdsGroup, removeAdsGroup, renameAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
   reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs, latestOnly,
 } from '../api';
@@ -125,6 +125,20 @@ export function groupColorMap(groups) {
 // Enter / уход с поля — сохранить, Esc — отмена.
 const trQ = v => (typeof v === 'number' ? v : v?.q || 0);
 const trD = v => (typeof v === 'object' && v ? v.d || '' : '');
+// «Пошив (в пути)» из раздела «Производство» (файл чехлов) — добавляется к ручному «В пути».
+const trSew = v => (typeof v === 'object' && v ? v.sew || 0 : 0);
+const trAll = v => trQ(v) + trSew(v);
+const SewLine = ({ v }) => (trSew(v) ? <span className="a-trsew" title="В пошиве у цехов — из файла «Пошив (в пути)» в разделе «Производство»">+{fmtInt(trSew(v))} пошив</span> : null);
+function withSewing(t, sew) {
+  if (!sew) return t;
+  const out = { ...t }, lower = new Map(Object.keys(t).map(k => [k.toLowerCase(), k]));
+  for (const [o, n] of Object.entries(sew)) {
+    if (!(n > 0)) continue;
+    const k = lower.get(o.toLowerCase()) || o, v = out[k];
+    out[k] = typeof v === 'number' ? { q: v, sew: n } : { ...(v || {}), sew: n };
+  }
+  return out;
+}
 function TransitCell({ value, onSave }) {
   const [ed, setEd] = useState(null);
   const q = trQ(value), d = trD(value);
@@ -132,6 +146,7 @@ function TransitCell({ value, onSave }) {
   const doneQ = () => { const n = Math.max(0, Math.round(Number(String(ed).replace(/\s/g, '').replace(',', '.')) || 0)); setEd(null); if (n !== q) onSave({ qty: n }); };
   if (value?.managed) return <div className="a-trc" title={`По заявкам производства: ${value.productionQty} шт.; вручную: ${value.manualQty} шт.`}>
     <span className="a-transit">{fmtInt(q)}</span><span className={`a-trd ${late ? 'late' : ''}`}>{d ? dayjs(d).format('DD.MM') : 'по журналу'}</span>
+    <SewLine v={value} />
     <details><summary className="muted" style={{fontSize:10}}>ручная добавка{value.manualQty ? ` ${value.manualQty}` : ''}</summary><TransitCell value={{ q:value.manualQty, d:value.manualDate }} onSave={onSave} /></details>
   </div>;
   return (
@@ -145,6 +160,7 @@ function TransitCell({ value, onSave }) {
         {d && <span className="a-trx" title="Убрать дату" onClick={e => { e.preventDefault(); e.stopPropagation(); onSave({ date: '' }); }}>×</span>}
         <input type="date" value={d} onChange={e => onSave({ date: e.target.value || '' })} />
       </label>
+      <SewLine v={value} />
     </div>
   );
 }
@@ -284,6 +300,9 @@ function buildModel(articles, dates, mode, unknown = false) {
       const prices = articles.map(a => a.byDate[d]?.[key]).filter(v => Number.isFinite(v) && v > 0);
       byDate[d][key] = prices.length ? prices.reduce((s, v) => s + v, 0) / prices.length : null;
     }
+    // % СПП: скидка Ozon от предельной цены до цены клиента, среднее по артикулам с обеими ценами.
+    const spp = articles.map(a => { const x = a.byDate[d]; return x && x.sellerPrice > 0 && x.clientPrice > 0 ? (1 - x.clientPrice / x.sellerPrice) * 100 : null; }).filter(v => v !== null);
+    byDate[d].sppPct = spp.length ? spp.reduce((s, v) => s + v, 0) / spp.length : null;
     if (articles.length === 1) {
       const src = articles[0].byDate[d] || {};
       byDate[d].manual = src.manual || {};
@@ -616,6 +635,7 @@ const DAY_ROWS = [
   { block: 'Цены текущие', tone: 'rev', prices: true },
   { key: 'sellerPrice', label: 'Предельная цена', fmt: 'money', total: 'avg', prices: true, hint: 'Цена продавца до скидки Ozon. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Насыщенность фиолетового показывает уровень цены в выбранном периоде, без оценки «лучше/хуже».' },
   { key: 'clientPrice', label: 'Цена клиента', fmt: 'money', total: 'avg', prices: true, hint: 'Цена для покупателя с Ozon-картой. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Насыщенность фиолетового показывает уровень цены в выбранном периоде, без оценки «лучше/хуже».' },
+  { key: 'sppPct', label: '% СПП', fmt: 'pct', total: 'avg', prices: true, hint: 'Скидка Ozon для покупателя: 1 − цена клиента / предельная цена. Для группы — среднее по артикулам с обеими ценами. Итого — среднее по дням с данными.' },
   { block: 'Заказы и остаток', tone: 'rev' },
   { key: 'revenue', label: 'Заказы, ₽', fmt: 'money', good: 'up', editable: true },
   { key: 'orders', label: 'Заказы, шт', fmt: 'int', good: 'up', editable: true },
@@ -1275,7 +1295,7 @@ export default function AdsStats2({ cabinet }) {
 
   useEffect(() => {
     let alive = true;
-    const refresh = () => getAdsTransit(cabinet).then(r => { if (alive) setTransit(r.data.data || {}); }).catch(console.error);
+    const refresh = () => Promise.all([getAdsTransit(cabinet), getSewing(cabinet).catch(() => null)]).then(([r, sw]) => { if (alive) setTransit(withSewing(r.data.data || {}, sw?.data?.data?.items)); }).catch(console.error);
     refresh(); const timer = setInterval(refresh, 60000);
     window.addEventListener('mp-production-updated', refresh); window.addEventListener('focus', refresh);
     return () => { alive = false; clearInterval(timer); window.removeEventListener('mp-production-updated', refresh); window.removeEventListener('focus', refresh); };
@@ -1334,7 +1354,7 @@ export default function AdsStats2({ cabinet }) {
         case 'revenue': return mode === 'ads' ? t.adRevenue : t.revenue;
         case 'orders': return mode === 'ads' ? t.adOrders : t.orders;
         case 'stock': return a.stock ? a.stock.fboPresent + a.stock.fbsPresent : -1;
-        case 'transit': return trQ(transit[a.offerId]);
+        case 'transit': return trAll(transit[a.offerId]);
         case 'spend': return t.spend;
         case 'drr': { const r = mode === 'ads' ? t.adRevenue : t.revenue; return r > 0 ? t.spend / r * 100 : (t.spend > 0 ? 1e9 : -1); }
         case 'profit': { const p = profitOf(a); return p ? p.profit : -1e12; }
@@ -1347,7 +1367,7 @@ export default function AdsStats2({ cabinet }) {
     const fk = Object.keys(fctl.filters);
     if (fk.length) list = list.filter(a => fk.every(k => {
       const t = a.totals, rev = mode === 'ads' ? t.adRevenue : t.revenue;
-      const v = k === 'drr' ? (rev > 0 ? t.spend / rev * 100 : null) : k === 'stock' ? (a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null) : k === 'transit' ? trQ(transit[a.offerId])
+      const v = k === 'drr' ? (rev > 0 ? t.spend / rev * 100 : null) : k === 'stock' ? (a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null) : k === 'transit' ? trAll(transit[a.offerId])
         : k === 'profit' ? (profitOf(a)?.profit ?? null) : k === 'margin' ? (profitOf(a)?.margin ?? null) : valK(a, k);
       const { min, max } = fctl.filters[k];
       if (v === null || v === undefined) return false;
@@ -1388,7 +1408,7 @@ export default function AdsStats2({ cabinet }) {
     } finally { setCollecting(false); }
   }
   function saveTransit(offerId, patch) {
-    saveAdsTransit(cabinet, offerId, patch).then(() => getAdsTransit(cabinet)).then(r => setTransit(r.data.data || {})).catch(console.error);
+    saveAdsTransit(cabinet, offerId, patch).then(() => Promise.all([getAdsTransit(cabinet), getSewing(cabinet).catch(() => null)])).then(([r, sw]) => setTransit(withSewing(r.data.data || {}, sw?.data?.data?.items))).catch(console.error);
   }
 
   function toggleOpen(key) {
@@ -1499,7 +1519,7 @@ export default function AdsStats2({ cabinet }) {
   });
   const COLS = [
     { k: 'id', t: 'Артикул' }, { k: null, t: 'Заказы по дням' }, { k: 'revenue', t: 'Заказано, ₽' }, { k: 'orders', t: 'Заказы, шт' },
-    { k: 'stock', t: 'Остаток, шт', h: 'Текущий остаток FBO + FBS' }, { k: 'transit', t: 'В пути, шт', h: 'Ручной ввод: сверху — сколько едет на склад (нажмите, введите число, Enter), снизу — плановая дата подсорта' }, { k: 'spend', t: 'Расход, ₽', h: 'Оплата за клик + оплата за заказ. Оплата за заказ — в дне заказа (Ozon списывает её позже, в день выкупа; в P&L она в дне списания)' },
+    { k: 'stock', t: 'Остаток, шт', h: 'Текущий остаток FBO + FBS' }, { k: 'transit', t: 'В пути, шт', h: 'Ручной ввод: сверху — сколько едет на склад (нажмите, введите число, Enter), под ним — плановая дата подсорта и «+N пошив» из файла «Пошив (в пути)» в «Производстве». Сортировка и итог — с пошивом' }, { k: 'spend', t: 'Расход, ₽', h: 'Оплата за клик + оплата за заказ. Оплата за заказ — в дне заказа (Ozon списывает её позже, в день выкупа; в P&L она в дне списания)' },
     { k: 'drr', t: 'ДРР', h: 'Расход / сумма заказов; ниже — с учётом выкупа: расход / (заказы × % выкупа артикула)', u: '%' },
     { k: 'profit', t: 'Прогнозируемая прибыль', h: 'Ожидаемая прибыль с заказов периода после выкупа, комиссии, логистики, рекламы, себестоимости и налога (коэффициенты — из «Юнит-экономики»)' },
     { k: 'margin', t: 'Маржа', h: 'Прогнозируемая прибыль / ожидаемая выручка', u: '%' },
@@ -1760,7 +1780,7 @@ export default function AdsStats2({ cabinet }) {
                   <td className="n" style={{background:resultTint(T.revenue,P?.revenue,'up')}}>{fmtInt(T.revenue)}{showAssoc && assocLine(assocForRows, 'revenue', T.revenue)}</td>
                   <td className="n" style={{background:resultTint(T.orders,P?.orders,'up')}}>{fmtInt(T.orders)}{showAssoc && assocLine(assocForRows, 'orders', T.orders)}</td>
                   <td className="n">{fmtInt(total.stockNow)}</td>
-                  <td className="n">{(() => { const t = rows.reduce((x, r) => x + trQ(transit[r.offerId]), 0); return t ? fmtInt(t) : '—'; })()}</td>
+                  <td className="n">{(() => { const t = rows.reduce((x, r) => x + trAll(transit[r.offerId]), 0); return t ? fmtInt(t) : '—'; })()}</td>
                   <td className="n" style={{background:resultTint(T.spend,P?.spend,'down')}}>{fmtInt(T.spend)}<span className="a-spendsub">{T.spendCpo ? <>клик {fmtInt(T.spendCpc)}<br />заказ {fmtInt(T.spendCpo)}</> : 'за клик'}</span></td>
                   <td style={{background:resultTint(T.drr,P?.drr,'down')}}><span className={`pill ${drrClass(T.drr)}`}>{fmtPct(T.drr)}</span>{T.drrB !== null && T.drrB !== undefined ? <span className="a-spendsub" title="С учётом выкупа">выкуп {fmtPct(T.drrB)}</span> : null}</td>
                   {(() => { let p = 0, e = 0, any = false; for (const r of rows) { const x = profitOf(r); if (x) { p += x.profit; e += x.expRev; any = true; } } return (
