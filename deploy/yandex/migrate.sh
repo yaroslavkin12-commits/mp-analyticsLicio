@@ -3,7 +3,7 @@
 # Запускается при первой настройке и повторно — когда в репозитории меняется migrate.stamp.
 set -euo pipefail
 STATE=/var/lib/mp
-set -a; . /etc/mp/env.user; set +a
+NEON_DATABASE_URL=$(grep -m1 "^NEON_DATABASE_URL=" /etc/mp/env.clean | cut -d= -f2-)
 [ -n "${NEON_DATABASE_URL:-}" ] || { echo "нет NEON_DATABASE_URL"; exit 1; }
 DBPASS=$(cat /etc/mp/db.pass)
 LOCAL="postgres://mp:${DBPASS}@127.0.0.1:5432/mp"

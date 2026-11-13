@@ -24,7 +24,12 @@ PY
 status stage=bootstrap
 
 [ -f /etc/mp/env.user ] || { echo "нет /etc/mp/env.user"; status stage=error error="нет настроек"; exit 1; }
-set -a; . /etc/mp/env.user; set +a
+# Настройки как их вставили: убираем отступы, пробелы по краям, \r и пустые строки.
+# Значения не «выполняем» в shell — в них бывают & ; и пробелы (адрес базы, cookie).
+sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' /etc/mp/env.user | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > /etc/mp/env.clean || true
+chmod 600 /etc/mp/env.clean
+envget() { grep -m1 "^$1=" /etc/mp/env.clean | cut -d= -f2- ; }
+DOMAIN=$(envget DOMAIN); NEON_DATABASE_URL=$(envget NEON_DATABASE_URL)
 
 export DEBIAN_FRONTEND=noninteractive
 # Подкачка 2 ГБ — сборка дашборда не упирается в память.
@@ -75,7 +80,7 @@ DBPASS=$(cat /etc/mp/db.pass)
 # Настройки сервиса: всё из env.user + своя база + вход по паролю.
 id mp >/dev/null 2>&1 || useradd --system --home /opt/mp --shell /usr/sbin/nologin mp
 {
-  grep -v -E '^(DATABASE_URL|NEON_DATABASE_URL|PORT|NODE_ENV|AUTH_ENABLED|DOMAIN|PUBLIC_URL|RENDER_[A-Z_]*)=' /etc/mp/env.user || true
+  grep -v -E '^(DATABASE_URL|NEON_DATABASE_URL|PORT|NODE_ENV|AUTH_ENABLED|DOMAIN|PUBLIC_URL|RENDER_[A-Z_]*)=' /etc/mp/env.clean | grep -v -E '^[A-Za-z_][A-Za-z0-9_]*=$' || true
   echo "DATABASE_URL=postgres://mp:${DBPASS}@127.0.0.1:5432/mp"
   echo "NODE_ENV=production"
   echo "PORT=3000"
