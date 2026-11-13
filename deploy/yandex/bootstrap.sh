@@ -3,7 +3,9 @@
 # из cloud-init; можно запускать повторно — шаги проверяют, сделаны ли они.
 # Настройки пользователя: /etc/mp/env.user (вставлены при создании сервера).
 set -euo pipefail
-exec > >(tee -a /var/log/mp-bootstrap.log) 2>&1
+# Журнал — в файл и в «Последовательный порт» консоли Яндекса (видно без входа на сервер).
+exec > >(tee -a /var/log/mp-bootstrap.log /dev/ttyS0) 2>&1
+trap 'echo "=== ОШИБКА в строке $LINENO: $BASH_COMMAND"' ERR
 echo "=== bootstrap $(date -Is)"
 
 REPO=https://github.com/yaroslavkin12-commits/mp-analyticsLicio.git
@@ -39,26 +41,34 @@ timedatectl set-timezone Europe/Moscow || true
 apt-get update -y
 apt-get install -y curl git ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https python3
 
-# PostgreSQL 17 (официальный репозиторий) — pg_dump новой версии читает базу Neon любой версии.
-if ! command -v /usr/lib/postgresql/17/bin/postgres >/dev/null 2>&1; then
+# PostgreSQL: официальный репозиторий (17), если недоступен — из Ubuntu (16).
+if ! ls /usr/lib/postgresql/*/bin/postgres >/dev/null 2>&1; then
+  echo "=== ставлю PostgreSQL"
   install -d /usr/share/postgresql-common/pgdg
-  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
-  echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" > /etc/apt/sources.list.d/pgdg.list
-  apt-get update -y && apt-get install -y postgresql-17
+  if curl -fsSL -m 60 https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; then
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+    { apt-get update -y && apt-get install -y postgresql-17; } || { rm -f /etc/apt/sources.list.d/pgdg.list; apt-get update -y; apt-get install -y postgresql; }
+  else apt-get install -y postgresql; fi
 fi
-# Node.js 22
-if ! node -v 2>/dev/null | grep -q '^v22'; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
+PGVER=$(ls /usr/lib/postgresql | sort -V | tail -1); PGBIN=/usr/lib/postgresql/$PGVER/bin
+echo "=== PostgreSQL $PGVER"
+# Node.js: NodeSource (22), если недоступен — из Ubuntu.
+if ! node -v 2>/dev/null | grep -qE '^v(2[0-9])'; then
+  echo "=== ставлю Node.js"
+  { curl -fsSL -m 60 https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh && bash /tmp/nodesource.sh && apt-get install -y nodejs; } || apt-get install -y nodejs npm
 fi
-# Caddy — HTTPS-сертификаты сам
+echo "=== Node $(node -v)"
+# Caddy — HTTPS-сертификаты сам. Официальный репозиторий, иначе из Ubuntu.
 if ! command -v caddy >/dev/null; then
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update -y && apt-get install -y caddy
+  echo "=== ставлю Caddy"
+  { curl -1sLf -m 60 https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
+    && curl -1sLf -m 60 https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o /etc/apt/sources.list.d/caddy-stable.list \
+    && apt-get update -y && apt-get install -y caddy; } || { rm -f /etc/apt/sources.list.d/caddy-stable.list; apt-get update -y; apt-get install -y caddy; }
 fi
 
 # База: настройки под 4 ГБ памяти, пользователь и пароль.
-PGCONF=/etc/postgresql/17/main/conf.d/mp.conf
+PGCONF=/etc/postgresql/$PGVER/main/conf.d/mp.conf
+mkdir -p "$(dirname "$PGCONF")"
 if [ ! -f "$PGCONF" ]; then
   cat > "$PGCONF" <<'EOF'
 shared_buffers = 1GB
@@ -91,9 +101,11 @@ id mp >/dev/null 2>&1 || useradd --system --home /opt/mp --shell /usr/sbin/nolog
 chmod 600 /etc/mp/app.env; chown root:root /etc/mp/app.env
 
 # Код
+echo "=== код из GitHub"
 if [ ! -d "$APP/.git" ]; then mkdir -p /opt/mp && git clone --depth 50 "$REPO" "$APP"; fi
 chown -R mp:mp /opt/mp
 cd "$APP"
+echo "=== установка и сборка"
 sudo -u mp bash -c "cd backend && npm install --omit=dev --no-audit --no-fund"
 sudo -u mp bash -c "cd dashboard && npm install --no-audit --no-fund && npm run build"
 
@@ -145,6 +157,7 @@ EOF
 
 # Перенос данных из Neon (один раз).
 if [ -n "${NEON_DATABASE_URL:-}" ] && [ ! -f "$STATE/migrated" ]; then
+  echo "=== перенос базы из Neon"
   bash "$APP/deploy/yandex/migrate.sh" || echo "перенос не удался — сервис стартует с пустой базой, перенос повторится по команде"
 fi
 
