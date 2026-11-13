@@ -10,6 +10,7 @@ try: d=json.load(open(p))
 except Exception: d={}
 d.update(dict(a.split('=',1) for a in sys.argv[1:])); d['updated']=datetime.datetime.now().isoformat(timespec='seconds'); json.dump(d,open(p,'w'),ensure_ascii=False)" "$@"; }
 cd "$APP" || exit 1
+git config --system --get-all safe.directory 2>/dev/null | grep -qx "$APP" || git config --system --add safe.directory "$APP"
 sudo -u mp git fetch -q origin main || { st lastError="git fetch $(date -Is)"; exit 0; }
 OLD=$(git rev-parse HEAD); NEW=$(git rev-parse origin/main)
 if [ "$OLD" != "$NEW" ]; then

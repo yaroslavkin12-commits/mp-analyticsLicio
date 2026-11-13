@@ -15,6 +15,13 @@ except Exception: d={}
 d.update(dict(a.split('=',1) for a in sys.argv[1:])); d['updated']=datetime.datetime.now().isoformat(timespec='seconds'); json.dump(d,open(p,'w'),ensure_ascii=False)" "$@"; }
 st migrate=running
 echo "=== перенос из Neon $(date -Is)"
+# pg_dump должен быть не старше версии сервера Neon — ставим клиент нужной версии.
+SV=$(psql "$NEON_DATABASE_URL" -tAc "SHOW server_version_num" 2>/dev/null | tr -d ' ' || echo "")
+if [ -n "$SV" ]; then
+  MAJ=$((SV / 10000)); echo "=== Neon: PostgreSQL $MAJ"
+  [ -x /usr/lib/postgresql/$MAJ/bin/pg_dump ] || apt-get install -y postgresql-client-$MAJ || true
+  [ -x /usr/lib/postgresql/$MAJ/bin/pg_dump ] && PGBIN=/usr/lib/postgresql/$MAJ/bin
+fi
 $PGBIN/pg_dump --format=custom --no-owner --no-acl -d "$NEON_DATABASE_URL" -f "$DUMP"
 systemctl stop mp.service || true
 sudo -u postgres psql -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS mp WITH (FORCE)" -c "CREATE DATABASE mp OWNER mp"

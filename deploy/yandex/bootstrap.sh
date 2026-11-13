@@ -102,7 +102,10 @@ chmod 600 /etc/mp/app.env; chown root:root /etc/mp/app.env
 
 # Код
 echo "=== код из GitHub"
-if [ ! -d "$APP/.git" ]; then mkdir -p /opt/mp && git clone --depth 50 "$REPO" "$APP"; fi
+# git под root не должен ругаться на «чужой» каталог (его владелец — mp).
+git config --system --add safe.directory "$APP" 2>/dev/null || true
+if [ ! -d "$APP/.git" ]; then mkdir -p /opt/mp && git clone --depth 50 "$REPO" "$APP"
+else git -C "$APP" fetch -q origin main && git -C "$APP" reset -q --hard origin/main; fi
 chown -R mp:mp /opt/mp
 cd "$APP"
 echo "=== установка и сборка"
