@@ -1100,6 +1100,7 @@ const MATRIX_METRICS = [
   { key: 'crToOrder', label: 'CR в заказ', fmt: 'pct', good: 'up' },
   { key: 'position', label: 'Ср. позиция', fmt: 'pos', good: 'down', total: 'avg' },
   { key: 'stock', label: 'Остаток', fmt: 'int', good: 'up' },
+  { key: 'sppPct', label: 'СПП, %', fmt: 'pct', good: 'up', total: 'avg' },
 ];
 function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls }) {
   const [metric, setMetric] = useState('orders');
