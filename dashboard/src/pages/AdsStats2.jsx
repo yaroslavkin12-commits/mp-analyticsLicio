@@ -61,20 +61,18 @@ function priceHeatColor(v, min, max) {
   const level = max > min ? Math.max(0, Math.min(1, (v - min) / (max - min))) : 0.5;
   return `rgba(139, 92, 246, ${0.08 + level * 0.30})`;
 }
-// % СПП: цвет — отклонение от обычного уровня строки (медианы), а не от min/max.
-// Выше обычного — зелёный, ниже — красный; ±10 п.п. — полная насыщенность.
-const SPP_FULL = 10;
-function medianOf(list) {
-  const a = list.filter(Number.isFinite).sort((x, y) => x - y);
-  if (!a.length) return null;
-  const m = Math.floor(a.length / 2);
-  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+// % СПП: плавная шкала, как у заказов (красный → жёлтый → зелёный), по своей строке.
+// Шкала не уже 10 п.п.: колебание на 1 п.п. — лёгкий сдвиг оттенка, на 10 п.п. — от красного до зелёного.
+const SPP_SPAN = 10;
+function rangeOf(list) {
+  const a = list.filter(Number.isFinite);
+  return a.length ? [Math.min(...a), Math.max(...a)] : [null, null];
 }
-function sppHeatColor(v, base) {
-  if (!Number.isFinite(v) || !Number.isFinite(base)) return 'transparent';
-  const t = Math.max(-1, Math.min(1, (v - base) / SPP_FULL));
-  if (Math.abs(t) < 0.08) return 'transparent';
-  return `hsla(${t > 0 ? 140 : 0}, 70%, 45%, ${(0.15 + 0.55 * Math.abs(t)).toFixed(2)})`;
+function sppHeatColor(v, lo, hi) {
+  if (!Number.isFinite(v) || !Number.isFinite(lo)) return 'transparent';
+  const mid = (lo + hi) / 2, span = Math.max(hi - lo, SPP_SPAN);
+  const t = Math.max(0, Math.min(1, 0.5 + (v - mid) / span));
+  return `hsla(${120 * t}, 62%, 42%, 0.32)`;
 }
 function positionHeatColor(v) {
   if (!Number.isFinite(v) || v <= 0) return 'transparent';
@@ -648,9 +646,9 @@ export function Funnel({ totals, prev, mode }) {
 // ── Таблица по дням: все метрики, цвета по строкам (как раньше) ──────────
 const DAY_ROWS = [
   { block: 'Цены текущие', tone: 'rev', prices: true },
-  { key: 'sellerPrice', label: 'Предельная цена', fmt: 'money', total: 'avg', prices: true, hint: 'Цена продавца до скидки Ozon. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Насыщенность фиолетового показывает уровень цены в выбранном периоде, без оценки «лучше/хуже».' },
-  { key: 'clientPrice', label: 'Цена клиента', fmt: 'money', total: 'avg', prices: true, hint: 'Цена для покупателя с Ozon-картой. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Насыщенность фиолетового показывает уровень цены в выбранном периоде, без оценки «лучше/хуже».' },
-  { key: 'sppPct', label: '% СПП', fmt: 'pct', total: 'avg', prices: true, hint: 'Скидка Ozon для покупателя: 1 − цена клиента / предельная цена. Для группы — среднее по артикулам с обеими ценами. Итого — среднее по дням с данными.' },
+  { key: 'sellerPrice', label: 'Предельная цена', fmt: 'money', total: 'avg', prices: true, hint: 'Цена продавца до скидки Ozon. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Цвет: выше цена — зеленее, ниже — краснее.' },
+  { key: 'clientPrice', label: 'Цена клиента', fmt: 'money', total: 'avg', prices: true, hint: 'Цена для покупателя с Ozon-картой. Среднее по сохранённым замерам дня; для группы — среднее по артикулам с данными. Итого — среднее по дням с данными. Цвет: ниже цена для покупателя — зеленее, выше — краснее.' },
+  { key: 'sppPct', label: '% СПП', fmt: 'pct', total: 'avg', prices: true, hint: 'Скидка Ozon для покупателя: 1 − цена клиента / предельная цена. Для группы — среднее по артикулам с обеими ценами. Итого — среднее по дням с данными. Цвет: выше СПП — зеленее; разница 10 п.п. и больше — от красного до зелёного.' },
   { block: 'Заказы и остаток', tone: 'rev' },
   { key: 'revenue', label: 'Заказы, ₽', fmt: 'money', good: 'up', editable: true },
   { key: 'orders', label: 'Заказы, шт', fmt: 'int', good: 'up', editable: true },
@@ -768,7 +766,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {
                   const d = dates[i];
-                  const bg = row.key === 'sppPct' ? sppHeatColor(v, medianOf(vals)) : row.prices ? priceHeatColor(v, min, max) : heatColor(v, min, max, row.good);
+                  const bg = row.key === 'sppPct' ? sppHeatColor(v, min, max) : row.key === 'sellerPrice' ? heatColor(v, min, max, 'up') : row.key === 'clientPrice' ? heatColor(v, min, max, 'down') : row.prices ? priceHeatColor(v, min, max) : heatColor(v, min, max, row.good);
                   if ((row.key === 'drr' || row.key === 'drrB') && (v === null || v === undefined)) {
                     const spent = model.byDate[d]?.spend > 0;
                     return <td key={d} style={{ color: 'var(--a-ink3)' }} title={spent ? 'Был расход, заказов не было' : ''}>{spent ? '×' : '—'}</td>;
@@ -1150,8 +1148,8 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
         {[[10, '1–10'], [30, '30'], [60, '60 и выше']].map(([v, label]) => <span key={v}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: positionHeatColor(v) }} />{label}</span>)}
       </div>}
       {metric === 'sppPct' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }}>
-        <span>Цвет СПП — отличие от обычного уровня артикула за период:</span>
-        {[[-10, 'ниже на 10 п.п.'], [-5, 'на 5'], [5, 'выше на 5'], [10, 'на 10 п.п.']].map(([d, label]) => <span key={d}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: sppHeatColor(d, 0) }} />{label}</span>)}
+        <span>Цвет СПП — по строке артикула: зелёный — выше, красный — ниже; разница в 10 п.п. и больше — от красного до зелёного:</span>
+        {[[0, 'ниже'], [5, ''], [10, 'выше']].map(([d, label], i) => <span key={i}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: sppHeatColor(d, 0, 10) }} />{label}</span>)}
       </div>}
       <div className="a-days" ref={ref}>
         <table className={`a-dt a-matrix${cabinet === 'licio' ? '' : ' a-matrix-row-hover'}`}>
@@ -1162,9 +1160,9 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
                 <td className="lbl" title={a.productName || ''}>{a.offerId} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{shortModel(a.productName)}</span></td>
                 <td className="tot">{fmtBy(totalOf(m), cfg.fmt)}</td>
                 <td className="stk">{fmtInt(m.stockNow)}</td>
-                {(() => { const base = metric === 'sppPct' ? medianOf(dates.map(d => m.byDate[d]?.sppPct)) : null; return dates.map(d => {
+                {(() => { const [lo, hi] = metric === 'sppPct' ? rangeOf(dates.map(d => m.byDate[d]?.sppPct)) : [null, null]; return dates.map(d => {
                   const v = m.byDate[d]?.[metric];
-                  return <td key={d} style={{ background: metric === 'position' ? positionHeatColor(v) : metric === 'sppPct' ? sppHeatColor(v, base) : heatColor(v, min, max, cfg.good) }}>{fmtBy(v, cfg.fmt)}</td>;
+                  return <td key={d} style={{ background: metric === 'position' ? positionHeatColor(v) : metric === 'sppPct' ? sppHeatColor(v, lo, hi) : heatColor(v, min, max, cfg.good) }}>{fmtBy(v, cfg.fmt)}</td>;
                 }); })()}
               </tr>
             ))}
@@ -1172,7 +1170,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
               <td className="lbl" style={{ fontWeight: 600, color: 'var(--a-ink)' }}>Итого</td>
               <td className="tot">{fmtBy(totalOf(all), cfg.fmt)}</td>
               <td className="stk" style={{ fontWeight: 600 }}>{fmtInt(all.stockNow)}</td>
-              {dates.map(d => <td key={d} style={{ fontWeight: 600, background: metric==='position'?positionHeatColor(all.byDate[d]?.[metric]):metric==='sppPct'?sppHeatColor(all.byDate[d]?.sppPct, medianOf(dates.map(x => all.byDate[x]?.sppPct))):d<dayjs().format('YYYY-MM-DD')?resultTint(all.byDate[d]?.[metric],periodMean,cfg.good):undefined }}>{fmtBy(all.byDate[d]?.[metric], cfg.fmt)}</td>)}
+              {dates.map(d => <td key={d} style={{ fontWeight: 600, background: metric==='position'?positionHeatColor(all.byDate[d]?.[metric]):metric==='sppPct'?sppHeatColor(all.byDate[d]?.sppPct, ...rangeOf(dates.map(x => all.byDate[x]?.sppPct))):d<dayjs().format('YYYY-MM-DD')?resultTint(all.byDate[d]?.[metric],periodMean,cfg.good):undefined }}>{fmtBy(all.byDate[d]?.[metric], cfg.fmt)}</td>)}
             </tr>
           </tbody>
         </table>
