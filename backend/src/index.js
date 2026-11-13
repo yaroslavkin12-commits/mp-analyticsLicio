@@ -166,6 +166,7 @@ async function start() {
     await new Promise(r => setTimeout(r, 4000));
   }
   await initSchema();
+  await require('./lib/skuAlias').ensure().catch(e => console.warn('[SKU] ensure', e.message));
   app.listen(PORT, () => {
     console.log(`🚀 Сервер: http://localhost:${PORT}`);
     startScheduler();

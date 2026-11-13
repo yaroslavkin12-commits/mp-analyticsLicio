@@ -189,7 +189,7 @@ async function loadSales(params = {}, onTiming) {
       for (const r of prevAnRows) { const s = sp.get(String(r.sku)); if (!s) continue; const dq = Math.min(Number(r.o) || 0, s.q), dr = Math.min(Number(r.r) || 0, s.r); r.o = (Number(r.o) || 0) - dq; r.r = (Number(r.r) || 0) - dr; s.q -= dq; s.r -= dr; }
     }
 
-    const offerBySku = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
+    const offerBySku = await require('../lib/skuAlias').extend(new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
     const override = new Map(overrideRows.map(r => [r.offer_id, r.path]));
 
     // Артикулы: весь каталог + то, что встретилось в аналитике/остатках без каталога.
@@ -468,7 +468,8 @@ router.get('/skus', async (req, res) => {
     const rows = await query(`SELECT offer_id, sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL AND sku != 0`, [req.query.cabinet || 'defly']);
     const map = {};
     for (const r of rows) if (r.offer_id && !map[r.offer_id]) map[r.offer_id] = String(r.sku);
-    res.set('Cache-Control', 'private, max-age=3600');
+    // Коротко: SKU у артикула может смениться (Ozon пересоздал карточку) — ссылки должны вести на новый.
+    res.set('Cache-Control', 'private, max-age=300');
     res.json({ success: true, data: map });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -552,7 +553,7 @@ router.get('/costs', async (req, res) => {
       const cur = cost.get(r.article);
       if (!cur || new Date(r.updated_at) > new Date(cur.updated_at)) cost.set(r.article, r);
     }
-    const offerBySku = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
+    const offerBySku = await require('../lib/skuAlias').extend(new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
     const sales = new Map();
     for (const r of salesRows) {
       const o = r.offer_id || offerBySku.get(String(r.sku));

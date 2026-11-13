@@ -49,8 +49,8 @@ router.get('/series', async (req, res) => {
     const cabinet = req.query.cabinet || 'defly';
     const days = Math.min(60, Number(req.query.days) || 30);
     const from = dayjs().subtract(days, 'day').format('YYYY-MM-DD');
-    const sku = await query(`SELECT sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = $2 AND sku IS NOT NULL`, [cabinet, req.query.offerId]);
-    const skus = sku.map(r => num(r.sku));
+    // Все SKU артикула, включая старые (если Ozon менял SKU), — история не теряется.
+    const skus = (await require('../lib/skuAlias').skusOf(cabinet, req.query.offerId)).map(num);
     const params = [cabinet, from, skus];
     let cond = '';
     if (req.query.query) { params.push(req.query.query); cond = ' AND query = $4'; }
@@ -169,7 +169,7 @@ router.get('/article', async (req, res) => {
     const to = req.query.dateTo || dayjs().subtract(1, 'day').format('YYYY-MM-DD');
     const from = req.query.dateFrom || dayjs(to).subtract(13, 'day').format('YYYY-MM-DD');
     const cat = await query(`SELECT sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = $2`, [cabinet, offerId]);
-    const skus = cat.filter(r => r.sku != null).map(r => num(r.sku));
+    const skus = (await require('../lib/skuAlias').skusOf(cabinet, offerId)).map(num);
     // Переходов (кликов) API Ozon не отдаёт — только «конверсию из поиска в карточку»
     // (view_conversion, в процентах). Тогда переходы = увидели × конверсия.
     const rows = skus.length ? await query(`SELECT date::text d, query, MIN(position) p, MAX(searches)::int s, SUM(views)::int v,

@@ -49,7 +49,7 @@ async function collectProductAnalytics(cabinet, { dateFrom, dateTo } = {}) {
 
   // SKU -> offer_id из каталога кабинета: в ответе аналитики есть только SKU.
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
-  const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+  const offerBySku = await require('../../lib/skuAlias').extend(new Map(catalog.map(r => [String(r.sku), r.offer_id])), cabinet);
 
   let saved = 0;
   const mismatches = [];

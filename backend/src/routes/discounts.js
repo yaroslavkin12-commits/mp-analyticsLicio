@@ -172,7 +172,7 @@ router.get('/overview', async (req, res) => {
               WHERE cabinet = $1 AND source = 'seller_cabinet' AND collected_at <= NOW() - INTERVAL '7 days' ORDER BY offer_id, collected_at DESC`, [cabinet]),
     ]);
     const names = new Map(catalog.map(r => [r.offer_id, r.product_name || '']));
-    const offerBySku = new Map(catalog.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
+    const offerBySku = await require('../lib/skuAlias').extend(new Map(catalog.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
     const ov = new Map(overrides.map(r => [r.offer_id, r.path]));
     const sale = new Map();
     for (const r of sales) { const o = r.offer_id || offerBySku.get(String(r.sku)); if (!o) continue; const x = sale.get(o) || { o: 0, r: 0 }; x.o += Number(r.o) || 0; x.r += Number(r.r) || 0; sale.set(o, x); }

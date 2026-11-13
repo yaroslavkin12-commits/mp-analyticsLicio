@@ -131,6 +131,10 @@ async function syncCatalogFromSheet(cabinet) {
   const dt = v => { const m = String(v || '').match(/^(\d{4}-\d{2}-\d{2})/); return m ? m[1] : null; };
   const out = filtered.map(r => [cabinet, 'ozon', r.offer_id, r.sku || null, r.product_name ? String(r.product_name).slice(0, 500) : null,
     ...(ext ? [r.model_id ? String(r.model_id) : null, r.model_count ? Math.round(num(r.model_count)) : null, dt(r.created_at), String(r.archived) === 'true' || r.archived === '1'] : []), new Date()]);
+  // Ozon сменил SKU у артикула — старый запоминаем, чтобы история не оторвалась.
+  const alias = require('../../lib/skuAlias');
+  await alias.rememberChanged(cabinet, filtered.filter(r => r.sku).map(r => ({ offer_id: r.offer_id, sku: r.sku }))).catch(e => console.warn('[SKU]', e.message));
+  await alias.backfill(cabinet);
   const saved = await bulkUpsert('ad_product_catalog',
     ['cabinet', 'platform', 'offer_id', 'sku', 'product_name', ...(ext ? ['model_id', 'model_count', 'created_ozon', 'archived'] : []), 'updated_at'],
     out, ['cabinet', 'platform', 'offer_id'], undefined, { diff: `catalog${ext ? '2' : ''}:${cabinet}`, skip: ['updated_at'] });
@@ -156,7 +160,7 @@ async function syncAnalyticsFromSheet(cabinet) {
   const same = rowDiff.sameAsLast(`analytics:${cabinet}`, mine);
   if (same.same) return { rows: 0 };
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
-  const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+  const offerBySku = await require('../../lib/skuAlias').extend(new Map(catalog.map(r => [String(r.sku), r.offer_id])), cabinet);
   const out = rows
     .filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}-\d{2}$/.test(r.date))
     .map(r => [
@@ -273,7 +277,7 @@ async function syncCampaignsFromSheet(cabinet) {
 // Товары РК по статистике Ozon по товарам (последние 60 дней) — точнее артикула в названии.
 async function statOffersOf(cabinet, ids) {
   const r = await query(`SELECT DISTINCT s.campaign_id::text AS id, c.offer_id FROM ad_sku_stats_daily s
-      JOIN ad_product_catalog c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
+      JOIN sku_offer c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
      WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2) AND s.date >= CURRENT_DATE - 60`, [cabinet, ids]).catch(() => []);
   const m = new Map();
   for (const x of r) { if (!m.has(x.id)) m.set(x.id, new Set()); m.get(x.id).add(x.offer_id); }
@@ -292,7 +296,7 @@ async function logCampaignSwitches(cabinet, rows, prevCamps) {
   if (changed.length > 60) { console.warn(`[SheetCampaigns:${cabinet}] сменилось ${changed.length} статусов — в журнал не пишем`); return; }
   const ids = changed.map(r => String(r.campaign_id));
   const skuRows = await query(`SELECT s.campaign_id, c.offer_id FROM ad_campaign_skus s
-      JOIN ad_product_catalog c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
+      JOIN sku_offer c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
      WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2)`, [cabinet, ids]).catch(() => []);
   const offersOf = new Map();
   for (const r of skuRows) { const k = String(r.campaign_id); if (!offersOf.has(k)) offersOf.set(k, new Set()); offersOf.get(k).add(r.offer_id); }
@@ -341,7 +345,7 @@ async function backfillNewCampaigns(cabinet, rows) {
   if (!todo.length || todo.length > 30) return;
   const tIds = todo.map(t => t.id);
   const skuRows = await query(`SELECT s.campaign_id, c.offer_id FROM ad_campaign_skus s
-      JOIN ad_product_catalog c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
+      JOIN sku_offer c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
      WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2)`, [cabinet, tIds]).catch(() => []);
   const m = await query(`SELECT campaign_id::text AS id, matched_offer_id FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon' AND campaign_id::text = ANY($2)`, [cabinet, tIds]).catch(() => []);
   const offersOf = new Map();
@@ -454,7 +458,7 @@ async function logBudgetChanges(cabinet, rows, prevCamps, rub) {
   if (changes.length > 60) { console.warn(`[SheetCampaigns:${cabinet}] сменилось ${changes.length} бюджетов — в журнал не пишем`); return; }
   const ids = [...new Set(changes.map(c => c.id))];
   const skuRows = await query(`SELECT s.campaign_id, c.offer_id FROM ad_campaign_skus s
-      JOIN ad_product_catalog c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
+      JOIN sku_offer c ON c.cabinet = s.cabinet AND c.platform = s.platform AND c.sku::text = s.sku::text
      WHERE s.cabinet = $1 AND s.platform = 'ozon' AND s.campaign_id::text = ANY($2)`, [cabinet, ids]).catch(() => []);
   const offersOf = new Map();
   for (const r of skuRows) { const k = String(r.campaign_id); if (!offersOf.has(k)) offersOf.set(k, new Set()); offersOf.get(k).add(r.offer_id); }
@@ -486,7 +490,7 @@ async function syncCpoProductsFromSheet(cabinet) {
   const prev = await query(`SELECT sku, offer_id, enabled, bid_pct FROM ad_cpo_products WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
   const prevBySku = new Map(prev.map(r => [String(r.sku), r]));
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
-  const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+  const offerBySku = await require('../../lib/skuAlias').extend(new Map(catalog.map(r => [String(r.sku), r.offer_id])), cabinet);
   const out = [];
   for (const r of list) {
     const enabled = String(r.enabled) === '1' || String(r.enabled).toLowerCase() === 'true';
@@ -523,7 +527,7 @@ async function syncCpcBidsFromSheet(cabinet) {
   const prev = await query(`SELECT campaign_id, sku, bid FROM ad_cpc_bids WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]);
   const prevByKey = new Map(prev.map(r => [`${r.campaign_id}|${r.sku}`, r]));
   const catalog = await query(`SELECT sku, offer_id FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku IS NOT NULL`, [cabinet]);
-  const offerBySku = new Map(catalog.map(r => [String(r.sku), r.offer_id]));
+  const offerBySku = await require('../../lib/skuAlias').extend(new Map(catalog.map(r => [String(r.sku), r.offer_id])), cabinet);
   const camps = await query(`SELECT campaign_id, title, placement, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]).catch(() => []);
   const campById = new Map(camps.map(c => [String(c.campaign_id), c]));
   const out = [];

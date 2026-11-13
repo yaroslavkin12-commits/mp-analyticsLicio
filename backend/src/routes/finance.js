@@ -63,7 +63,7 @@ async function meta(cabinet) {
     return articles.length - 1;
   };
   for (const r of catalog) art(r.offer_id, r.product_name);
-  const offerBySku = new Map(catalog.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
+  const offerBySku = await require('../lib/skuAlias').extend(new Map(catalog.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
   return { articles, art, offerBySku };
 }
 

@@ -547,7 +547,7 @@ router.get('/stats', async (req, res) => {
     ]);
     const targets = await targetsP;
 
-    const offerBySkuPre = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
+    const offerBySkuPre = await require('../lib/skuAlias').extend(new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
     const neededOffers = new Set();
     for (const c of campaigns) if (c.matched_offer_id) neededOffers.add(c.matched_offer_id);
     for (const r of campaignSkuRows) { const o = offerBySkuPre.get(String(r.sku)); if (o) neededOffers.add(o); }
@@ -626,7 +626,7 @@ router.get('/stats', async (req, res) => {
     const analyticsByOfferDate = new Map(); // offerId|date -> row
     // Если у строки аналитики нет offer_id (товар попал в каталог позже
     // сбора аналитики) — достраиваем его по SKU из каталога.
-    const offerBySkuCat = new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id]));
+    const offerBySkuCat = await require('../lib/skuAlias').extend(new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
     for (const r of analyticsRows) {
       const offerId = r.offer_id || offerBySkuCat.get(String(r.sku));
       if (offerId) analyticsByOfferDate.set(`${offerId}|${r.date}`, r);
