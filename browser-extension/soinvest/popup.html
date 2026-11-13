@@ -20,6 +20,10 @@
   <button id="runCards">Обновить карточки конкурентов</button>
   <div id="agent" style="margin-top:12px"></div>
   <button id="runAgent">Собрать выдачу и «Товары на Ozon» сейчас</button>
-  <details><summary class="muted">Адрес сервиса</summary><input id="server"></details>
+  <div id="authErr" style="color:#c0392b;font-size:12px;margin-top:8px"></div>
+  <details><summary class="muted">Адрес сервиса и ключ доступа</summary>
+    <div class="muted" style="font-size:11px;margin:4px 0 2px">Адрес</div><input id="server">
+    <div class="muted" style="font-size:11px;margin:6px 0 2px">Ключ доступа (из раздела «Доступ» сервиса)</div><input id="apiKey" type="password" placeholder="dfk_…">
+  </details>
   <script src="popup.js"></script>
 </body></html>

@@ -12,6 +12,7 @@ import AdsStats from './pages/AdsStats2';
 import Discounts from './pages/Discounts';
 import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
+import Access from './pages/Access';
 import TrackedArticles from './pages/TrackedArticles';
 import SalesAnalytics from './pages/SalesAnalytics';
 import Geography from './pages/Geography';
@@ -52,7 +53,7 @@ class PageBoundary extends React.Component {
   }
 }
 
-const PAGES = { summary: ShopsSummary, sales: SalesAnalytics, rnp: RnpPage, orders: OrdersFeed, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Products, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings };
+const PAGES = { summary: ShopsSummary, sales: SalesAnalytics, rnp: RnpPage, orders: OrdersFeed, geo: Geography, unit: UnitEconomics, pnl: PnL, buyout: Buyout, inventory: Inventory, production: Production, pricelog: PriceLog, check: AvgCheck, abc: Abc, recon: Recon, margin: Margin, plan: PlanFact, search: SearchPositions, season: Season, costs: Products, dashboard: Dashboard, stocks: Stocks, ads: AdsStats, discounts: Discounts, notifications: TrackedArticles, calculator: Calculator, settings: Settings, access: Access };
 
 // Держим в синхроне с NAV_BY_CABINET в components/Sidebar.jsx — какие
 // страницы доступны в каждом кабинете. Аналитика, P&L и юнит-экономика

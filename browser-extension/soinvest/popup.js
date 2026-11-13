@@ -32,7 +32,9 @@ async function renderAgent() {
 async function render() {
   renderCards(); renderAgent();
   document.getElementById('ver').textContent = 'v' + chrome.runtime.getManifest().version;
-  const { lastRun, server } = await chrome.storage.local.get(['lastRun', 'server']);
+  const { lastRun, server, apiKey, authError } = await chrome.storage.local.get(['lastRun', 'server', 'apiKey', 'authError']);
+  const ak = document.getElementById('apiKey'); if (document.activeElement !== ak) ak.value = apiKey || '';
+  document.getElementById('authErr').textContent = authError || '';
   const srv = document.getElementById('server'); if (document.activeElement !== srv) srv.value = server || DEFAULT_SERVER;
   const el = document.getElementById('status');
   if (!lastRun) { el.innerHTML = '<div class="muted">Ещё не запускалось — нажмите «Собрать сейчас».</div>'; return; }
@@ -54,6 +56,7 @@ document.getElementById('run').addEventListener('click', async () => {
   render();
 });
 document.getElementById('server').addEventListener('change', e => chrome.storage.local.set({ server: e.target.value.trim() }));
+document.getElementById('apiKey').addEventListener('change', e => chrome.storage.local.set({ apiKey: e.target.value.trim() }).then(() => chrome.storage.local.remove('authError')));
 render();
 setInterval(render, 2000);
 

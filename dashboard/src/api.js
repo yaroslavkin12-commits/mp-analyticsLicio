@@ -235,3 +235,14 @@ export const saveSkuPhoto = (cabinet, sku, photo) => api.post('/competitors/phot
 export const importCompetitorReport = (cabinet, payload) => api.post('/competitors/import', { cabinet, ...payload }, { timeout: 60000 });
 export const getSerpTracking = (cabinet, offerId) => api.get('/competitors/tracking', { params: { cabinet, offerId } });
 export const saveSerpTracking = (cabinet, body) => api.post('/competitors/tracking', { cabinet, ...body });
+// Вход: сессия кончилась — на страницу входа.
+api.interceptors.response.use(r => r, e => { if (e.response?.status === 401 && e.response?.data?.auth) window.location.href = '/login'; return Promise.reject(e); });
+export const getMe = () => api.get('/auth/me');
+export const authLogout = () => api.post('/auth/logout');
+export const changePassword = (current, next) => api.post('/auth/password', { current, next });
+export const getAuthUsers = () => api.get('/auth/users');
+export const saveAuthUser = u => api.post('/auth/users', u);
+export const deleteAuthUser = id => api.delete(`/auth/users/${id}`);
+export const getAuthKeys = () => api.get('/auth/keys');
+export const createAuthKey = name => api.post('/auth/keys', { name });
+export const deleteAuthKey = id => api.delete(`/auth/keys/${id}`);

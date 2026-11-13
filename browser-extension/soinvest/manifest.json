@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MP Analytics — Соинвест и конкуренты Ozon",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Цены с Соинвестом (раз в час), карточки конкурентов с ozon.ru (раз в 6 часов), выдача по отслеживаемым запросам (раз в 4 часа) и «Товары на Ozon» по конкурентам (раз в день) — из вашего входа в seller.ozon.ru, в сервис аналитики.",
   "permissions": [
     "alarms",
@@ -13,7 +13,9 @@
     "https://api.seller.ozon.ru/*",
     "https://mp-analyticslicio-1.onrender.com/*",
     "https://seller.ozon.ru/*",
-    "https://www.ozon.ru/*"
+    "https://www.ozon.ru/*",
+    "https://defly-analytics.ru/*",
+    "https://*.sslip.io/*"
   ],
   "background": {
     "service_worker": "background.js"

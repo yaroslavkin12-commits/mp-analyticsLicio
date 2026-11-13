@@ -8,7 +8,8 @@ function getPool() {
   if (!pool) {
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      // База на том же сервере (Яндекс) — без SSL; внешняя (Neon) — с SSL.
+      ssl: process.env.NODE_ENV === 'production' && !/@(localhost|127\.0\.0\.1)[:/]/.test(process.env.DATABASE_URL || '') ? { rejectUnauthorized: false } : false,
       max: 10,
       // Без этого зависший или заблокированный запрос (например, ожидание
       // лока от другого долгого INSERT) держит соединение из пула вечно —

@@ -8,9 +8,17 @@ const { startScheduler } = require('./scheduler');
 const app  = express();
 const PORT = process.env.PORT || 4000;
 
+app.set('trust proxy', 1);
+// Без входа CORS не нужен: страницы и API на одном адресе. Расширение ходит со своим ключом.
 app.use(cors());
 app.use(require('compression')());
 app.use(express.json({ limit: '10mb', verify: (req, res, buffer) => { const p = req.originalUrl.split('?')[0]; if (p === '/api/wb/import' || p === '/api/queries/ingest') req.wbRawBody = buffer; } }));
+// Вход по логину и паролю (включается AUTH_ENABLED=1) и служебные страницы.
+const auth = require('./lib/auth');
+app.get('/login', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.type('html').send(require('./loginPage')()); });
+app.use(auth.middleware());
+app.use('/api/auth', require('./routes/auth'));
+app.get('/api/ops/status', (req, res) => res.json(require('./lib/opsStatus')()));
 
 app.use((req, res, next) => { if ((req.query.cabinet || req.body?.cabinet) === 'defly_wb' && /^\/api\/(finance|sales|ads|promo|discounts|stocks|queries|orders)(\/|$)/.test(req.path)) return res.status(409).json({ success: false, error: 'Этот раздел Ozon не используется для WB. Финансы Defly WB пока не подключены.' }); next(); });
 
@@ -31,6 +39,7 @@ app.use((req, res, next) => {
   if (req.path === '/api/wb/import') return next(); // кэши обновляются после приёма целого набора
   // Шаблоны конструктора и «отшивается» отчёты не меняют — кэш не трогаем.
   if (req.method !== 'GET' && (req.path === '/api/sales/builder-templates' || req.path === '/api/sales/sewing' || req.path.startsWith('/api/production') || req.path.startsWith('/api/pricelog'))) return next();
+  if (req.method !== 'GET' && (req.path.startsWith('/api/auth') || req.path.startsWith('/api/competitors/agent') || req.path.startsWith('/api/queries/ingest'))) return next(); // вход и приём от расширения отчёты не меняют
   if (req.method !== 'GET') {
     // Любое сохранение может поменять отчёты (себестоимость, категории, группы…).
     // Расширение СПП присылает цены часто — от него сбрасываем только калькулятор.
@@ -142,6 +151,8 @@ app.get('/api/env-check', (req, res) => {
     DATABASE_URL: has('DATABASE_URL'), WB_TOKEN: has('WB_TOKEN'),
     OZON_CLIENT_ID: has('OZON_CLIENT_ID'), DEFLY_OZON_CLIENT_ID: has('DEFLY_OZON_CLIENT_ID'),
     OZON_SELLER_COOKIE: has('OZON_SELLER_COOKIE'),
+    // Только названия заданных настроек (без значений) — для переноса на другой сервер.
+    names: Object.keys(process.env).filter(k => /^(ADS_|DEFLY_|OZON_|WB_|TELEGRAM_|QUERIES_|LICIO_|NABAUTO_|ALEX_|FULLGAS_|ACCENT_|COLLECT_|PUBLIC_URL$|DATABASE_URL$)/.test(k) && has(k)).sort(),
   } });
 });
 app.use('/api/netcheck', require('./routes/netcheck')); // ВРЕМЕННО: диагностика таймаутов Ozon 28.09, убрать после
@@ -166,6 +177,7 @@ async function start() {
     await new Promise(r => setTimeout(r, 4000));
   }
   await initSchema();
+  await require('./lib/auth').ensure().catch(e => console.warn('[Auth] ensure', e.message));
   await require('./lib/skuAlias').ensure().catch(e => console.warn('[SKU] ensure', e.message));
   app.listen(PORT, () => {
     console.log(`🚀 Сервер: http://localhost:${PORT}`);

@@ -4,10 +4,10 @@ import { navOf, navLabel, unavailablePage } from '../lib/navigation';
 export { navLabel };
 import { getAdsCabinets } from '../api';
 import { Store, TrendingUp, Activity, ShoppingCart, Target, Receipt, ChartColumn, CalendarRange, Map as MapIcon, Megaphone, Search, BadgePercent,
-  Warehouse, Scissors, PackageCheck, Layers, Tag, NotebookPen, Wallet, ScanSearch, Bell, Calculator, Boxes, Sun, Moon, ChevronsLeft, ChevronsRight } from 'lucide-react';
+  Warehouse, Scissors, PackageCheck, Layers, Tag, NotebookPen, Wallet, ScanSearch, Bell, Calculator, Boxes, Sun, Moon, ChevronsLeft, ChevronsRight, KeyRound } from 'lucide-react';
 
 // Значки разделов меню в одном стиле для всех кабинетов.
-const ICONS = { summary: Store, sales: TrendingUp, rnp: Activity, orders: ShoppingCart, plan: Target, check: Receipt, abc: ChartColumn,
+const ICONS = { access: KeyRound, summary: Store, sales: TrendingUp, rnp: Activity, orders: ShoppingCart, plan: Target, check: Receipt, abc: ChartColumn,
   season: CalendarRange, geo: MapIcon, ads: Megaphone, search: Search, discounts: BadgePercent, inventory: Warehouse, production: Scissors,
   buyout: PackageCheck, unit: Layers, margin: Tag, pricelog: NotebookPen, pnl: Wallet, recon: ScanSearch, notifications: Bell, calculator: Calculator, costs: Boxes };
 

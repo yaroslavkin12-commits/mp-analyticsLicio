@@ -30,6 +30,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   return false;
 });
 
+// Запрос в сервис: с ключом доступа из настроек расширения (на сервере с входом по паролю без него — 401).
+async function srvFetch(url, opts = {}) {
+  const { apiKey } = await chrome.storage.local.get('apiKey');
+  const headers = { ...(opts.headers || {}) };
+  if (apiKey) headers['X-Api-Key'] = apiKey;
+  const r = await fetch(url, { ...opts, headers });
+  if (r.status === 401) await chrome.storage.local.set({ authError: 'Сервис не принял ключ доступа — вставьте ключ из раздела «Доступ» в настройках расширения' });
+  else if (r.ok) await chrome.storage.local.remove('authError');
+  return r;
+}
 async function getServer() {
   const { server } = await chrome.storage.local.get('server');
   return (server || DEFAULT_SERVER).replace(/\/+$/, '');
@@ -76,7 +86,7 @@ async function run(reason) {
   let tab = null;
   try {
     const server = await getServer();
-    const tr = await fetch(server + '/api/discounts/targets');
+    const tr = await srvFetch(server + '/api/discounts/targets');
     if (!tr.ok) throw new Error('сервис не ответил (' + tr.status + ')');
     const targets = (await tr.json()).data || [];
     if (!targets.some(t => t.productIds && t.productIds.length)) throw new Error('сервис пока не знает товаров ни одного кабинета');
@@ -106,7 +116,7 @@ async function run(reason) {
       }
       st.got = items.length;
       if (items.length) {
-        const ir = await fetch(server + '/api/discounts/ingest', {
+        const ir = await srvFetch(server + '/api/discounts/ingest', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ cabinet: t.cabinet, items }),
         });
@@ -186,7 +196,7 @@ async function runCards(reason) {
   let tabId = null;
   try {
     const server = await getServer();
-    const r = await withTimeout(fetch(server + '/api/competitors/skus'), 60000, 'сервис');
+    const r = await withTimeout(srvFetch(server + '/api/competitors/skus'), 60000, 'сервис');
     if (!r.ok) throw new Error('сервис не ответил (' + r.status + ')');
     const skus = (await r.json()).data || [];
     status.asked = skus.length;
@@ -203,7 +213,7 @@ async function runCards(reason) {
     }
     status.got = cards.length;
     if (cards.length) {
-      const ir = await withTimeout(fetch(server + '/api/competitors/cards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cards }) }), 60000, 'сервис');
+      const ir = await withTimeout(srvFetch(server + '/api/competitors/cards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cards }) }), 60000, 'сервис');
       const ij = await ir.json().catch(() => ({}));
       if (!ir.ok || !ij.success) status.error = 'сервис не принял карточки: ' + (ij.error || ir.status);
     }
@@ -303,7 +313,7 @@ async function runAgent(reason, force) {
   let tab = null;
   try {
     const server = await getServer();
-    const r = await withTimeout(fetch(server + '/api/competitors/agent-tasks'), 60000, 'сервис');
+    const r = await withTimeout(srvFetch(server + '/api/competitors/agent-tasks'), 60000, 'сервис');
     if (!r.ok) throw new Error('сервис не ответил (' + r.status + ')');
     const t = (await r.json()).data || {};
     const now = mskNow();
@@ -331,7 +341,7 @@ async function runAgent(reason, force) {
       const res = await inSeller(tab.id, explainInPage, [String(d.task.companyId), d.task.query, d.task.skus, d.reg]);
       if (res.status === 401 || res.status === 403) throw new Error('нет входа в кабинет Ozon (откройте seller.ozon.ru и войдите)');
       if (res.status !== 200) { st.error = 'выдача «' + d.task.query + '»: ' + (res.error || res.status); continue; }
-      const ir = await fetch(server + '/api/competitors/agent/serp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: d.task.cabinet, query: d.task.query, region: d.reg.title, total: res.total, rows: res.rows }) });
+      const ir = await srvFetch(server + '/api/competitors/agent/serp', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: d.task.cabinet, query: d.task.query, region: d.reg.title, total: res.total, rows: res.rows }) });
       if (ir.ok) { done[d.key] = Date.now(); st.serpOk++; }
       else { const ij = await ir.json().catch(() => ({})); st.error = 'сервис не принял выдачу «' + d.task.query + '» (' + d.reg.title.split(',')[0] + '): ' + (ij.error || ir.status); }
       st.serpDone = done;
@@ -355,7 +365,7 @@ async function runAgent(reason, force) {
         if (res.rows.length < 100) break;
       }
       if (fail) { st.error = 'запросы товара ' + j.sku + ': ' + fail; continue; }
-      const ir = await fetch(server + '/api/queries/ingest-ext', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: j.g.cabinet, sku: j.sku, date: j.d, rows }) });
+      const ir = await srvFetch(server + '/api/queries/ingest-ext', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: j.g.cabinet, sku: j.sku, date: j.d, rows }) });
       if (ir.ok) { qDone[j.key] = Date.now(); st.qOk++; st.qLeft--; }
       else st.error = 'сервис не принял запросы товара ' + j.sku + ' (' + ir.status + ')';
       // Чистим память старше 20 дней.
@@ -387,7 +397,7 @@ async function runAgent(reason, force) {
             } else if (!st.error) st.error = '«Товары на Ozon» (' + win + ' дн.): ' + ((res && (res.error || res.status)) || 'нет ответа');
             await sleep(1500 + Math.random() * 1500);
           }
-          if (items.length || empty.length) await fetch(server + '/api/competitors/agent/market', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: g.cabinet, window: win, items, empty }) });
+          if (items.length || empty.length) await srvFetch(server + '/api/competitors/agent/market', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cabinet: g.cabinet, window: win, items, empty }) });
         }
       }
       st.marketOk = ok; st.marketAsked = asked;
