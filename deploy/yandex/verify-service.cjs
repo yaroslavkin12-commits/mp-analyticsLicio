@@ -18,7 +18,7 @@ function request(path, body, cookie) {
   });
 }
 (async () => {
-  let out = { transport: 'https', domain }, cookie;
+  let out = { transport: 'https', domain }, cookie, probeId;
   try {
     let ready = false;
     for (let i = 0; i < 45; i++) {
@@ -37,6 +37,10 @@ function request(path, body, cookie) {
           const r = await request(path + '?cabinet=defly&dateFrom=2026-11-13&dateTo=2026-11-13', null, cookie);
           out[name] = { code: r.code, success: r.json?.success, articles: r.json?.data?.articles?.length, rows: r.json?.data?.rows?.length };
         }
+        probeId = require('crypto').randomUUID();
+        const ping = await request('/api/auth/activity', {visitId:probeId,idleSeconds:0,visible:false,close:true,page:'service-check',cabinet:'defly'},cookie);
+        out.accessHeartbeat = {code:ping.code,success:ping.json?.success};
+        if (ping.json?.error) out.accessHeartbeat.error = String(ping.json.error).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi,'[адрес]').replace(/[a-zA-Z0-9_-]{32,}/g,'[скрыто]').slice(0,180);
         const journal = await request('/api/auth/activity/report', null, cookie);
         out.accessJournal = { code: journal.code, success: journal.json?.success };
         const keys = await request('/api/auth/keys', null, cookie);
@@ -44,7 +48,14 @@ function request(path, body, cookie) {
       }
     }
   } catch { out.error = 'verification failed'; }
-  finally { if (cookie) await request('/api/auth/logout', {}, cookie).catch(() => {}); }
+  finally {
+    if (probeId) {
+      const { Client } = require('/opt/mp/app/backend/node_modules/pg');
+      const client = new Client({connectionString:env.DATABASE_URL,ssl:/@(localhost|127\.0\.0\.1)[:/]/.test(env.DATABASE_URL)?false:{rejectUnauthorized:false},connectionTimeoutMillis:10000});
+      try { await client.connect(); await client.query("DELETE FROM app_access_visits WHERE id=$1 AND page='service-check'",[probeId]); }
+      catch {} finally { await client.end().catch(()=>{}); }
+    }
+    if (cookie) await request('/api/auth/logout', {}, cookie).catch(() => {}); }
   let d = {}; try { d = JSON.parse(fs.readFileSync(file)); } catch {}
   d.serviceVerification = out; fs.writeFileSync(file, JSON.stringify(d));
 })();
