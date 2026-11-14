@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getMe, authLogout, changePassword, getAuthUsers, saveAuthUser, deleteAuthUser, getAuthKeys, createAuthKey, deleteAuthKey } from '../api';
 import './ads2.css';
+import AccessActivity from './AccessActivity';
 
 // «Доступ»: пользователи сервиса, ключи для расширения и смена своего пароля.
 const err = e => e.response?.data?.error || e.message;
@@ -17,9 +18,10 @@ export default function Access() {
   const say = (t, isBad) => { setMsg(isBad ? '' : t); setBad(isBad ? t : ''); };
   const load = useCallback(async () => {
     const m = (await getMe()).data.data; setMe(m);
-    if (m?.role === 'admin' && m.auth) {
-      const [u, k] = await Promise.all([getAuthUsers(), getAuthKeys()]);
-      setUsers(u.data.data); setKeys(k.data.data);
+    if (['owner', 'admin'].includes(m?.role) && m.auth) {
+      const u = await getAuthUsers(); setUsers(u.data.data);
+      if (m.role === 'owner') { const k = await getAuthKeys(); setKeys(k.data.data); }
+      else setKeys([]);
     }
   }, []);
   useEffect(() => { load().catch(e => say(err(e), true)); }, [load]);
@@ -27,40 +29,42 @@ export default function Access() {
 
   if (me === undefined) return <div className="mpui"><div className="a-card" style={{ padding: 16 }}>Загрузка…</div></div>;
   if (!me?.auth) return <div className="mpui"><div className="a-top"><h1>Доступ</h1></div><div className="a-card" style={{ padding: 16 }}>На этом сервере вход по паролю выключен — сервис открыт всем, у кого есть ссылка. Вход включится на новом сервере.</div></div>;
-  const admin = me.role === 'admin';
+  const owner = me.role === 'owner' && me.login === 'evgeniy';
+  const admin = owner || me.role === 'admin';
   return (
     <div className="mpui">
       <div className="page-sticky"><div className="a-top"><h1>Доступ</h1>
-        <span className="a-hint">Вы вошли как <b>{me.name || me.login}</b>{admin ? ' · администратор' : ''}</span>
+        <span className="a-hint">Вы вошли как <b>{me.name || me.login}</b>{owner ? ' · главный администратор' : admin ? ' · администратор пользователей' : ''}</span>
         <button className="a-btn ghost" style={{ marginLeft: 'auto' }} onClick={async () => { await authLogout().catch(() => {}); window.location.href = '/login'; }}>Выйти</button>
       </div></div>
       {msg && <div className="c-msg" role="status">{msg}</div>}{bad && <div className="c-msg bad" role="alert">{bad}</div>}
 
+      {owner && <AccessActivity />}
       {admin && <div className="a-card" style={{ padding: 16, marginBottom: 14 }}>
         <b style={{ fontSize: 15 }}>Пользователи</b>
-        <div className="a-hint" style={{ margin: '4px 0 10px' }}>Администратор управляет пользователями и ключами. Обычный пользователь видит и меняет данные сервиса, но не доступы.</div>
-        <div className="a-scroll"><table className="a-t no-sh"><thead><tr><th>Логин</th><th>Имя</th><th>Роль</th><th>Последний вход</th><th>Статус</th><th /></tr></thead><tbody>
+        <div className="a-hint" style={{ margin: '4px 0 10px' }}>{owner ? 'Вы управляете ролями, пользователями и ключами. Журнал посещений доступен только вам.' : 'Вы можете добавлять и удалять обычных пользователей. История входов и активность вам недоступны.'}</div>
+        <div className="a-scroll"><table className="a-t no-sh"><thead><tr><th>Логин</th><th>Имя</th><th>Роль</th>{owner && <th>Последний вход</th>}<th>Статус</th><th /></tr></thead><tbody>
           {users.map(u => <tr key={u.id}>
             <td><b>{u.login}</b></td><td>{u.name}</td>
-            <td><select className="a-input" value={u.role} onChange={e => act(() => saveAuthUser({ id: u.id, role: e.target.value, disabled: u.disabled }))()}><option value="user">пользователь</option><option value="admin">администратор</option></select></td>
-            <td>{when(u.last_login)}</td>
+            <td>{owner && u.role !== 'owner' ? <select className="a-input" value={u.role} onChange={e => act(() => saveAuthUser({ id: u.id, role: e.target.value, disabled: u.disabled }))()}><option value="user">пользователь</option><option value="admin">администратор пользователей</option></select> : u.role === 'owner' ? 'Главный администратор' : 'Пользователь'}</td>
+            {owner && <td>{when(u.last_login)}</td>}
             <td>{u.disabled ? <span className="s-down">отключён</span> : 'активен'}</td>
             <td style={{ whiteSpace: 'nowrap' }}>
-              <button className="a-btn ghost" onClick={act(async () => { const p = window.prompt(`Новый пароль для ${u.login} (не короче 8 символов)`); if (!p) return; await saveAuthUser({ id: u.id, role: u.role, disabled: u.disabled, password: p }); say(`Пароль ${u.login} изменён, его сессии закрыты`); })}>Сменить пароль</button>
-              <button className="a-btn ghost" onClick={act(() => saveAuthUser({ id: u.id, role: u.role, disabled: !u.disabled }))}>{u.disabled ? 'Включить' : 'Отключить'}</button>
-              <button className="a-btn ghost" onClick={act(async () => { if (window.confirm(`Удалить пользователя ${u.login}?`)) await deleteAuthUser(u.id); })}>Удалить</button>
+              {owner && u.role !== 'owner' && <><button className="a-btn ghost" onClick={act(async () => { const p = window.prompt(`Новый пароль для ${u.login} (не короче 8 символов)`); if (!p) return; await saveAuthUser({ id: u.id, role: u.role, disabled: u.disabled, password: p }); say(`Пароль ${u.login} изменён, его сессии закрыты`); })}>Сменить пароль</button>
+              <button className="a-btn ghost" onClick={act(() => saveAuthUser({ id: u.id, role: u.role, disabled: !u.disabled }))}>{u.disabled ? 'Включить' : 'Отключить'}</button></>}
+              {u.role !== 'owner' && <button className="a-btn ghost" onClick={act(async () => { if (window.confirm(`Удалить пользователя ${u.login}?`)) await deleteAuthUser(u.id); })}>Удалить</button>}
             </td></tr>)}
         </tbody></table></div>
         <div className="a-bar" style={{ marginTop: 10 }}>
           <input className="a-input" placeholder="логин (латиница)" value={nu.login} onChange={e => setNu({ ...nu, login: e.target.value })} />
           <input className="a-input" placeholder="имя" value={nu.name} onChange={e => setNu({ ...nu, name: e.target.value })} />
           <input className="a-input" type="password" placeholder="пароль, от 8 символов" value={nu.password} onChange={e => setNu({ ...nu, password: e.target.value })} />
-          <select className="a-input" value={nu.role} onChange={e => setNu({ ...nu, role: e.target.value })}><option value="user">пользователь</option><option value="admin">администратор</option></select>
+          {owner && <select className="a-input" value={nu.role} onChange={e => setNu({ ...nu, role: e.target.value })}><option value="user">пользователь</option><option value="admin">администратор пользователей</option></select>}
           <button className="a-btn" onClick={act(async () => { await saveAuthUser(nu); say(`Пользователь ${nu.login} добавлен`); setNu({ login: '', name: '', password: '', role: 'user' }); })}>Добавить</button>
         </div>
       </div>}
 
-      {admin && <div className="a-card" style={{ padding: 16, marginBottom: 14 }}>
+      {owner && <div className="a-card" style={{ padding: 16, marginBottom: 14 }}>
         <b style={{ fontSize: 15 }}>Ключи доступа</b>
         <div className="a-hint" style={{ margin: '4px 0 10px' }}>Для расширения «Соинвест» и других программ, которые сами отправляют данные в сервис. Ключ показывается один раз — вставьте его в настройках расширения. Удалённый ключ сразу перестаёт работать.</div>
         {newKey && <div className="c-msg" style={{ wordBreak: 'break-all' }}>Новый ключ: <code>{newKey}</code> <button className="a-btn ghost" onClick={() => navigator.clipboard?.writeText(newKey)}>Скопировать</button><div className="a-hint">Сохраните его сейчас — потом увидеть ключ будет нельзя.</div></div>}

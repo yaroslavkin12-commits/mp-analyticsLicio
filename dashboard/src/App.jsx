@@ -13,6 +13,7 @@ import Discounts from './pages/Discounts';
 import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
 import Access from './pages/Access';
+import useAccessActivity from './lib/useAccessActivity';
 import TrackedArticles from './pages/TrackedArticles';
 import SalesAnalytics from './pages/SalesAnalytics';
 import Geography from './pages/Geography';
@@ -81,14 +82,11 @@ const CABINET_KEY = 'mp-cabinet';
 
 export default function App() {
   const [page, setPage]     = useState(() => {
-    let cab = 'licio';
-    try { cab = localStorage.getItem(CABINET_KEY) || 'licio'; } catch (e) { /* ignore */ }
-    return (PAGES_BY_CABINET[cab] || PAGES_BY_CABINET.licio)[0];
+    return PAGES_BY_CABINET.defly[0];
   });
   const [platform, setPlatform] = useState('all');
-  const [cabinet, setCabinet] = useState(() => {
-    try { return localStorage.getItem(CABINET_KEY) || 'licio'; } catch(e) { return 'licio'; }
-  });
+  const [cabinet, setCabinet] = useState('defly');
+  useAccessActivity(page, cabinet);
   const isMobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
   const [theme, setTheme] = useState(() => {

@@ -2,7 +2,8 @@
 // Включается переменной AUTH_ENABLED=1 (на старом сервере Render — выключено).
 // Первый администратор создаётся из ADMIN_LOGIN / ADMIN_PASSWORD, если пользователей ещё нет.
 const crypto = require('crypto');
-const { query } = require('../db');
+const { query, getPool } = require('../db');
+const { isOwner, isAdmin } = require('./accessPolicy');
 
 const enabled = () => process.env.AUTH_ENABLED === '1';
 const COOKIE = 'mp_s';
@@ -24,6 +25,23 @@ function ensure() {
       await query(`INSERT INTO app_users (login, name, pass_hash, role) VALUES ($1, $1, $2, 'admin')`, [login.toLowerCase(), hashPassword(pass)]);
       console.log(`[Auth] создан администратор ${login}`);
     }
+    // Владелец назначен явно: другие администраторы не могут получить эту роль.
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(67491301)');
+      const owner = await client.query("SELECT id FROM app_users WHERE login = 'evgeniy'");
+      if (owner.rows.length) await client.query("UPDATE app_users SET role = 'owner', disabled = false WHERE id = $1", [owner.rows[0].id]);
+      else if (login && pass) {
+        const original = await client.query('SELECT id, pass_hash FROM app_users WHERE login = $1 FOR UPDATE', [login.toLowerCase()]);
+        if (original.rows[0] && checkPassword(pass, original.rows[0].pass_hash)) {
+          await client.query("UPDATE app_users SET login = 'evgeniy', role = 'owner', disabled = false WHERE id = $1", [original.rows[0].id]);
+        }
+      }
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK'); throw e; }
+    finally { client.release(); }
+    await require('./accessActivity').ensure();
   })().catch(e => { ready = null; throw e; });
   return ready;
 }
@@ -98,12 +116,13 @@ async function login(req, res) {
   await query(`INSERT INTO app_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '${SESSION_DAYS} days')`, [sha(token), r[0].id]);
   await query(`UPDATE app_users SET last_login = NOW() WHERE id = $1`, [r[0].id]);
   await query(`DELETE FROM app_sessions WHERE expires_at < NOW()`).catch(() => {});
+  await require('./accessActivity').recordLogin(r[0].id, sha(token), ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip));
   res.setHeader('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${req.secure ? '; Secure' : ''}`);
   res.json({ success: true });
 }
 async function logout(req, res) {
   const t = cookieOf(req);
-  if (t) { await query(`DELETE FROM app_sessions WHERE token_hash = $1`, [sha(t)]).catch(() => {}); sessCache.delete(sha(t)); }
+  if (t) { await require('./accessActivity').closeSession(sha(t)); await query(`DELETE FROM app_sessions WHERE token_hash = $1`, [sha(t)]).catch(() => {}); sessCache.delete(sha(t)); }
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
   res.json({ success: true });
 }
@@ -130,6 +149,5 @@ function middleware() {
   };
 }
 
-const isAdmin = req => !enabled() || req.user?.role === 'admin';
 
-module.exports = { ensure, enabled, middleware, login, logout, hashPassword, checkPassword, sha, dropCaches, isAdmin };
+module.exports = { ensure, enabled, middleware, login, logout, hashPassword, checkPassword, sha, dropCaches, isAdmin, isOwner, sessionHash: req => { const t = cookieOf(req); return t ? sha(t) : null; } };

@@ -246,3 +246,5 @@ export const deleteAuthUser = id => api.delete(`/auth/users/${id}`);
 export const getAuthKeys = () => api.get('/auth/keys');
 export const createAuthKey = name => api.post('/auth/keys', { name });
 export const deleteAuthKey = id => api.delete(`/auth/keys/${id}`);
+
+export const getAccessActivity = params => api.get('/auth/activity/report', { params });
