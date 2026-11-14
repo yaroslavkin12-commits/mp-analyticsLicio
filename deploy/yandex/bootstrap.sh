@@ -161,7 +161,7 @@ EOF
 # Перенос данных из Neon (один раз).
 if [ -n "${NEON_DATABASE_URL:-}" ] && [ ! -f "$STATE/migrated" ]; then
   echo "=== перенос базы из Neon"
-  bash "$APP/deploy/yandex/migrate.sh" || echo "перенос не удался — сервис стартует с пустой базой, перенос повторится по команде"
+  bash "$APP/deploy/yandex/migrate.sh" || echo "перенос не удался — требуется проверка оператора"
 fi
 
 # HTTPS: свой домен и запасной адрес на sslip.io (работает сразу, без DNS).
@@ -177,5 +177,5 @@ EOF
 systemctl daemon-reload
 systemctl enable --now mp.service mp-update.timer mp-backup.timer
 systemctl reload caddy || systemctl restart caddy
-status stage=ready ip="$IP" sslip="https://$SSLIP" domain="${DOMAIN:-}" commit="$(git -C "$APP" rev-parse --short HEAD)"
+status stage=configured ip="$IP" sslip="https://$SSLIP" domain="${DOMAIN:-}" commit="$(git -C "$APP" rev-parse --short HEAD)"
 echo "=== готово: https://$SSLIP ${DOMAIN:+и https://$DOMAIN}"

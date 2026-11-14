@@ -25,12 +25,17 @@ if [ "$OLD" != "$NEW" ]; then
   if echo "$CHANGED" | grep -q -E '^(backend/|dashboard/src/lib/.*\.mjs)'; then systemctl restart mp.service; fi
   st commit="${NEW:0:7}" deployedAt="$(date -Is)"
 fi
-# Повторный перенос базы по команде из репозитория.
-WANT=$(cat "$APP/deploy/yandex/migrate.stamp" 2>/dev/null || echo "")
-HAVE=$(cat "$STATE/migrate.stamp" 2>/dev/null || echo "")
-if [ -n "$WANT" ] && [ "$WANT" != "$HAVE" ] && [ -f "$STATE/migrated" ]; then
-  echo "=== $(date -Is) повторный перенос базы: $WANT"
-  bash "$APP/deploy/yandex/migrate.sh" && echo "$WANT" > "$STATE/migrate.stamp"
-elif [ -n "$WANT" ] && [ -z "$HAVE" ]; then echo "$WANT" > "$STATE/migrate.stamp"; fi
+# Перенос базы запускается оператором отдельно после проверки источника.
+# Изменение migrate.stamp больше не перезаписывает рабочую базу.
 # Отметка, что обновлялка жива.
 st checkedAt="$(date -Is)"
+
+# Видимость одноразовой подготовки базы без публикации содержимого журналов.
+if [ -f /var/log/mp-migrate-safe.log ]; then
+  JOB_STATE=$(systemctl show mp-migration-prepare.service -p ActiveState --value 2>/dev/null || true)
+  JOB_EXIT=$(systemctl show mp-migration-prepare.service -p ExecMainStatus --value 2>/dev/null || true)
+  MIG_ERROR=''
+  if grep -q '^Число строк изменилось:' /var/log/mp-migrate-safe.log; then MIG_ERROR='Источник изменился во время сверки';
+  elif grep -qE '^(ERROR:|pg_restore: error:)' /var/log/mp-migrate-safe.log; then MIG_ERROR='Ошибка восстановления SQL'; fi
+  st migrationJob="$JOB_STATE" migrationExit="$JOB_EXIT" migrationError="$MIG_ERROR"
+fi
