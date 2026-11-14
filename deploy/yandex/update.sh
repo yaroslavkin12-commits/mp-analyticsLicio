@@ -40,8 +40,9 @@ if [ -f /var/log/mp-migrate-safe.log ]; then
   st migrationJob="$JOB_STATE" migrationExit="$JOB_EXIT" migrationError="$MIG_ERROR"
 fi
 # Разовая проверка рабочего входа и отчётов; пароль остаётся внутри сервера.
-if [ ! -f /var/lib/mp/verified-shared-attempted ] && grep -q 'neon-shared' /var/lib/mp/status.json; then
-  touch /var/lib/mp/verified-shared-attempted
+VERIFY_HASH=$(sha256sum "$APP/deploy/yandex/verify-service.cjs" | cut -d' ' -f1)
+if [ ! -f "$STATE/verified-$VERIFY_HASH" ] && grep -q 'neon-shared' /var/lib/mp/status.json; then
+  touch "$STATE/verified-$VERIFY_HASH"
   node "$APP/deploy/yandex/verify-service.cjs"
 fi
 
