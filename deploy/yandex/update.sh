@@ -52,3 +52,17 @@ if [ ! -f "$STATE/backup-check-$BACKUP_HASH" ]; then
     touch "$STATE/backup-check-$BACKUP_HASH"
   fi
 fi
+
+BACKUP_UNIT="mp-backup-check-${BACKUP_HASH:0:12}.service"
+st backupJob="$(systemctl show "$BACKUP_UNIT" -p ActiveState --value 2>/dev/null || true)" backupExit="$(systemctl show "$BACKUP_UNIT" -p ExecMainStatus --value 2>/dev/null || true)"
+
+# Явный повторный запрос HTTPS после изменения DNS домена.
+if [ -s "$APP/deploy/yandex/https.stamp" ]; then
+  HTTPS_STAMP=$(cat "$APP/deploy/yandex/https.stamp")
+  if [ "$(cat "$STATE/https.stamp" 2>/dev/null || true)" != "$HTTPS_STAMP" ]; then
+    if systemctl reload caddy; then
+      printf '%s' "$HTTPS_STAMP" > "$STATE/https.stamp"
+      st httpsReloadAt="$(date -Is)"
+    fi
+  fi
+fi
