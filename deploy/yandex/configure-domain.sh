@@ -14,7 +14,7 @@ if index is None:
     raise SystemExit('Не найден существующий блок домена')
 header = lines[index]
 if not re.search(r'(^|[\s,])app\.defly-analytics\.ru(?=[\s,{])', header):
-    lines[index] = header.replace('{', ', app.defly-analytics.ru {', 1)
+    lines[index] = header.rstrip()[:-1].rstrip() + ', app.defly-analytics.ru {\n'
     candidate = p.with_name('Caddyfile.next')
     candidate.write_text(''.join(lines))
     try:
