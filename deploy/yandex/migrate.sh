@@ -5,7 +5,7 @@ umask 077
 STATE=/var/lib/mp
 exec 9>"$STATE/migrate.lock"
 flock -n 9 || { echo 'Другой перенос уже запущен'; exit 1; }
-NEON_DATABASE_URL=$(grep -m1 '^NEON_DATABASE_URL=' /etc/mp/env.clean | cut -d= -f2-)
+export NEON_DATABASE_URL=$(grep -m1 '^NEON_DATABASE_URL=' /etc/mp/env.clean | cut -d= -f2-)
 [ -n "$NEON_DATABASE_URL" ] || { echo 'Не задан источник Neon'; exit 1; }
 PGBIN=/usr/lib/postgresql/$(ls /usr/lib/postgresql | sort -V | tail -1)/bin
 SV=$(psql "$NEON_DATABASE_URL" -tAc 'SHOW server_version_num')
@@ -30,7 +30,7 @@ PY
 }
 trap 'st migrate=failed; echo "Перенос остановлен. Копии и исходная база сохранены."' ERR
 st migrate=dumping
-"$PGBIN/pg_dump" --format=custom --no-owner --no-acl -d "$NEON_DATABASE_URL" -f "$DUMP"
+node "$(dirname "$0")/dump-snapshot.cjs" "$PGBIN/pg_dump" "$DUMP"
 sudo -u postgres createdb --owner=mp "$STAGE"
 st migrate=restoring stagingDb="$STAGE"
 # PostgreSQL 17 и старше не знают SET transaction_timeout из дампа PG18.
@@ -38,17 +38,16 @@ st migrate=restoring stagingDb="$STAGE"
 "$PGBIN/pg_restore" --no-owner --no-acl -f - "$DUMP" | sed '/^SET transaction_timeout = /d' | psql -X -v ON_ERROR_STOP=1 -d "$LOCAL" >/dev/null
 # Сверяем точные количества строк всех пользовательских таблиц.
 TABLES="SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
-psql -X "$NEON_DATABASE_URL" -Atc "$TABLES" > "$DUMP.tables"
+cut -f1 "$DUMP.manifest" > "$DUMP.tables"
 psql -X "$LOCAL" -Atc "$TABLES" > "$DUMP.local-tables"
 cmp "$DUMP.tables" "$DUMP.local-tables"
 [ -s "$DUMP.tables" ] || { echo 'Источник не содержит таблиц'; exit 1; }
-while IFS= read -r table; do
+while IFS=$'\t' read -r table src; do
   [[ "$table" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || { echo 'Нестандартное имя таблицы требует проверки'; exit 1; }
   sql="SELECT count(*) FROM public.\"$table\""
-  src=$(psql -X "$NEON_DATABASE_URL" -Atc "$sql")
   dst=$(psql -X "$LOCAL" -Atc "$sql")
-  [ "$src" = "$dst" ] || { echo "Число строк изменилось: $table; повторите перенос после остановки записи в источник"; exit 1; }
-done < "$DUMP.tables"
+  [ "$src" = "$dst" ] || { echo "Не совпало число строк снимка: $table"; exit 1; }
+done < "$DUMP.manifest"
 st migrate=verified stagingDb="$STAGE"
 if [ "${1:-}" != '--activate' ]; then
   echo "Копия $STAGE проверена. Рабочая база не переключена."
