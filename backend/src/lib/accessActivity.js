@@ -14,7 +14,8 @@ function ensure() {
       login VARCHAR(64) NOT NULL, name VARCHAR(128), session_hash CHAR(64) NOT NULL,
       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       ended_at TIMESTAMPTZ, active_seconds INT NOT NULL DEFAULT 0, was_active BOOLEAN NOT NULL DEFAULT false,
-      page VARCHAR(64), cabinet VARCHAR(32))`);
+      page VARCHAR(64), cabinet VARCHAR(32), source VARCHAR(24) NOT NULL DEFAULT 'user')`);
+    await query(`ALTER TABLE app_access_visits ADD COLUMN IF NOT EXISTS source VARCHAR(24) NOT NULL DEFAULT 'user'`);
     await query(`CREATE TABLE IF NOT EXISTS app_access_spans (
       id BIGSERIAL PRIMARY KEY, visit_id UUID NOT NULL REFERENCES app_access_visits(id) ON DELETE CASCADE,
       user_id INT REFERENCES app_users(id) ON DELETE SET NULL, login VARCHAR(64) NOT NULL,
@@ -49,15 +50,15 @@ async function recordLogin(userId, sessionHash, internal = false) {
   await query(`INSERT INTO app_access_logins (user_id, login, name, session_hash, source)
     SELECT id, login, name, $2, $3 FROM app_users WHERE id = $1`, [userId, sessionHash, internal ? 'service-check' : 'user']);
 }
-async function heartbeat(user, sessionHash, input) {
+async function heartbeat(user, sessionHash, input, internal = false) {
   await ensure();
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
-    await client.query(`INSERT INTO app_access_visits (id, user_id, login, name, session_hash, was_active, page, cabinet)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING`,
+    await client.query(`INSERT INTO app_access_visits (id, user_id, login, name, session_hash, was_active, page, cabinet, source)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
     [input.visitId, user.id, user.login, user.name || user.login, sessionHash,
-      input.visible && input.idleSeconds < IDLE_SECONDS && !input.close, input.page, input.cabinet]);
+      input.visible && input.idleSeconds < IDLE_SECONDS && !input.close, input.page, input.cabinet, internal ? 'service-check' : 'user']);
     const result = await client.query(`SELECT * FROM app_access_visits WHERE id = $1 FOR UPDATE`, [input.visitId]);
     const visit = result.rows[0];
     if (!visit || Number(visit.user_id) !== Number(user.id) || visit.session_hash !== sessionHash) {
@@ -68,8 +69,8 @@ async function heartbeat(user, sessionHash, input) {
       const now = clock[0].server_now;
       const span = activeSlice(visit, now, input);
       if (span) await client.query(`INSERT INTO app_access_spans (visit_id, user_id, login, start_at, end_at) VALUES ($1,$2,$3,$4,$5)`, [input.visitId, user.id, user.login, span.start, span.end]);
-      await client.query(`UPDATE app_access_visits SET last_seen_at=$2, active_seconds=active_seconds+$3,
-        was_active=$4, page=$5, cabinet=$6, ended_at=CASE WHEN $7 THEN $2 ELSE NULL END WHERE id=$1`,
+      await client.query(`UPDATE app_access_visits SET last_seen_at=$2::timestamptz, active_seconds=active_seconds+$3,
+        was_active=$4, page=$5, cabinet=$6, ended_at=CASE WHEN $7::boolean THEN $2::timestamptz ELSE NULL::timestamptz END WHERE id=$1`,
       [input.visitId, now, span?.seconds || 0, input.visible && input.idleSeconds < IDLE_SECONDS && !input.close, input.page, input.cabinet, input.close]);
     }
     await client.query('COMMIT');
@@ -93,8 +94,8 @@ async function report(input) {
   const [from, to] = period(input);
   // Объединяем пересекающиеся интервалы: несколько вкладок не умножают время.
   const summary = await query(`WITH clipped AS (
-      SELECT login, tstzrange(GREATEST(start_at,$1::timestamptz),LEAST(end_at,$2::timestamptz),'[)') AS span
-      FROM app_access_spans WHERE start_at < $2 AND end_at > $1
+      SELECT s.login, tstzrange(GREATEST(s.start_at,$1::timestamptz),LEAST(s.end_at,$2::timestamptz),'[)') AS span
+      FROM app_access_spans s JOIN app_access_visits v ON v.id=s.visit_id WHERE v.source='user' AND s.start_at < $2 AND s.end_at > $1
     ), merged AS (SELECT login, range_agg(span) AS spans FROM clipped GROUP BY login),
     active AS (SELECT login, SUM(EXTRACT(EPOCH FROM upper(r)-lower(r)))::bigint AS active_seconds
       FROM merged CROSS JOIN LATERAL unnest(spans) AS r GROUP BY login),
@@ -102,14 +103,14 @@ async function report(input) {
       MIN(GREATEST(started_at,$1::timestamptz)) AS first_seen,
       MAX(LEAST(last_seen_at,$2::timestamptz)) AS last_seen,
       BOOL_OR(was_active AND ended_at IS NULL AND last_seen_at > NOW()-INTERVAL '75 seconds') AS online
-      FROM app_access_visits WHERE started_at < $2 AND COALESCE(ended_at,last_seen_at) >= $1 GROUP BY login)
+      FROM app_access_visits WHERE source='user' AND started_at < $2 AND COALESCE(ended_at,last_seen_at) >= $1 GROUP BY login)
     SELECT v.*, COALESCE(a.active_seconds,0)::bigint AS active_seconds FROM visits v LEFT JOIN active a USING(login) ORDER BY last_seen DESC`, [from, to]);
   const visits = await query(`SELECT v.id, v.login, v.name, v.started_at, v.last_seen_at, v.ended_at, v.was_active,
       COALESCE((SELECT SUM(EXTRACT(EPOCH FROM LEAST(s.end_at,$2::timestamptz)-GREATEST(s.start_at,$1::timestamptz)))
         FROM app_access_spans s WHERE s.visit_id=v.id AND s.start_at < $2 AND s.end_at > $1),0)::bigint AS active_seconds,
       GREATEST(0,EXTRACT(EPOCH FROM LEAST(COALESCE(v.ended_at,LEAST(NOW(),v.last_seen_at+INTERVAL '75 seconds')),$2::timestamptz)-GREATEST(v.started_at,$1::timestamptz)))::bigint AS duration_seconds,
       v.page, v.cabinet, (v.ended_at IS NULL AND v.last_seen_at > NOW()-INTERVAL '75 seconds') AS online
-    FROM app_access_visits v WHERE v.started_at < $2 AND COALESCE(v.ended_at,v.last_seen_at) >= $1 ORDER BY v.started_at DESC LIMIT 200`, [from, to]);
+    FROM app_access_visits v WHERE v.source='user' AND v.started_at < $2 AND COALESCE(v.ended_at,v.last_seen_at) >= $1 ORDER BY v.started_at DESC LIMIT 200`, [from, to]);
   const logins = await query(`SELECT id, login, name, logged_in_at, logged_out_at, source FROM app_access_logins
     WHERE logged_in_at >= $1 AND logged_in_at < $2 ORDER BY logged_in_at DESC LIMIT 200`, [from, to]);
   return { from, to, idleMinutes: IDLE_SECONDS / 60, limit: 200, summary, visits, logins };

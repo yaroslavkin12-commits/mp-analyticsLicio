@@ -38,7 +38,10 @@ function request(path, body, cookie) {
           out[name] = { code: r.code, success: r.json?.success, articles: r.json?.data?.articles?.length, rows: r.json?.data?.rows?.length };
         }
         probeId = require('crypto').randomUUID();
-        const ping = await request('/api/auth/activity', {visitId:probeId,idleSeconds:0,visible:false,close:true,page:'service-check',cabinet:'defly'},cookie);
+        const opened = await request('/api/auth/activity', {visitId:probeId,idleSeconds:0,visible:true,close:false,page:'service-check',cabinet:'defly'},cookie);
+        await new Promise(resolve=>setTimeout(resolve,1200));
+        const ping = await request('/api/auth/activity', {visitId:probeId,idleSeconds:1,visible:false,close:true,page:'service-check',cabinet:'defly'},cookie);
+        out.accessHeartbeatOpen = opened.code;
         out.accessHeartbeat = {code:ping.code,success:ping.json?.success};
         if (ping.json?.error) out.accessHeartbeat.error = String(ping.json.error).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi,'[адрес]').replace(/[a-zA-Z0-9_-]{32,}/g,'[скрыто]').slice(0,180);
         const journal = await request('/api/auth/activity/report', null, cookie);
@@ -52,7 +55,7 @@ function request(path, body, cookie) {
     if (probeId) {
       const { Client } = require('/opt/mp/app/backend/node_modules/pg');
       const client = new Client({connectionString:env.DATABASE_URL,ssl:/@(localhost|127\.0\.0\.1)[:/]/.test(env.DATABASE_URL)?false:{rejectUnauthorized:false},connectionTimeoutMillis:10000});
-      try { await client.connect(); await client.query("DELETE FROM app_access_visits WHERE id=$1 AND page='service-check'",[probeId]); }
+      try { await client.connect(); const counted=await client.query('SELECT active_seconds,source FROM app_access_visits WHERE id=$1',[probeId]); if(out.accessHeartbeat) out.accessHeartbeat.counterConfirmed=Number(counted.rows[0]?.active_seconds)>=1 && counted.rows[0]?.source==='service-check'; await client.query("DELETE FROM app_access_visits WHERE id=$1 AND page='service-check'",[probeId]); }
       catch {} finally { await client.end().catch(()=>{}); }
     }
     if (cookie) await request('/api/auth/logout', {}, cookie).catch(() => {}); }

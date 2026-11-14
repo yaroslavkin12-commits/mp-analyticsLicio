@@ -104,7 +104,7 @@ router.post('/activity', wrap(async (req, res) => {
   if (!req.user || !hash) return res.status(401).json({ success: false, error: 'Нужен вход', auth: true });
   const input = activity.cleanInput(req.body);
   if (!input) return res.status(400).json({ success: false, error: 'Неверные данные посещения' });
-  await activity.heartbeat(req.user, hash, input);
+  await activity.heartbeat(req.user, hash, input, ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.ip));
   res.set('Cache-Control', 'no-store'); res.json({ success: true });
 }));
 router.get('/activity/report', wrap(async (req, res) => {
