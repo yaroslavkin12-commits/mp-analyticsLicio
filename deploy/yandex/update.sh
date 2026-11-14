@@ -39,3 +39,8 @@ if [ -f /var/log/mp-migrate-safe.log ]; then
   elif grep -qE '^(ERROR:|pg_restore: error:)' /var/log/mp-migrate-safe.log; then MIG_ERROR='Ошибка восстановления SQL'; fi
   st migrationJob="$JOB_STATE" migrationExit="$JOB_EXIT" migrationError="$MIG_ERROR"
 fi
+# Разовая проверка рабочего входа и отчётов; пароль остаётся внутри сервера.
+if [ ! -f /var/lib/mp/verified-shared-attempted ] && grep -q 'neon-shared' /var/lib/mp/status.json; then
+  touch /var/lib/mp/verified-shared-attempted
+  node "$APP/deploy/yandex/verify-service.cjs"
+fi
