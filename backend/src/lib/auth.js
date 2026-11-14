@@ -18,6 +18,26 @@ async function requireAuthentication() {
   await query("INSERT INTO app_settings(key,value,updated_at) VALUES('auth:required:v1','1',NOW()) ON CONFLICT(key) DO UPDATE SET value='1',updated_at=NOW()");
   authRequired = true; requirementAt = Date.now();
 }
+// Старый сервер подтверждает поддержку ограничений через общую БД.
+// Это работает и когда соединение Яндекс → Render недоступно.
+function startRequirementWatch() {
+  if (!process.env.RENDER_SERVICE_ID) return null;
+  let busy=false, lastAt=0, lastAuth;
+  const tick=async()=>{
+    if(busy)return; busy=true;
+    try {
+      await refreshRequirement();
+      const auth=enabled();
+      if(auth!==lastAuth || Date.now()-lastAt>=30000){
+        await query("INSERT INTO app_settings(key,value,updated_at) VALUES('auth:legacy-guard:v1',$1,NOW()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()",[JSON.stringify({version:1,auth})]);
+        lastAuth=auth;lastAt=Date.now();
+      }
+    } catch(e) { console.error('[Auth] Не удалось подтвердить защиту старого сервера'); }
+    finally { busy=false; }
+  };
+  const ready=tick(), timer=setInterval(tick,10000); timer.unref?.();
+  return {ready,stop:()=>clearInterval(timer)};
+}
 const COOKIE = 'mp_s';
 const SESSION_DAYS = 30;
 
@@ -167,4 +187,4 @@ function middleware() {
 }
 
 
-module.exports = { ensure, enabled, middleware, login, logout, hashPassword, checkPassword, sha, dropCaches, isAdmin, isOwner, requireAuthentication, refreshRequirement, sessionHash: req => { const t = cookieOf(req); return t ? sha(t) : null; } };
+module.exports = { ensure, enabled, middleware, login, logout, hashPassword, checkPassword, sha, dropCaches, isAdmin, isOwner, requireAuthentication, refreshRequirement, startRequirementWatch, sessionHash: req => { const t = cookieOf(req); return t ? sha(t) : null; } };

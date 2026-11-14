@@ -183,6 +183,7 @@ async function start() {
   await require('./lib/skuAlias').ensure().catch(e => console.warn('[SKU] ensure', e.message));
   app.listen(PORT, () => {
     console.log(`🚀 Сервер: http://localhost:${PORT}`);
+    auth.startRequirementWatch();
     startScheduler();
     startKeepAlive();
     query(`INSERT INTO collection_log (platform,collector_type,status,records_collected,error_message,finished_at)
