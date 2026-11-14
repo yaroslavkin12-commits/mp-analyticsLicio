@@ -46,6 +46,11 @@ if [ ! -f "$STATE/verified-$VERIFY_HASH" ] && grep -q 'neon-shared' /var/lib/mp/
   node "$APP/deploy/yandex/verify-service.cjs"
 fi
 
+# После подключения расширения закрываем обход входа через старый адрес.
+if [ -f "$APP/deploy/yandex/activate-access.cjs" ]; then
+  timeout 30s node "$APP/deploy/yandex/activate-access.cjs" || true
+fi
+
 # Проверяем каждую новую версию копирования один раз, в отдельном процессе.
 BACKUP_HASH=$(sha256sum "$APP/deploy/yandex/backup.sh" | cut -d' ' -f1)
 if [ ! -f "$STATE/backup-check-$BACKUP_HASH" ]; then
