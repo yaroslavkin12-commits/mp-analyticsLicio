@@ -57,6 +57,15 @@ fi
 BACKUP_UNIT="mp-backup-check-${BACKUP_HASH:0:12}.service"
 st backupJob="$(systemctl show "$BACKUP_UNIT" -p ActiveState --value 2>/dev/null || true)" backupExit="$(systemctl show "$BACKUP_UNIT" -p ExecMainStatus --value 2>/dev/null || true)"
 
+# Поддерживаем разрешённый дополнительный вход после обновлений/повторной настройки.
+if [ -f "$APP/deploy/yandex/configure-domain.sh" ]; then
+  if bash "$APP/deploy/yandex/configure-domain.sh"; then
+    st additionalDomain=app.defly-analytics.ru additionalDomainError=
+  else
+    st additionalDomainError="Не удалось настроить дополнительный HTTPS-вход"
+  fi
+fi
+
 # Явный повторный запрос HTTPS после изменения DNS домена.
 if [ -s "$APP/deploy/yandex/https.stamp" ]; then
   HTTPS_STAMP=$(cat "$APP/deploy/yandex/https.stamp")
