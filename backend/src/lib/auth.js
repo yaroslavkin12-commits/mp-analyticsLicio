@@ -149,11 +149,16 @@ function middleware() {
       await refreshRequirement();
       if (!enabled()) return next();
       if (OPEN.some(re => re.test(req.path))) return next();
-      const user = await userOf(req);
-      if (user) { req.user = user; return next(); }
-      if (req.path.startsWith('/api/')) {
+      // Явно переданный ключ проверяем даже при наличии браузерной сессии.
+      // Иначе расширение могло казаться подключённым с неверным ключом.
+      if (/^\/api\//i.test(req.path) && req.get?.('X-Api-Key')) {
         const key = await keyOf(req);
         if (key) { req.apiKey = key; return next(); }
+        return res.status(401).json({ success:false,error:'Ключ доступа не принят',auth:true });
+      }
+      const user = await userOf(req);
+      if (user) { req.user = user; return next(); }
+      if (/^\/api\//i.test(req.path)) {
         return res.status(401).json({ success: false, error: 'Нужен вход', auth: true });
       }
       return res.redirect(302, '/login');
