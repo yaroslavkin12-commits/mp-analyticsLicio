@@ -190,7 +190,7 @@ function Workspace() {
         )}
 
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
-          {allowed.filter(id => (id === page || visited.has(id)) && PAGES[id] && (!isMobile || id === page)).map(id => {
+          {allowed.filter(id => (id === page || (id !== 'access' && visited.has(id))) && PAGES[id] && (!isMobile || id === page)).map(id => {
             const P = scope && id === 'discounts' ? SoinvestCats : PAGES[id];
             const on = id === page;
             return (

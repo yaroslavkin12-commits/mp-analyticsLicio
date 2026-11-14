@@ -69,9 +69,9 @@ export default function Access() {
         </div>}
         {nu.role === 'user' && <CategoryAccessPicker value={nu.accessScope} onChange={accessScope=>setNu({...nu,accessScope})} options={options} status={accessStatus}/>}
         <div className="a-bar" style={{ marginTop: 10 }}>
-          <input className="a-input" placeholder="логин (латиница)" value={nu.login} onChange={e => setNu({ ...nu, login: e.target.value })} />
-          <input className="a-input" placeholder="имя" value={nu.name} onChange={e => setNu({ ...nu, name: e.target.value })} />
-          <input className="a-input" type="password" placeholder="пароль, от 8 символов" value={nu.password} onChange={e => setNu({ ...nu, password: e.target.value })} />
+          <input className="a-input" name="new-user-login" autoComplete="off" placeholder="логин (латиница)" value={nu.login} onChange={e => setNu({ ...nu, login: e.target.value })} />
+          <input className="a-input" name="new-user-display-name" autoComplete="off" placeholder="имя" value={nu.name} onChange={e => setNu({ ...nu, name: e.target.value })} />
+          <input className="a-input" type="password" name="new-user-password" autoComplete="new-password" placeholder="пароль, от 8 символов" value={nu.password} onChange={e => setNu({ ...nu, password: e.target.value })} />
           {owner && <select className="a-input" value={nu.role} onChange={e => setNu({ ...nu, role: e.target.value, accessScope: e.target.value === 'admin' ? null : nu.accessScope })}><option value="user">пользователь</option><option value="admin">администратор пользователей</option></select>}
           <button className="a-btn" onClick={act(async () => { await saveAuthUser(nu); say(`Пользователь ${nu.login} добавлен`); setNu({ login: '', name: '', password: '', role: 'user' }); })}>Добавить</button>
         </div>
