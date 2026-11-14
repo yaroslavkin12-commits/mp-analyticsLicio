@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { accessMode } from './lib/accessClient';
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
 export const getWbData = (cabinet, params) => api.get('/wb/data', { params: { cabinet, ...params }, timeout: 120000 });
 export const getTaxSettings = cabinet => api.get('/settings/tax', { params: { cabinet } });
@@ -7,6 +8,9 @@ export const saveTaxSettings = (cabinet, settings) => api.post('/settings/tax', 
 // освободится, — открытая страница получает данные первой.
 // WB использует те же страницы и контракты представления, что и Ozon.
 api.interceptors.request.use(cfg => {
+  const access = accessMode(), method = (cfg.method || 'get').toLowerCase();
+  if (access.readOnly && !['get','head','options'].includes(method) && !/^\/auth\/(password|logout|activity)$/.test(cfg.url)) throw new Error('Доступ только для просмотра и выгрузки');
+  if (access.cacheTag && ['get','head'].includes(method)) cfg.params = { ...cfg.params, _access: access.cacheTag };
   const cabinet = cfg.params?.cabinet || (cfg.data && typeof cfg.data === 'object' ? cfg.data.cabinet : null);
   if (cabinet === 'defly_wb') {
     if (/^\/(sales|promo|ads|stocks|orders|clusters|finance|queries)(\/|$)/.test(cfg.url)) { cfg.url = '/wb/views' + cfg.url; cfg.timeout = Math.max(cfg.timeout || 0, 120000); }
@@ -248,3 +252,5 @@ export const createAuthKey = name => api.post('/auth/keys', { name });
 export const deleteAuthKey = id => api.delete(`/auth/keys/${id}`);
 
 export const getAccessActivity = params => api.get('/auth/activity/report', { params });
+
+export const getCategoryAccessOptions = () => api.get('/auth/categories', { timeout: 60000 });

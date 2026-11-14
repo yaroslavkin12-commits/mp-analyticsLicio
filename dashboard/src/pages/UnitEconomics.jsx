@@ -1,3 +1,4 @@
+import { accessStorage } from '../lib/accessClient';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getSalesData, getFinanceCoefs } from '../api';
@@ -75,8 +76,8 @@ export default function UnitEconomics({ cabinet }) {
   const [showNames, setShowNames] = useState(false);
   const tip = useTip();
   // «На 1 выкуп»: суммы таблицы делятся на ожидаемое число выкупов (за день / за период).
-  const [perUnit, setPerUnitRaw] = useState(() => { try { return localStorage.getItem('mp-unit-perunit') === '1'; } catch (e) { return false; } });
-  const setPerUnit = v => { setPerUnitRaw(v); try { localStorage.setItem('mp-unit-perunit', v ? '1' : '0'); } catch (e) { /* ignore */ } };
+  const [perUnit, setPerUnitRaw] = useState(() => { try { return accessStorage.getItem('mp-unit-perunit') === '1'; } catch (e) { return false; } });
+  const setPerUnit = v => { setPerUnitRaw(v); try { accessStorage.setItem('mp-unit-perunit', v ? '1' : '0'); } catch (e) { /* ignore */ } };
   const grp = useGroups(cabinet);
 
   const load = useCallback(() => {

@@ -1,3 +1,4 @@
+import { accessStorage } from '../lib/accessClient';
 import { sumAvailable } from '../lib/availableSum';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
@@ -144,11 +145,11 @@ export default function PnL({ cabinet }) {
   const [tax] = useTax(cabinet);
   const tip = useTip();
   // «На 1 выкуп»: все суммы таблицы делятся на число выкупленных штук (за день / за период).
-  const [perUnit, setPerUnitRaw] = useState(() => { try { return localStorage.getItem('mp-pnl-perunit') === '1'; } catch (e) { return false; } });
-  const setPerUnit = v => { setPerUnitRaw(v); try { localStorage.setItem('mp-pnl-perunit', v ? '1' : '0'); } catch (e) { /* ignore */ } };
+  const [perUnit, setPerUnitRaw] = useState(() => { try { return accessStorage.getItem('mp-pnl-perunit') === '1'; } catch (e) { return false; } });
+  const setPerUnit = v => { setPerUnitRaw(v); try { accessStorage.setItem('mp-pnl-perunit', v ? '1' : '0'); } catch (e) { /* ignore */ } };
   // «В % от выручки»: выручка по выкупам = 100%, каждая статья — её доля (по дням и за период).
-  const [pctMode, setPctRaw] = useState(() => { try { return localStorage.getItem('mp-pnl-pct') === '1'; } catch (e) { return false; } });
-  const setPct = v => { setPctRaw(v); if (v) setPerUnit(false); try { localStorage.setItem('mp-pnl-pct', v ? '1' : '0'); } catch (e) { /* ignore */ } };
+  const [pctMode, setPctRaw] = useState(() => { try { return accessStorage.getItem('mp-pnl-pct') === '1'; } catch (e) { return false; } });
+  const setPct = v => { setPctRaw(v); if (v) setPerUnit(false); try { accessStorage.setItem('mp-pnl-pct', v ? '1' : '0'); } catch (e) { /* ignore */ } };
   const setUnit = v => { setPerUnit(v); if (v) setPctRaw(false); };
   const grp = useGroups(cabinet);
   // Расшифровка статьи: из каких операций Ozon она состоит (клик по ячейке).

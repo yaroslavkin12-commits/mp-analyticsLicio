@@ -14,6 +14,10 @@ import Calculator from './pages/Calculator';
 import Settings from './pages/Settings';
 import Access from './pages/Access';
 import useAccessActivity from './lib/useAccessActivity';
+import { AccessContext, useAccess } from './lib/AccessContext';
+import { configureAccess } from './lib/accessClient';
+import { getMe } from './api';
+import SoinvestCats from './pages/SoinvestCats';
 import TrackedArticles from './pages/TrackedArticles';
 import SalesAnalytics from './pages/SalesAnalytics';
 import Geography from './pages/Geography';
@@ -81,11 +85,28 @@ function useIsMobile() {
 const CABINET_KEY = 'mp-cabinet';
 
 export default function App() {
+  const [user,setUser] = useState(undefined), [error,setError] = useState('');
+  const signature = React.useRef('');
+  useEffect(() => {
+    let stopped=false;
+    const load=async()=>{try{const r=await getMe();if(stopped)return;const me=r.data.data;const text=JSON.stringify(me);if(text!==signature.current){signature.current=text;configureAccess(me);setUser(me);}setError('');}catch(e){if(!stopped)setError('Не удалось проверить доступ. Обновите страницу.');}};
+    load();const timer=setInterval(load,60000);
+    const onShow=e=>{if(e.persisted)window.location.reload();};window.addEventListener('pageshow',onShow);
+    return()=>{stopped=true;clearInterval(timer);window.removeEventListener('pageshow',onShow);};
+  },[]);
+  if(user===undefined || error)return <div style={{padding:24}}>{error || 'Проверяем доступ…'}{error&&<button onClick={()=>window.location.reload()}>Обновить</button>}</div>;
+  return <AccessContext.Provider value={user}><Workspace key={JSON.stringify([user?.id,user?.role,user?.accessScope])}/></AccessContext.Provider>;
+}
+function Workspace() {
+  const access=useAccess(), scope=access?.accessScope;
+  const startCabinet=!scope || scope.cabinets.includes('defly') ? 'defly' : (scope.cabinets[0] || 'defly');
+  const pagesFor=c=>(PAGES_BY_CABINET[c] || PAGES_BY_CABINET.defly).filter(id=>!scope || scope.pages.includes(id));
   const [page, setPage]     = useState(() => {
-    return PAGES_BY_CABINET.defly[0];
+    return pagesFor(startCabinet)[0] || 'access';
   });
   const [platform, setPlatform] = useState('all');
-  const [cabinet, setCabinet] = useState('defly');
+  const [cabinet, changeCabinet] = useState(startCabinet);
+  const setCabinet = c => { if (!scope || scope.cabinets.includes(c)) changeCabinet(c); };
   useAccessActivity(page, cabinet);
   const isMobile = useIsMobile();
   const [drawer, setDrawer] = useState(false);
@@ -107,12 +128,12 @@ export default function App() {
 
   useEffect(() => {
     try { localStorage.setItem(CABINET_KEY, cabinet); } catch(e) { /* ignore */ }
-    const allowed = PAGES_BY_CABINET[cabinet] || PAGES_BY_CABINET.licio;
+    const allowed = pagesFor(cabinet);
     if (!allowed.includes(page)) setPage(allowed[0]);
   }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Сохраняем открытые разделы; новые загружаем только по выбору пользователя.
-  const allowed = PAGES_BY_CABINET[cabinet] || PAGES_BY_CABINET.licio;
+  const allowed = pagesFor(cabinet);
   const [visited, setVisited] = useState(() => new Set([page]));
   useEffect(() => { setVisited(prev => prev.has(page) ? prev : new Set(prev).add(page)); }, [page]);
   // После изменения данных обновляем ранее открытые разделы.
@@ -146,6 +167,7 @@ export default function App() {
         <div className="m-drawer"><Sidebar mobile page={page} setPage={id => { setPage(id); setDrawer(false); }} theme={theme} setTheme={setTheme} cabinet={cabinet} setCabinet={c => { setCabinet(c); setDrawer(false); }}/></div>
       </>) : <Sidebar page={page} setPage={setPage} theme={theme} setTheme={setTheme} cabinet={cabinet} setCabinet={setCabinet}/>}
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
+        {scope && <div style={{padding:'8px 18px',fontSize:12,borderBottom:'1px solid var(--border)',color:'var(--text2)',background:'var(--surface)'}}>Только просмотр и Excel · {scope.paths.join(' · ')}. Общие данные магазина скрыты.</div>}
         {isMobile && (
           <div className="m-topbar">
             <button type="button" className="m-burger" onClick={() => setDrawer(true)} aria-label="Меню">☰</button>
@@ -169,7 +191,7 @@ export default function App() {
 
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
           {allowed.filter(id => (id === page || visited.has(id)) && PAGES[id] && (!isMobile || id === page)).map(id => {
-            const P = PAGES[id];
+            const P = scope && id === 'discounts' ? SoinvestCats : PAGES[id];
             const on = id === page;
             return (
               <div key={cabinet + ':' + id + ':' + (pageGen[id] || 0)} aria-hidden={!on} className="app-page" style={{

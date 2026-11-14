@@ -1,3 +1,4 @@
+import { accessStorageKey } from '../lib/accessClient';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import { familyOf } from '../lib/cabinets';
@@ -88,8 +89,8 @@ const DEFAULT = {
 };
 const MAX_SPAN = 400;
 
-const load = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
-const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } };
+const load = k => { try { return JSON.parse(localStorage.getItem(accessStorageKey(k)) || 'null'); } catch (e) { return null; } };
+const save = (k, v) => { try { localStorage.setItem(accessStorageKey(k), JSON.stringify(v)); } catch (e) { /* ignore */ } };
 
 const perTxt = (days, unit) => (unit === 'w' && days % 7 === 0 ? `${days / 7} нед` : `${days} дн`);
 const colTitle = c => {

@@ -17,6 +17,7 @@ app.use(express.json({ limit: '10mb', verify: (req, res, buffer) => { const p = 
 const auth = require('./lib/auth');
 app.get('/login', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.type('html').send(require('./loginPage')()); });
 app.use(auth.middleware());
+app.use(require('./lib/categoryAccess').middleware());
 app.use('/api/auth', require('./routes/auth'));
 app.get('/api/ops/status', (req, res) => res.json(require('./lib/opsStatus')()));
 
@@ -36,6 +37,7 @@ const dataVersion = require('./lib/dataVersion');
 const cacheFresh = h => h && h.ver === dataVersion.get() && Date.now() - h.at < CACHE_TTL;
 const CACHED = ['/api/wb/views/sales/data', '/api/wb/views/promo/stats', '/api/wb/views/stocks/data','/api/ads/stats', '/api/promo/stats', '/api/sales/data', '/api/sales/costs', '/api/sales/geo', '/api/finance/coefs', '/api/finance/pnl', '/api/finance/buyout', '/api/finance/calc-base', '/api/stocks/data', '/api/queries/data', '/api/queries/season'];
 app.use((req, res, next) => {
+  if (req.restricted) return next(); // закрытые профили получают только проверенную проекцию, без общего кэша
   if (req.path === '/api/wb/import') return next(); // кэши обновляются после приёма целого набора
   // Шаблоны конструктора и «отшивается» отчёты не меняют — кэш не трогаем.
   if (req.method !== 'GET' && (req.path === '/api/sales/builder-templates' || req.path === '/api/sales/sewing' || req.path.startsWith('/api/production') || req.path.startsWith('/api/pricelog'))) return next();

@@ -1,3 +1,4 @@
+import { accessStorage } from '../lib/accessClient';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav, { categoryCompare } from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -71,8 +72,8 @@ const METRICS = [
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
 const fmt = (v, kind) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : kind === 'pct' ? fmtPct(v) : fmtInt(v));
 const LS = 'mp-rnp';
-const ld = (k, d) => { try { const v = JSON.parse(localStorage.getItem(`${LS}:${k}`) || 'null'); return v ?? d; } catch (e) { return d; } };
-const sv = (k, v) => { try { localStorage.setItem(`${LS}:${k}`, JSON.stringify(v)); } catch (e) { /* ignore */ } };
+const ld = (k, d) => { try { const v = JSON.parse(accessStorage.getItem(`${LS}:${k}`) || 'null'); return v ?? d; } catch (e) { return d; } };
+const sv = (k, v) => { try { accessStorage.setItem(`${LS}:${k}`, JSON.stringify(v)); } catch (e) { /* ignore */ } };
 
 // Начисления Ozon по артикулу и дню (в датах dates) — тем же способом, что «Фактическая
 // прибыль» в «Аналитике продаж» (= «P&L»): удержания и продажи без артикула — по доле

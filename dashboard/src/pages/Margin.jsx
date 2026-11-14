@@ -1,3 +1,4 @@
+import { accessStorage } from '../lib/accessClient';
 import SetMark from '../components/SetMark';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
@@ -120,31 +121,31 @@ export default function Margin({ cabinet }) {
   const [drrOver, setDrrOver] = useState({});
   // Новые цены: { артикул: { v, m } }, m — в какой цене вписано ('real' — реализации, 'client' — клиента).
   const [priceOver, setPriceOver] = useState({});
-  const [setMode, setSetMode] = useState(() => { try { return localStorage.getItem('mp-margin-setmode') || 'client'; } catch (e) { return 'client'; } });
-  useEffect(() => { try { localStorage.setItem('mp-margin-setmode', setMode); } catch (e) { /* ignore */ } }, [setMode]);
+  const [setMode, setSetMode] = useState(() => { try { return accessStorage.getItem('mp-margin-setmode') || 'client'; } catch (e) { return 'client'; } });
+  useEffect(() => { try { accessStorage.setItem('mp-margin-setmode', setMode); } catch (e) { /* ignore */ } }, [setMode]);
   const [full, setFull] = useState(false);
   const [per, setPer] = useState('unit'); // unit — на 1 шт, total — всего за 30 дней
   const pinKey = `mp-margin-pin:${cabinet}`;
   const [pinned, setPinned] = useState([]);
-  useEffect(() => { try { setPinned(JSON.parse(localStorage.getItem(pinKey) || '[]')); } catch (e) { setPinned([]); } }, [pinKey]);
-  useEffect(() => { try { localStorage.setItem(pinKey, JSON.stringify(pinned)); } catch (e) { /* ignore */ } }, [pinKey, pinned]);
-  const [cols, setCols] = useState(() => { try { const v = JSON.parse(localStorage.getItem('mp-margin-cols') || 'null'); return Array.isArray(v) ? v : DEF_COLS; } catch (e) { return DEF_COLS; } });
-  useEffect(() => { try { localStorage.setItem('mp-margin-cols', JSON.stringify(cols)); } catch (e) { /* ignore */ } }, [cols]);
+  useEffect(() => { try { setPinned(JSON.parse(accessStorage.getItem(pinKey) || '[]')); } catch (e) { setPinned([]); } }, [pinKey]);
+  useEffect(() => { try { accessStorage.setItem(pinKey, JSON.stringify(pinned)); } catch (e) { /* ignore */ } }, [pinKey, pinned]);
+  const [cols, setCols] = useState(() => { try { const v = JSON.parse(accessStorage.getItem('mp-margin-cols') || 'null'); return Array.isArray(v) ? v : DEF_COLS; } catch (e) { return DEF_COLS; } });
+  useEffect(() => { try { accessStorage.setItem('mp-margin-cols', JSON.stringify(cols)); } catch (e) { /* ignore */ } }, [cols]);
   const [exportRows, setExportRows] = useState(null);
-  const [exportCols, setExportCols] = useState(() => { try { const v = JSON.parse(localStorage.getItem('mp-margin-export-cols') || 'null'); return Array.isArray(v) ? [...new Set(['o', ...v])] : ['o', 'set']; } catch (e) { return ['o', 'set']; } });
+  const [exportCols, setExportCols] = useState(() => { try { const v = JSON.parse(accessStorage.getItem('mp-margin-export-cols') || 'null'); return Array.isArray(v) ? [...new Set(['o', ...v])] : ['o', 'set']; } catch (e) { return ['o', 'set']; } });
   const [exportBusy, setExportBusy] = useState(false);
   const [exportError, setExportError] = useState('');
-  useEffect(() => { try { localStorage.setItem('mp-margin-export-cols', JSON.stringify(exportCols)); } catch (e) { /* ignore */ } }, [exportCols]);
+  useEffect(() => { try { accessStorage.setItem('mp-margin-export-cols', JSON.stringify(exportCols)); } catch (e) { /* ignore */ } }, [exportCols]);
   const [withAds, setWithAds] = useState(true);
   const [allArts, setAllArts] = useState(false); // показывать и товары без заказов за 30 дней
   const [ready, setReady] = useState(false);
   useEffect(() => {
     setReady(false);
-    try { const v = JSON.parse(localStorage.getItem(lsKey) || '{}'); setDrrAll(v.all ?? ''); setDrrOver(v.over || {}); setPriceOver(Object.fromEntries(Object.entries(v.price || {}).map(([o, x]) => [o, typeof x === 'object' ? x : { v: Number(x), m: 'real' }]))); setWithAds(v.ads !== false); }
+    try { const v = JSON.parse(accessStorage.getItem(lsKey) || '{}'); setDrrAll(v.all ?? ''); setDrrOver(v.over || {}); setPriceOver(Object.fromEntries(Object.entries(v.price || {}).map(([o, x]) => [o, typeof x === 'object' ? x : { v: Number(x), m: 'real' }]))); setWithAds(v.ads !== false); }
     catch (e) { setDrrAll(''); setDrrOver({}); setPriceOver({}); setWithAds(true); }
     setReady(true);
   }, [lsKey]);
-  useEffect(() => { if (ready) try { localStorage.setItem(lsKey, JSON.stringify({ all: drrAll, over: drrOver, price: priceOver, ads: withAds })); } catch (e) { /* ignore */ } }, [ready, lsKey, drrAll, drrOver, priceOver, withAds]);
+  useEffect(() => { if (ready) try { accessStorage.setItem(lsKey, JSON.stringify({ all: drrAll, over: drrOver, price: priceOver, ads: withAds })); } catch (e) { /* ignore */ } }, [ready, lsKey, drrAll, drrOver, priceOver, withAds]);
   const upd = set => (o, val) => set(m => { const n = { ...m }; if (val === '' || val === null || val === undefined) delete n[o]; else n[o] = val; return n; });
   const setOver = upd(setDrrOver);
   const setPrice = (o, val, m = setMode) => setPriceOver(mm => { const n = { ...mm }; if (val === '' || val === null || val === undefined || !(Number(val) > 0)) delete n[o]; else n[o] = { v: Number(val), m }; return n; });

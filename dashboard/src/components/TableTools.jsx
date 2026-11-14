@@ -1,3 +1,4 @@
+import { accessStorage } from '../lib/accessClient';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -9,8 +10,8 @@ import { createPortal } from 'react-dom';
 // включено. Состояние помнится в браузере для каждой таблицы.
 // ─────────────────────────────────────────────────────────────────────────
 
-const load = k => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
-const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } };
+const load = k => { try { return JSON.parse(accessStorage.getItem(k) || 'null'); } catch (e) { return null; } };
+const save = (k, v) => { try { accessStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ignore */ } };
 
 export function useTableCtl(storeKey, defaultSort = null) {
   const key = storeKey ? `mp-tbl-${storeKey}` : null;

@@ -1,3 +1,4 @@
+import { useReadOnly } from '../lib/AccessContext';
 import { createPortal } from 'react-dom';
 import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
@@ -78,6 +79,7 @@ function SppChart({ hist, list, tip }) {
 }
 
 export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
+  const readOnly=useReadOnly();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -247,7 +249,7 @@ export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
 
       </>} actions={<>
           {newGroup === null ? (
-            <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
+            readOnly ? null : <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
           ) : (
             <form style={{ display: 'flex', gap: 6 }} onSubmit={e => { e.preventDefault(); const n = newGroup.trim(); if (!n) return; addAdsGroup(cabinet, n).then(r => { setGroupsData(r.data.data); setNewGroup(null); }).catch(err => window.alert(err.response?.data?.error || 'Не удалось создать группу')); }}>
               <input className="a-input" autoFocus value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Название группы" onKeyDown={e => { if (e.key === 'Escape') setNewGroup(null); }} style={{ padding: '5px 10px' }} />

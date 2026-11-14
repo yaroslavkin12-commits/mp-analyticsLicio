@@ -1,3 +1,4 @@
+import { accessStorage } from '../lib/accessClient';
 import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { getCalcBase, getFinanceCoefs } from '../api';
@@ -175,7 +176,7 @@ export default function Calculator({ cabinet }) {
   const [budget, setBudget] = useState('');
   const [tab, setTab] = useState('calc');
   const [name, setName] = useState('');
-  const [hist, setHist] = useState(() => { try { return JSON.parse(localStorage.getItem(HIST_KEY + cabinet) || '[]'); } catch (e) { return []; } });
+  const [hist, setHist] = useState(() => { try { return JSON.parse(accessStorage.getItem(HIST_KEY + cabinet) || '[]'); } catch (e) { return []; } });
 
   useEffect(() => {
     setData(null); setError(null);
@@ -314,10 +315,10 @@ export default function Calculator({ cabinet }) {
     if (!res) return;
     const item = { id: Date.now(), name: name || (cat ? cat.split(SEP).slice(-1)[0] : 'Расчёт'), at: new Date().toISOString(), scheme, cat, art, vals: Object.fromEntries(FIELDS.map(([k]) => [k, val(k)])), taxMode, dims, dimMode, profit: res.profit, margin: res.margin, roi: res.roi, price: res.P };
     const next = [item, ...hist].slice(0, 100);
-    setHist(next); try { localStorage.setItem(HIST_KEY + cabinet, JSON.stringify(next)); } catch (e) { /* ignore */ }
+    setHist(next); try { accessStorage.setItem(HIST_KEY + cabinet, JSON.stringify(next)); } catch (e) { /* ignore */ }
   };
   const loadHist = h => { setScheme(h.scheme); setCat(h.cat || ''); setArt(h.art ?? null); setVals(h.vals || {}); setTaxMode(h.taxMode || 'usn_income'); setDims(h.dims || { l: '', w: '', h: '', liters: '' }); setDimMode(h.dimMode || 'dims'); setName(h.name); setTab('calc'); };
-  const delHist = id => { const next = hist.filter(h => h.id !== id); setHist(next); try { localStorage.setItem(HIST_KEY + cabinet, JSON.stringify(next)); } catch (e) { /* ignore */ } };
+  const delHist = id => { const next = hist.filter(h => h.id !== id); setHist(next); try { accessStorage.setItem(HIST_KEY + cabinet, JSON.stringify(next)); } catch (e) { /* ignore */ } };
   const resetAll = () => { setArt(null); setCat(''); setVals({}); setDims({ l: '', w: '', h: '', liters: '' }); setName(''); setBudget(''); };
 
   const clientField = () => {

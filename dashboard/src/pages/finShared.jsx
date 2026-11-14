@@ -1,3 +1,4 @@
+import { accessStorage } from '../lib/accessClient';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
@@ -188,7 +189,7 @@ export function TaxInput({ tax, cabinet }) {
   return (
     <span className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       Налог {tax}%
-      <button type="button" className="tt-reset" onClick={() => { try { localStorage.setItem('mp-products-tab', 'tax'); } catch { /* ignore */ } window.dispatchEvent(new CustomEvent('mp-open', { detail: { cabinet, page: 'costs', productTab: 'tax' } })); }}>настроить в «Товары»</button>
+      <button type="button" className="tt-reset" onClick={() => { try { accessStorage.setItem('mp-products-tab', 'tax'); } catch { /* ignore */ } window.dispatchEvent(new CustomEvent('mp-open', { detail: { cabinet, page: 'costs', productTab: 'tax' } })); }}>настроить в «Товары»</button>
     </span>
   );
 }

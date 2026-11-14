@@ -46,6 +46,8 @@ function request(path, body, cookie) {
         if (ping.json?.error) out.accessHeartbeat.error = String(ping.json.error).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi,'[адрес]').replace(/[a-zA-Z0-9_-]{32,}/g,'[скрыто]').slice(0,180);
         const journal = await request('/api/auth/activity/report', null, cookie);
         out.accessJournal = { code: journal.code, success: journal.json?.success };
+        const categories = await request('/api/auth/categories', null, cookie);
+        out.categoryAccess = {code:categories.code,success:categories.json?.success,paths:categories.json?.data?.paths?.length,readiness:categories.json?.data?.accessStatus};
         const keys = await request('/api/auth/keys', null, cookie);
         out.integrationKeys = { code: keys.code, count: keys.json?.data?.length, recentlyUsed: keys.json?.data?.some(k => k.last_used && Date.now() - new Date(k.last_used).getTime() < 86400000) };
       }

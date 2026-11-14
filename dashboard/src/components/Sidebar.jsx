@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SHOPS, shopOf, isDeflyLike } from '../lib/cabinets';
 import { navOf, navLabel, unavailablePage } from '../lib/navigation';
+import { useAccess } from '../lib/AccessContext';
 export { navLabel };
 import { getAdsCabinets } from '../api';
 import { Store, TrendingUp, Activity, ShoppingCart, Target, Receipt, ChartColumn, CalendarRange, Map as MapIcon, Megaphone, Search, BadgePercent,
@@ -35,7 +36,10 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
 
   const shop = shopOf(cabinet);
   const cabinetLabel = shop?.label || cabinet;
-  const nav = navOf(cabinet);
+  const scope = useAccess()?.accessScope;
+  const shopAllowed = id => !scope || scope.cabinets.includes(id);
+  const menu = navOf(cabinet).filter(([id]) => id === '__h' || !scope || scope.pages.includes(id));
+  const nav = menu.filter(([id],i) => id !== '__h' || (menu[i+1] && menu[i+1][0] !== '__h'));
   const lucide = true;
   // Какие магазины уже подключены (есть своя Google-таблица на сервере).
   const [conn, setConn] = useState(null);
@@ -93,14 +97,14 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
             boxShadow:'0 8px 24px rgba(0,0,0,.25)', overflow:'hidden',
           }}>
             {head('Ozon')}
-            {SHOPS.filter(x => x.platform === 'ozon').map(x => {
+            {SHOPS.filter(x => x.platform === 'ozon' && shopAllowed(x.id)).map(x => {
               const off = x.id !== 'defly' && conn && conn[x.id] === false;
               return item(x, off, off ? 'не подключён' : null);
             })}
             {head('WB')}
-            {SHOPS.filter(x => x.platform === 'wb').map(x => item(x, false, conn && conn[x.id] === false ? 'настройка' : null))}
+            {SHOPS.filter(x => x.platform === 'wb' && shopAllowed(x.id)).map(x => item(x, false, conn && conn[x.id] === false ? 'настройка' : null))}
             <div style={{ height:1, background:'var(--border)' }} />
-            {item(shopOf('licio'), false, 'WB + Ozon')}
+            {shopAllowed('licio') && item(shopOf('licio'), false, 'WB + Ozon')}
           </div>
         )}
       </div>

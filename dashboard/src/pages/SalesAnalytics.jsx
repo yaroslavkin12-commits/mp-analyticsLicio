@@ -1,3 +1,5 @@
+import { useReadOnly } from '../lib/AccessContext';
+import { accessStorage } from '../lib/accessClient';
 import { sumAvailable } from '../lib/availableSum';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
@@ -393,6 +395,7 @@ function SharesCard({ node, kids, colorNode, brandRank, dates, buckets, gran, ti
 
 // ── Карточка артикула ────────────────────────────────────────────────────
 function ArticleDetail({ a, dates, buckets, gran, tip, leafPaths, onMoveCategory, pnl, forecast, shareAt, tax }) {
+  const readOnly = useReadOnly();
   const model = useMemo(() => enrichSalesChart([a],dates,buckets,toModel(aggregate([a], dates.length), buckets),{pnl,forecast,shareAt,tax}), [a, dates, buckets,pnl,forecast,shareAt,tax]);
   const [custom, setCustom] = useState('');
   const sd = stockDaysOf(aggregate([a], dates.length), dates);
@@ -417,17 +420,17 @@ function ArticleDetail({ a, dates, buckets, gran, tip, leafPaths, onMoveCategory
           <span>Расход: клик / заказ</span><b className="n">{fmtInt(model.totals.spendCpc)} / {fmtInt(model.totals.spendCpo)} ₽</b>
           <span>Категория</span>
           <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap', alignItems: 'center' }}>
-            <select className="a-sel" value={a.cat} onChange={e => { if (e.target.value === '__custom') return; onMoveCategory(a, e.target.value); }} style={{ padding: '3px 6px', fontSize: 12, maxWidth: 300 }}>
+            <select disabled={readOnly} className="a-sel" value={a.cat} onChange={e => { if (e.target.value === '__custom') return; onMoveCategory(a, e.target.value); }} style={{ padding: '3px 6px', fontSize: 12, maxWidth: 300 }}>
               {!leafPaths.includes(a.cat) && <option value={a.cat}>{a.cat}</option>}
               {leafPaths.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
-            {a.manual && <button type="button" className="a-btn" style={{ padding: '3px 9px', fontSize: 12 }} title={`Автоматически: ${a.auto}`} onClick={() => onMoveCategory(a, null)}>↺ авто</button>}
+            {!readOnly && a.manual && <button type="button" className="a-btn" style={{ padding: '3px 9px', fontSize: 12 }} title={`Автоматически: ${a.auto}`} onClick={() => onMoveCategory(a, null)}>↺ авто</button>}
           </span>
-          <span>Новая категория</span>
+          {!readOnly && <><span>Новая категория</span>
           <form style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }} onSubmit={e => { e.preventDefault(); if (custom.trim()) { onMoveCategory(a, custom.trim()); setCustom(''); } }}>
             <input className="a-input" value={custom} onChange={e => setCustom(e.target.value)} placeholder="Аксессуары / Органайзеры" style={{ padding: '3px 8px', fontSize: 12, width: 190 }} />
             <button type="submit" className="a-btn" style={{ padding: '3px 9px', fontSize: 12 }} disabled={!custom.trim()}>Перенести</button>
-          </form>
+          </form></>}
         </div>
       </div>
       <div className="a-box wide">
@@ -533,8 +536,8 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   const [showAll, setShowAll] = useState(() => new Set());
   const [slice, setSlice] = useState('loss');
   // Порог «сверхприбыльных» (маржа от N%), помнится в браузере.
-  const [superPct, setSuperPctRaw] = useState(() => { try { return Number(localStorage.getItem('mp-superpct')) || 20; } catch (e) { return 20; } });
-  const setSuperPct = v => { setSuperPctRaw(v); try { localStorage.setItem('mp-superpct', String(v)); } catch (e) { /* ignore */ } };
+  const [superPct, setSuperPctRaw] = useState(() => { try { return Number(accessStorage.getItem('mp-superpct')) || 20; } catch (e) { return 20; } });
+  const setSuperPct = v => { setSuperPctRaw(v); try { accessStorage.setItem('mp-superpct', String(v)); } catch (e) { /* ignore */ } };
   const [matrixMetric, setMatrixMetric] = useState('revenue');
   const tip = useTip();
   // Ширина видимой части таблицы: карточка артикула внутри широкой таблицы

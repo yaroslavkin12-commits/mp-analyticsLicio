@@ -1,3 +1,5 @@
+import { accessStorage } from '../lib/accessClient';
+import { useReadOnly } from '../lib/AccessContext';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
@@ -560,11 +562,11 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
 
 export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults, remember = true, singleMetric, trafficLight = true, gran = 'day', hideControls = false, signalBaseline = 'previous' }) {
   const [cfg, setCfg] = useState(() => {
-    try { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}), ...(remember ? JSON.parse(localStorage.getItem(storeKey) || '{}') : {}) }; }
+    try { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}), ...(remember ? JSON.parse(accessStorage.getItem(storeKey) || '{}') : {}) }; }
     catch (e) { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}) }; }
   });
   const [hover, setHover] = useState(null);
-  useEffect(() => { try { if (remember) localStorage.setItem(storeKey, JSON.stringify(cfg)); } catch (e) { /* ignore */ } }, [cfg, storeKey]);
+  useEffect(() => { try { if (remember) accessStorage.setItem(storeKey, JSON.stringify(cfg)); } catch (e) { /* ignore */ } }, [cfg, storeKey]);
   const metrics = (metricsList || CHART_METRICS).filter(m => !(mode === 'ads' && (m.key === 'position')));
   const mk = (key, side) => {
     const m = metrics.find(x => x.key === key) || metrics[0];
@@ -1214,7 +1216,8 @@ function Freshness({ status }) {
 }
 
 // ── Поиск артикула для добавления в группу ───────────────────────────────
-export function AddToGroup({ catalog, exclude, onPick }) {
+export function AddToGroup(props) { const readOnly=useReadOnly(); return readOnly ? null : <AddToGroupForm {...props}/>; }
+function AddToGroupForm({ catalog, exclude, onPick }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ex = new Set(exclude);
@@ -1240,6 +1243,7 @@ export function AddToGroup({ catalog, exclude, onPick }) {
 
 // ═════════════════════════════════════════════════════════════════════════
 export default function AdsStats2({ cabinet }) {
+  const readOnly=useReadOnly();
   CAB_CTX.cabinet = cabinet;
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
@@ -1689,15 +1693,15 @@ export default function AdsStats2({ cabinet }) {
                   <span onDoubleClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>{g.name.length > 28 ? g.name.slice(0, 27) + '…' : g.name}</span>
                 )}
                 <span className="c">{cnt}</span>
-                <button type="button" className="x" title="Переименовать группу" onClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>✎</button>
-                <button type="button" className="x" title="Удалить группу" onClick={e => { e.stopPropagation(); removeGroup(g.id); }}>×</button>
+                {!readOnly && <button type="button" className="x" title="Переименовать группу" onClick={e => { e.stopPropagation(); setEditGroup({ id: g.id, name: g.name }); }}>✎</button>}
+                {!readOnly && <button type="button" className="x" title="Удалить группу" onClick={e => { e.stopPropagation(); removeGroup(g.id); }}>×</button>}
               </span>
             );
           })}
 
       </>} actions={<>
           {newGroup === null ? (
-            <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
+            readOnly ? null : <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
           ) : (
             <form onSubmit={createGroup} style={{ display: 'flex', gap: 6 }}>
               <input className="a-input" autoFocus value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Название, напр. Haval M6"
@@ -1705,7 +1709,7 @@ export default function AdsStats2({ cabinet }) {
               <button type="submit" className="a-btn" disabled={!newGroup.trim()}>Создать</button>
             </form>
           )}
-          {ungroupedClusters.length > 0 && (
+          {!readOnly && ungroupedClusters.length > 0 && (
             <select className="a-sel" value="" onChange={e => createFromCluster(e.target.value)} title="Создать группу из готовой склейки одним действием">
               <option value="">+ по склейке…</option>
               {ungroupedClusters.map(c => <option key={c.primary} value={c.primary}>{c.primary} ({c.members.length} арт.)</option>)}

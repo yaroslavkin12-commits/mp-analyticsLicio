@@ -8,7 +8,7 @@
 // кабинет, с вашим входом. Пароли и cookie расширение не читает и никуда
 // не передаёт: в сервис уходят только цены.
 
-const DEFAULT_SERVER = 'https://mp-analyticslicio-1.onrender.com';
+const DEFAULT_SERVER = 'https://defly-analytics.ru';
 const CHUNK = 200;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
