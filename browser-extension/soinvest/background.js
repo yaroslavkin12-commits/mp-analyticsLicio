@@ -25,6 +25,7 @@ chrome.alarms.onAlarm.addListener(a => {
   if (a.name === 'cards') runCards('по расписанию');
 });
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg?.type === 'checkConnection') { checkConnection().then(() => reply({ ok: true })); return true; }
   if (msg && msg.type === 'runNow') { run('вручную').then(() => reply({ ok: true })); return true; }
   if (msg && msg.type === 'runCards') { runCards('вручную').then(() => reply({ ok: true })); return true; }
   return false;
@@ -35,7 +36,12 @@ async function srvFetch(url, opts = {}) {
   const { apiKey } = await chrome.storage.local.get('apiKey');
   const headers = { ...(opts.headers || {}) };
   if (apiKey) headers['X-Api-Key'] = apiKey;
-  const r = await fetch(url, { ...opts, headers });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  let r;
+  try { r = await fetch(url, { ...opts, headers, signal: controller.signal }); }
+  catch (e) { throw new Error(e.name === 'AbortError' ? 'Сервис: нет ответа за 30 с. Проверьте адрес и доступность сайта' : 'Нет связи с сервисом: ' + e.message); }
+  finally { clearTimeout(timer); }
   if (r.status === 401) await chrome.storage.local.set({ authError: 'Сервис не принял ключ доступа — вставьте ключ из раздела «Доступ» в настройках расширения' });
   else if (r.ok) await chrome.storage.local.remove('authError');
   return r;
@@ -62,27 +68,34 @@ async function sellerTab() {
 }
 
 async function askPrices(tabId, companyId, ids) {
-  const [res] = await chrome.scripting.executeScript({
+  const [res] = await withTimeout(chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
     args: [String(companyId), ids],
     func: async (company, itemIds) => {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 25000);
       try {
         const r = await fetch('/api/pricing-bff-service/v3/get-common-prices', {
-          method: 'POST', credentials: 'include',
+          method: 'POST', credentials: 'include', signal: controller.signal,
           headers: { 'content-type': 'application/json', accept: 'application/json' },
           body: JSON.stringify({ company_id: company, item_ids: itemIds }),
         });
         return { status: r.status, text: await r.text() };
-      } catch (e) { return { status: 0, text: String(e && e.message || e) }; }
+      } catch (e) { return { status: 0, text: e.name === 'AbortError' ? 'Ozon: нет ответа за 25 с' : String(e && e.message || e) }; }
+      finally { clearTimeout(timer); }
     },
-  });
+  }), 35000, 'Вкладка Ozon');
   return res && res.result ? res.result : { status: 0, text: 'нет ответа от вкладки' };
 }
 
+let pricesBusy = false;
 async function run(reason) {
+  if (pricesBusy) return;
+  pricesBusy = true;
   const started = new Date().toISOString();
-  const status = { at: started, reason, cabinets: {}, error: null };
+  const status = { at: started, reason, cabinets: {}, error: null, running: true, phase: 'Проверяем связь с сервисом' };
+  const progress = phase => { status.phase = phase; return chrome.storage.local.set({ lastRun: { ...status, updatedAt: new Date().toISOString() } }); };
+  await progress(status.phase);
   let tab = null;
   try {
     const server = await getServer();
@@ -90,6 +103,7 @@ async function run(reason) {
     if (!tr.ok) throw new Error('сервис не ответил (' + tr.status + ')');
     const targets = (await tr.json()).data || [];
     if (!targets.some(t => t.productIds && t.productIds.length)) throw new Error('сервис пока не знает товаров ни одного кабинета');
+    await progress('Открываем кабинет Ozon');
     tab = await sellerTab();
     for (const t of targets) {
       const st = { asked: t.productIds.length, got: 0, matched: 0, error: null };
@@ -97,6 +111,7 @@ async function run(reason) {
       if (!t.productIds.length) { st.error = 'кабинет пока не подключён в сервисе'; continue; }
       const items = [];
       for (let i = 0; i < t.productIds.length; i += CHUNK) {
+        await progress('Ozon · ' + t.cabinet + ': ' + i + ' из ' + t.productIds.length);
         const r = await askPrices(tab.id, t.companyId, t.productIds.slice(i, i + CHUNK));
         if (r.status === 401 || r.status === 403 || /^\s*</.test(r.text)) { st.error = 'нет входа в кабинет Ozon (откройте seller.ozon.ru и войдите)'; break; }
         if (r.status !== 200) { st.error = 'кабинет ответил ' + r.status + ': ' + r.text.slice(0, 120); break; }
@@ -116,6 +131,7 @@ async function run(reason) {
       }
       st.got = items.length;
       if (items.length) {
+        await progress('Отправляем цены · ' + t.cabinet);
         const ir = await srvFetch(server + '/api/discounts/ingest', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ cabinet: t.cabinet, items }),
@@ -130,6 +146,7 @@ async function run(reason) {
   } finally {
     if (tab && tab.created) chrome.tabs.remove(tab.id).catch(() => {});
     status.finished = new Date().toISOString();
+    status.running = false; pricesBusy = false;
     await chrome.storage.local.set({ lastRun: status });
   }
 }
@@ -141,7 +158,11 @@ async function run(reason) {
 // фоновой вкладке ozon.ru — как обычный покупатель в вашем браузере — и
 // читаем со страницы главное фото, название, цену и рейтинг. В сервис
 // уходят только эти поля. Вкладка своя: ваши открытые вкладки не трогаем.
-const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, bad) => setTimeout(() => bad(new Error(what + ': нет ответа за ' + Math.round(ms / 1000) + ' с')), ms))]);
+async function withTimeout(p, ms, what) {
+  let timer;
+  try { return await Promise.race([p,new Promise((_,bad)=>{timer=setTimeout(()=>bad(new Error(what + ': нет ответа за ' + Math.round(ms/1000) + ' с')),ms);})]); }
+  finally { clearTimeout(timer); }
+}
 function waitComplete(tabId, ms) {
   return new Promise(resolve => {
     const t = setTimeout(() => { chrome.tabs.onUpdated.removeListener(l); resolve(false); }, ms);
@@ -418,3 +439,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg && msg.type === 'runAgent') { runAgent('вручную', true).then(() => reply({ ok: true })); return true; }
   return false;
 });
+
+async function checkConnection() {
+  let result = { at: new Date().toISOString(), running: true };
+  await chrome.storage.local.set({ connectionCheck: result });
+  try {
+    const { apiKey } = await chrome.storage.local.get('apiKey');
+    if (!apiKey) throw new Error('Ключ не сохранён. Вставьте его в настройках ниже');
+    const server = await getServer();
+    const r = await srvFetch(server + '/api/discounts/targets');
+    if (!r.ok) throw new Error(r.status === 401 ? 'Ключ не принят сервисом. Проверьте ключ в разделе «Доступ»' : 'Сервис ответил ' + r.status);
+    const body = await r.json();
+    if (!body.success || !Array.isArray(body.data)) throw new Error('По этому адресу нет ожидаемого ответа сервиса');
+    result.ok = true; result.message = 'Связь с сервисом установлена · кабинетов: ' + body.data.length;
+  } catch (e) { result.ok = false; result.message = e.message; }
+  result.running = false; await chrome.storage.local.set({ connectionCheck: result });
+}

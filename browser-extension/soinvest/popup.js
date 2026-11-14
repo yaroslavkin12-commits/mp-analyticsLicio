@@ -29,16 +29,23 @@ async function renderAgent() {
   }
   el.innerHTML = html;
 }
+async function saveConnection() {
+  await chrome.storage.local.set({server:document.getElementById('server').value.trim(),apiKey:document.getElementById('apiKey').value.trim()});
+}
 async function render() {
   renderCards(); renderAgent();
   document.getElementById('ver').textContent = 'v' + chrome.runtime.getManifest().version;
-  const { lastRun, server, apiKey, authError } = await chrome.storage.local.get(['lastRun', 'server', 'apiKey', 'authError']);
+  const { lastRun, server, apiKey, authError, connectionCheck } = await chrome.storage.local.get(['lastRun', 'server', 'apiKey', 'authError', 'connectionCheck']);
+  const check = document.getElementById('connectionStatus');
+  check.textContent = connectionCheck ? (connectionCheck.running ? 'Проверяем связь…' : connectionCheck.message) : '';
+  check.className = connectionCheck?.ok ? 'ok' : 'bad';
   const ak = document.getElementById('apiKey'); if (document.activeElement !== ak) ak.value = apiKey || '';
   document.getElementById('authErr').textContent = authError || '';
   const srv = document.getElementById('server'); if (document.activeElement !== srv) srv.value = server || DEFAULT_SERVER;
   const el = document.getElementById('status');
   if (!lastRun) { el.innerHTML = '<div class="muted">Ещё не запускалось — нажмите «Собрать сейчас».</div>'; return; }
   let html = `<div class="row"><span>Последний сбор</span><b>${fmt(lastRun.finished || lastRun.at)}</b></div>`;
+  if (lastRun.running) html += '<div class="muted">' + (Date.now()-Date.parse(lastRun.updatedAt || lastRun.at)>120000 ? 'Сбор прервался. Запустите заново.' : lastRun.phase || 'Идёт сбор…') + '</div>';
   if (lastRun.error) html += `<div class="bad" style="margin-top:6px">${lastRun.error}</div>`;
   for (const [cab, st] of Object.entries(lastRun.cabinets || {})) {
     html += `<div class="row"><span>${NAMES[cab] || cab}</span>${st.error
@@ -49,6 +56,7 @@ async function render() {
 }
 
 document.getElementById('run').addEventListener('click', async () => {
+  await saveConnection();
   const b = document.getElementById('run');
   b.disabled = true; b.textContent = 'Собираем… (до пары минут)';
   await chrome.runtime.sendMessage({ type: 'runNow' }).catch(() => {});
@@ -61,6 +69,7 @@ render();
 setInterval(render, 2000);
 
 document.getElementById('runCards').addEventListener('click', async () => {
+  await saveConnection();
   const b = document.getElementById('runCards');
   b.disabled = true; b.textContent = 'Собираю карточки…';
   await chrome.runtime.sendMessage({ type: 'runCards' }).catch(() => {});
@@ -69,9 +78,16 @@ document.getElementById('runCards').addEventListener('click', async () => {
 });
 
 document.getElementById('runAgent').addEventListener('click', async () => {
+  await saveConnection();
   const b = document.getElementById('runAgent');
   b.disabled = true; b.textContent = 'Собираю…';
   await chrome.runtime.sendMessage({ type: 'runAgent' }).catch(() => {});
   b.disabled = false; b.textContent = 'Собрать выдачу и «Товары на Ozon» сейчас';
   render();
+});
+
+document.getElementById('checkConnection').addEventListener('click', async () => {
+  await saveConnection();
+  const b=document.getElementById('checkConnection'); b.disabled=true;
+  try { await chrome.runtime.sendMessage({type:'checkConnection'}); } finally { b.disabled=false;render(); }
 });

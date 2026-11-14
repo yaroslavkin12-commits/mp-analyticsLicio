@@ -62,7 +62,8 @@ export default function ArtSearch({ value, onChange, options = [], placeholder =
   const pick = a => { onChange(String(a.o)); setOpen(false); };
   return (
     <span ref={box} className="as-wrap" style={style}>
-      <input className={className} value={value} placeholder={placeholder} style={{ width: '100%', ...inputStyle }}
+      <input type="search" name="product-query" autoComplete="off" autoCorrect="off" spellCheck={false} data-lpignore="true" data-1p-ignore="true" className={className} value={value} placeholder={placeholder} style={{ width: '100%', ...inputStyle }}
+        onAnimationStart={e => { if (e.animationName === 'art-search-autofill') { onChange(''); setOpen(false); } }}
         onFocus={() => setOpen(true)}
         onChange={e => { onChange(e.target.value); setOpen(true); setHi(0); }}
         onKeyDown={e => {

@@ -9,3 +9,8 @@
 .as-it span{color:var(--a-ink3,#888);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
 .as-it.hi{background:var(--a-hover,rgba(127,127,127,.12))}
 .as-it.on b{color:var(--a-accent,#5b5bd6)}
+
+/* Менеджер паролей не должен превращать логин в фильтр товаров. */
+@keyframes art-search-autofill { from { opacity: 1; } to { opacity: 1; } }
+.as-wrap input:-webkit-autofill { animation-name: art-search-autofill; animation-duration: .01s; }
+.as-wrap input[type="search"]::-webkit-search-cancel-button { display: none; }
