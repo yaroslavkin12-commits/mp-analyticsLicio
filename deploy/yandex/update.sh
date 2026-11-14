@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Самообновление из GitHub (раз в 2 минуты): новый коммит в main → сборка и перезапуск.
-# Если в репозитории поменялся deploy/yandex/migrate.stamp — повторный перенос базы из Neon.
+# Перенос базы запускается отдельно; обновление кода не меняет её источник.
 set -uo pipefail
 APP=/opt/mp/app
 STATE=/var/lib/mp
@@ -24,6 +24,9 @@ if [ "$OLD" != "$NEW" ]; then
   fi
   if echo "$CHANGED" | grep -q -E '^(backend/|dashboard/src/lib/.*\.mjs)'; then systemctl restart mp.service; fi
   st commit="${NEW:0:7}" deployedAt="$(date -Is)"
+  if echo "$CHANGED" | grep -qx 'deploy/yandex/backup.sh'; then
+    systemd-run --no-block --unit="mp-backup-check-${NEW:0:7}" /bin/bash "$APP/deploy/yandex/backup.sh"
+  fi
 fi
 # Перенос базы запускается оператором отдельно после проверки источника.
 # Изменение migrate.stamp больше не перезаписывает рабочую базу.
