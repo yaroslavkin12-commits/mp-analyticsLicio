@@ -39,12 +39,14 @@ const CABINETS = {
 // family: 'defly' — те же товары (дефлекторы): категории и марки авто по
 // правилам Defly, ручные категории Defly действуют и здесь.
 const SHEET_SHOPS = [
-  ['nabauto', 'NABauto'],
-  ['alex', 'Alex'],
-  ['fullgas', 'Fullgas'],
-  ['accent', 'Accent Line'],
+  ['nabauto', 'NABauto', '3614467'],
+  ['alex', 'Alex', '1051512'],
+  ['fullgas', 'Fullgas', '2974129'],
+  ['accent', 'Accent Line', '3333052'],
 ];
-for (const [id, label] of SHEET_SHOPS) CABINETS[id] = { label, platform: 'ozon', family: 'defly', sheetOnly: true };
+// Публичные номера компаний сверены с действовавшим сбором Render 14.11.2026.
+// Это не API-ключи; переменная окружения имеет приоритет.
+for (const [id, label, companyId] of SHEET_SHOPS) CABINETS[id] = { label, platform: 'ozon', family: 'defly', sheetOnly: true, ozonCompanyId: process.env[`${id.toUpperCase()}_OZON_COMPANY_ID`] || companyId };
 CABINETS.defly.platform = 'ozon'; CABINETS.defly.family = 'defly';
 
 CABINETS.defly_wb = { label: 'Defly WB', platform: 'wb', family: 'defly', wbBridge: true };

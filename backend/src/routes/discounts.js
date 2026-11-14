@@ -30,7 +30,7 @@ const COMPANY_IDS = {
 {
   const { CABINETS, isConnected } = require('../config/cabinets');
   for (const [id, c] of Object.entries(CABINETS)) {
-    const v = process.env[`${id.toUpperCase()}_OZON_COMPANY_ID`];
+    const v = process.env[`${id.toUpperCase()}_OZON_COMPANY_ID`] || c.ozonCompanyId;
     if (c.sheetOnly && v && isConnected(id)) COMPANY_IDS[id] = String(v).trim();
   }
 }
