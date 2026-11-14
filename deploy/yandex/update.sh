@@ -24,9 +24,6 @@ if [ "$OLD" != "$NEW" ]; then
   fi
   if echo "$CHANGED" | grep -q -E '^(backend/|dashboard/src/lib/.*\.mjs)'; then systemctl restart mp.service; fi
   st commit="${NEW:0:7}" deployedAt="$(date -Is)"
-  if echo "$CHANGED" | grep -qx 'deploy/yandex/backup.sh'; then
-    systemd-run --no-block --unit="mp-backup-check-${NEW:0:7}" /bin/bash "$APP/deploy/yandex/backup.sh"
-  fi
 fi
 # Перенос базы запускается оператором отдельно после проверки источника.
 # Изменение migrate.stamp больше не перезаписывает рабочую базу.
@@ -46,4 +43,12 @@ fi
 if [ ! -f /var/lib/mp/verified-shared-attempted ] && grep -q 'neon-shared' /var/lib/mp/status.json; then
   touch /var/lib/mp/verified-shared-attempted
   node "$APP/deploy/yandex/verify-service.cjs"
+fi
+
+# Проверяем каждую новую версию копирования один раз, в отдельном процессе.
+BACKUP_HASH=$(sha256sum "$APP/deploy/yandex/backup.sh" | cut -d' ' -f1)
+if [ ! -f "$STATE/backup-check-$BACKUP_HASH" ]; then
+  if systemd-run --no-block --unit="mp-backup-check-${BACKUP_HASH:0:12}" /bin/bash "$APP/deploy/yandex/backup.sh"; then
+    touch "$STATE/backup-check-$BACKUP_HASH"
+  fi
 fi
