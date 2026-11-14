@@ -15,7 +15,15 @@ const dir = '/var/backups/mp';
 fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
 const file = `${dir}/mp-${date}.dump`, temp = `${file}.tmp`;
-const pgEnv = { ...process.env, PGDATABASE: env.DATABASE_URL, PGCONNECT_TIMEOUT: '30' };
+const connection = new URL(env.DATABASE_URL);
+const pgEnv = { ...process.env,
+  PGHOST: connection.hostname, PGPORT: connection.port || '5432',
+  PGUSER: decodeURIComponent(connection.username), PGPASSWORD: decodeURIComponent(connection.password),
+  PGDATABASE: decodeURIComponent(connection.pathname.slice(1)), PGCONNECT_TIMEOUT: '30'
+};
+for (const [key, variable] of Object.entries({ sslmode: 'PGSSLMODE', channel_binding: 'PGCHANNELBINDING', sslrootcert: 'PGSSLROOTCERT', sslcert: 'PGSSLCERT', sslkey: 'PGSSLKEY', options: 'PGOPTIONS' })) {
+  if (connection.searchParams.has(key)) pgEnv[variable] = connection.searchParams.get(key);
+}
 // Строка подключения остаётся в окружении дочернего процесса, не в аргументах и журнале.
 try {
   const dump = spawnSync(`${process.env.PGBIN}/pg_dump`, ['--format=custom', '--no-password', '--file', temp], { env: pgEnv, stdio: ['ignore', 'ignore', 'ignore'], timeout: 1800000 });
