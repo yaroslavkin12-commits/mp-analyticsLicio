@@ -26,22 +26,31 @@ for (const [key, variable] of Object.entries({ sslmode: 'PGSSLMODE', channel_bin
 }
 // Строка подключения остаётся в окружении дочернего процесса, не в аргументах и журнале.
 try {
-  const dump = spawnSync(`${process.env.PGBIN}/pg_dump`, ['--format=custom', '--no-password', '--file', temp], { env: pgEnv, stdio: ['ignore', 'ignore', 'ignore'], timeout: 1800000 });
-  if (dump.error || dump.status !== 0) throw Error('Не удалось создать копию рабочей базы');
+  const dump = spawnSync(`${process.env.PGBIN}/pg_dump`, ['--format=custom', '--no-password', '--file', temp], { env: pgEnv, stdio: ['ignore', 'ignore', 'pipe'], timeout: 1800000 });
+  if (dump.error || dump.status !== 0) {
+    let detail = (dump.stderr || dump.error?.code || `код ${dump.status}`).toString();
+    for (const secret of [env.DATABASE_URL, pgEnv.PGPASSWORD, pgEnv.PGHOST, pgEnv.PGUSER, pgEnv.PGDATABASE].filter(Boolean)) detail = detail.split(secret).join('[скрыто]');
+    throw Error('Не удалось создать копию рабочей базы: ' + detail.slice(0, 1200));
+  }
   const check = spawnSync(`${process.env.PGBIN}/pg_restore`, ['--list', temp], { stdio: 'ignore' });
   if (check.error || check.status !== 0 || fs.statSync(temp).size === 0) throw Error('Архив базы не прошёл проверку');
   fs.renameSync(temp, file);
 } catch (error) {
   try { fs.unlinkSync(temp); } catch {}
   console.error(error.message);
-  process.exitCode = 1;
-  return;
+  const statusFile = '/var/lib/mp/status.json';
+  let status = {};
+  try { status = JSON.parse(fs.readFileSync(statusFile)); } catch {}
+  status.backupError = error.message;
+  fs.writeFileSync(statusFile, JSON.stringify(status));
+  process.exit(1);
 }
 const copies = fs.readdirSync(dir).filter(n => /^mp-\d{8}\.dump$/.test(n)).sort().reverse();
 for (const name of copies.slice(7)) fs.unlinkSync(`${dir}/${name}`);
 const statusFile = '/var/lib/mp/status.json';
 let status = {};
 try { status = JSON.parse(fs.readFileSync(statusFile)); } catch {}
+status.backupError = '';
 status.backupAt = new Date().toISOString();
 status.backupBytes = fs.statSync(file).size;
 status.backupDatabaseMode = status.databaseMode || 'configured';
