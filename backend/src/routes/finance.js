@@ -209,7 +209,11 @@ async function loadPnl(params = {}) {
     {
       const OF = require('../lib/orderFeed');
       const ext = dayjs(from).subtract(45, 'day').format('YYYY-MM-DD');
-      const saleRows = await query(`SELECT date::text d, sku, name, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 AND sku IS NOT NULL GROUP BY date, sku, name`, [cabinet, ext, to]).catch(() => []);
+      // Сопоставление использует только продажи. Не передаём по медленному
+      // соединению все комиссии и услуги за дополнительные 45 дней.
+      const names=await query('SELECT DISTINCT name FROM finance_daily WHERE cabinet=$1 AND date BETWEEN $2 AND $3',[cabinet,ext,to]).catch(()=>null);
+      const saleNames=names?.filter(r=>bucketOf(r.name)==='sale').map(r=>r.name);
+      const saleRows = saleNames?.length===0?[]:await query(`SELECT date::text d, sku, name, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 AND sku IS NOT NULL ${saleNames?'AND name=ANY($4::text[])':''} GROUP BY date, sku, name`,saleNames?[cabinet,ext,to,saleNames]:[cabinet,ext,to]).catch(() => []);
       const sales = [];
       for (const r of saleRows) { const b = bucketOf(r.name); if (b === 'sale') sales.push({ sku: r.sku, d: r.d, q: Math.abs(num(r.q)) }); }
       const matched = await OF.matchToSales(cabinet, sales, ext, to).catch(() => new Map());

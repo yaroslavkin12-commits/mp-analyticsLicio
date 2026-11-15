@@ -4,7 +4,7 @@ const ledger=[sale('old','2026-09-01'),sale('new','2026-11-10'),{id:'logistics',
 const db=require.resolve('../src/db');require.cache[db]={id:db,filename:db,loaded:true,exports:{query:async(sql,p=[])=>{
  if(sql.includes('kind=ANY')){opsReads++;return ops.filter(d=>p[1].includes(d.kind)).map(d=>d.kind==='ads'&&p[2]?{...d,rows:d.rows.filter(r=>r.date>=p[2]&&r.date<=p[3])}:d);}
  const meta={runId:run,from:'2026-09-01',to:'2026-11-15'};
- if(sql.includes('jsonb_array_elements(d.rows)')){financeReads++;assert.ok(sql.includes('WITH ORDINALITY'));assert.ok(sql.includes('OR NOT COALESCE'));assert.ok(!sql.includes('jsonb_agg'));assert.equal(p[3],run);assert.ok(Array.isArray(p[4]));assert.ok(!p[4].includes('bonusTypeName'));return ledger.filter(r=>r.rrDate>=p[1]&&r.rrDate<=p[2]).map(r=>({payload:Object.fromEntries(Object.entries(r).filter(([k])=>!p[4].includes(k)))}));}
+ if(sql.includes('jsonb_array_elements(d.rows)')){financeReads++;assert.ok(sql.includes('WITH ORDINALITY'));assert.ok(sql.includes('OR NOT COALESCE'));assert.ok(!sql.includes('jsonb_agg'));assert.equal(p[3],run);assert.ok(sql.includes('jsonb_build_array'));return ledger.filter(r=>r.rrDate>=p[1]&&r.rrDate<=p[2]).map(r=>({payload:[...require('../src/lib/wbBridge').FINANCE_WIRE_FIELDS.map(k=>r[k]??null),Object.hasOwn(r,'bonusTypeName')]}));}
  if(sql.includes('SELECT kind, meta, updated_at'))return [{kind:'finance',meta}];
  return [];
 }}};
@@ -24,4 +24,12 @@ test('Финансовый срез WB сохраняет все статьи в
  assert.deepEqual(V.build([...ops,latest],prefs,p).coefs().coefs,full.coefs().coefs);
  const before=financeReads;run='two';await bridge.readFinance(p);assert.equal(financeReads,before+1);
  await assert.rejects(bridge.readFinance({dateFrom:'не дата',dateTo:'2026-11-15'}));
+});
+test('Компактная передача сохраняет различие между отсутствующей и пустой расшифровкой удержания',async()=>{
+ ledger.push({id:'bad',rrDate:'2026-11-12',deduction:10});run='three';
+ const absent=await bridge.readFinance({dateFrom:'2026-11-12',dateTo:'2026-11-12'});assert.equal(Object.hasOwn(absent.rows[0],'bonusTypeName'),false);
+ assert.throws(()=>require('../src/lib/wbFinance').entries(absent.rows),/bonusTypeName/);
+ ledger.push({id:'empty',rrDate:'2026-11-13',deduction:10,bonusTypeName:null});run='four';
+ const empty=await bridge.readFinance({dateFrom:'2026-11-13',dateTo:'2026-11-13'});assert.equal(Object.hasOwn(empty.rows[0],'bonusTypeName'),true);
+ assert.equal(require('../src/lib/wbFinance').entries(empty.rows)[0].amount,-10);
 });
