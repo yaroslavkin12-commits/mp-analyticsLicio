@@ -1,11 +1,13 @@
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import dayjs from 'dayjs';
-import { getFinancePnl, getBuyerShare, getSalesSummary } from '../api';
+import { getFinancePnl, getBuyerShare, getSalesSummary, getSalesData, getFinanceCoefs } from '../api';
 import { loadTaxSettings, watchTaxCabinets } from '../lib/taxSettings';
 import DateRangePicker from '../components/DateRangePicker';
+import ShopsWeekly from '../components/ShopsWeekly';
+import {shopDaily,rangeTotals} from '../lib/shopsWeekly';
 import { pnlTotals } from '../lib/pnlCalc';
 import { makeShareAt } from './buyerShare';
 import { SHOPS } from '../lib/cabinets';
@@ -50,25 +52,31 @@ export default function ShopsSummary({ active, cabinet }) {
   const [to, setTo] = useState(today);
   const [pct, setPct] = useState(() => { try { return localStorage.getItem('mp-ss-pct') !== '0'; } catch (e) { return true; } });
   useEffect(() => { try { localStorage.setItem('mp-ss-pct', pct ? '1' : '0'); } catch (e) { /* ignore */ } }, [pct]);
+  const [showTax,setShowTax]=useState(()=>localStorage.getItem('mp-ss-tax-visible')==='1');
+  useEffect(()=>{localStorage.setItem('mp-ss-tax-visible',showTax?'1':'0');},[showTax]);
   const [orders, setOrders] = useState(null);
   const [fin, setFin] = useState({}); // cab → { cur, prev } (итоги и по категориям)
   const [open, setOpen] = useState(new Set());
   const [err, setErr] = useState('');
   const [taxVersion, setTaxVersion] = useState(0);
   useEffect(() => { if (active) return watchTaxCabinets(MARKETS.map(s => s.id)); return undefined; }, [active, cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { const update = () => setTaxVersion(v => v + 1); window.addEventListener('mp-tax-changed', update); window.addEventListener('focus', update); return () => { window.removeEventListener('mp-tax-changed', update); window.removeEventListener('focus', update); }; }, []);
+  useEffect(() => { const update = () => setTaxVersion(v => v + 1); window.addEventListener('mp-tax-changed', update); return () => { window.removeEventListener('mp-tax-changed', update); }; }, []);
   // Тяжёлая страница (начисления всех магазинов) — грузим только когда её открыли, не в фоне.
   const [armed, setArmed] = useState(!!active);
   useEffect(() => { if (active) setArmed(true); }, [active]);
 
+  const loadedKey=useRef('');
   useEffect(() => {
     if (!armed) return undefined;
     let off = false;
-    setOrders(null); setFin({}); setErr('');
+    const key=[cabinet,from,to].join(':');
+    if(loadedKey.current!==key){setOrders(null);setFin({});loadedKey.current=key;}
+    setErr('');
     const len = dayjs(to).diff(dayjs(from), 'day') + 1;
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD');
     getSalesSummary(from, to, cabinet === 'licio' ? 'licio' : undefined).then(r => { if (!off) setOrders(r.data.data); }).catch(e => { if (!off) setErr(e.response?.data?.error || e.message); });
     (async () => {
+      let forecasts=Promise.resolve();
       for (const s of MARKETS) {
         try {
           const [cur, prev, bs, taxSettings] = await Promise.all([
@@ -87,8 +95,17 @@ export default function ShopsSummary({ active, cabinet }) {
           const pOk = prev && prev.available?.mn && prev.available.mn <= pFrom;
           const p = pOk ? pnlTotals(prev, { tax, shareAt, groupOf: top }) : null;
           if (p) p.byPath = byPathOf(prev, { tax, shareAt });
-          setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax, operational: !!cur._operational, through:cur.available?.mx, source:cur.financeSource } }));
+          setFin(f => ({ ...f, [s.id]: { cur: c, prev: p, tax, raw:cur, shareAt, operational: !!cur._operational, through:cur.available?.mx, source:cur.financeSource } }));
         } catch (e) { if (!off) setFin(f => ({ ...f, [s.id]: { error: e.message } })); }
+          forecasts=forecasts.then(async()=>{
+            if(off)return;
+            const [sales,coefs]=await Promise.all([
+              getSalesData(s.id,{dateFrom:from,dateTo:to}).then(r=>r.data.data).catch(()=>null),
+              getFinanceCoefs(s.id).then(r=>r.data.data).catch(()=>null),
+            ]);
+            if(!off)setFin(f=>({...f,[s.id]:{...f[s.id],rawSales:sales,coefs,forecastLoaded:true}}));
+          });
+
       }
     })();
     return () => { off = true; };
@@ -103,13 +120,20 @@ export default function ShopsSummary({ active, cabinet }) {
     for (const s of orders?.shops || []) for (const [k, v] of Object.entries(s.cur.byCat)) m.set(k, (m.get(k) || 0) + v[1]);
     return [...m.entries()].sort((a, b) => (b[0] === 'Чехлы') - (a[0] === 'Чехлы') || b[1] - a[1]); // «Чехлы» — всегда первыми
   }, [orders]);
+  const dailyByCategory=useMemo(()=>{
+    const paths=new Set(['',cat]);
+    for(const s of orders?.shops||[]) if(open.has(s.id)) for(const k of Object.keys(s.cur.byPath||{})) paths.add(k);
+    return Object.fromEntries([...paths].map(path=>[path,Object.fromEntries(Object.entries(fin).map(([id,f])=>[id,shopDaily({sales:f.rawSales,coefs:f.coefs,pnl:f.raw,tax:f.tax,shareAt:f.shareAt,category:path})]))]));
+  },[fin,cat,open,orders]);
+  const daily=dailyByCategory[cat]||{};
+  const forecast=(selected,path=cat)=>rangeTotals(selected.map(s=>dailyByCategory[path]?.[s.id]||null),from,to)?.payForecast;
   // Срез магазина под выбранную категорию: заказы, начисления, подгруппы для раскрытия.
   const viewOf = s => {
     const o0 = [0, 0];
     const depth = cat ? cat.split(SEP).length : 0;
     const kidsOf = keys => keys.filter(k => k.split(SEP).length === depth + 1 && (!cat || k.startsWith(cat + SEP))).map(k => ({
       k, name: k.split(SEP).pop(), oq: (s.cur.byPath[k] || o0)[0], or: (s.cur.byPath[k] || o0)[1], poq: (s.prev.byPath?.[k] || o0)[0], por: (s.prev.byPath?.[k] || o0)[1],
-      F: s.fin?.cur?.byPath?.[k] || zeroFin(s.fin?.cur?.total), PF: s.fin?.prev?.byPath?.[k] || zeroFin(s.fin?.prev?.total) }));
+      forecast:forecast([s],k), F: s.fin?.cur?.byPath?.[k] || zeroFin(s.fin?.cur?.total), PF: s.fin?.prev?.byPath?.[k] || zeroFin(s.fin?.prev?.total) }));
     const keys = [...new Set([...Object.keys(s.cur.byPath || {}), ...Object.keys(s.fin?.cur?.byPath || {})])];
     if (!cat) return { oq: s.cur.q, or: s.cur.r, poq: s.prev.q, por: s.prev.r, F: s.fin?.cur?.total || null, PF: s.fin?.prev?.total || null, kids: kidsOf(keys) };
     return { oq: (s.cur.byPath[cat] || o0)[0], or: (s.cur.byPath[cat] || o0)[1], poq: (s.prev.byPath?.[cat] || o0)[0], por: (s.prev.byPath?.[cat] || o0)[1],
@@ -127,6 +151,7 @@ export default function ShopsSummary({ active, cabinet }) {
     const v = selectedShops.map(s => ({ s, v: viewOf(s) }));
     return {
       oq: sum(v, x => x.v.oq), or: sum(v, x => x.v.or), por: sum(v, x => x.v.por), poq: sum(v, x => x.v.poq),
+      forecast:forecast(selectedShops),
       fin: addF(v.map(x => x.v.F)),
       pfin: v.every(x => x.s.fin?.prev) ? addF(v.map(x => x.v.PF)) : null,
       loading: selectedShops.some(s => !s.fin),
@@ -136,7 +161,7 @@ export default function ShopsSummary({ active, cabinet }) {
   const marketplaceGroups = (cabinet === 'licio' ? [{id:'licio',label:'Licio'}] : [{id:'ozon',label:'Ozon'},{id:'wb',label:'WB'}]).map(p=>({...p,shops:cabinet === 'licio' ? shops : shops.filter(s=>s.platform === p.id)})).filter(p=>p.shops.length);
 
   const money = (v, rev) => !Number.isFinite(v) ? '—' : (pct ? (rev > 0 && Number.isFinite(v) ? fmtPct((-v / rev) * 100) : '—') : `${fmtInt(-v)} ₽`);
-  const row = ({ key, name, sub, color, oq, or, por, poq, F, PF, depth, onToggle, isOpen, onOpenShop, loading }) => {
+  const row = ({ key, name, sub, color, oq, or, por, poq, F, PF, forecast:payForecast, depth, onToggle, isOpen, onOpenShop, loading }) => {
     const rev = F?.revenue;
     const tint=(v,p)=>depth===0?{background:resultTint(v,p)}:undefined;
     const expenseTint=(v,p)=>tint(pct&&rev>0?v/rev:v,pct&&PF?.revenue>0?p/PF.revenue:p);
@@ -161,12 +186,13 @@ export default function ShopsSummary({ active, cabinet }) {
         <td className="n r" style={tint(chk,pchk)}> {chk !== null ? <>{fmtInt(chk)} ₽<Delta cur={chk} prev={pchk} /></> : '—'}</td>
         <td className="n r" style={tint(rev,PF?.revenue)}> {F ? <>{fmtInt(rev)} ₽<small className="ss-sub">{fmtInt(F.qty)} шт</small><Delta cur={rev} prev={PF?.revenue} /></> : loading ? '…' : '—'}</td>
         <td className="n r" style={tint(bchk,pbchk)}> {bchk !== null ? <>{fmtInt(bchk)} ₽<Delta cur={bchk} prev={pbchk} /></> : '—'}</td>
+        <td className="n r ss-pay">{Number.isFinite(payForecast)?`${fmtInt(payForecast)} ₽`:'—'}</td>
         <td className="n r ss-pay" style={tint(pay1,ppay1)}> {pay1 !== null ? <><b>{fmtInt(pay1)} ₽</b><Delta cur={pay1} prev={ppay1} /></> : '—'}</td>
         <td className="n r" style={expenseTint(F?.ozonX,PF?.ozonX)}>{F ? money(F.ozonX, rev) : '—'}</td>
         <td className="n r" style={expenseTint(F?.ads,PF?.ads)}>{F ? money(F.ads, rev) : '—'}</td>
         <td className="n r" style={tint(F?.payout,PF?.payout)}> {F ? `${fmtInt(F.payout)}${Number.isFinite(F.payout) ? ' ₽' : ''}` : '—'}</td>
         <td className="n r" style={expenseTint(F?.cost,PF?.cost)}>{F ? money(F.cost, rev) : '—'}</td>
-        <td className="n r" style={expenseTint(F?.tax,PF?.tax)}>{F ? money(F.tax, rev) : '—'}</td>
+        {showTax && <td className="n r" style={expenseTint(F?.tax,PF?.tax)}>{F ? money(F.tax, rev) : '—'}</td>}
         <td className="n r ss-profit" style={tint(F?.profit,PF?.profit)}> {F ? <><b className={F.profit < 0 ? 's-down' : ''}>{fmtInt(F.profit)}{Number.isFinite(F.profit) ? ' ₽' : ''}</b><Delta cur={F.profit} prev={PF?.profit} /></> : '—'}</td>
         <td className="n r" style={tint(margin,pMargin)}> {margin !== null ? <><b className={margin < 0 ? 's-down' : ''}>{fmtPct(margin)}</b><Delta cur={margin} prev={pMargin} pp /></> : '—'}</td>
       </tr>
@@ -182,6 +208,7 @@ export default function ShopsSummary({ active, cabinet }) {
           <h1>Сводка по магазинам</h1>
           <QuickPeriods from={from} to={to} onChange={(f,t)=>{setFrom(f);setTo(t);}} periods={[7, 14, 30, 90]} />
           <DateRangePicker from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
+          <button className={'a-btn '+(showTax?'on':'ghost')} aria-pressed={showTax} onClick={()=>setShowTax(v=>!v)}>Налог</button>
           <span className="a-seg" style={{ marginLeft: 'auto' }}>
             <button type="button" className={pct ? 'on' : ''} onClick={() => setPct(true)}>% от выручки</button>
             <button type="button" className={!pct ? 'on' : ''} onClick={() => setPct(false)}>в рублях</button>
@@ -201,21 +228,22 @@ export default function ShopsSummary({ active, cabinet }) {
                 <th className="r" title="Заказы ₽ / заказы шт">Ср. чек заказа</th>
                 <th className="r" title="Выкупы минус возвраты по начислениям Ozon">Выручка (выкупы)</th>
                 <th className="r" title="Выручка / выкупленные штуки">Ср. чек выкупа</th>
-                <th className="r" title="К перечислению / выкупленные штуки: сколько в среднем приходит на счёт за 1 выкуп (до себестоимости и налога)">Поступление на 1 выкуп</th>
+                <th className="r" title="По заказам периода и действующей модели юнит-экономики">Поступление · прогноз</th>
+                <th className="r" title="К перечислению / выкупленные штуки: сколько в среднем приходит на счёт за 1 выкуп (до себестоимости и налога)">Поступление · факт</th>
                 <th className="r" title="Комиссия, логистика, эквайринг, хранение и прочие удержания Ozon (без рекламы)">Услуги площадки</th>
                 <th className="r">Реклама</th>
                 <th className="r" title="Выручка минус услуги Ozon и реклама">К перечислению</th>
                 <th className="r" title="Себестоимость выкупленного (без самовыкупов)">Себестоимость</th>
-                <th className="r" title="Ставка — из «P&L» каждого магазина, от оплаты покупателя">Налог</th>
+                {showTax && <th className="r" title="Ставка — из «P&L» каждого магазина, от оплаты покупателя">Налог</th>}
                 <th className="r">Прибыль</th>
                 <th className="r" title="Прибыль / выручка">Рентаб.</th>
               </tr></thead>
               <tbody>
-                {row({ key: 'total', name: cat ? `Итого · ${cat.split(SEP).join(' › ')}` : 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
+                {row({ key: 'total', name: cat ? `Итого · ${cat.split(SEP).join(' › ')}` : 'Итого', sub: `${dayjs(from).format('DD.MM')} — ${dayjs(to).format('DD.MM.YYYY')} · ${shops.length} маг.`, oq: total.oq, or: total.or, por: total.por, poq: total.poq, forecast:total.forecast, F: total.fin, PF: total.pfin, depth: 0, loading: total.loading })}
                 {marketplaceGroups.map(platform => {
                   const subtotal = totalsOf(platform.shops);
                   return <React.Fragment key={platform.id}>
-                {cabinet !== 'licio' && row({key:'platform-'+platform.id,name:platform.label,sub:`${platform.shops.length} маг.`,oq:subtotal.oq,or:subtotal.or,por:subtotal.por,poq:subtotal.poq,F:subtotal.fin,PF:subtotal.pfin,depth:0,loading:subtotal.loading})}
+                {cabinet !== 'licio' && row({key:'platform-'+platform.id,name:platform.label,sub:`${platform.shops.length} маг.`,oq:subtotal.oq,or:subtotal.or,por:subtotal.por,poq:subtotal.poq,forecast:subtotal.forecast,F:subtotal.fin,PF:subtotal.pfin,depth:0,loading:subtotal.loading})}
                 {platform.shops.map(s => {
                   const V = viewOf(s);
                   const isOpen = open.has(s.id);
@@ -223,8 +251,8 @@ export default function ShopsSummary({ active, cabinet }) {
                   const kids = [...V.kids].sort((a, b) => b.or - a.or);
                   return (
                     <React.Fragment key={s.id}>
-                      {row({ key: s.id, name: s.shop.label, sub: s.error || ((s.cur.complete===false&&s.cur.coveredFrom?`Заказы ${dayjs(s.cur.coveredFrom).format('DD.MM')} — ${dayjs(s.cur.coveredTo).format('DD.MM')} · `:'')+(s.fin?.error ? 'начисления не загрузились' : s.fin?.operational ? 'Продажи и возвраты WB · начисления пока не подключены' : s.fin?.source === 'wb' ? `Финансы по ${dayjs(s.fin.through).format('DD.MM.YYYY')} · налог ${s.fin.tax}%` : s.fin ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '')), color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
-                      {isOpen && kids.map(x => row({ key: s.id + x.k, name: x.name, oq: x.oq, or: x.or, por: x.por, poq: x.poq, F: x.F, PF: x.PF, depth: 2, loading: !s.fin }))}
+                      {row({ key: s.id, name: s.shop.label, sub: s.error || ((s.cur.complete===false&&s.cur.coveredFrom?`Заказы ${dayjs(s.cur.coveredFrom).format('DD.MM')} — ${dayjs(s.cur.coveredTo).format('DD.MM')} · `:'')+(s.fin?.error ? 'начисления не загрузились' : s.fin?.operational ? 'Продажи и возвраты WB · начисления пока не подключены' : s.fin?.source === 'wb' ? `Финансы по ${dayjs(s.fin.through).format('DD.MM.YYYY')}${showTax?' · налог '+s.fin.tax+'%':''}` : s.fin && showTax ? `налог ${String(s.fin.tax).replace('.', ',')}%` : '')), color: s.shop.color, oq: V.oq, or: V.or, por: V.por, poq: V.poq, forecast:forecast([s]), F: V.F, PF: V.PF, depth: 1, onToggle: kids.length ? toggle : null, isOpen, onOpenShop: () => openShop(s.id), loading: !s.fin })}
+                      {isOpen && kids.map(x => row({ key: s.id + x.k, name: x.name, oq: x.oq, or: x.or, por: x.por, poq: x.poq, forecast:x.forecast, F: x.F, PF: x.PF, depth: 2, loading: !s.fin }))}
                     </React.Fragment>
                   );
                 })}</React.Fragment>; })}
@@ -237,6 +265,7 @@ export default function ShopsSummary({ active, cabinet }) {
           </div>
         </div>
       )}
+      {orders && <ShopsWeekly shops={shops} daily={daily} from={from} to={to} category={cat}/>}
     </div>
   );
 }

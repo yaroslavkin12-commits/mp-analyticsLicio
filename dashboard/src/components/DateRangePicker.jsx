@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import dayjs from 'dayjs';
 import 'dayjs/locale/ru';
 dayjs.locale('ru');
@@ -63,7 +63,17 @@ export default function DateRangePicker({ from, to, onChange }) {
   const [hovered, setHovered] = useState(null);
   const [viewYear, setViewYear] = useState(dayjs(from || undefined).year());
   const [viewMonth, setViewMonth] = useState(dayjs(from || undefined).month());
-  const ref = useRef();
+  const ref = useRef(), popupRef=useRef();
+  const [position,setPosition]=useState(null);
+  useLayoutEffect(()=>{
+    if(!open)return;
+    const place=()=>{const a=ref.current?.getBoundingClientRect(),p=popupRef.current?.getBoundingClientRect();if(!a||!p)return;const top=a.bottom+6+p.height<=window.innerHeight-8?a.bottom+6:Math.max(8,a.top-p.height-6);setPosition({left:Math.max(8,Math.min(a.left,window.innerWidth-p.width-8)),top});};
+    place();window.addEventListener('resize',place);
+    const close=e=>{if(!popupRef.current?.contains(e.target))setOpen(false);};
+    const escape=e=>{if(e.key==='Escape')setOpen(false);};
+    window.addEventListener('scroll',close,true);document.addEventListener('keydown',escape);
+    return()=>{window.removeEventListener('resize',place);window.removeEventListener('scroll',close,true);document.removeEventListener('keydown',escape);};
+  },[open,viewMonth,viewYear]);
 
   // Закрыть при клике вне
   useEffect(() => {
@@ -133,11 +143,11 @@ export default function DateRangePicker({ from, to, onChange }) {
 
       {/* Popup */}
       {open && (
-        <div style={{
-          position:'absolute', top:'calc(100% + 6px)', left:0, zIndex:1000,
+        <div ref={popupRef} role="dialog" aria-label="Выбор периода" style={{
+          position:'fixed', top:position?.top??8, left:position?.left??8, zIndex:1000,
           background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12,
           padding:20, boxShadow:'0 8px 32px rgba(0,0,0,0.4)',
-          display:'flex', flexDirection:'column', gap:16, width:'max-content', maxWidth:'calc(100vw - 40px)',
+          display:'flex', flexDirection:'column', gap:16, width:'max-content', maxWidth:'calc(100vw - 16px)', maxHeight:'calc(100vh - 16px)',overflow:'auto',boxSizing:'border-box',
         }}>
           {/* Быстрые периоды */}
           <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
@@ -161,7 +171,7 @@ export default function DateRangePicker({ from, to, onChange }) {
           </div>
 
           {/* Двойной календарь */}
-          <div style={{ display:'flex', gap:24 }}>
+          <div style={{ display:'flex', gap:24, flexWrap:'wrap' }}>
             {/* Навигация */}
             <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', width:230 }}>

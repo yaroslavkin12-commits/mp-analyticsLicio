@@ -112,6 +112,8 @@ echo "=== установка и сборка"
 sudo -u mp bash -c "cd backend && npm install --omit=dev --no-audit --no-fund"
 sudo -u mp bash -c "cd dashboard && npm install --no-audit --no-fund && npm run build"
 
+bash "$APP/deploy/yandex/prepare-password-vault.sh"
+
 # Сервис
 cat > /etc/systemd/system/mp.service <<EOF
 [Unit]

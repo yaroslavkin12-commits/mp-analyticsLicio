@@ -56,6 +56,7 @@ export default function PlanFact({ active = true, cabinet }) {
   const [refresh, setRefresh] = useState(0), [basisRefresh, setBasisRefresh] = useState(0);
   const factKey = useRef('');
   const factInFlight = useRef(false);
+  const factLoadedAt = useRef(0);
   const fingerprint = JSON.stringify({ scope, month, targets, period, source, revision: state?.revision });
   const currentInput = useRef(fingerprint); currentInput.current = fingerprint;
   const fixed = state?.versions.find(v => v.id === state.activeId);
@@ -96,14 +97,14 @@ export default function PlanFact({ active = true, cabinet }) {
     if (factKey.current !== key) setFact(null);
     factKey.current = key; factInFlight.current = true;
     setFactError(''); setFactBusy(true);
-    getOzonPlanExecution({ scope, month, version: version || undefined, refresh }).then(r => { if (!off) setFact(r.data.data); })
+    getOzonPlanExecution({ scope, month, version: version || undefined, refresh }).then(r => { if (!off) {setFact(r.data.data);factLoadedAt.current=Date.now();} })
       .catch(e => { if (!off) setFactError(errorText(e)); }).finally(() => { if (!off) { factInFlight.current = false; setFactBusy(false); } });
     return () => { off = true; };
   }, [active, state?.revision, mode, month, version, refresh]);
 
   useEffect(()=>{
     if(!active||mode!=='actual')return;
-    const update=()=>{if(document.visibilityState!=='hidden'&&!factInFlight.current)setRefresh(v=>v+1);};
+    const update=()=>{if(document.visibilityState!=='hidden'&&!factInFlight.current&&Date.now()-factLoadedAt.current>=60000)setRefresh(v=>v+1);};
     const timer=setInterval(update,60*1000);
     window.addEventListener('focus',update);document.addEventListener('visibilitychange',update);
     return()=>{clearInterval(timer);window.removeEventListener('focus',update);document.removeEventListener('visibilitychange',update);};

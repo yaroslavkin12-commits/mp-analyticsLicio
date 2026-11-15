@@ -131,7 +131,7 @@ function build(datasets, prefs = initial(), params = {}) {
     const rows=[]; articles.forEach((a,ai)=>months.forEach((month,mi)=>{const x=byMonth.get(ai+'|'+month)||[0,0];rows.push([ai,mi,...x]);}));return {_wb:true,articles,order:ORDER.defly,months,rows};
   }
   const coefs = (costRows=[]) => ds.has('finance') ? require('./wbFinance').coefs(ds.get('finance'),{articles,index,costs:costRows,orders:get('orders'),sales:get('sales'),prices:get('prices'),prefs,today,order:ORDER.defly}) : ({ _wb: true, _metadataOnly: true, articles, order: ORDER.defly, rows: [], coefs:[], noSku:{}, totalSale:0, names:[], fbsDays: [] });
-  const costs = costRows => ({ _wb: true, items: articles.map((a, ai) => { const c = costRows.find(r => r.article === a.o), s = sum(ai, dates); return { offerId: a.o, name: a.n, category: a.cat, cost: c ? number(c.cost_price) : null, updatedAt: c?.updated_at || null, orders30: s.orders, avgPrice30: s.orders > 0 ? s.revenue / s.orders : null }; }), order: ORDER.defly });
+  const costs = costRows => ({ _wb: true, items: articles.map((a, ai) => { const c = costRows.find(r => r.article === a.o), s = sum(ai, dates), stock=stockFor(ai); return { offerId: a.o, name: a.n, category: a.cat, stock:stock?add(stock.fboPresent,stock.fbsPresent):null, cost: c ? number(c.cost_price) : null, updatedAt: c?.updated_at || null, orders30: s.orders, avgPrice30: s.orders > 0 ? s.revenue / s.orders : null }; }), order: ORDER.defly });
   const calcBase = costRows => {
     const c=coefs(costRows), cm=new Map((c.coefs||[]).map(r=>[r[0],r]));
     return {_wb:true,...(c._metadataOnly?{_metadataOnly:true}:{}),articles,order:ORDER.defly,since:c.since,a:articles.map((a,ai)=>{

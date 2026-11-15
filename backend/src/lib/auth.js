@@ -47,7 +47,7 @@ function ensure() {
     await query(`CREATE TABLE IF NOT EXISTS app_users (id SERIAL PRIMARY KEY, login VARCHAR(64) UNIQUE NOT NULL, name VARCHAR(128),
       pass_hash TEXT NOT NULL, role VARCHAR(16) NOT NULL DEFAULT 'user', disabled BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ DEFAULT NOW(), last_login TIMESTAMPTZ)`);
-    await query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS access_scope JSONB`);
+    await query(`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS access_scope JSONB, ADD COLUMN IF NOT EXISTS pass_cipher TEXT`);
     await query(`CREATE TABLE IF NOT EXISTS app_sessions (token_hash CHAR(64) PRIMARY KEY, user_id INT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
       expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
     await query(`CREATE TABLE IF NOT EXISTS app_api_keys (id SERIAL PRIMARY KEY, name VARCHAR(128) NOT NULL, key_hash CHAR(64) UNIQUE NOT NULL,

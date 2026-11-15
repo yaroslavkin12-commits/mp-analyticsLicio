@@ -361,3 +361,5 @@ tr:hover .a-ungroup { opacity: 1; }
 .a-day-expand:focus-visible{outline:2px solid var(--accent-oz);outline-offset:2px;}
 
 .mpui .a-trsew{display:block;font-size:10px;color:var(--a-ink2);white-space:nowrap;margin-top:1px}
+
+.mpui.mp-floating-root{position:fixed;inset:0;padding:0!important;pointer-events:none;z-index:2000;background:transparent;min-height:0}

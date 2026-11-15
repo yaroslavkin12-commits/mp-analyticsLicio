@@ -530,12 +530,14 @@ router.get('/costs', async (req, res) => {
     await ensureSchema();
     const cabinet = req.query.cabinet || 'defly';
     const since = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
-    const [catalogRows, overrideRows, costRows, salesRows] = await Promise.all([
+    const [catalogRows, overrideRows, costRows, salesRows, stockRows] = await Promise.all([
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
       query(OV_SQL, overrideArgs(cabinet)),
       query(`SELECT article, platform, product_name, cost_price, updated_at, cabinet FROM product_costs`),
       query(`SELECT offer_id, sku, SUM(orders_item) o, SUM(revenue) r FROM product_analytics_daily
               WHERE cabinet = $1 AND platform = 'ozon' AND date >= $2 GROUP BY offer_id, sku`, [cabinet, since]),
+      query(`SELECT DISTINCT ON (offer_id) offer_id, fbo_present, fbo_reserved, fbs_present, fbs_reserved FROM ad_product_stocks
+        WHERE cabinet=$1 AND platform='ozon' AND snapshot_date >= $2 ORDER BY offer_id,snapshot_date DESC,collected_at DESC`,[cabinet,dayjs().subtract(5,'day').format('YYYY-MM-DD')]),
     ]);
     const override = new Map(overrideRows.map(r => [r.offer_id, r.path]));
     // Каталога кабинета в базе ещё нет (Licio: товары пока не собираются
@@ -562,6 +564,7 @@ router.get('/costs', async (req, res) => {
       s.o += num(r.o); s.r += num(r.r);
       sales.set(o, s);
     }
+    const stocks=new Map(stockRows.map(r=>[r.offer_id,Math.max(0,num(r.fbo_present)-num(r.fbo_reserved))+Math.max(0,num(r.fbs_present)-num(r.fbs_reserved))]));
     const items = catalogRows.map(r => {
       const c = cost.get(r.offer_id);
       const s = sales.get(r.offer_id);
@@ -569,7 +572,7 @@ router.get('/costs', async (req, res) => {
         offerId: r.offer_id, name: r.product_name || '',
         category: override.get(r.offer_id) || autoPath(cabinet, r.product_name, r.offer_id).join(' / '),
         cost: c ? num(c.cost_price) : null, updatedAt: c ? c.updated_at : null,
-        orders30: s ? s.o : 0, avgPrice30: s && s.o > 0 ? r2(s.r / s.o) : null,
+        stock: stocks.has(r.offer_id)?stocks.get(r.offer_id):null, orders30: s ? s.o : 0, avgPrice30: s && s.o > 0 ? r2(s.r / s.o) : null,
       };
     });
     res.json({ success: true, data: { items, order: ORDER[cabinet] || [] } });

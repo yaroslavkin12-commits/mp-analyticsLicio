@@ -60,7 +60,7 @@ export default function Costs({ cabinet, nav }) {
     const val = it => {
       switch (sort.key) {
         case 'id': return it.offerId; case 'cat': return it.category; case 'price': return it.avgPrice30 ?? -1;
-        case 'orders': return it.orders30; case 'cost': return it.cost ?? -1;
+        case 'stock': return it.stock ?? -1; case 'orders': return it.orders30; case 'cost': return it.cost ?? -1;
         case 'pct': return it.cost !== null && it.avgPrice30 ? it.cost / it.avgPrice30 : -1;
         default: return 0;
       }
@@ -234,7 +234,7 @@ export default function Costs({ cabinet, nav }) {
         <div className="a-scroll">
           <table className="a-t c-table">
             <thead><tr>
-              {TH(['id', 'Артикул'])}<th>Название</th>{TH(['cat', 'Категория'])}{TH(['orders', 'Заказы за 30 дн', 1])}
+              {TH(['id', 'Артикул'])}<th>Название</th>{TH(['cat', 'Категория'])}{TH(['orders', 'Заказы за 30 дн', 1])}{TH(['stock', 'Остаток, шт', 1])}
               {TH(['price', 'Ср. цена, ₽', 1])}{TH(['cost', 'Себестоимость, ₽', 1])}{TH(['pct', '% от цены', 1])}<th className="r">Обновлено</th>
             </tr></thead>
             <tbody>
@@ -250,6 +250,7 @@ export default function Costs({ cabinet, nav }) {
                     <td title={it.name} style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</td>
                     <td className="a-hint">{it.category}</td>
                     <td className="n r">{it.orders30 ? fmtInt(it.orders30) : <span className="muted">—</span>}</td>
+                    <td className="n r">{it.stock == null ? <span className="muted">—</span> : fmtInt(it.stock)}</td>
                     <td className="n r">{it.avgPrice30 ? fmtInt(it.avgPrice30) : <span className="muted">—</span>}</td>
                     <td className="r">
                       <input value={shown} inputMode="decimal" className={d !== undefined && (bad || v !== it.cost) ? 'dirty' : ''} style={bad ? { borderColor: 'var(--a-bad)' } : undefined}
@@ -261,7 +262,7 @@ export default function Costs({ cabinet, nav }) {
                   </tr>
                 );
               })}
-              {!rows.length && !loading && <tr><td colSpan={8} className="a-empty">Ничего не найдено.</td></tr>}
+              {!rows.length && !loading && <tr><td colSpan={9} className="a-empty">Ничего не найдено.</td></tr>}
             </tbody>
           </table>
         </div>

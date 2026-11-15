@@ -1,3 +1,4 @@
+import FloatingInfo from '../components/FloatingInfo';
 import { accessStorage } from '../lib/accessClient';
 import { useReadOnly } from '../lib/AccessContext';
 import { resultTint } from '../lib/resultTint';
@@ -386,9 +387,9 @@ export function SparkBars({ values, w = 96, h = 24, dates = [], metric = 'orders
 // ── Общая всплывашка ──────────────────────────────────────────────────────
 export function useTip() {
   const [tip, setTip] = useState(null);
-  const show = useCallback((e, content) => setTip({ x: e.clientX + 14, y: e.clientY + 14, content }), []);
+  const show = useCallback((e, content) => setTip({ x: e.clientX, y: e.clientY, content }), []);
   const hide = useCallback(() => setTip(null), []);
-  const node = tip ? <div className="a-tip" style={{ left: tip.x, top: tip.y }}>{tip.content}</div> : null;
+  const node = tip ? <FloatingInfo x={tip.x} y={tip.y} onDismiss={hide}>{tip.content}</FloatingInfo> : null;
   return { show, hide, node };
 }
 

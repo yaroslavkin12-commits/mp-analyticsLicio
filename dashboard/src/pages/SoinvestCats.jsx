@@ -1,3 +1,5 @@
+import DateRangePicker from '../components/DateRangePicker';
+import QuickPeriods from '../components/QuickPeriods';
 import { useReadOnly } from '../lib/AccessContext';
 import { createPortal } from 'react-dom';
 import CategoryNav from '../components/CategoryNav';
@@ -88,13 +90,15 @@ export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
   const [open, setOpen] = useState(() => new Set());
   const [sort, setSort] = useState({ key: 'rev', dir: -1 });
   const [hist, setHist] = useState(null);
-  const [histDays, setHistDays] = useState(30);
+  const [histFrom,setHistFrom]=useState(dayjs().subtract(29,'day').format('YYYY-MM-DD'));
+  const [histTo,setHistTo]=useState(dayjs().format('YYYY-MM-DD'));
+  const [histError,setHistError]=useState('');
   const [groupsData, setGroupsData] = useState({ groups: [], members: {} });
   const [group, setGroup] = useState('');
   const [newGroup, setNewGroup] = useState(null);
   const requestId = useRef(0);
   const tip = useTip();
-  useEffect(() => { setHist(null); getDiscountHistory(cabinet, histDays).then(r => setHist(r.data.data)).catch(() => setHist({ dates: [], rows: [], base: [] })); }, [cabinet, histDays]);
+  useEffect(() => { let cancelled=false;setHist(null);setHistError('');getDiscountHistory(cabinet,{dateFrom:histFrom,dateTo:histTo}).then(r=>{if(!cancelled)setHist(r.data.data);}).catch(e=>{if(!cancelled){setHistError(e.response?.data?.error || 'История не загрузилась');setHist({dates:[],rows:[],base:[]});}});return()=>{cancelled=true;};},[cabinet,histFrom,histTo]);
   useEffect(() => { getAdsGroups(cabinet).then(r => setGroupsData(r.data.data || { groups: [], members: {} })).catch(() => {}); }, [cabinet]);
 
   const load = useCallback(() => {
@@ -278,8 +282,13 @@ export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
         <div className="a-bar" style={{ marginBottom: 8 }}>
           <b style={{ fontSize: 14 }}>Как менялся СПП{group ? ` · ${(groupsData.groups.find(g => g.id === group) || {}).name || ''}` : sel ? ` · ${sel.split(SEP).pop()}` : ''}</b>
           <span className="a-hint">среднее по выбранным товарам с весом по выручке за 30 дней</span>
-          <span className="a-seg" style={{ marginLeft: 'auto' }}>{[7, 14, 30, 90].map(n => <button key={n} type="button" className={histDays === n ? 'on' : ''} onClick={() => setHistDays(n)}>{n} дн</button>)}</span>
+          <span style={{marginLeft:'auto',display:'flex',gap:8,flexWrap:'wrap'}}>
+            <QuickPeriods from={histFrom} to={histTo} onChange={(f,t)=>{setHistFrom(f);setHistTo(t);}} periods={[7,14,30,90]}/>
+            <DateRangePicker from={histFrom} to={histTo} onChange={(f,t)=>{setHistFrom(f);setHistTo(t);}}/>
+          </span>
         </div>
+        {histError && <div className="c-msg bad">{histError}</div>}
+        {hist?.available?.mn && <div className="a-hint">История сохранена с {dayjs(hist.available.mn).format('DD.MM.YYYY')} · снимки накапливаются при сборе цен</div>}
         <SppChart hist={hist} list={filtered} tip={tip} />
       </div>
 

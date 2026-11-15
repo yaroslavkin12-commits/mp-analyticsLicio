@@ -86,7 +86,7 @@ export const getOzonFunnel      = p => api.get('/analytics/ozon/funnel',  { para
 export const getOzonCategories  = p => api.get('/analytics/ozon/categories', { params: p });
 
 export const getAdsCabinets = () => api.get('/promo/cabinets');
-export const collectAds     = (cabinet, days) => api.post('/promo/collect', {}, { params: { cabinet, days } });
+export const collectAds     = (cabinet, days) => api.post('/promo/collect', {}, { params: { cabinet, ...(typeof days === 'object' ? days : { days }) } });
 export const getAdsDataStatus = cabinet => api.get('/promo/data-status', { params: { cabinet } });
 export const saveCampaignTarget = (cabinet, campaignId, drr) => api.post('/promo/campaign-target', { cabinet, campaignId, drr });
 export const getAdsStats    = (cabinet, params) => api.get('/promo/stats', { params: { cabinet, ...params } });
@@ -148,7 +148,7 @@ export const getCostList = cabinet => api.get('/sales/costs', { params: { cabine
 export const saveCostList = (cabinet, items) => api.post('/sales/costs', { cabinet, items }, { timeout: 120000 });
 export const getSalesGeo = (cabinet, p) => api.get('/sales/geo', { params: { cabinet, ...p }, timeout: 90000 });
 export const getDiscountOverview = cabinet => api.get('/discounts/overview', { params: { cabinet } });
-export const getDiscountHistory = (cabinet, days) => api.get('/discounts/history', { params: { cabinet, days } });
+export const getDiscountHistory = (cabinet, range) => api.get('/discounts/history', { params: { cabinet, ...(typeof range === 'object' ? range : {days:range}) } });
 // Юнит-экономика, P&L, % выкупа
 export const getBuyerShare = cabinet => api.get('/finance/buyer-share', { params: { cabinet } });
 export const saveBuyerShare = (cabinet, body) => api.post('/finance/buyer-share', { cabinet, ...body });
@@ -254,3 +254,5 @@ export const deleteAuthKey = id => api.delete(`/auth/keys/${id}`);
 export const getAccessActivity = params => api.get('/auth/activity/report', { params });
 
 export const getCategoryAccessOptions = () => api.get('/auth/categories', { timeout: 60000 });
+
+export const getUserPassword = id => api.get(`/auth/users/${id}/password`);

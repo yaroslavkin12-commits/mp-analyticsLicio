@@ -1,3 +1,5 @@
+import { Eye,EyeOff } from 'lucide-react';
+import {getUserPassword} from '../api';
 import React, { useEffect, useState, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getMe, authLogout, changePassword, getAuthUsers, saveAuthUser, deleteAuthUser, getAuthKeys, createAuthKey, deleteAuthKey } from '../api';
@@ -18,12 +20,17 @@ export default function Access() {
   const [newKey, setNewKey] = useState(null), [keyName, setKeyName] = useState('Расширение «Соинвест»');
   const [options,setOptions] = useState([]), [accessStatus,setAccessStatus] = useState(null);
   const [editing,setEditing] = useState(null);
+  const [vaultReady,setVaultReady]=useState(false);
+  const [revealed,setRevealed]=useState(null);
+  useEffect(()=>{if(!revealed)return;const hide=()=>setRevealed(null);const timer=setTimeout(hide,30000);window.addEventListener('blur',hide);return()=>{clearTimeout(timer);window.removeEventListener('blur',hide);};},[revealed]);
+  const [creating,setCreating]=useState(false);
+  const emptyUser=()=>({login:'',name:'',password:'',role:'user',accessScope:{paths:[],readOnly:true}});
   const [pw, setPw] = useState({ current: '', next: '' });
   const say = (t, isBad) => { setMsg(isBad ? '' : t); setBad(isBad ? t : ''); };
   const load = useCallback(async () => {
     const m = (await getMe()).data.data; setMe(m);
     if (['owner', 'admin'].includes(m?.role) && m.auth) {
-      const u = await getAuthUsers(); setUsers(u.data.data);
+      const u = await getAuthUsers(); setUsers(u.data.data);setVaultReady(!!u.data.passwordVaultConfigured);
       const categories = await getCategoryAccessOptions(); setOptions(categories.data.data.paths); setAccessStatus(categories.data.data.accessStatus);
       if (m.role === 'owner') { const k = await getAuthKeys(); setKeys(k.data.data); }
       else setKeys([]);
@@ -48,16 +55,17 @@ export default function Access() {
       {admin && <div className="a-card" style={{ padding: 16, marginBottom: 14 }}>
         <b style={{ fontSize: 15 }}>Пользователи</b>
         <div className="a-hint" style={{ margin: '4px 0 10px' }}>{owner ? 'Вы управляете ролями, пользователями и ключами. Журнал посещений доступен только вам.' : 'Вы можете добавлять и удалять обычных пользователей. История входов и активность вам недоступны.'}</div>
-        <div className="a-scroll"><table className="a-t no-sh"><thead><tr><th>Логин</th><th>Имя</th><th>Роль</th><th>Категории</th>{owner && <th>Последний вход</th>}<th>Статус</th><th /></tr></thead><tbody>
+        <div className="a-scroll"><table className="a-t no-sh"><thead><tr><th>Логин</th><th>Имя</th>{owner && <th>Пароль</th>}<th>Роль</th><th>Категории</th>{owner && <th>Последний вход</th>}<th>Статус</th><th /></tr></thead><tbody>
           {users.map(u => <tr key={u.id}>
             <td><b>{u.login}</b></td><td>{u.name}</td>
+            {owner && <td style={{whiteSpace:'nowrap'}}>{u.password_saved ? <span style={{display:'inline-flex',gap:8,alignItems:'center'}}><code>{revealed?.id===u.id?revealed.password:'••••••••'}</code><button type="button" className="a-btn ghost" aria-label={`${revealed?.id===u.id?'Скрыть':'Показать'} пароль ${u.login}`} onClick={async()=>{if(revealed?.id===u.id)return setRevealed(null);try{const r=await getUserPassword(u.id);if(r.data.data.password)setRevealed({id:u.id,password:r.data.data.password});else say('Пароль не сохранён. Задайте пользователю новый пароль',true);}catch(e){say(err(e),true);}}}>{revealed?.id===u.id?<EyeOff size={15}/>:<Eye size={15}/>}</button></span>:<span className="a-hint" title="Пароль задан до включения показа либо изменён самим пользователем">Не сохранён</span>}</td>}
             <td>{owner && u.role !== 'owner' ? <select className="a-input" value={u.role} onChange={e => act(() => saveAuthUser({ id: u.id, role: e.target.value, disabled: u.disabled }))()}><option value="user">пользователь</option><option value="admin">администратор пользователей</option></select> : u.role === 'owner' ? 'Главный администратор' : 'Пользователь'}</td>
             <td>{u.access_scope ? u.access_scope.paths?.join(' · ') : 'Все данные'}</td>
             {owner && <td>{when(u.last_login)}</td>}
             <td>{u.disabled ? <span className="s-down">отключён</span> : 'активен'}</td>
             <td style={{ whiteSpace: 'nowrap' }}>
-              {owner && u.role === 'user' && <button className="a-btn ghost" onClick={()=>setEditing({id:u.id,scope:u.access_scope || null,role:u.role,disabled:u.disabled,login:u.login})}>Категории</button>}
-              {owner && u.role !== 'owner' && <><button className="a-btn ghost" onClick={act(async () => { const p = window.prompt(`Новый пароль для ${u.login} (не короче 8 символов)`); if (!p) return; await saveAuthUser({ id: u.id, role: u.role, disabled: u.disabled, password: p }); say(`Пароль ${u.login} изменён, его сессии закрыты`); })}>Сменить пароль</button>
+              {owner && u.role === 'user' && <button className="a-btn ghost" onClick={()=>{setCreating(false);setEditing({id:u.id,scope:u.access_scope || null,role:u.role,disabled:u.disabled,login:u.login});}}>Категории</button>}
+              {owner && u.role !== 'owner' && <><button className="a-btn ghost" disabled={!vaultReady} onClick={act(async () => { const p = window.prompt(`Новый пароль для ${u.login} (не короче 8 символов)`); if (!p) return; await saveAuthUser({ id: u.id, role: u.role, disabled: u.disabled, password: p }); say(`Пароль ${u.login} изменён, его сессии закрыты`); })}>Сменить пароль</button>
               <button className="a-btn ghost" onClick={act(() => saveAuthUser({ id: u.id, role: u.role, disabled: !u.disabled }))}>{u.disabled ? 'Включить' : 'Отключить'}</button></>}
               {u.role !== 'owner' && <button className="a-btn ghost" onClick={act(async () => { if (window.confirm(`Удалить пользователя ${u.login}?`)) await deleteAuthUser(u.id); })}>Удалить</button>}
             </td></tr>)}
@@ -67,14 +75,17 @@ export default function Access() {
           <button className="a-btn" onClick={act(async()=>{await saveAuthUser({id:editing.id,role:editing.role,disabled:editing.disabled,accessScope:editing.scope});setEditing(null);say('Доступ к категориям сохранён');})}>Сохранить доступ</button>
           <button className="a-btn ghost" onClick={()=>setEditing(null)}>Отмена</button>
         </div>}
+        {!creating && !editing && <button className="a-btn" onClick={()=>{setNu(emptyUser());setCreating(true);}}>Добавить пользователя</button>}
+        {creating && <>
         {nu.role === 'user' && <CategoryAccessPicker value={nu.accessScope} onChange={accessScope=>setNu({...nu,accessScope})} options={options} status={accessStatus}/>}
         <div className="a-bar" style={{ marginTop: 10 }}>
           <input className="a-input" name="new-user-login" autoComplete="off" placeholder="логин (латиница)" value={nu.login} onChange={e => setNu({ ...nu, login: e.target.value })} />
           <input className="a-input" name="new-user-display-name" autoComplete="off" placeholder="имя" value={nu.name} onChange={e => setNu({ ...nu, name: e.target.value })} />
           <input className="a-input" type="password" name="new-user-password" autoComplete="new-password" placeholder="пароль, от 8 символов" value={nu.password} onChange={e => setNu({ ...nu, password: e.target.value })} />
           {owner && <select className="a-input" value={nu.role} onChange={e => setNu({ ...nu, role: e.target.value, accessScope: e.target.value === 'admin' ? null : nu.accessScope })}><option value="user">пользователь</option><option value="admin">администратор пользователей</option></select>}
-          <button className="a-btn" onClick={act(async () => { await saveAuthUser(nu); say(`Пользователь ${nu.login} добавлен`); setNu({ login: '', name: '', password: '', role: 'user' }); })}>Добавить</button>
-        </div>
+          <button className="a-btn" disabled={!vaultReady} title={!vaultReady?'Готовится защищённое хранение паролей. Обновите страницу через минуту':undefined} onClick={act(async () => { await saveAuthUser(nu); say(`Пользователь ${nu.login} добавлен`); setNu(emptyUser());setCreating(false); })}>Добавить</button>
+          <button className="a-btn ghost" onClick={()=>{setCreating(false);setNu(emptyUser());}}>Отмена</button>
+        </div></>}
       </div>}
 
       {owner && <div className="a-card" style={{ padding: 16, marginBottom: 14 }}>

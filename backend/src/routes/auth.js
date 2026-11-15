@@ -7,6 +7,7 @@ const policy = require('../lib/accessPolicy');
 const activity = require('../lib/accessActivity');
 const categories = require('../lib/categoryAccess');
 const readiness = require('../lib/accessReadiness');
+const vault=require('../lib/passwordVault');
 const router = express.Router();
 const wrap = fn => async (req, res) => { try { await A.ensure(); await fn(req, res); } catch (e) { console.error('[Auth]', e.message); res.status(e.status || 500).json({ success: false, error: e.message }); } };
 const admin = (req, res) => { if (A.isAdmin(req)) return true; res.status(403).json({ success: false, error: 'Только для администратора' }); return false; };
@@ -25,14 +26,22 @@ router.post('/password', wrap(async (req, res) => {
   if (String(next || '').length < 8) return res.status(400).json({ success: false, error: 'Новый пароль — не короче 8 символов' });
   const r = await query('SELECT pass_hash FROM app_users WHERE id=$1', [req.user.id]);
   if (!r.length || !A.checkPassword(current, r[0].pass_hash)) return res.status(400).json({ success: false, error: 'Текущий пароль неверный' });
-  await query('UPDATE app_users SET pass_hash=$1 WHERE id=$2', [A.hashPassword(next), req.user.id]);
+  await query('UPDATE app_users SET pass_hash=$1, pass_cipher=NULL WHERE id=$2', [A.hashPassword(next), req.user.id]);
   res.json({ success: true });
 }));
 router.get('/users', wrap(async (req, res) => {
   if (!admin(req, res)) return;
   res.set('Cache-Control', 'no-store');
   const where = A.isOwner(req) ? '' : " WHERE role='user' AND login<>'evgeniy'";
-  res.json({ success: true, data: await query(`SELECT ${policy.userFields(req)} FROM app_users${where} ORDER BY id`) });
+  res.json({ success: true, data: await query(`SELECT ${policy.userFields(req)} FROM app_users${where} ORDER BY id`), passwordVaultConfigured: vault.configured() });
+}));
+router.get('/users/:id/password', wrap(async(req,res)=>{
+  if(!owner(req,res))return;
+  const id=Number(req.params.id);if(!Number.isInteger(id)||id<1)return res.status(400).json({success:false,error:'Неверный пользователь'});
+  res.set('Cache-Control','no-store');res.set('Pragma','no-cache');
+  const rows=await query('SELECT login,pass_cipher FROM app_users WHERE id=$1',[id]);
+  if(!rows.length)return res.status(404).json({success:false,error:'Пользователь не найден'});
+  res.json({success:true,data:{password:vault.open(rows[0].pass_cipher,rows[0].login)}});
 }));
 router.post('/users', wrap(async (req, res) => {
   if (!admin(req, res)) return;
@@ -55,7 +64,7 @@ router.post('/users', wrap(async (req, res) => {
       if (nextScope && nextRole !== 'user') throw Object.assign(Error('Ограничение категорий задаётся только обычному пользователю'), { status: 400 });
       const scope = nextRole === 'user' ? (nextScope === undefined ? target.access_scope : nextScope) : null;
       await client.query('UPDATE app_users SET name=COALESCE($2,name), role=$3, disabled=$4, access_scope=$5::jsonb WHERE id=$1', [id, typeof name === 'string' ? name.slice(0, 128) : null, nextRole, disabled === undefined ? target.disabled : !!disabled, scope ? JSON.stringify(scope) : null]);
-      if (password) await client.query('UPDATE app_users SET pass_hash=$2 WHERE id=$1', [id, A.hashPassword(password)]);
+      if (password) await client.query('UPDATE app_users SET pass_hash=$2,pass_cipher=$3 WHERE id=$1', [id,A.hashPassword(password),vault.seal(password,target.login)]);
       if (password || disabled) await client.query('DELETE FROM app_sessions WHERE user_id=$1', [id]);
       await client.query('COMMIT');
     } catch (e) { await client.query('ROLLBACK'); throw e; }
@@ -72,7 +81,7 @@ router.post('/users', wrap(async (req, res) => {
   const scope = await categories.validate(accessScope);
   if (scope && role === 'admin') return res.status(400).json({ success:false,error:'Ограничение категорий задаётся только обычному пользователю' });
   if (scope) await readiness.ensureReady();
-  await query('INSERT INTO app_users (login,name,pass_hash,role,access_scope) VALUES ($1,$2,$3,$4,$5::jsonb)', [l, String(name || l).slice(0, 128), A.hashPassword(password), A.isOwner(req) && role === 'admin' ? 'admin' : 'user', scope ? JSON.stringify(scope) : null]);
+  await query('INSERT INTO app_users (login,name,pass_hash,role,access_scope,pass_cipher) VALUES ($1,$2,$3,$4,$5::jsonb,$6)', [l, String(name || l).slice(0, 128), A.hashPassword(password), A.isOwner(req) && role === 'admin' ? 'admin' : 'user', scope ? JSON.stringify(scope) : null,vault.seal(password,l)]);
   res.json({ success: true });
 }));
 router.delete('/users/:id', wrap(async (req, res) => {

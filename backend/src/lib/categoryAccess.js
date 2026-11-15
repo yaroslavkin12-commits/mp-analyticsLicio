@@ -124,7 +124,7 @@ function projection(path, data, ctx) {
   if (path === '/promo/stats') return ads(data,ctx);
   if (path === '/orders/feed') return { ...pick(data,['from','to','since','_wb']), rows: (data.rows || []).filter(r => ctx.allowed.has(offerOf(r))).map(r => ({ ...pick(r,['p','sku','o','n','price','est','qty','st','wh','at','sch','self']), cat: ctx.allowed.get(offerOf(r)).path })) };
   if (path === '/discounts/overview') return { ...pick(data,['cabinet','lastCheckedAt']), items: (data.items || []).filter(r => ctx.allowed.has(offerOf(r))).map(r => ({ ...pick(r,['o','n','seller','site','card','pct','pctCard','schema','c1','c7','d1','d7','orders30','revenue30','checkedAt']), cat: ctx.allowed.get(offerOf(r)).path })) };
-  if (path === '/discounts/history') return { dates: data.dates, rows: (data.rows || []).filter(r => ctx.allowed.has(String(r[0]))), base: (data.base || []).filter(r => ctx.allowed.has(String(r[0]))) };
+  if (path === '/discounts/history') return { dates: data.dates, from:data.from,to:data.to, rows: (data.rows || []).filter(r => ctx.allowed.has(String(r[0]))), base: (data.base || []).filter(r => ctx.allowed.has(String(r[0]))) };
   if (path === '/promo/groups') {
     const members = filterMap(data.members,ctx), ids = new Set(Object.values(members));
     return { members, groups: (data.groups || []).filter(g => ids.has(g.id)).map(g => pick(g,['id','name','color'])) };

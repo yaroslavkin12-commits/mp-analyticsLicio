@@ -73,3 +73,11 @@ test('Владелец определяется точным логином и �
   assert.equal(policy.isAdmin({ user: admin }), true);
   assert.equal(policy.isAdmin({}), false);
 });
+
+ test('Показ сохранённого пароля разрешён только владельцу, проверка прав выполняется до чтения шифротекста',async()=>{
+  for(const user of [admin,undefined,{login:'other',role:'owner'},{login:'evgeniy',role:'admin'}]){
+   sqlLog.length=0;assert.equal((await call('get','/users/:id/password',user,{}, {id:'3'})).status,403);assert.equal(sqlLog.length,0);
+  }
+  assert.equal((await call('get','/users/:id/password',owner,{}, {id:'bad'})).status,400);
+  const result=await call('get','/users/:id/password',owner,{}, {id:'99'});assert.equal(result.status,404);assert.equal(result.headers['Cache-Control'],'no-store');
+ });

@@ -18,7 +18,7 @@ function request(path, body, cookie) {
   });
 }
 (async () => {
-  let out = { transport: 'https', domain }, cookie, probeId;
+  let out = { transport: 'https', domain, interfaceVersion:2 }, cookie, probeId;
   try {
     let ready = false;
     for (let i = 0; i < 45; i++) {
@@ -37,6 +37,12 @@ function request(path, body, cookie) {
           const r = await request(path + '?cabinet=defly&dateFrom=2026-11-13&dateTo=2026-11-13', null, cookie);
           out[name] = { code: r.code, success: r.json?.success, articles: r.json?.data?.articles?.length, rows: r.json?.data?.rows?.length };
         }
+        const users=await request('/api/auth/users',null,cookie);
+        out.passwordVault={code:users.code,configured:users.json?.passwordVaultConfigured===true,noPasswordInList:Array.isArray(users.json?.data)&&users.json.data.every(u=>!('pass_hash' in u)&&!('pass_cipher' in u)&&!('password' in u))};
+        const products=await request('/api/sales/costs?cabinet=defly',null,cookie);
+        out.productStocks={code:products.code,articles:products.json?.data?.items?.length,known:products.json?.data?.items?.filter(u=>Number.isFinite(u.stock)).length};
+        const history=await request('/api/discounts/history?cabinet=defly&dateFrom=2026-09-01&dateTo=2026-09-30',null,cookie);
+        out.discountHistory={code:history.code,days:history.json?.data?.dates?.length,septemberPoints:history.json?.data?.rows?.length,available:history.json?.data?.available};
         probeId = require('crypto').randomUUID();
         const opened = await request('/api/auth/activity', {visitId:probeId,idleSeconds:0,visible:true,close:false,page:'service-check',cabinet:'defly'},cookie);
         await new Promise(resolve=>setTimeout(resolve,1200));

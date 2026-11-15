@@ -74,3 +74,9 @@ test('WB: расходы по дням рекламы отделены от фи
  const m=model(ds),p=m.pnl();assert.equal(p.rows.filter(r=>p.buckets[r[2]]==='ads').reduce((s,r)=>s+r[3],0)+p.noSku.filter(r=>p.buckets[r[1]]==='ads').reduce((s,r)=>s+r[2],0),-30);
  assert(p.adStatistics.rows.some(r=>r[1]===1&&r[2]>0));assert.equal(p.ads.length,0);assert.equal(p.adStatistics.to,to);
 });
+
+test('Товары WB получают остаток из того же снимка, что раздел «Остатки»; неизвестное значение остаётся пустым',()=>{
+ const m=model(),stock=m.stocks().stock,costs=m.costs([]).items;
+ costs.forEach((row,ai)=>assert.equal(row.stock,stock[ai][1]+stock[ai][3]));
+ assert.equal(model(fixture().filter(x=>x.kind!=='stocks')).costs([]).items[0].stock,null);
+});

@@ -88,7 +88,7 @@ function FilterPop({ value, onApply, onClose, unit, anchor }) {
   const ok = () => { onApply({ min, max }); onClose(); };
   const r = anchor?.getBoundingClientRect();
   const W = 190;
-  const pos = r ? { position: 'fixed', top: Math.min(r.bottom + 4, window.innerHeight - 170), left: Math.max(8, Math.min(r.right - W, window.innerWidth - W - 8)), right: 'auto', marginTop: 0, zIndex: 1000 } : {};
+  const pos = r ? { position: 'fixed', top: Math.max(8,Math.min(r.bottom + 4, window.innerHeight - 170)), left: Math.max(8, Math.min(r.right - W, window.innerWidth - W - 8)), right: 'auto', marginTop: 0, zIndex: 1000,maxWidth:'calc(100vw - 16px)',maxHeight:'calc(100vh - 16px)',overflow:'auto',boxSizing:'border-box' } : {};
   const node = (
     <div ref={ref} className="tt-pop" style={pos} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
       <div className="tt-row"><span>от</span><input className="a-input" type="number" value={min} autoFocus onChange={e => setMin(e.target.value)} onKeyDown={e => e.key === 'Enter' && ok()} /></div>

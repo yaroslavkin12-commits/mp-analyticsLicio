@@ -25,6 +25,10 @@ if [ "$OLD" != "$NEW" ]; then
   if echo "$CHANGED" | grep -q -E '^(backend/|dashboard/src/lib/.*\.mjs)'; then systemctl restart mp.service; fi
   st commit="${NEW:0:7}" deployedAt="$(date -Is)"
 fi
+# Подготавливаем ключ даже если код уже был обновлён старой версией обновлялки.
+if [ -f "$APP/deploy/yandex/prepare-password-vault.sh" ]; then
+  if bash "$APP/deploy/yandex/prepare-password-vault.sh" | grep -qx changed; then systemctl restart mp.service; fi
+fi
 # Перенос базы запускается оператором отдельно после проверки источника.
 # Изменение migrate.stamp больше не перезаписывает рабочую базу.
 # Отметка, что обновлялка жива.
@@ -41,6 +45,7 @@ if [ -f /var/log/mp-migrate-safe.log ]; then
 fi
 # Разовая проверка рабочего входа и отчётов; пароль остаётся внутри сервера.
 VERIFY_HASH=$(sha256sum "$APP/deploy/yandex/verify-service.cjs" | cut -d' ' -f1)
+if grep -q '^USER_PASSWORD_VAULT_KEY=' /etc/mp/app.env; then VERIFY_HASH="$VERIFY_HASH-vault"; fi
 if [ ! -f "$STATE/verified-$VERIFY_HASH" ] && grep -q 'neon-shared' /var/lib/mp/status.json; then
   touch "$STATE/verified-$VERIFY_HASH"
   node "$APP/deploy/yandex/verify-service.cjs"

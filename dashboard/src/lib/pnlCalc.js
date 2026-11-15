@@ -9,7 +9,7 @@ const SEP = ' / ';
 
 export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withDays = false } = {}) {
   if (data._operational) {
-    const blank=()=>({revenue:0,qty:0,payout:null,profit:null,ozonX:null,ads:null,cost:null,tax:null,...(withDays?{days:data.dates.map(date=>({date,revenue:0,qty:0,payout:null,profit:null}))}:{})});
+    const blank=()=>({revenue:0,qty:0,payout:null,profit:null,ozonX:null,ads:null,cost:null,tax:null,...(withDays?{days:data.dates.map(date=>({date,revenue:0,qty:0,payout:null,profit:null,ozonX:null,ads:null,cost:null,tax:null}))}:{})});
     const total=blank(),byGroup={};
     for(const a of data.articles) if(groupOf) byGroup[groupOf(a)] ||= blank();
     for(const [ai,di,bi,rub,qty] of data.rows){
@@ -65,14 +65,14 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
     const T = { revenue: 0, ozonX: 0, ads: 0, cost: 0, tax: 0, profit: 0, qty: 0, payout: 0 };
     if (withDays) T.days = [];
     for (let i = 0; i < n; i++) {
-      if (data.financeSource === 'wb' && (data.dates[i] < data.available.mn || data.dates[i] > data.available.mx)) { if(withDays) T.days.push({date:data.dates[i],qty:null,payout:null,revenue:null,profit:null}); continue; }
+      if (data.financeSource === 'wb' && (data.dates[i] < data.available.mn || data.dates[i] > data.available.mx)) { if(withDays) T.days.push({date:data.dates[i],qty:null,payout:null,revenue:null,profit:null,ozonX:null,ads:null,cost:null,tax:null}); continue; }
       const rev = v.sale[i] + v.return[i];
       const ozX = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
       const ad = data.financeSource === 'wb' || i <= lastFin ? v.ads[i] : -v.adsRaw[i];
       const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
       T.revenue += rev; T.ozonX += ozX; T.ads += ad; T.cost -= v.costRaw[i]; T.tax += t; T.qty += v.qty[i];
       T.payout += rev + ozX + ad; T.profit += rev + ozX + ad - v.costRaw[i] + t;
-      if (withDays) T.days.push({ date: data.dates[i], qty: v.qty[i], payout: rev + ozX + ad, revenue: rev, profit: rev + ozX + ad - v.costRaw[i] + t });
+      if (withDays) T.days.push({ date: data.dates[i], qty: v.qty[i],ozonX:ozX,ads:ad,cost:-v.costRaw[i],tax:t, payout: rev + ozX + ad, revenue: rev, profit: rev + ozX + ad - v.costRaw[i] + t });
     }
     return T;
   };

@@ -1,3 +1,4 @@
+import FloatingInfo from '../components/FloatingInfo';
 import { accessStorage } from '../lib/accessClient';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav, { categoryCompare } from '../components/CategoryNav';
@@ -391,7 +392,7 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
   const showTip = (e, S, title, key) => {
     if (!S || !S.finAny) return;
     const r = e.currentTarget.getBoundingClientRect();
-    setTip({ x: Math.min(window.innerWidth - 360, r.right + 8), y: Math.max(8, Math.min(window.innerHeight - 440, r.top - 120)), S, title, key });
+    setTip({ x:r.right,y:r.top, S, title, key });
   };
   // Окно раскладки закрывается кликом в любом другом месте.
   useEffect(() => { if (!tip) return undefined; const on = () => setTip(null); document.addEventListener('click', on); return () => document.removeEventListener('click', on); }, [tip]);
@@ -578,14 +579,14 @@ export default function Rnp({ cabinet, data, arts, fin, finPrev, forecast, share
         </div>
       </div>
       {tip && TT && (
-        <div className="rnp-tip" style={{ left: tip.x, top: tip.y }}>
+        <FloatingInfo className="rnp-tip" x={tip.x} y={tip.y}>
           <div className="rnp-tipt">Прибыль · {tip.title}</div>
           {tipRows.map(([t, v, head]) => (
             <div key={t} className={`rnp-tr ${head ? 'h' : ''}`}><span>{t}</span><b>{fmtInt(v)} ₽</b><i>{TT.buyRub ? fmtPct((v / TT.buyRub) * 100) : ''}</i></div>
           ))}
           <div className="rnp-tr tot"><span>Прибыль</span><b className={TT.profit < 0 ? 's-down' : 's-up'}>{fmtInt(TT.profit)} ₽</b><i>{TT.buyRub ? fmtPct((TT.profit / TT.buyRub) * 100) : ''}</i></div>
           <div className="rnp-tipn">% — от выкупов. Как в «P&L»: начисления Ozon дня; реклама за дни, которые Ozon ещё не провёл, — из кабинета.</div>
-        </div>
+        </FloatingInfo>
       )}
     </div>
   );
