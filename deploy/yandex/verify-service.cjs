@@ -19,7 +19,7 @@ function request(path, body, cookie) {
   });
 }
 (async () => {
-  let out = { transport: 'https', domain, interfaceVersion:2, summaryPerformanceVersion:5 }, cookie, probeId;
+  let out = { transport: 'https', domain, interfaceVersion:2, summaryPerformanceVersion:6 }, cookie, probeId;
   try {
     let ready = false;
     for (let i = 0; i < 45; i++) {
@@ -34,6 +34,8 @@ function request(path, body, cookie) {
       if (login.code === 200) {
         const me = await request('/api/auth/me', null, cookie);
         out.owner = me.json?.data?.login === 'evgeniy' && me.json?.data?.role === 'owner';
+        out.databaseSpeed=await require('./verify-db-speed.cjs')(env);
+        {let status={};try{status=JSON.parse(fs.readFileSync(file));}catch{}status.serviceVerification={...out,checking:true};fs.writeFileSync(file,JSON.stringify(status));}
         for (const [name, path] of [['sales', '/api/sales/data'], ['finance', '/api/finance/pnl']]) {
           const r = await request(path + '?cabinet=defly&dateFrom=2026-11-13&dateTo=2026-11-13', null, cookie);
           out[name] = { code: r.code, success: r.json?.success, articles: r.json?.data?.articles?.length, rows: r.json?.data?.rows?.length };
