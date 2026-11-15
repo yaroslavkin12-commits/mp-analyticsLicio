@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { SHOPS, shopOf, isDeflyLike } from '../lib/cabinets';
+import {canManageAccess} from '../lib/accessClient';
 import { navOf, navLabel, unavailablePage } from '../lib/navigation';
 import { useAccess } from '../lib/AccessContext';
 export { navLabel };
@@ -36,9 +37,9 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
 
   const shop = shopOf(cabinet);
   const cabinetLabel = shop?.label || cabinet;
-  const scope = useAccess()?.accessScope;
+  const user=useAccess(),scope=user?.accessScope;
   const shopAllowed = id => !scope || scope.cabinets.includes(id);
-  const menu = navOf(cabinet).filter(([id]) => id === '__h' || !scope || scope.pages.includes(id));
+  const menu = navOf(cabinet).filter(([id]) => (id === '__h' || !scope || scope.pages.includes(id))&&(id!=='access'||canManageAccess(user)));
   const nav = menu.filter(([id],i) => id !== '__h' || (menu[i+1] && menu[i+1][0] !== '__h'));
   const lucide = true;
   // Какие магазины уже подключены (есть своя Google-таблица на сервере).

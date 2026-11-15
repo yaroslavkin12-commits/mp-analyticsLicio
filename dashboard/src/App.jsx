@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { initArtLinks } from './lib/artLinks';
 import { initSearchClear } from './lib/searchClear';
 import { isDeflyLike, shopOf, SHARED_PAGES } from './lib/cabinets';
+import {canManageAccess} from './lib/accessClient';
 import { pagesOf } from './lib/navigation';
 import Sidebar, { navLabel } from './components/Sidebar';
 import { startStickyHeads } from './lib/stickyHeads';
@@ -100,7 +101,7 @@ export default function App() {
 function Workspace() {
   const access=useAccess(), scope=access?.accessScope;
   const startCabinet=!scope || scope.cabinets.includes('defly') ? 'defly' : (scope.cabinets[0] || 'defly');
-  const pagesFor=c=>(PAGES_BY_CABINET[c] || PAGES_BY_CABINET.defly).filter(id=>!scope || scope.pages.includes(id));
+  const pagesFor=c=>(PAGES_BY_CABINET[c] || PAGES_BY_CABINET.defly).filter(id=>(!scope || scope.pages.includes(id))&&(id!=='access'||canManageAccess(access)));
   const [page, setPage]     = useState(() => {
     return pagesFor(startCabinet)[0] || 'access';
   });

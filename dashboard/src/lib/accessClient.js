@@ -10,3 +10,5 @@ export const accessMode = () => state;
 export const accessStorageKey = key => state.storagePrefix + key;
 
 export const accessStorage = { getItem:key=>localStorage.getItem(accessStorageKey(key)), setItem:(key,value)=>localStorage.setItem(accessStorageKey(key),value), removeItem:key=>localStorage.removeItem(accessStorageKey(key)) };
+
+export const canManageAccess = user => user?.role === 'admin' || (user?.role === 'owner' && user?.login === 'evgeniy');

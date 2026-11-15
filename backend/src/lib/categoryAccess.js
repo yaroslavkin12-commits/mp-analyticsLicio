@@ -2,7 +2,7 @@ const { query } = require('../db');
 const { CABINETS, familyOf } = require('../config/cabinets');
 const { autoPath, OV_SQL, overrideArgs } = require('./categories');
 const SEP = ' / ';
-const PAGES = ['summary','plan','geo','search','costs','sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator','access'];
+const PAGES = ['summary','plan','geo','search','costs','sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator'];
 const ROOTS = ['Чехлы','Дефлекторы','Утеплители','Аксессуары','Одежда'];
 function normalize(value) {
   if (value == null) return null;
@@ -24,7 +24,7 @@ function cabinets(scope) {
 function publicScope(value) {
   if (value == null) return null;
   try { const scope = normalize(value); return { ...scope, cabinets: cabinets(scope), pages: PAGES }; }
-  catch { return { paths: [], readOnly: true, cabinets: [], pages: ['access'] }; }
+  catch { return { paths: [], readOnly: true, cabinets: [], pages: [] }; }
 }
 function category(cabinet, path) {
   const clean = String(path || '').split('/').map(s => s.trim()).filter(Boolean).join(SEP);
