@@ -67,4 +67,4 @@ async function testConnection() {
   catch (e) { console.error('❌ DB error:', e.message); return false; }
 }
 
-module.exports = { query, getPool, testConnection, initSchema, diagnostics:()=>({queries:queryCount,errors,pool:pool?{total:pool.totalCount,idle:pool.idleCount,waiting:pool.waitingCount}:null,recent:[...recent]}) };
+module.exports = { query, getPool, testConnection, initSchema, diagnostics:()=>({queries:queryCount,errors,pool:pool?{total:pool.totalCount,idle:pool.idleCount,waiting:pool.waitingCount}:null,recent:recent.filter(r=>!/^app_(sessions|users|access_|integration_)/.test(r.relation)).map(({at,...r})=>r)}) };

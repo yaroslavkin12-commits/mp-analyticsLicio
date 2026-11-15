@@ -112,11 +112,18 @@ async function readFinance(options={}) {
     const to=options.latest?meta.meta.to:options.dateTo,from=options.latest?new Date(Date.parse(to)-29*86400000).toISOString().slice(0,10):options.dateFrom;
     if(![from,to].every(d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d)))||from>to)throw Error('Некорректный период финансов WB');
     const key=JSON.stringify([meta.meta.runId,from,to]),hit=financeWindows.get(key);if(hit)return hit;
-    const promise=query(`SELECT kind,meta,updated_at,
-      COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality)
-        WHERE left(item.value->>'rrDate',10) BETWEEN $2 AND $3
-          OR NOT COALESCE(left(item.value->>'rrDate',10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',false)), '[]'::jsonb) AS rows
-      FROM wb_bridge_data d WHERE cabinet=$1 AND kind='finance' AND run_id=$4`,[CABINET,from,to,meta.meta.runId]).then(rows=>{if(rows[0])return rows[0];financeWindows.delete(key);return readFinance(options);});
+    const drop=['reportId','rrdId','dateFrom','dateTo','createDate','reportType','sku','orderDt','saleDt','retailPrice','commissionPercent','ppvzSalesCommission','ppvzReward','vw','vwNds','deliveryAmount','returnAmount','rebillLogisticCost','installmentCofinancingAmount','deliveryMethod'];
+    // Возвращаем строки потоком протокола PostgreSQL, без построения одного
+    // огромного JSON-массива на стороне базы и повторного разбора этого массива.
+    const promise=query(`SELECT item.value - $5::text[] AS payload
+      FROM wb_bridge_data d CROSS JOIN LATERAL jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality)
+      WHERE cabinet=$1 AND kind='finance' AND run_id=$4 AND
+        (left(item.value->>'rrDate',10) BETWEEN $2 AND $3
+          OR NOT COALESCE(left(item.value->>'rrDate',10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',false))
+      ORDER BY item.ordinality`,[CABINET,from,to,meta.meta.runId,drop]).then(async rows=>{
+        if(!rows.length){const current=(await readMeta()).find(r=>r.kind==='finance');if(!current)return null;if(current.meta.runId!==meta.meta.runId){financeWindows.delete(key);return readFinance(options);}}
+        return {...meta,rows:rows.map(r=>r.payload)};
+      });
     financeWindows.set(key,promise);while(financeWindows.size>12)financeWindows.delete(financeWindows.keys().next().value);
     promise.catch(()=>{if(financeWindows.get(key)===promise)financeWindows.delete(key);});return promise;
   }

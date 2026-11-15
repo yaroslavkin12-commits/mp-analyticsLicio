@@ -4,7 +4,7 @@ const ledger=[sale('old','2026-09-01'),sale('new','2026-11-10'),{id:'logistics',
 const db=require.resolve('../src/db');require.cache[db]={id:db,filename:db,loaded:true,exports:{query:async(sql,p=[])=>{
  if(sql.includes('kind=ANY')){opsReads++;return ops.filter(d=>p[1].includes(d.kind)).map(d=>d.kind==='ads'&&p[2]?{...d,rows:d.rows.filter(r=>r.date>=p[2]&&r.date<=p[3])}:d);}
  const meta={runId:run,from:'2026-09-01',to:'2026-11-15'};
- if(sql.includes('jsonb_array_elements(d.rows)')){financeReads++;assert.ok(sql.includes('WITH ORDINALITY'));assert.ok(sql.includes('OR NOT COALESCE'));assert.equal(p[3],run);return [{kind:'finance',meta,rows:ledger.filter(r=>r.rrDate>=p[1]&&r.rrDate<=p[2])}];}
+ if(sql.includes('jsonb_array_elements(d.rows)')){financeReads++;assert.ok(sql.includes('WITH ORDINALITY'));assert.ok(sql.includes('OR NOT COALESCE'));assert.ok(!sql.includes('jsonb_agg'));assert.equal(p[3],run);assert.ok(Array.isArray(p[4]));assert.ok(!p[4].includes('bonusTypeName'));return ledger.filter(r=>r.rrDate>=p[1]&&r.rrDate<=p[2]).map(r=>({payload:Object.fromEntries(Object.entries(r).filter(([k])=>!p[4].includes(k)))}));}
  if(sql.includes('SELECT kind, meta, updated_at'))return [{kind:'finance',meta}];
  return [];
 }}};
