@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');let run='
 const sale=(id,date)=>({id,rrDate:date,vendorCode:'A',nmId:1,title:'Дефлекторы окон 2D',currency:'RUB',docTypeName:'Продажа',sellerOperName:'Продажа',quantity:1,retailPriceWithDisc:1000,retailAmount:900,forPay:700,acquiringFee:20});
 const ledger=[sale('old','2026-09-01'),sale('new','2026-11-10'),{id:'logistics',rrDate:'2026-11-11',deliveryService:30}],ops=[{kind:'catalog',rows:[{id:'a',offer:'A',nmId:1,name:'Дефлекторы окон 2D'}],meta:{}},{kind:'orders',rows:[{id:'o',nmId:1,offer:'A',date:'2026-11-10',price:1000}],meta:{from:'2026-09-01',to:'2026-11-15'}},{kind:'ads',rows:[{date:'2026-10-10',spend:10},{date:'2026-11-10',spend:20}],meta:{from:'2026-09-01',to:'2026-11-15'}}];
 const db=require.resolve('../src/db');require.cache[db]={id:db,filename:db,loaded:true,exports:{query:async(sql,p=[])=>{
- if(sql.includes('kind=ANY')){opsReads++;return ops.filter(d=>p[1].includes(d.kind)).map(d=>d.kind==='ads'&&p[2]?{...d,rows:d.rows.filter(r=>r.date>=p[2]&&r.date<=p[3])}:d);}
+ if(sql.includes('kind=ANY')){opsReads++;return ops.filter(d=>p[1].includes(d.kind)).map(d=>p[4]==='aliases'&&['orders','sales'].includes(d.kind)?{...d,rows:d.rows.map(r=>({id:r.id,offer:r.offer,nmId:r.nmId,name:r.name}))}:d.kind==='ads'&&p[2]?{...d,rows:d.rows.filter(r=>r.date>=p[2]&&r.date<=p[3])}:d);}
  const meta={runId:run,from:'2026-09-01',to:'2026-11-15'};
  if(sql.includes('jsonb_array_elements(d.rows)')){financeReads++;assert.ok(sql.includes('WITH ORDINALITY'));assert.ok(sql.includes('OR NOT COALESCE'));assert.ok(!sql.includes('jsonb_agg'));assert.equal(p[3],run);assert.ok(sql.includes('jsonb_build_array'));return ledger.filter(r=>r.rrDate>=p[1]&&r.rrDate<=p[2]).map(r=>({payload:[...require('../src/lib/wbBridge').FINANCE_WIRE_FIELDS.map(k=>r[k]??null),Object.hasOwn(r,'bonusTypeName')]}));}
  if(sql.includes('SELECT kind, meta, updated_at'))return [{kind:'finance',meta}];
@@ -32,4 +32,14 @@ test('Компактная передача сохраняет различие 
  ledger.push({id:'empty',rrDate:'2026-11-13',deduction:10,bonusTypeName:null});run='four';
  const empty=await bridge.readFinance({dateFrom:'2026-11-13',dateTo:'2026-11-13'});assert.equal(Object.hasOwn(empty.rows[0],'bonusTypeName'),true);
  assert.equal(require('../src/lib/wbFinance').entries(empty.rows)[0].amount,-10);
+});
+
+test('Наборы WB переиспользуются между разными отчётами; для финансов передаются только связи артикулов',async()=>{
+ const before=opsReads;await bridge.read({kinds:['catalog','orders','sales','prices']});assert.equal(opsReads,before+1);
+ await bridge.read({kinds:['catalog','orders']});assert.equal(opsReads,before+1);
+ const [a,b]=await Promise.all([bridge.read({kinds:['catalog','orders','sales'],projection:'aliases'}),bridge.read({kinds:['orders','sales'],projection:'aliases'})]);
+ assert.equal(opsReads,before+2);assert.equal(a.find(d=>d.kind==='orders').rows[0].price,undefined);assert.equal(b[0].rows[0].offer,'A');
+ const p={dateFrom:'2026-11-10',dateTo:'2026-11-11'},finance={kind:'finance',meta:{from:'2026-09-01',to:'2026-11-15'},rows:ledger.filter(r=>r.rrDate<='2026-11-11')};
+ const original=V.build([...ops,finance],V.initial(),p).pnl(),brief=V.build([...a,finance],V.initial(),p).pnl();
+ for(const key of ['rows','noSku','taxBase','self','available'])assert.deepEqual(brief[key],original[key]);
 });

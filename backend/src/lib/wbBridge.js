@@ -73,9 +73,9 @@ async function ingest(input, { deferCommit = false } = {}) {
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
 let operationsCache, operationsLoading, operationsEpoch=0;
-const selectedCache=new Map();
-async function read({ excludeFinance = false, kinds = null, from = null, to = null } = {}) {
-  if(kinds)return readSelected(kinds,from,to);
+const selectedKinds=new Map();
+async function read({ excludeFinance = false, kinds = null, from = null, to = null, projection = null } = {}) {
+  if(kinds)return readSelected(kinds,from,to,projection);
   await ensure();
   if(!excludeFinance)return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1',[CABINET]);
   if(operationsCache && Date.now()-operationsCache.at<300000)return [...operationsCache.rows];
@@ -85,20 +85,28 @@ async function read({ excludeFinance = false, kinds = null, from = null, to = nu
   return [...rows];
 }
 // Сводка не должна скачивать всю рекламную статистику и складские строки WB.
-async function readSelected(kinds,from=null,to=null){
+async function readSelected(kinds,from=null,to=null,projection=null){
  await ensure();
  if(!Array.isArray(kinds)||!kinds.length||kinds.some(k=>!KINDS.includes(k)||k==='finance'))throw Error('Неизвестный набор WB');
  if((from||to)&&![from,to].every(d=>/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d||'')))throw Error('Некорректный период WB');
- const wanted=[...new Set(kinds)].sort(),key=JSON.stringify([wanted,from,to]),epoch=operationsEpoch,hit=selectedCache.get(key);
- if(operationsCache&&Date.now()-operationsCache.at<300000)return operationsCache.rows.filter(r=>wanted.includes(r.kind)).map(r=>r.kind==='ads'&&from?{...r,rows:r.rows.filter(v=>v.date>=from&&v.date<=to)}:r);
- if(hit&&hit.epoch===epoch&&Date.now()-hit.at<300000)return [...await hit.promise];
- const promise=query(`SELECT kind,meta,updated_at,CASE WHEN kind='ads' AND $3::text IS NOT NULL THEN
-  COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality)
-    WHERE item.value->>'date' BETWEEN $3 AND $4),'[]'::jsonb) ELSE rows END AS rows
-  FROM wb_bridge_data d WHERE cabinet=$1 AND kind=ANY($2::text[])`,[CABINET,wanted,from,to]);
- const entry={at:Date.now(),epoch,promise};selectedCache.set(key,entry);while(selectedCache.size>12)selectedCache.delete(selectedCache.keys().next().value);
- try{const rows=await promise;if(epoch!==operationsEpoch)return readSelected(wanted,from,to);return [...rows];}
- catch(e){if(selectedCache.get(key)===entry)selectedCache.delete(key);throw e;}
+ if(projection&&projection!=='aliases')throw Error('Неизвестный срез WB');
+ const wanted=[...new Set(kinds)].sort(),epoch=operationsEpoch;
+ const aliases=d=>d&&projection==='aliases'&&['orders','sales'].includes(d.kind)?{...d,rows:d.rows.map(r=>({id:r.id,offer:r.offer,nmId:r.nmId,name:r.name}))}:d;
+ if(operationsCache&&Date.now()-operationsCache.at<300000)return operationsCache.rows.filter(r=>wanted.includes(r.kind)).map(r=>aliases(r.kind==='ads'&&from?{...r,rows:r.rows.filter(v=>v.date>=from&&v.date<=to)}:r));
+ const key=k=>JSON.stringify([k,k==='ads'?from:null,k==='ads'?to:null,['orders','sales'].includes(k)?projection:null]);
+ const missing=wanted.filter(k=>{const h=selectedKinds.get(key(k));return !h||h.epoch!==epoch||Date.now()-h.at>=300000;});
+ if(missing.length){
+  const batch=query(`SELECT kind,meta,updated_at,CASE
+    WHEN $5::text='aliases' AND kind IN ('orders','sales') THEN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.value->'id','offer',a.value->'offer','nmId',a.value->'nmId','name',a.value->'name') ORDER BY a.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS a(value,ordinality)),'[]'::jsonb)
+    WHEN kind='ads' AND $3::text IS NOT NULL THEN COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality) WHERE item.value->>'date' BETWEEN $3 AND $4),'[]'::jsonb)
+    ELSE rows END AS rows FROM wb_bridge_data d WHERE cabinet=$1 AND kind=ANY($2::text[])`,[CABINET,missing,from,to,projection]);
+  for(const k of missing){const id=key(k),entry={at:Date.now(),epoch,promise:batch.then(rows=>rows.find(r=>r.kind===k)||null)};selectedKinds.set(id,entry);entry.promise.catch(()=>{if(selectedKinds.get(id)===entry)selectedKinds.delete(id);});}
+ }
+ const entries=wanted.map(k=>selectedKinds.get(key(k)));
+ while(selectedKinds.size>32)selectedKinds.delete(selectedKinds.keys().next().value);
+ const rows=(await Promise.all(entries.map(e=>e.promise))).filter(Boolean);
+ if(epoch!==operationsEpoch)return readSelected(wanted,from,to,projection);
+ return [...rows];
 }
 async function readMeta() { await ensure(); return query('SELECT kind, meta, updated_at FROM wb_bridge_data WHERE cabinet=$1', [CABINET]); }
 module.exports = { CABINET, KINDS, verify, validate, ingest, read, readMeta };
