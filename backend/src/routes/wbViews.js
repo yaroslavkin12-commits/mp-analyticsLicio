@@ -39,6 +39,7 @@ router.use(async (req, res) => {
       if (path === '/clusters/decide') { const m = V.build(await bridge.read({excludeFinance:true}), await V.preferences()); return res.json({ success: true, data: m.clusters() }); }
       return res.json({ success: true, data: result });
     }
+    if(path==='/sales/history')return res.json({success:true,data:await require('../lib/shopsHistory').load(req.query,req.categoryContext)});
     const prefs = await V.preferences();
     if (path === '/promo/groups') return res.json({ success: true, data: groups(prefs) });
     if (path === '/promo/order') return res.json({ success: true, data: prefs.order });

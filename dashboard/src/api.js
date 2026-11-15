@@ -256,3 +256,5 @@ export const getAccessActivity = params => api.get('/auth/activity/report', { pa
 export const getCategoryAccessOptions = () => api.get('/auth/categories', { timeout: 60000 });
 
 export const getUserPassword = id => api.get(`/auth/users/${id}/password`);
+
+export const getShopsHistory = (cabinet, params) => api.get('/sales/history', {params:{cabinet,...params},timeout:180000});

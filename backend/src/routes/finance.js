@@ -450,3 +450,5 @@ module.exports.meta = meta;
 
 module.exports.loadPnl = loadPnl;
 module.exports.loadCoefs = loadCoefs;
+
+module.exports.loadBuyerShare = bsLoad;

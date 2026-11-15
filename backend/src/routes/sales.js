@@ -310,6 +310,8 @@ async function loadSales(params = {}, onTiming) {
         order: ORDER[cabinet] || [],
     };
 }
+router.get('/history', async (req,res)=>{try{res.set('Cache-Control','no-store');res.json({success:true,data:await require('../lib/shopsHistory').load(req.query,req.categoryContext)});}catch(e){res.status(400).json({success:false,error:e.message});}});
+
 router.get('/data', async (req, res) => {
   try { res.json({ success: true, data: await loadSales(req.query, timing => res.set('Server-Timing', timing)) }); }
   catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }

@@ -18,6 +18,7 @@ module.exports=async env=>{
   const q=await dispatch('/api/queries/data','queries','/data');out.search={code:q.code,onlyAllowed:q.success&&q.data.articles.every(a=>ctx.allowed.has(a.o))};
   const plan=await dispatch('/api/plan/ozon','ozonPlan','/');out.plan={code:plan.code,onlyAllowed:plan.success&&plan.data.versions.every(v=>v.rows.every(r=>scope.paths.some(p=>access.inPath(r.path,p))))};
   const summary=await dispatch('/api/sales/summary','sales','/summary');out.summary={code:summary.code,onlyAllowed:summary.success&&summary.data.shops.every(s=>[s.cur,s.prev].every(t=>Object.keys(t.byPath).every(p=>scope.paths.some(allowed=>access.inPath(p,allowed)||access.inPath(allowed,p)))))};
+  const history=await dispatch('/api/sales/history','sales','/history','GET',{mode:'weeks'});out.history={code:history.code,success:history.success,periods:history.data?.periods?.length};
   out.costChangeBlocked=(await dispatch('/api/sales/costs','sales','/costs','POST')).code===403;
   out.categoryChangeBlocked=(await dispatch('/api/sales/category','sales','/category','POST')).code===403;
   out.productionHidden=!access.publicScope(scope).pages.includes('production');

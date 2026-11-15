@@ -41,6 +41,11 @@ export function rangeTotals(series,from,to){
  if(!series?.length)return null;
  const keys=['ordersRub','ordersQty','expectedQty','expectedPayout',...FIN];
  const totals=series.map(days=>days?Object.fromEntries(keys.map(k=>[k,sumKnown(days.filter(d=>d.date>=from&&d.date<=to),k)])):Object.fromEntries(keys.map(k=>[k,null])));
+ return combineTotals(totals);
+}
+export function combineTotals(totals){
+ if(!totals?.length)return null;
+ const keys=['ordersRub','ordersQty','expectedQty','expectedPayout',...FIN];
  const t=Object.fromEntries(keys.map(k=>[k,totals.every(s=>Number.isFinite(s[k]))?totals.reduce((n,s)=>n+s[k],0):null]));
  const ratio=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&b>0?Math.round((a/b)*1e8)/1e8:null;
  return {...t,avgOrder:ratio(t.ordersRub,t.ordersQty),avgBuyout:ratio(t.revenue,t.qty),payForecast:ratio(t.expectedPayout,t.expectedQty),payActual:ratio(t.payout,t.qty),margin:ratio(t.profit,t.revenue)===null?null:ratio(t.profit,t.revenue)*100};
@@ -50,3 +55,31 @@ export const WEEK_METRICS=[
  ['avgOrder','Ср. чек · прогноз по заказам','money'],['avgBuyout','Ср. чек · факт по выкупам','money'],['payForecast','Поступление на 1 выкуп · прогноз','money'],['payActual','Поступление на 1 выкуп · факт','money'],
  ['ozonX','Услуги площадки, ₽','expense'],['ads','Реклама, ₽','expense'],['payout','К перечислению, ₽','money'],['cost','Себестоимость, ₽','expense'],['profit','Прибыль, ₽','money'],['margin','Рентабельность, %','pct']
 ];
+
+export function calendarPeriod(date,mode='weeks'){
+ const d=new Date(date+'T00:00:00Z');
+ const start=mode==='months'?date.slice(0,7)+'-01':dateAdd(date,-((d.getUTCDay()+6)%7));
+ const end=mode==='months'?new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).toISOString().slice(0,10):dateAdd(start,6);
+ return {key:start,start,end};
+}
+export function historyPeriods(from,to,mode='weeks'){
+ if(!from||!to||from>to)return [];
+ const out=[];for(let p=calendarPeriod(from,mode);p.start<=to;p=calendarPeriod(dateAdd(p.end,1),mode))out.push(p);
+ return out;
+}
+export function previousPeriod(period,mode){return calendarPeriod(dateAdd(period.start,-1),mode);}
+export function comparisonWindow(period,mode,from,to,partial){
+ const prev=previousPeriod(period,mode);if(!partial)return {from:period.start,to:period.end,previousFrom:prev.start,previousTo:prev.end};
+ const offset=Math.max(0,Math.round((Date.parse(from)-Date.parse(period.start))/86400000));
+ const count=Math.round((Date.parse(to)-Date.parse(from))/86400000)+1;
+ const previousFrom=dateAdd(prev.start,offset);if(previousFrom>prev.end||count<1)return null;
+ const previousTo=[dateAdd(previousFrom,count-1),prev.end].sort()[0],days=Math.round((Date.parse(previousTo)-Date.parse(previousFrom))/86400000)+1;
+ return {from,to:dateAdd(from,days-1),previousFrom,previousTo};
+}
+export const historyMetricGroup=key=>['ordersRub','ordersQty','avgOrder','payForecast'].includes(key)?'orders':key==='ads'?'ads':'finance';
+export function historyChange(current,previous,type){
+ if(!Number.isFinite(current)||!Number.isFinite(previous))return null;
+ const delta=current-previous,percent=previous===0?(current===0?0:null):delta/Math.abs(previous)*100;
+ const better=type==='expense'?delta<0:delta>0;
+ return {percent,fromZero:previous===0&&current!==0,tone:delta===0||percent!==null&&Math.abs(percent)<=5?'flat':better?'up':'down'};
+}

@@ -269,7 +269,7 @@ export default function ShopsSummary({ active, cabinet }) {
           </div>
         </div>
       )}
-      {orders && <ShopsWeekly shops={shops} daily={daily} from={from} to={to} category={cat}/>}
+      <ShopsWeekly shops={MARKETS} category={cat} active={active} taxVersion={taxVersion}/>
     </div>
   );
 }

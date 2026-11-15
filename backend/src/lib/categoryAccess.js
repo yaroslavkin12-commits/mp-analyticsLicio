@@ -121,6 +121,7 @@ function ads(data, ctx) {
 }
 function projection(path, data, ctx) {
   if (INDEXED[path]) return indexed(path,data,ctx);
+  if(path==='/sales/history'){if(!data._categoryFiltered)throw Error('Нужна фильтрация истории');return pick(data,['cabinet','mode','available','coverage','periods','olderThan']);}
   if(path==='/sales/summary'&&!data._categoryFiltered)throw Error('Нужна фильтрация до агрегации');
   if(path==='/sales/geo'&&!data._categoryFiltered)throw Error('Нужна фильтрация дневных сумм');
   if(path==='/sales/summary')return { ...pick(data,['from','to','pFrom','pTo']),shops:data.shops.filter(s=>ctx.contexts[s.id])};
@@ -156,7 +157,7 @@ function routeOf(path) {
   const normalized = path.toLowerCase().replace(/\/+$/, '').replace(/^\/api\/wb\/views/, '/api').replace(/^\/api\/ads(?=\/)/, '/api/promo');
   return normalized.replace(/^\/api/, '');
 }
-const EXTRA = ['/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
+const EXTRA = ['/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
 function middleware() {
   return async (req,res,next) => {
     if (req.user?.accessScope == null || !/^\/api(?:\/|$)/i.test(req.path)) return next();
