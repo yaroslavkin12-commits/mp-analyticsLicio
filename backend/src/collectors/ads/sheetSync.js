@@ -583,9 +583,9 @@ async function syncGeoFromSheet(cabinet) {
 }
 
 // ── Выкуп, цены/комиссии и финансы (для «% выкупа», юнит-экономики и P&L) ──
-let finTablesReady = false;
-async function ensureFinTables() {
-  if (finTablesReady) return;
+let finTablesReady = null;
+function ensureFinTables() {
+  if (!finTablesReady) finTablesReady = (async () => {
   await query(`CREATE TABLE IF NOT EXISTS buyout_daily (cabinet VARCHAR(32) NOT NULL, date DATE NOT NULL, offer_id VARCHAR(128) NOT NULL, sku BIGINT,
     ordered INT DEFAULT 0, delivered INT DEFAULT 0, cancelled INT DEFAULT 0, in_progress INT DEFAULT 0, PRIMARY KEY (cabinet, date, offer_id))`);
   await query(`CREATE TABLE IF NOT EXISTS product_prices (cabinet VARCHAR(32) NOT NULL, offer_id VARCHAR(128) NOT NULL, product_id BIGINT,
@@ -604,7 +604,8 @@ async function ensureFinTables() {
     PRIMARY KEY (cabinet, date, sku, query))`);
   await query(`CREATE TABLE IF NOT EXISTS analytics_monthly (cabinet VARCHAR(32) NOT NULL, month CHAR(7) NOT NULL, sku BIGINT NOT NULL,
     revenue DECIMAL(16,2) DEFAULT 0, orders INT DEFAULT 0, PRIMARY KEY (cabinet, month, sku))`);
-  finTablesReady = true;
+  })().catch(e => { finTablesReady = null; throw e; });
+  return finTablesReady;
 }
 // Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
 // Чтобы не переписывать каждый час десятки тысяч одинаковых строк: если

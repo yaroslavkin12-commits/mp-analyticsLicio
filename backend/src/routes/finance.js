@@ -49,10 +49,8 @@ const num = v => Number(v) || 0;
 const r2 = v => Math.round(v * 100) / 100;
 
 async function meta(cabinet) {
-  const [catalog, overrides] = await Promise.all([
-    query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-    query(OV_SQL, overrideArgs(cabinet)).catch(() => []),
-  ]);
+  const snapshot=await require('../lib/catalogSnapshot').read(cabinet);
+  const {catalog,overrides}=snapshot;
   const ov = new Map(overrides.map(r => [r.offer_id, r.path]));
   const articles = [], idx = new Map();
   const art = (o, name) => {
@@ -63,7 +61,7 @@ async function meta(cabinet) {
     return articles.length - 1;
   };
   for (const r of catalog) art(r.offer_id, r.product_name);
-  const offerBySku = await require('../lib/skuAlias').extend(new Map(catalog.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
+  const offerBySku = new Map(snapshot.offerBySku);
   return { articles, art, offerBySku };
 }
 

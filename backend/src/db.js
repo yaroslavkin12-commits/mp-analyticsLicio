@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 let pool;
+const recent=[];let queryCount=0,errors=0;
 
 function getPool() {
   if (!pool) {
@@ -31,8 +32,18 @@ function toPostgres(sql) {
 }
 
 async function query(sql, params = []) {
-  const { rows } = await getPool().query(toPostgres(sql), params);
-  return rows;
+  const p=getPool(),start=performance.now(),waiting=p.waitingCount||0;queryCount++;
+  let rows,error;
+  try{({rows}=await p.query(toPostgres(sql),params));return rows;}
+  catch(e){error=e.code||'error';errors++;throw e;}
+  finally{
+    const ms=Math.round(performance.now()-start);
+    if(ms>=250||error){
+      const operation=String(sql).trim().match(/^\w+/)?.[0]?.toUpperCase()||'OTHER';
+      const relation=String(sql).match(/\b(?:FROM|UPDATE|INTO|TABLE)\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z_0-9]*)/i)?.[1]||'other';
+      recent.push({at:new Date().toISOString(),operation,relation,ms,rows:rows?.length??0,waiting,...(error?{error}:{} )});if(recent.length>32)recent.shift();
+    }
+  }
 }
 
 async function initSchema() {
@@ -56,4 +67,4 @@ async function testConnection() {
   catch (e) { console.error('❌ DB error:', e.message); return false; }
 }
 
-module.exports = { query, getPool, testConnection, initSchema };
+module.exports = { query, getPool, testConnection, initSchema, diagnostics:()=>({queries:queryCount,errors,pool:pool?{total:pool.totalCount,idle:pool.idleCount,waiting:pool.waitingCount}:null,recent:[...recent]}) };

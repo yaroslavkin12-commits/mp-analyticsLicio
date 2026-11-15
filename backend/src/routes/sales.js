@@ -144,9 +144,9 @@ async function loadSales(params = {}, onTiming, options = {}) {
     const P = [cabinet];
     const t0 = Date.now();
 
-    const [catalogRows, overrideRows, anRows, stockRows, stockBaseRows, stockNowRows, campaigns, campaignSkuRows, adRows, skuStatRows, cpoRows, prevAnRows] = await Promise.all([
-      query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, P),
-      query(OV_SQL, overrideArgs(cabinet)),
+    const snapshot=await require('../lib/catalogSnapshot').read(cabinet);
+    const {catalog:catalogRows,overrides:overrideRows}=snapshot;
+    const [anRows, stockRows, stockBaseRows, stockNowRows, campaigns, campaignSkuRows, adRows, skuStatRows, cpoRows, prevAnRows] = await Promise.all([
       query(`SELECT date::text AS date, sku, offer_id, orders_item, revenue ${ordersOnly?'':', hits_view, hits_view_pdp, hits_tocart, position_category'}
                FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3 ${ordersOnly?'AND (orders_item <> 0 OR revenue <> 0)':''}`, [cabinet, from, to]),
       ordersOnly ? Promise.resolve([]) : query(`SELECT snapshot_date::text AS date, offer_id, SUM(fbo_present + fbs_present) AS v
@@ -190,7 +190,7 @@ async function loadSales(params = {}, onTiming, options = {}) {
       for (const r of prevAnRows) { const s = sp.get(String(r.sku)); if (!s) continue; const dq = Math.min(Number(r.o) || 0, s.q), dr = Math.min(Number(r.r) || 0, s.r); r.o = (Number(r.o) || 0) - dq; r.r = (Number(r.r) || 0) - dr; s.q -= dq; s.r -= dr; }
     }
 
-    const offerBySku = await require('../lib/skuAlias').extend(new Map(catalogRows.filter(r => r.sku != null).map(r => [String(r.sku), r.offer_id])), cabinet);
+    const offerBySku = new Map(snapshot.offerBySku);
     const override = new Map(overrideRows.map(r => [r.offer_id, r.path]));
 
     // Артикулы: весь каталог + то, что встретилось в аналитике/остатках без каталога.

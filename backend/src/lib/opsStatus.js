@@ -14,5 +14,5 @@ module.exports = () => {
   let deploy = null;
   try { deploy = JSON.parse(fs.readFileSync('/var/lib/mp/status.json', 'utf8')); } catch (e) { /* не сервер Яндекса */ }
   return { ok: true, commit: head(), started, uptimeMin: Math.round(process.uptime() / 60), node: process.version,
-    memMb: Math.round(process.memoryUsage().rss / 1048576), auth: process.env.AUTH_ENABLED === '1', deploy };
+    memMb: Math.round(process.memoryUsage().rss / 1048576), database:require('../db').diagnostics(), auth: process.env.AUTH_ENABLED === '1', deploy };
 };
