@@ -8,7 +8,8 @@ async function build(params,ctx){
  const mode=params.mode==='months'?'months':'weeks';
  const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow'}).format(new Date());
  if(params.end&&(!/^\d{4}-\d{2}-\d{2}$/.test(params.end)|| !Number.isFinite(Date.parse(params.end))||new Date(params.end).toISOString().slice(0,10)!==params.end||params.end>today))throw Error('Некорректная дата истории');
- const [{historyWindow,historyColumn},{makeShareAt}]=await models;
+ const [{historyWindow,historyColumns},{makeShareAt}]=await models;
+ const started=performance.now();
  const window=historyWindow(params.end,mode,today),p={cabinet,dateFrom:window.from,dateTo:window.to};
  let sales,pnl,coefs,bs=null,coverage;
  if(cabinet==='defly_wb'){
@@ -19,7 +20,8 @@ async function build(params,ctx){
   coverage={orders:sales.coverage?.orders,finance:range(pnl.available),ads:sales.coverage?.ads};
  }else{
   const f=require('../routes/finance');
-  sales=await require('../routes/sales').loadSales(p);pnl=await f.loadPnl(p);coefs=await f.loadCoefs({cabinet});bs=await f.loadBuyerShare(cabinet);
+  [sales,pnl]=await Promise.all([require('../routes/sales').loadSales(p),f.loadPnl(p)]);
+  [coefs,bs]=await Promise.all([f.loadCoefs({cabinet}),f.loadBuyerShare(cabinet)]);
   const [orders,ads]=await Promise.all([
    query("SELECT MIN(date)::text mn,MAX(date)::text mx FROM product_analytics_daily WHERE cabinet=$1 AND platform='ozon'",[cabinet]),
    query("SELECT MIN(date)::text mn,MAX(date)::text mx FROM ad_stats_daily WHERE cabinet=$1 AND platform='ozon'",[cabinet])]);
@@ -32,13 +34,16 @@ async function build(params,ctx){
  const available={from:starts[0]||null,to:ends.at(-1)||null};
  const tax=(await require('./taxSettings').getTaxSettings(cabinet)).effectiveRate;
  const source={sales,pnl,coefs,tax,category:String(params.category||''),shareAt:makeShareAt(bs,pnl.articles.map(a=>({...a,parts:String(a.cat||'').split(' / ')})))};
- return {cabinet,mode,available,coverage,periods:window.periods.filter(p=>!available.from||p.end>=available.from).map(period=>historyColumn(source,period,mode,today,coverage)),olderThan:available.from&&window.olderThan>=available.from?window.olderThan:null,_categoryFiltered:!!ctx};
+ const loadedAt=performance.now(),diagnostics={};
+ const periods=historyColumns(source,window.periods.filter(p=>!available.from||p.end>=available.from),mode,today,coverage,diagnostics);
+ return {cabinet,mode,available,coverage,periods,olderThan:available.from&&window.olderThan>=available.from?window.olderThan:null,_categoryFiltered:!!ctx,
+  _timing:{loadMs:Math.round(loadedAt-started),calculateMs:Math.round(performance.now()-loadedAt),ranges:diagnostics.ranges}};
 }
 function load(params,ctx){
  const key=JSON.stringify([require('./dataVersion').get(),params.cabinet,params.mode,params.end,params.category,ctx?[...ctx.allowed.keys()].sort():null]);
- const hit=cache.get(key);if(hit&&Date.now()-hit.at<120000)return hit.promise;
+ const hit=cache.get(key);if(hit&&(!hit.finished||Date.now()-hit.at<300000))return hit.promise;
  const promise=queue.catch(()=>{}).then(()=>build(params,ctx));queue=promise.catch(()=>{});
- cache.set(key,{at:Date.now(),promise});while(cache.size>24)cache.delete(cache.keys().next().value);
+ const entry={at:Date.now(),promise,finished:false};cache.set(key,entry);promise.then(()=>{entry.finished=true;entry.at=Date.now();},()=>{});while(cache.size>24)cache.delete(cache.keys().next().value);
  promise.catch(()=>cache.delete(key));return promise;
 }
 module.exports={load};

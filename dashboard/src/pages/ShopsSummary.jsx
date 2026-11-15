@@ -59,6 +59,7 @@ export default function ShopsSummary({ active, cabinet }) {
   const [showTax,setShowTax]=useState(()=>localStorage.getItem('mp-ss-tax-visible')==='1');
   useEffect(()=>{localStorage.setItem('mp-ss-tax-visible',showTax?'1':'0');},[showTax]);
   const [orders, setOrders] = useState(null);
+  const [upperBusy,setUpperBusy]=useState(true);
   const [fin, setFin] = useState({}); // cab → { cur, prev } (итоги и по категориям)
   const [open, setOpen] = useState(new Set());
   const [err, setErr] = useState('');
@@ -75,7 +76,7 @@ export default function ShopsSummary({ active, cabinet }) {
     let off = false;
     const key=[cabinet,from,to].join(':');
     if(loadedKey.current!==key){setOrders(null);setFin({});loadedKey.current=key;}
-    setErr('');
+    setErr('');setUpperBusy(true);
     const len = dayjs(to).diff(dayjs(from), 'day') + 1;
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD');
     getSalesSummary(from, to, cabinet === 'licio' ? 'licio' : undefined).then(r => { if (!off) setOrders(r.data.data); }).catch(e => { if (!off) setErr(e.response?.data?.error || e.message); });
@@ -111,6 +112,8 @@ export default function ShopsSummary({ active, cabinet }) {
           });
 
       }
+      await forecasts;
+      if(!off)setUpperBusy(false);
     })();
     return () => { off = true; };
   }, [from, to, armed, cabinet, taxVersion]);
@@ -129,7 +132,6 @@ export default function ShopsSummary({ active, cabinet }) {
     for(const s of orders?.shops||[]) if(open.has(s.id)) for(const k of Object.keys(s.cur.byPath||{})) paths.add(k);
     return Object.fromEntries([...paths].map(path=>[path,Object.fromEntries(Object.entries(fin).map(([id,f])=>[id,shopDaily({sales:f.rawSales,coefs:f.coefs,pnl:f.raw,tax:f.tax,shareAt:f.shareAt,category:path})]))]));
   },[fin,cat,open,orders]);
-  const daily=dailyByCategory[cat]||{};
   const forecast=(selected,path=cat)=>rangeTotals(selected.map(s=>dailyByCategory[path]?.[s.id]||null),from,to)?.payForecast;
   // Срез магазина под выбранную категорию: заказы, начисления, подгруппы для раскрытия.
   const viewOf = s => {
@@ -269,7 +271,7 @@ export default function ShopsSummary({ active, cabinet }) {
           </div>
         </div>
       )}
-      <ShopsWeekly shops={MARKETS} category={cat} active={active} taxVersion={taxVersion}/>
+      <ShopsWeekly shops={MARKETS} category={cat} active={active} ready={!!orders&&!upperBusy} taxVersion={taxVersion}/>
     </div>
   );
 }

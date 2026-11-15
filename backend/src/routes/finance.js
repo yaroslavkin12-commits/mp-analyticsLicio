@@ -70,7 +70,7 @@ async function meta(cabinet) {
 // GET /api/finance/coefs?cabinet= — средние за последние 30 дней по каждому
 // артикулу: суммы из финансов, выкуп, комиссия/эквайринг из карточки,
 // себестоимость. Коэффициенты (с подстраховкой по категории) считает страница.
-async function loadCoefs(params = {}) {
+async function loadCoefsUncached(params = {}) {
     await ensureFinTables();
     const cabinet = params.cabinet || 'defly';
     const since = dayjs().subtract(30, 'day').format('YYYY-MM-DD');
@@ -138,6 +138,17 @@ async function loadCoefs(params = {}) {
       articles: m.articles, coefs, noSku: Object.fromEntries(Object.entries(noSku).map(([k, v]) => [k, r2(v)])), totalSale: r2(totalSale),
       names: names.map(r => [r.name, bucketOf(r.name), r2(num(r.a))]), since, order: ORDER[cabinet] || [], fbsDays,
     };
+}
+// Вкладки и независимая история используют одни текущие коэффициенты.
+// В кэше исходные данные; ограничения категорий применяются после чтения.
+const coefficientCache=new Map();
+function loadCoefs(params={}){
+ const cabinet=params.cabinet||'defly',version=require('../lib/dataVersion').get(),hit=coefficientCache.get(cabinet);
+ if(hit&&hit.version===version&&Date.now()-hit.at<300000)return hit.promise;
+ const entry={version,at:Date.now(),promise:loadCoefsUncached(params)};
+ coefficientCache.set(cabinet,entry);while(coefficientCache.size>8)coefficientCache.delete(coefficientCache.keys().next().value);
+ entry.promise.catch(()=>{if(coefficientCache.get(cabinet)===entry)coefficientCache.delete(cabinet);});
+ return entry.promise;
 }
 router.get('/coefs', async (req, res) => {
   try { res.json({ success: true, data: await loadCoefs(req.query) }); }

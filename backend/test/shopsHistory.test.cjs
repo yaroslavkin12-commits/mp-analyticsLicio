@@ -49,3 +49,13 @@ test('Сервер фильтрует артикулы перед итогами
   assert.equal(restricted._categoryFiltered,true);assert.equal(restricted.available.from,'2026-11-01');
  }finally{paths.forEach((p,i)=>{if(old[i])require.cache[p]=old[i];else delete require.cache[p];});}
 });
+test('История считает общие диапазоны один раз и сохраняет все значения прежнего расчёта',async()=>{
+ const {historyWindow,historyColumn,historyColumns}=await at('lib/shopsHistory.js');
+ const dates=Array.from({length:63},(_,i)=>new Date(Date.parse('2026-09-14')+i*86400000).toISOString().slice(0,10));
+ const s=fixture();s.sales.dates=dates;s.pnl.dates=dates;s.pnl.noSku=[[4,0,10]];s.sales.rows=dates.map((_,i)=>[0,i,20,5,1,2,200,5,0]);s.pnl.rows=dates.map((_,i)=>[0,i,0,100,1]);s.pnl.adNoSku=dates.map(()=>0);s.coefs={articles:s.sales.articles,coefs:[],noSku:{},totalSale:0};
+ for(const category of ['', 'Дефлекторы'])for(const financeEnd of ['2026-11-15','2026-11-12']){
+  const source={...s,category},coverage={orders:{from:dates[0],to:dates.at(-1)},finance:{from:dates[0],to:financeEnd},ads:{from:dates[0],to:financeEnd}},periods=historyWindow('2026-11-15','weeks','2026-11-15').periods,stats={};
+  const before=periods.map(p=>historyColumn(source,p,'weeks','2026-11-15',coverage)),after=historyColumns(source,periods,'weeks','2026-11-15',coverage,stats);
+  assert.deepEqual(after,before);assert.ok(stats.ranges<=11,`Повторные вычисления: ${stats.ranges}`);
+ }
+});

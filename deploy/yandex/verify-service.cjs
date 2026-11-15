@@ -4,6 +4,7 @@ const env = require('/opt/mp/app/backend/node_modules/dotenv').parse(fs.readFile
 const file = '/var/lib/mp/status.json';
 function request(path, body, cookie) {
   return new Promise((resolve, reject) => {
+    const started=Date.now();
     const data = body ? JSON.stringify(body) : null;
     const req = https.request({ hostname: '127.0.0.1', port: 443, servername: domain,
       checkServerIdentity: (_, cert) => tls.checkServerIdentity(domain, cert), path,
@@ -12,7 +13,7 @@ function request(path, body, cookie) {
         ...(cookie ? { Cookie: cookie } : {}) } }, res => {
       let raw = ''; res.on('data', b => raw += b);
       res.on('end', () => { let json; try { json = JSON.parse(raw); } catch {}
-        resolve({ code: res.statusCode, json, cookie: res.headers['set-cookie']?.map(v => v.split(';')[0]).join('; ') }); });
+        resolve({ code: res.statusCode, json, durationMs:Date.now()-started, bytes:Buffer.byteLength(raw), cookie: res.headers['set-cookie']?.map(v => v.split(';')[0]).join('; ') }); });
     });
     req.setTimeout(150000, () => req.destroy(Error('timeout'))); req.on('error', reject); req.end(data);
   });
@@ -45,6 +46,14 @@ function request(path, body, cookie) {
         out.discountHistory={code:history.code,days:history.json?.data?.dates?.length,septemberPoints:history.json?.data?.rows?.length,available:history.json?.data?.available};
         const periods=await request('/api/sales/history?cabinet=defly&mode=months',null,cookie);
         out.shopsHistory={code:periods.code,success:periods.json?.success,available:periods.json?.data?.available,periods:periods.json?.data?.periods?.length};
+        const end=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow'}).format(new Date()),start=new Date(Date.parse(end)-29*86400000).toISOString().slice(0,10);
+        const summary=await request('/api/sales/summary?includeWb=1&dateFrom='+start+'&dateTo='+end,null,cookie);
+        const [summaryFinance,coefficients]=await Promise.all([
+          request('/api/finance/pnl?cabinet=defly&dateFrom='+start+'&dateTo='+end,null,cookie),
+          request('/api/finance/coefs?cabinet=defly',null,cookie)
+        ]);
+        const weeks=await request('/api/sales/history?cabinet=defly&mode=weeks',null,cookie),repeat=await request('/api/sales/history?cabinet=defly&mode=weeks',null,cookie);
+        out.summaryPerformance={summary:{code:summary.code,ms:summary.durationMs,shops:summary.json?.data?.shops?.length},finance:{code:summaryFinance.code,ms:summaryFinance.durationMs},coefficients:{code:coefficients.code,ms:coefficients.durationMs},history:{code:weeks.code,ms:weeks.durationMs,bytes:weeks.bytes,timing:weeks.json?.data?._timing},repeatHistory:{code:repeat.code,ms:repeat.durationMs}};
         out.scopedReports=await require('./verify-scoped.cjs')(env);
         probeId = require('crypto').randomUUID();
         const opened = await request('/api/auth/activity', {visitId:probeId,idleSeconds:0,visible:true,close:false,page:'service-check',cabinet:'defly'},cookie);

@@ -9,11 +9,16 @@ export function calendarWeeks(from,to){
 }
 const includes=(a,cat)=>!cat||a.cat===cat||String(a.cat||'').startsWith(cat+SEP);
 const FIN=['revenue','qty','ozonX','ads','payout','cost','tax','profit'];
-export function shopDaily({sales,coefs,pnl,tax=6,shareAt=null,category=''}){
+// Коэффициенты и доли FBS не зависят от недельного среза. История готовит
+// их один раз, обычные страницы сохраняют прежний вызов shopDaily.
+export function prepareShopModel(coefs,shareAt=null){
+ const ca=(coefs?.articles||[]).map(a=>({...a,parts:String(a.cat||'Без категории').split(SEP)}));
+ const ks=coefs&&!coefs._metadataOnly?unitCoefs(coefs,ca,shareAt?(o,p)=>shareAt(o,p):null):null;
+ return {ks,kByOffer:new Map(ca.map((a,i)=>[a.o,ks?.[i]])),fbs:new Map((coefs?.fbsDays||[]).filter(r=>r[2]>0).map(([ai,d,q,f])=>[coefs.articles[ai].o+'|'+d,f/q]))};
+}
+export function shopDaily({sales,coefs,pnl,tax=6,shareAt=null,category='',prepared=null}){
  if(!sales&&!pnl)return null;
- const parts=a=>({...a,parts:String(a.cat||'Без категории').split(SEP)});
- const ca=(coefs?.articles||[]).map(parts),ks=coefs&&!coefs._metadataOnly?unitCoefs(coefs,ca,shareAt?(o,p)=>shareAt(o,p):null):null;
- const kByOffer=new Map(ca.map((a,i)=>[a.o,ks?.[i]])),fbs=new Map((coefs?.fbsDays||[]).filter(r=>r[2]>0).map(([ai,d,q,f])=>[coefs.articles[ai].o+'|'+d,f/q]));
+ const {ks,kByOffer,fbs}=prepared||prepareShopModel(coefs,shareAt);
  const daily=(sales?.dates||pnl.dates).map(date=>{
   const known=!!sales&&(!sales._wb||!!sales.coverage?.orders&&date>=sales.coverage.orders.from&&date<=sales.coverage.orders.to);
   return {date,ordersRub:known?0:null,ordersQty:known?0:null,expectedQty:ks&&known?0:null,expectedPayout:ks&&known?0:null,...Object.fromEntries(FIN.map(k=>[k,null]))};
