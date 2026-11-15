@@ -12,3 +12,7 @@ test('WB: неполный период и неизвестная цена в с
  const unknown=wbShopSummary(input,{}, {from:'2026-09-30',to:'2026-10-10'});
  assert.equal(unknown.cur.q,3);assert.equal(unknown.cur.r,null);assert.equal(unknown.cur.complete,false);assert.equal(unknown.cur.coveredFrom,'2026-10-01');
 });
+
+test('Сводка WB считает итог разрешённых артикулов до суммирования',()=>{
+ const result=wbShopSummary(ds(),{}, {from:'2026-10-10',to:'2026-10-10',allowed:new Map()});assert.equal(result.cur.q,0);assert.equal(result.cur.r,0);assert.deepEqual(result.cur.byPath,{});
+});

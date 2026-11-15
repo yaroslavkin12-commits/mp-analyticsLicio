@@ -325,7 +325,7 @@ router.get('/summary', async (req, res) => {
     const { from, to } = period(req.query);
     const len = dayjs(to).diff(from, 'day') + 1;
     const pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD'), pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
-    const shops = listCabinets().filter(c => req.query.cabinet === 'licio' ? c.id === 'licio' : c.platform === 'ozon' && c.connected);
+    const shops = listCabinets().filter(c=>!req.categoryContexts||req.categoryContexts[c.id]).filter(c => req.query.cabinet === 'licio' ? c.id === 'licio' : c.platform === 'ozon' && c.connected);
     const out = [];
     for (const c of shops) {
       const cab = c.id;
@@ -342,28 +342,29 @@ router.get('/summary', async (req, res) => {
       const topOf = r => {
         const o = r.offer_id || bySku.get(String(r.sku))?.offer_id;
         const n = (o && byOffer.get(o)?.product_name) || '';
-        const path = (o && ovm.get(o)) || autoPath(cab, n, o || '').join(' / ') || 'Без категории';
+        const path = req.categoryContexts?.[cab]?.allowed.get(o)?.path || (o && ovm.get(o)) || autoPath(cab, n, o || '').join(' / ') || 'Без категории';
         return path.split(' / ');
       };
       const agg = () => ({ q: 0, r: 0, byCat: {}, byPath: {} });
       const cur = agg(), prev = agg();
       for (const r of rows) {
+        if(req.categoryContexts&&!req.categoryContexts[cab].allowed.has(r.offer_id||bySku.get(String(r.sku))?.offer_id))continue;
         const t = r.date >= from ? cur : prev, parts = topOf(r), k = parts[0], q = num(r.orders_item), v = num(r.revenue);
         t.q += q; t.r += v; const b = t.byCat[k] || (t.byCat[k] = [0, 0]); b[0] += q; b[1] += v;
         for (let d = 1; d <= Math.min(3, parts.length); d++) { const kk = parts.slice(0, d).join(' / '); const b2 = t.byPath[kk] || (t.byPath[kk] = [0, 0]); b2[0] += q; b2[1] += v; }
       }
       out.push({ id: cab, label: c.label, platform: 'ozon', cur, prev });
     }
-    if (req.query.includeWb === '1' && req.query.cabinet !== 'licio' && listCabinets().some(c => c.id === 'defly_wb' && c.connected)) {
+    if ((!req.categoryContexts||req.categoryContexts.defly_wb) && req.query.includeWb === '1' && req.query.cabinet !== 'licio' && listCabinets().some(c => c.id === 'defly_wb' && c.connected)) {
       try {
         const datasets = await require('../lib/wbBridge').read({excludeFinance:true});
         const prefs = await require('../lib/wbViews').preferences();
-        out.push(require('../lib/shopsSummary').wbShopSummary(datasets, prefs, {from,to}));
+        out.push(require('../lib/shopsSummary').wbShopSummary(datasets, prefs, {from,to,allowed:req.categoryContexts?.defly_wb?.allowed}));
       } catch (e) {
         out.push({id:'defly_wb',label:'Defly WB',platform:'wb',error:'Не удалось получить заказы WB',cur:{q:null,r:null,byCat:{},byPath:{}},prev:{q:null,r:null,byCat:{},byPath:{}}});
       }
     }
-    res.json({ success: true, data: { from, to, pFrom, pTo, shops: out } });
+    res.json({ success: true, data: { from, to, pFrom, pTo, shops: out, _categoryFiltered:!!req.categoryContexts } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -383,13 +384,14 @@ router.get('/geo', async (req, res) => {
     for (let d = dayjs(from); !d.isAfter(to, 'day'); d = d.add(1, 'day')) dates.push(d.format('YYYY-MM-DD'));
     const pFrom = dayjs(from).subtract(dates.length, 'day').format('YYYY-MM-DD');
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD');
+    const geoOffers=req.categoryContext?[...req.categoryContext.allowed.keys()]:null;
     const [catalogRows, overrideRows, curRows, dayRows, prevRows, range] = await Promise.all([
       query(`SELECT offer_id, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
       query(OV_SQL, overrideArgs(cabinet)),
       query(`SELECT offer_id, region, city, SUM(qty)::int q, SUM(revenue) r, SUM(cancelled)::int c FROM sales_geo_daily
               WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region, city`, [cabinet, from, to]),
       query(`SELECT date::text AS date, region, city, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
-              WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, region, city`, [cabinet, from, to]),
+              WHERE cabinet = $1 AND date BETWEEN $2 AND $3 ${geoOffers?'AND offer_id = ANY($4::text[])':''} GROUP BY date, region, city`, geoOffers?[cabinet, from, to,geoOffers]:[cabinet,from,to]),
       req.query.compare === '1'
         ? query(`SELECT offer_id, region, city, SUM(qty)::int q, SUM(revenue) r FROM sales_geo_daily
                   WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY offer_id, region, city`, [cabinet, pFrom, pTo])
@@ -430,7 +432,7 @@ router.get('/geo', async (req, res) => {
     const days = dayRows.filter(r => di.has(r.date)).map(r => [reg(r.region, r.city), di.get(r.date), num(r.q), r2x(r.r)]);
     const prev = prevRows.map(r => [art(r.offer_id), reg(r.region, r.city), num(r.q), r2x(r.r)]);
     res.json({ success: true, data: {
-      dates, articles, regions, cities, rows, days, prev: req.query.compare === '1' ? prev : null,
+      dates, articles, regions, cities, rows, days, _categoryFiltered:!!req.categoryContext, prev: req.query.compare === '1' ? prev : null,
       districts: DISTRICT_ORDER, order: ORDER[cabinet] || [], available: range[0] || null,
     } });
   } catch (e) {

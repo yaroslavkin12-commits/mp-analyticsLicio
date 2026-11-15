@@ -1,3 +1,5 @@
+import {useReadOnly} from '../lib/AccessContext';
+import {accessStorage} from '../lib/accessClient';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
 import { getQueries, getQuerySeries, getQueryArticle, saveQueryGroup, saveQueryFreq, getSerpTracking, saveSerpTracking, getAdsEvents, getAdsStats, latestOnly } from '../api';
@@ -31,10 +33,11 @@ const posHeat = v => {
   return `hsla(${hue}, 62%, 42%, 0.32)`;
 };
 const STORE = 'sp:offer';
-const readStore = () => { try { return localStorage.getItem(STORE) || ''; } catch (e) { return ''; } };
-const writeStore = v => { try { if (v) localStorage.setItem(STORE, v); else localStorage.removeItem(STORE); } catch (e) { /* без памяти */ } };
+const readStore = () => { try { return accessStorage.getItem(STORE) || ''; } catch (e) { return ''; } };
+const writeStore = v => { try { if (v) accessStorage.setItem(STORE, v); else accessStorage.removeItem(STORE); } catch (e) { /* без памяти */ } };
 
 export default function SearchPositions({ cabinet }) {
+  const readOnly=useReadOnly();
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(14, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().subtract(1, 'day').format('YYYY-MM-DD'));
   const [data, setData] = useState(null);
@@ -57,6 +60,7 @@ export default function SearchPositions({ cabinet }) {
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
   const cats = useCats(data?.articles, data?.order);
+  useEffect(()=>{if(readOnly&&data&&offer&&!data.articles.some(a=>a.o===offer))setOffer('');},[data,offer,readOnly]);
 
   const q = search.trim().toLowerCase();
   const rows = useMemo(() => {
@@ -280,14 +284,16 @@ function FreqTag({ f }) {
   return <span className={`sp-fq fq-${f}`} title={FREQ.find(x => x.key === f)?.title}>{FREQ_LABEL[f]}</span>;
 }
 function TargetBox({ x, onToggle }) {
+  const readOnly=useReadOnly();
   return (
-    <input type="checkbox" className="sp-tg" checked={x.t} onChange={() => onToggle(x)}
-      title={x.manual ? 'Отмечено вами. Снимите или поставьте галочку, чтобы поменять' : 'Подсказка по названию товара — поставьте или снимите галочку, чтобы закрепить вручную'}
+    <input type="checkbox" className="sp-tg" disabled={readOnly} checked={x.t} onChange={() => onToggle(x)}
+      title={readOnly?'Целевой запрос':x.manual ? 'Отмечено вами. Снимите или поставьте галочку, чтобы поменять' : 'Подсказка по названию товара — поставьте или снимите галочку, чтобы закрепить вручную'}
       style={x.manual ? undefined : { opacity: 0.55 }} />
   );
 }
 
 function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, dateTo, tip }) {
+  const readOnly=useReadOnly();
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [ads, setAds] = useState(null);
@@ -301,11 +307,13 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const [track, setTrack] = useState({ queries: [], regions: ['Москва'], allRegions: [] });
   useEffect(() => { getSerpTracking(cabinet, offer).then(r => setTrack(r.data.data)).catch(() => {}); }, [cabinet, offer]);
   const toggleTrack = async q => {
+    if(readOnly)return;
     const on = !track.queries.includes(q);
     setTrack(t => ({ ...t, queries: on ? [...t.queries, q] : t.queries.filter(x => x !== q) }));
     await saveSerpTracking(cabinet, { offerId: offer, query: q, on }).catch(() => {});
   };
   const toggleRegion = async rg => {
+    if(readOnly)return;
     const regions = track.regions.includes(rg) ? track.regions.filter(x => x !== rg) : [...track.regions, rg];
     if (!regions.length) return;
     setTrack(t => ({ ...t, regions }));
@@ -405,6 +413,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const curSum = useMemo(() => sumDay(sumSet.flatMap(x => x.list)), [sumSet]);
 
   const toggleTarget = async x => {
+    if(readOnly)return;
     const prev = groups;
     const g = x.t ? 'other' : 'target';
     // Если ручная отметка совпала бы с подсказкой — всё равно закрепляем: владелец так решил.
@@ -413,12 +422,14 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
     try { const r = await saveQueryGroup(cabinet, x.q, g); setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
   };
   const resetTarget = async x => {
+    if(readOnly)return;
     const prev = groups;
     const next = { ...groups }; delete next[x.q];
     setGroups(next);
     try { const r = await saveQueryGroup(cabinet, x.q, null); setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
   };
   const saveTh = async v => {
+    if(readOnly)return;
     const prev = th;
     setTh(v);
     try { await saveQueryFreq(cabinet, v.hi, v.mid); } catch (e) { setTh(prev); }
@@ -437,7 +448,7 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
           {options.map(a => <option key={a.o} value={a.o}>{a.o} — {a.short}</option>)}
         </select>
         <div className="sp-name">{data?.name || art?.n || ''}</div>
-        <span className="a-seg sp-tabs">{[['q', 'Поисковые запросы'], ['c', 'Сравнение с конкурентами']].map(([k, l]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</span>
+        <span className="a-seg sp-tabs">{[['q', 'Поисковые запросы'], ...(!readOnly? [['c', 'Сравнение с конкурентами']]:[])].map(([k, l]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</span>
       </div>
 
       {tab === 'c' ? <SearchCompetitors cabinet={cabinet} offer={offer} tip={tip} /> : err ? <Empty>Не удалось загрузить: {err}</Empty> : !data ? <div className="a-hint" style={{ padding: 20 }}>Загрузка…</div> : !queries.length ? (
@@ -648,6 +659,7 @@ const QCOLS = [
   { key: 'r', label: 'Сумма', get: x => x.tot.r },
 ];
 function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocus, track, onTrack, onRegion }) {
+  const readOnly=useReadOnly();
   const [sort, setSort] = useState({ key: 's', dir: -1 });
   const [find, setFind] = useState('');
   const [onlyT, setOnlyT] = useState('all');
@@ -680,11 +692,11 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
         <span className="a-seg">{[['all', 'Все'], ['t', 'Целевые'], ['n', 'Нецелевые']].map(([k, l]) => <button key={k} type="button" className={onlyT === k ? 'on' : ''} onClick={() => setOnlyT(k)}>{l}</button>)}</span>
         <span className="a-seg">{[['', 'Любая'], ...FREQ.map(f => [f.key, f.label])].map(([k, l]) => <button key={k || 'any'} type="button" className={fq === k ? 'on' : ''} onClick={() => setFq(k)}>{l}</button>)}</span>
         <span className="sp-regs" title="В каких регионах отслеживать выдачу (для всех отслеживаемых запросов магазина)">выдача в регионах:
-          {(track.allRegions.length ? track.allRegions : ['Москва']).map(rg => <button key={rg} type="button" className={track.regions.includes(rg) ? 'on' : ''} onClick={() => onRegion(rg)}>{rg}</button>)}
+          {(track.allRegions.length ? track.allRegions : ['Москва']).map(rg => <button disabled={readOnly} key={rg} type="button" className={track.regions.includes(rg) ? 'on' : ''} onClick={() => onRegion(rg)}>{rg}</button>)}
         </span>
         <span className="a-hint sp-th" title="Сколько людей искали по запросу за 30 дней">
-          ВЧ от <input className="a-input" type="number" min="1" value={hi} onChange={e => setHi(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} />
-          · СЧ от <input className="a-input" type="number" min="1" value={mid} onChange={e => setMid(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} /> искавших за 30 дн.
+          ВЧ от <input className="a-input" disabled={readOnly} type="number" min="1" value={hi} onChange={e => setHi(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} />
+          · СЧ от <input className="a-input" disabled={readOnly} type="number" min="1" value={mid} onChange={e => setMid(e.target.value)} onBlur={applyTh} onKeyDown={e => e.key === 'Enter' && e.target.blur()} /> искавших за 30 дн.
         </span>
       </div>
       <div className="a-scroll">
@@ -693,14 +705,14 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
           <tbody>
             {list.map(x => (
               <tr key={x.q} className={`row ${focusQ === x.q ? 'sp-focus' : ''}`}>
-                <td><TargetBox x={x} onToggle={onToggle} />{x.manual && <button type="button" className="sp-reset" title="Убрать ручную отметку — вернуть подсказку" onClick={() => onReset(x)}>↺</button>}</td>
+                <td><TargetBox x={x} onToggle={onToggle} />{!readOnly&&x.manual && <button type="button" className="sp-reset" title="Убрать ручную отметку — вернуть подсказку" onClick={() => onReset(x)}>↺</button>}</td>
                 <td className="sp-qn"><button type="button" className={`sp-qbtn ${focusQ === x.q ? 'on' : ''}`} onClick={() => onFocus(x.q)} title="Показать всю статистику по этому запросу по дням (ещё раз — вернуться)">{x.q}</button></td>
                 <td className="n r"><FreqTag f={x.f} /> {fmtInt(x.per30)}</td>
                 <td className="n r">{fmtInt(x.tot.s)}</td><td className="n r">{fmtInt(x.tot.v)}</td><td className="n r">{fmtPct(x.tot.reach)}</td>
                 <td className="r">{pill(x.tot.p)}</td><td className="r"><PosDelta p1={x.p1} p2={x.p2} /></td>
                 <td className="n r">{fmtPct(x.tot.ctr)}</td><td className="n r">{fmtPct(x.tot.toOrder)}</td>
                 <td className="n r">{fmtInt(x.tot.o)}</td><td className="n r">{x.tot.r ? fmtInt(x.tot.r) : '—'}</td>
-                <td className="c"><button type="button" className={`sp-trk ${track.queries.includes(x.q) ? 'on' : ''}`} onClick={() => onTrack(x.q)} title={track.queries.includes(x.q) ? 'Выдача отслеживается — нажмите, чтобы выключить' : 'Отслеживать выдачу по этому запросу'}>{track.queries.includes(x.q) ? '● следим' : '○'}</button></td>
+                <td className="c"><button type="button" disabled={readOnly} className={`sp-trk ${track.queries.includes(x.q) ? 'on' : ''}`} onClick={() => onTrack(x.q)} title={track.queries.includes(x.q) ? 'Выдача отслеживается — нажмите, чтобы выключить' : 'Отслеживать выдачу по этому запросу'}>{track.queries.includes(x.q) ? '● следим' : '○'}</button></td>
               </tr>
             ))}
             {!list.length && <tr><td colSpan={QCOLS.length + 2} className="muted">Ничего не найдено</td></tr>}
@@ -708,7 +720,7 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
         </table>
       </div>
       <div className="a-hint" style={{ padding: '6px 12px 10px' }}>
-        Галочка — целевой запрос. Бледная галочка — подсказка по названию товара (наш тип товара + наша модель); поставьте или снимите её — отметка закрепится (↺ вернёт подсказку). Отметки общие для всех товаров магазина. «Выдача» — включить отслеживание: расширение раз в 4 часа само снимает выдачу по запросу в выбранных регионах (место, ставки, стратегии, конкуренты); смотрите во вкладке «Сравнение с конкурентами».
+        {readOnly?'Галочка отмечает целевой запрос.':<>Галочка — целевой запрос. Бледная галочка — подсказка по названию товара (наш тип товара + наша модель); поставьте или снимите её — отметка закрепится (↺ вернёт подсказку). Отметки общие для всех товаров магазина. «Выдача» — включить отслеживание: расширение раз в 4 часа само снимает выдачу по запросу в выбранных регионах (место, ставки, стратегии, конкуренты); смотрите во вкладке «Сравнение с конкурентами».</>}
         Частота пересчитана на 30 дней из выбранного периода ({days} дн.). Сейчас Ozon отдаёт сервису до 15 самых частотных запросов товара в день — хвост может быть неполным.
       </div>
     </div>

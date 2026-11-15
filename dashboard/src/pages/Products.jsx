@@ -1,3 +1,4 @@
+import {useReadOnly} from '../lib/AccessContext';
 import React, { useState, useEffect } from 'react';
 import Costs from './Costs';
 import Clusters from './Clusters';
@@ -6,6 +7,7 @@ import Tax from './Tax';
 // «Товары»: себестоимость, склейки и общий налог магазина.
 const KEY = 'mp-products-tab';
 export default function Products({ cabinet }) {
+  const readOnly=useReadOnly();
   const [tab, setTab] = useState(() => { try { return localStorage.getItem(KEY) || 'costs'; } catch (e) { return 'costs'; } });
   useEffect(() => {
     const open = e => { if (e.detail?.page === 'costs' && e.detail?.productTab === 'tax') setTab('tax'); };
@@ -18,5 +20,6 @@ export default function Products({ cabinet }) {
       {[['costs', 'Себестоимость'], ['clusters', 'Склейки'], ['tax', 'Налог']].map(([k, t]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => pick(k)}>{t}</button>)}
     </span>
   );
+  if(readOnly)return <Costs cabinet={cabinet} nav={<></>}/>;
   return tab === 'tax' ? <Tax cabinet={cabinet} nav={nav} /> : tab === 'clusters' ? <Clusters cabinet={cabinet} nav={nav} /> : <Costs cabinet={cabinet} nav={nav} />;
 }

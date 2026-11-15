@@ -97,6 +97,7 @@ export default function Costs({ cabinet, nav }) {
   const badIds = Object.keys(draft).filter(id => Number.isNaN(parseCost(draft[id])));
 
   async function save(list) {
+    if(readOnly)return;
     setSaving(true); setMsg(null);
     try {
       const r = await saveCostList(cabinet, list);
@@ -190,18 +191,18 @@ export default function Costs({ cabinet, nav }) {
         {nav}
         <span className="a-hint">{fmtInt(filled)} из {fmtInt(items.length)} артикулов заполнено · из продававшихся за 30 дней — {fmtInt(soldFilled)} из {fmtInt(soldItems.length)}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button type="button" className="a-btn" onClick={() => downloadTemplate(items)} disabled={!items.length}>Скачать шаблон (все)</button>
-          {rows.length !== items.length && <button type="button" className="a-btn" onClick={() => downloadTemplate(rows)}>Шаблон по фильтру ({fmtInt(rows.length)})</button>}
-          <button type="button" className="a-btn primary" onClick={() => fileRef.current?.click()}>Загрузить из Excel</button>
+          <button type="button" className="a-btn" onClick={() => downloadTemplate(items)} disabled={!items.length}>{readOnly?'Скачать Excel (все)':'Скачать шаблон (все)'}</button>
+          {rows.length !== items.length && <button type="button" className="a-btn" onClick={() => downloadTemplate(rows)}>{readOnly?'Excel':'Шаблон'} по фильтру ({fmtInt(rows.length)})</button>}
+          {!readOnly&&<button type="button" className="a-btn primary" onClick={() => fileRef.current?.click()}>Загрузить из Excel</button>}
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={onFile} />
         </span>
       </div>
       </div>
 
-      <div className="c-note">
+      {!readOnly&&<div className="c-note">
         Себестоимость одна на артикул — она же используется для WB и Ozon. Её возьмут в расчёт прибыли.
         Ввести можно прямо в таблице (изменённые клетки подсвечиваются, потом «Сохранить») или через Excel: скачайте шаблон, заполните колонку «{COL_COST}» и загрузите файл обратно — перед сохранением покажем, что изменится.
-      </div>
+      </div>}
 
       {msg && <div className={`c-msg ${msg.bad ? 'bad' : ''}`}>{msg.text}</div>}
 
@@ -238,14 +239,14 @@ export default function Costs({ cabinet, nav }) {
       <div className="a-bar">
         <button type="button" className="a-toggle" onClick={() => setOnlyEmpty(v => !v)}><span className={`a-sw ${onlyEmpty ? 'on' : ''}`} />Только без себестоимости</button>
         <button type="button" className="a-toggle" onClick={() => setOnlySold(v => !v)}><span className={`a-sw ${onlySold ? 'on' : ''}`} />Только с продажами</button>
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+        {!readOnly&&<span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           <input className="a-input" value={bulk} onChange={e => setBulk(e.target.value)} placeholder="₽ всем в фильтре" style={{ width: 130 }} />
           <button type="button" className="a-btn" disabled={parseCost(bulk) === null || Number.isNaN(parseCost(bulk)) || !rows.length} onClick={applyBulk}>Проставить</button>
           <button type="button" className="a-btn primary" disabled={!dirtyIds.length || saving || badIds.length > 0} onClick={saveDraft}>
             {saving ? 'Сохраняем…' : `Сохранить${dirtyIds.length ? ` (${dirtyIds.length})` : ''}`}
           </button>
           {Object.keys(draft).length > 0 && <button type="button" className="a-btn ghost" onClick={() => setDraft({})}>Отменить правки</button>}
-        </span>
+        </span>}
       </div>
 
       {assigning&&!readOnly&&<CategoryAssignment key={assigning.offerId} item={assigning} options={cats} busy={assignBusy} onSave={assignCategory} onCancel={()=>setAssigning(null)}/>}
@@ -272,9 +273,9 @@ export default function Costs({ cabinet, nav }) {
                     <td className="n r">{it.stock == null ? <span className="muted">—</span> : fmtInt(it.stock)}</td>
                     <td className="n r">{it.avgPrice30 ? fmtInt(it.avgPrice30) : <span className="muted">—</span>}</td>
                     <td className="r">
-                      <input value={shown} inputMode="decimal" className={d !== undefined && (bad || v !== it.cost) ? 'dirty' : ''} style={bad ? { borderColor: 'var(--a-bad)' } : undefined}
+                      {readOnly?<span className="n">{it.cost==null?'—':fmtInt(it.cost)}</span>:<input value={shown} inputMode="decimal" className={d !== undefined && (bad || v !== it.cost) ? 'dirty' : ''} style={bad ? { borderColor: 'var(--a-bad)' } : undefined}
                         onChange={e => setDraft(p => ({ ...p, [it.offerId]: e.target.value }))}
-                        onKeyDown={e => { if (e.key === 'Enter') { const tr = e.target.closest('tr')?.nextElementSibling; tr?.querySelector('input')?.focus(); } }} />
+                        onKeyDown={e => { if (e.key === 'Enter') { const tr = e.target.closest('tr')?.nextElementSibling; tr?.querySelector('input')?.focus(); } }} />}
                     </td>
                     <td className="n r">{pct === null ? <span className="muted">—</span> : <span style={{ color: pct > 60 ? 'var(--a-bad)' : pct > 40 ? 'var(--a-warn)' : undefined }}>{fmtPct(pct)}</span>}</td>
                     <td className="r a-hint">{it.updatedAt ? dayjs(it.updatedAt).format('DD.MM.YY') : ''}</td>

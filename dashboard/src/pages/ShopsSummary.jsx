@@ -1,3 +1,5 @@
+import {useAccess} from '../lib/AccessContext';
+import {accessStorage} from '../lib/accessClient';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
@@ -45,7 +47,9 @@ function Delta({ cur, prev, pp }) {
 }
 
 export default function ShopsSummary({ active, cabinet }) {
-  const MARKETS = cabinet === 'licio' ? LICIO : [...DEFAULT_OZON, ...SHOPS.filter(s=>s.platform === 'wb')];
+  const access=useAccess()?.accessScope;
+  const MARKETS_ALL = cabinet === 'licio' ? LICIO : [...DEFAULT_OZON, ...SHOPS.filter(s=>s.platform === 'wb')];
+  const MARKETS=MARKETS_ALL.filter(s=>!access||access.cabinets.includes(s.id));
   const catKey = cabinet === 'licio' ? 'mp-ss-licio-cat' : 'mp-ss-cat';
   const today = dayjs().format('YYYY-MM-DD');
   const [from, setFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
@@ -113,8 +117,8 @@ export default function ShopsSummary({ active, cabinet }) {
 
   const shops = useMemo(() => (orders?.shops || []).map(o => ({ ...o, shop: MARKETS.find(s => s.id === o.id) || { id: o.id, label: o.label, platform:o.platform, color: '#888' }, fin: fin[o.id] })), [orders, fin]);
   // Категория сверху: «Все» — магазины целиком, иначе — только эта категория.
-  const [cat, setCat] = useState(() => { try { return localStorage.getItem(catKey) || ''; } catch (e) { return ''; } });
-  useEffect(() => { try { localStorage.setItem(catKey, cat); } catch (e) { /* ignore */ } }, [cat]);
+  const [cat, setCat] = useState(() => { try { return accessStorage.getItem(catKey) || ''; } catch (e) { return ''; } });
+  useEffect(() => { try { accessStorage.setItem(catKey, cat); } catch (e) { /* ignore */ } }, [cat]);
   const catList = useMemo(() => {
     const m = new Map();
     for (const s of orders?.shops || []) for (const [k, v] of Object.entries(s.cur.byCat)) m.set(k, (m.get(k) || 0) + v[1]);

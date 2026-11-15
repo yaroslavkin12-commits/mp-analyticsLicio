@@ -45,23 +45,25 @@ async function wbModel(from,to,finance=false){
   if(finance){const f=await bridge.readFinance();if(f)ds.push(f);}
   return {model:views.build(ds,await views.preferences(),{dateFrom:from,dateTo:to}),datasets:ds};
 }
-async function catalogs(ids = SHOPS) {
+async function catalogs(ids = SHOPS,contexts=null) {
   const out = {}, errors = {};
   for (const shop of ids) {
     try { out[shop] = shop==='defly_wb'?(await wbModel()).model.articles:(await meta(shop)).articles; }
     catch (e) { out[shop] = []; errors[shop] = e.message; }
   }
+  if(contexts)for(const id of ids)out[id]=out[id].filter(a=>contexts[id]?.allowed.has(a.o)).map(a=>({...a,cat:contexts[id].allowed.get(a.o).path}));
   return { out, errors };
 }
-async function report(shop, from, to, tax, source, frozen, openDay = false) {
+async function report(shop, from, to, tax, source, frozen, openDay = false,ctx=null) {
   const label = CABINETS[shop].label,platform=CABINETS[shop].platform;
   if (!isConnected(shop)) return { label, error: 'магазин не подключён', byPath: {} };
   try {
     const [{ pnlTotals }, { unitCoefs, unitProfit }] = await models;
     const wb=platform==='wb'?await wbModel(from,to,true):null;
-    const data = wb?wb.model.pnl():await loadPnl({ cabinet: shop, dateFrom: from, dateTo: to });
+    let data = wb?wb.model.pnl():await loadPnl({ cabinet: shop, dateFrom: from, dateTo: to });
+    if(ctx)data=require('./categoryAccess').projection('/finance/pnl',data,ctx);
     if(wb&&data._operational)return {label,platform,error:'Финансовый отчёт WB ещё не загружен',byPath:{}};
-    const pathOf = a => frozen?.[a.o] || tax.byShop[shop]?.[a.o] || leafPath(a.cat, tax.branches, tax.detailed);
+    const pathOf = a => ctx?(frozen?.[a.o]||ctx.allowed.get(a.o)?.path):frozen?.[a.o] || tax.byShop[shop]?.[a.o] || leafPath(a.cat, tax.branches, tax.detailed);
     const result = pnlTotals(data, { tax: 0, groupOf: pathOf, withDays: true });
     const byPath = result.byGroup;
     const available = data.available || {};
@@ -119,14 +121,14 @@ async function basis(from, to, source, force = false, ids = SHOPS) {
   if (basisCache.size > 4) basisCache.delete(basisCache.keys().next().value);
   return promise;
 }
-async function loadExecution(month, snapshot, ids = SHOPS) {
+async function loadExecution(month, snapshot, ids = SHOPS,contexts=null) {
   const now = dayjs().tz('Europe/Moscow'), current = now.format('YYYY-MM-DD');
   const from = month + '-01', end = dayjs(from).endOf('month').format('YYYY-MM-DD'), to = end < current ? end : current;
   if (to < from) return { from, to: null, shops: {}, future: true };
-  const cat = await catalogs(ids), tax = taxonomy(cat.out, snapshot?.targets.map(t => t.path) || [], ids, ids.some(id=>CABINETS[id].platform==='wb')), shops = {};
+  const cat = await catalogs(ids,contexts), tax = taxonomy(cat.out, snapshot?.targets.map(t => t.path) || [], ids, ids.some(id=>CABINETS[id].platform==='wb')), shops = {};
   if(snapshot)for(const offers of Object.values(tax.byShop))for(const [offer,path] of Object.entries(offers))offers[offer]=snapshot.targets.find(t=>path===t.path||path.startsWith(t.path+' / '))?.path||path;
   const provisional = to === current;
-  for (const shop of ids) shops[shop] = await report(shop, from, to, tax, 'fact', snapshot?.taxonomy?.[shop], provisional);
+  for (const shop of ids) shops[shop] = await report(shop, from, to, tax, 'fact', snapshot?.taxonomy?.[shop], provisional,contexts?.[shop]);
   let effectiveTo=to;
   if(ids.some(id=>CABINETS[id].platform==='wb')){
     const ends=Object.values(shops).map(s=>s.available?.mx).filter(Boolean);if(ends.length)effectiveTo=[to,...ends].sort()[0];
@@ -137,5 +139,5 @@ async function loadExecution(month, snapshot, ids = SHOPS) {
   const elapsedDays = effectiveTo<from?0:effectiveTo===current?now.date()-1+fraction:dayjs(effectiveTo).date();
   return { from, to:effectiveTo<from?null:effectiveTo, requestedTo:to,shops, asOf: now.toISOString(), future: false, provisional:effectiveTo===current, elapsedDays, evaluatedAtMoscow: now.format('HH:mm') };
 }
-const execution = (month, snapshot, ids = SHOPS) => serial(() => loadExecution(month, snapshot, ids));
+const execution = (month, snapshot, ids = SHOPS,contexts=null) => serial(() => loadExecution(month, snapshot, ids,contexts));
 module.exports = { today, cutoff, validMonth, defaultPeriod, marketPeriod, checkPeriod, catalogs, basis, execution };

@@ -2,7 +2,7 @@ const { query } = require('../db');
 const { CABINETS, familyOf } = require('../config/cabinets');
 const { autoPath, OV_SQL, overrideArgs } = require('./categories');
 const SEP = ' / ';
-const PAGES = ['sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator','access'];
+const PAGES = ['summary','plan','geo','search','costs','sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator','access'];
 const ROOTS = ['Чехлы','Дефлекторы','Утеплители','Аксессуары','Одежда'];
 function normalize(value) {
   if (value == null) return null;
@@ -101,7 +101,7 @@ const INDEXED = {
 };
 function indexed(path, data, ctx) {
   const selection = selectArticles(data,ctx);
-  const out = { ...pick(data, ['dates','months','days','from','to','since','available','stockDate','clusterDate','buckets','_wb','_metadataOnly','financeSource']), articles: selection.articles, order: [...new Set(selection.articles.map(a => a.cat.split(SEP)[0]))] };
+  const out = { ...pick(data, ['dates','months','days','from','to','since','available','stockDate','clusterDate','buckets','_wb','_metadataOnly','_operational','financeSource','coverage','availability']), articles: selection.articles, order: [...new Set(selection.articles.map(a => a.cat.split(SEP)[0]))] };
   for (const key of INDEXED[path]) out[key] = selection.rows(data[key]);
   if (path === '/sales/data') out.unallocated = { cur: 0, prev: 0, byDate: {} };
   if (path === '/finance/coefs') { out.noSku = {}; out.names = []; out.totalSale = out.coefs.reduce((n,r) => n + Math.max(0, Number(r[1]) || 0),0); }
@@ -121,6 +121,17 @@ function ads(data, ctx) {
 }
 function projection(path, data, ctx) {
   if (INDEXED[path]) return indexed(path,data,ctx);
+  if(path==='/sales/summary'&&!data._categoryFiltered)throw Error('Нужна фильтрация до агрегации');
+  if(path==='/sales/geo'&&!data._categoryFiltered)throw Error('Нужна фильтрация дневных сумм');
+  if(path==='/sales/summary')return { ...pick(data,['from','to','pFrom','pTo']),shops:data.shops.filter(s=>ctx.contexts[s.id])};
+  if(path==='/plan/ozon')return require('./scopedReports').planState(data,ctx.contexts);
+  if(path==='/plan/ozon/execution'){if(!data._categoryFiltered)throw Error('Нужен ограниченный факт');return pick(data,['snapshot','revision','from','to','requestedTo','shops','asOf','future','provisional','elapsedDays','evaluatedAtMoscow']);} // Факт рассчитывается только из разрешённых артикулов в ozonPlanData.
+  if(path==='/sales/geo')return require('./scopedReports').geo(data,ctx,selectArticles);
+  if(path==='/queries/data')return require('./scopedReports').queries(data,ctx,selectArticles);
+  if(path==='/queries/series')return data;
+  if(path==='/queries/article'){const names=new Set(data.rows.map(r=>r[1]));return {...pick(data,['offerId','name','from','to','rows','freq']),groups:Object.fromEntries(Object.entries(data.groups||{}).filter(([q])=>names.has(q)))};}
+  if(path==='/competitors/tracking')return pick(data,['queries','regions','allRegions']);
+  if(path==='/sales/costs')return {_wb:data._wb,items:(data.items||[]).filter(r=>ctx.allowed.has(String(r.offerId))).map(r=>({...pick(r,['offerId','name','cost','updatedAt','orders30','avgPrice30','stock']),category:ctx.allowed.get(String(r.offerId)).path})),order:[...new Set([...ctx.allowed.values()].map(a=>a.path.split(SEP)[0]))]};
   if (path === '/promo/stats') return ads(data,ctx);
   if (path === '/orders/feed') return { ...pick(data,['from','to','since','_wb']), rows: (data.rows || []).filter(r => ctx.allowed.has(offerOf(r))).map(r => ({ ...pick(r,['p','sku','o','n','price','est','qty','st','wh','at','sch','self']), cat: ctx.allowed.get(offerOf(r)).path })) };
   if (path === '/discounts/overview') return { ...pick(data,['cabinet','lastCheckedAt']), items: (data.items || []).filter(r => ctx.allowed.has(offerOf(r))).map(r => ({ ...pick(r,['o','n','seller','site','card','pct','pctCard','schema','c1','c7','d1','d7','orders30','revenue30','checkedAt']), cat: ctx.allowed.get(offerOf(r)).path })) };
@@ -136,7 +147,7 @@ function projection(path, data, ctx) {
   if (path === '/pricelog/dynamics') return { ...pick(data,['from','to','days']), items: filterMap(data.items,ctx) };
   if (path === '/sales/builder-templates') return {templates:[]}; // общие шаблоны могут содержать списки чужих артикулов
   if (path === '/finance/buyer-share') return { periods: (data?.periods || []).map(p => ({ ...pick(p,['from','to','total','at']), byOffer: filterMap(p.byOffer,ctx) })) };
-  if (path === '/settings/tax') return pick(data,['enabled','rate']);
+  if (path === '/settings/tax') return pick(data,['cabinet','enabled','rate','effectiveRate','configured']);
   if (path === '/promo/data-status') return { ...pick(data,['automatic']), running: false, jobs: (data.jobs || []).map(j=>pick(j,['job','everyMin','lastSuccessAt'])) };
   if (path === '/discounts/settings') return pick(data,['enabled','intervalMin','threshold']);
   throw Error('Раздел не поддерживает ограниченный доступ');
@@ -145,7 +156,7 @@ function routeOf(path) {
   const normalized = path.toLowerCase().replace(/\/+$/, '').replace(/^\/api\/wb\/views/, '/api').replace(/^\/api\/ads(?=\/)/, '/api/promo');
   return normalized.replace(/^\/api/, '');
 }
-const EXTRA = ['/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
+const EXTRA = ['/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
 function middleware() {
   return async (req,res,next) => {
     if (req.user?.accessScope == null || !/^\/api(?:\/|$)/i.test(req.path)) return next();
@@ -160,10 +171,26 @@ function middleware() {
       return res.json({ success:true, data:list.map(c => pick(c,['id','label','platform','family','connected'])) });
     }
     if (!INDEXED[path] && !EXTRA.includes(path)) return res.status(403).json({ success:false, error:'Этот раздел недоступен в вашем профиле' });
+    if(['/sales/summary','/plan/ozon','/plan/ozon/execution'].includes(path)){
+      try{
+        const requested=path==='/sales/summary'?(req.query.cabinet==='licio'?'licio':'marketplaces'):(req.query.scope||'ozon');
+        if(!['licio','ozon','marketplaces'].includes(requested))return res.status(403).json({success:false,error:'Нет доступа к этой области'});
+        const ids=scope.cabinets.filter(id=>requested==='licio'?id==='licio':id!=='licio');
+        if(!ids.length)return res.status(403).json({success:false,error:'Нет доступа к этой области'});
+        req.categoryContexts=Object.fromEntries(await Promise.all(ids.map(async id=>[id,await context(id,scope)])));
+        return filtered({contexts:req.categoryContexts});
+      }catch{return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'});}
+    }
     const cabinet = req.query.cabinet === undefined ? 'defly' : req.query.cabinet;
     if (typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || (/^\/api\/wb\/views/i.test(req.path) && cabinet !== 'defly_wb')) return res.status(403).json({ success:false, error:'Нет доступа к этому кабинету' });
     try {
-      const ctx = await context(cabinet,scope), json = res.json.bind(res);
+      const ctx = await context(cabinet,scope);
+      if(['/queries/article','/queries/series','/competitors/tracking'].includes(path)&&!ctx.allowed.has(String(req.query.offerId||'')))return res.status(403).json({success:false,error:'Нет доступа к этому товару'});
+      req.categoryContext=ctx;
+      return filtered(ctx);
+    } catch { return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'}); }
+    function filtered(ctx){
+      const json = res.json.bind(res);
       res.set('Cache-Control','no-store');
       res.json = body => {
         res.set('Cache-Control','no-store'); res.set('Vary','Cookie');
@@ -172,7 +199,7 @@ function middleware() {
         catch { return res.status(403).type('json').send(JSON.stringify({ success:false,error:'Раздел временно недоступен для ограниченного профиля' })); }
       };
       next();
-    } catch { return res.status(503).json({ success:false,error:'Не удалось проверить доступ к категориям' }); }
+    }
   };
 }
 module.exports = { normalize, publicScope, category, cabinets, availablePaths, validate, context, projection, middleware, inPath, PAGES, routeOf };

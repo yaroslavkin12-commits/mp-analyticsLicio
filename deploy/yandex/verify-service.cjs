@@ -43,6 +43,7 @@ function request(path, body, cookie) {
         out.productStocks={code:products.code,articles:products.json?.data?.items?.length,known:products.json?.data?.items?.filter(u=>Number.isFinite(u.stock)).length};
         const history=await request('/api/discounts/history?cabinet=defly&dateFrom=2026-09-01&dateTo=2026-09-30',null,cookie);
         out.discountHistory={code:history.code,days:history.json?.data?.dates?.length,septemberPoints:history.json?.data?.rows?.length,available:history.json?.data?.available};
+        out.scopedReports=await require('./verify-scoped.cjs')(env);
         probeId = require('crypto').randomUUID();
         const opened = await request('/api/auth/activity', {visitId:probeId,idleSeconds:0,visible:true,close:false,page:'service-check',cabinet:'defly'},cookie);
         await new Promise(resolve=>setTimeout(resolve,1200));

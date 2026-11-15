@@ -29,3 +29,12 @@ test('Автобаза ограничена самым поздним общим
  const result=require('../src/lib/ozonPlan').allocate([{path,qty:140,mean:1800}],b,'fact',['defly','defly_wb']);
  assert(result.errors.some(e=>e.includes('неполный период финансов')));
 });
+
+test('Ограниченный план исключает запрещённые артикулы до расчёта факта',async()=>{
+ const allowed=new Map(),contexts={defly:{cabinet:'defly',allowed,scope:{paths:[path]}}};
+ const f=await data.execution('2026-10',null,['defly'],contexts);assert.deepEqual(f.shops.defly.byPath,{});
+ const {snapshot}=require('../src/lib/scopedReports');
+ const input={id:'v',month:'2026-10',rows:[{path:'Дефлекторы',qty:999999,shops:[{id:'defly',qty:999999,amount:999999}]},{path,qty:10,shops:[{id:'defly',qty:10,amount:20000},{id:'private',qty:999999,amount:999999}]}],note:'PRIVATE',taxonomy:{private:{SECRET:'PRIVATE'}}};
+ const out=snapshot(input,{defly:{...contexts.defly,allowed:new Map([['A',{path}]])}});assert.equal(out.rows.length,1);assert.equal(out.rows[0].qty,10);assert.equal(out.rows[0].mean,2000);assert.ok(!JSON.stringify(out).includes('999999'));assert.ok(!JSON.stringify(out).includes('PRIVATE'));assert.ok(!JSON.stringify(out).includes('SECRET'));
+ const state={...input,rows:[{...input.rows[1],path:'Футболки',shops:[{id:'licio',qty:10,amount:20000}]}]};assert.equal(snapshot(state,{licio:{allowed:new Map([['A',{path:'Одежда / Футболки'}]]),scope:{paths:['Одежда']}}}).rows[0].path,'Одежда / Футболки');
+});

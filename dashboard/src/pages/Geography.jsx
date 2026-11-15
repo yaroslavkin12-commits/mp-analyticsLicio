@@ -1,3 +1,4 @@
+import {useReadOnly} from '../lib/AccessContext';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -112,6 +113,7 @@ function ClusterMap({ regions, tot, metric, tip, selected, onPick }) {
 }
 
 export default function Geography({ cabinet }) {
+  const readOnly=useReadOnly();
   const today = dayjs().format('YYYY-MM-DD');
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(today);
@@ -460,7 +462,7 @@ export default function Geography({ cabinet }) {
             <div className="a-card" style={{ padding: 14 }}>
               <div className="a-bar" style={{ marginBottom: 6 }}>
                 <b style={{ fontSize: 14 }}>Доли округов по {weekly.gran === 'week' ? 'неделям' : 'дням'}</b>
-                <span className="a-hint">по всему кабинету, без фильтров; каждый столбец — 100%</span>
+                <span className="a-hint">{readOnly?'Каждый столбец — 100%':'по всему кабинету, без фильтров; каждый столбец — 100%'}</span>
               </div>
               <StackChart buckets={weekly.buckets} groups={weekly.groups} metric={metric} tip={tip} gran={weekly.gran} normalize />
             </div>

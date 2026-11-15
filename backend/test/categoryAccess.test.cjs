@@ -16,10 +16,10 @@ const context={cabinet:'defly',scope,allowed:new Map([[OWN,{path:PATH}]])};
 const articles=[{o:OWN,n:'Дефлектор',cat:PATH},{o:OTHER,n:'PRIVATE-COVER',cat:'Чехлы'},{o:THIRD,n:'3D',cat:'Дефлекторы / Окна / 3D'}];
 const arrayRows=[[0,0,7,700],[1,0,999999,999999],[2,0,9,900]];
 const secret=out=>assert.ok(!JSON.stringify(out).includes('PRIVATE-COVER')&&!JSON.stringify(out).includes('999999'));
-async function dispatch(path, method='GET', cabinet='defly', data={articles,rows:arrayRows,stock:[],prev:[],self:[],dates:['2026-11-14']}) {
+async function dispatch(path, method='GET', cabinet='defly', data={articles,rows:arrayRows,stock:[],prev:[],self:[],dates:['2026-11-14']},extra={}) {
  let code=200,body,called=false;const headers={};
  const res={statusCode:200,status(n){code=n;this.statusCode=n;return this;},set(k,v){headers[k]=v;return this;},type(){return this;},send(v){body=JSON.parse(v);return this;},json(v){body=v;return this;}};
- await access.middleware()({path,method,query:{cabinet},user:{id:3,role:'user',accessScope:scope}},res,()=>{called=true;res.set('Cache-Control','private,max-age=300');res.json({success:true,data});});
+ await access.middleware()({path,method,query:{cabinet,...extra},user:{id:3,role:'user',accessScope:scope}},res,()=>{called=true;res.set('Cache-Control','private,max-age=300');res.json({success:true,data});});
  return {code,body,called,headers};
 }
 test('Права нормализуются по границам веток, а одежда отделена от автомобильных категорий',()=>{
@@ -53,7 +53,7 @@ test('Чужие товары исключены из рекламы, склее
  secret(access.projection('/orders/feed',{rows:[{o:OWN,price:100},{o:OTHER,price:999999}],summary:999999},context));
 });
 test('Прямые обращения к сырым данным WB, общим отчётам, журналу владельца и неизвестным API запрещены',async()=>{
- for(const path of ['/api/wb/data','/api/sales/summary','/api/auth/activity/report','/api/env-check','/api/plan/ozon','/api/settings/costs','/api/anything']){
+ for(const path of ['/api/wb/data','/api/production/data','/api/auth/activity/report','/api/env-check','/api/plan/ozon/basis','/api/settings/costs','/api/anything']){
   const r=await dispatch(path);assert.equal(r.code,403,path);assert.equal(r.called,false);
  }
  for(const path of ['/api/sales/category','/API/ORDERS/self','/api/production'])assert.equal((await dispatch(path,'POST')).code,403);
@@ -74,4 +74,21 @@ test('Одежда доступна только в своём направле�
 });
 test('Неизвестный формат успешного ответа не проходит без фильтра',async()=>{
  const r=await dispatch('/api/sales/data','GET','defly',{secret:'PRIVATE-COVER'});assert.equal(r.code,403);assert.ok(!JSON.stringify(r.body).includes('PRIVATE-COVER'));
+});
+
+test('Новые разделы разрешены профилю, производство и все изменения остаются закрыты',async()=>{
+ const pages=access.publicScope(scope).pages;for(const p of ['summary','plan','geo','search','costs'])assert.ok(pages.includes(p));assert.ok(!pages.includes('production'));
+ for(const path of ['/api/sales/costs','/api/plan/ozon/fix','/api/queries/groups','/api/sales/category'])assert.equal((await dispatch(path,'POST')).code,403);
+ for(const path of ['/api/queries/article','/api/queries/series','/api/competitors/tracking']){const r=await dispatch(path,'GET','defly',{}, {offerId:OTHER});assert.equal(r.code,403);assert.equal(r.called,false);}
+});
+test('Товары и запросы: чужие имена и запросы исчезают, индексы запросов пересчитываются',()=>{
+ secret(access.projection('/sales/costs',{items:[{offerId:OWN,cost:12,stock:8},{offerId:OTHER,cost:999999,name:OTHER}],order:['Чехлы']},context));
+ const q=access.projection('/queries/data',{articles,queries:['PRIVATE-COVER','свой запрос'],rows:[[0,1,5,12],[1,0,999999,999999]]},context);
+ assert.deepEqual(q.queries,['свой запрос']);assert.deepEqual(q.rows,[[0,0,5,12]]);secret(q);
+ const a=access.projection('/queries/article',{offerId:OWN,rows:[['2026-11-14','свой запрос',3]],groups:{'PRIVATE-COVER':'target','свой запрос':'other'}},context);secret(a);
+});
+test('Сводка и география не принимают общие агрегаты без серверной фильтрации',()=>{
+ assert.throws(()=>access.projection('/sales/summary',{shops:[]},{contexts:{defly:context}}));
+ assert.throws(()=>access.projection('/sales/geo',{articles,rows:arrayRows},context));
+ const g=access.projection('/sales/geo',{_categoryFiltered:true,articles,regions:[{name:'Москва'},{name:'PRIVATE-COVER'}],cities:['Москва','PRIVATE-COVER'],dates:['2026-11-14'],rows:[[0,0,0,2,100],[1,1,1,999999,999999]],prev:[[0,0,1,50],[1,1,999999,999999]],days:[[0,0,2,100]],districts:[]},context);assert.equal(g.regions.length,1);assert.equal(g.days[0][2],2);secret(g);
 });

@@ -71,7 +71,7 @@ router.use(async (req, res) => {
     }
     if (path === '/finance/buyout') out=m.buyout();
     if (path === '/finance/pnl') { const costs=await require('../db').query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC"); out = m.pnl(costs);if(req.query.adsBasis==='activity')out=require('../lib/wbActivityPnl').activityPnl(out); }
-    if (path === '/sales/geo') out = m.geo();
+    if (path === '/sales/geo') out = m.geo(req.categoryContext?.allowed);
     if (path === '/queries/season') out = m.season();
     if (path === '/clusters') out = m.clusters();
     if (path === '/promo/sibling-clusters') out = m.clusters().clusters.map(c => ({ primary: c.members[0], members: c.members, name: c.name }));

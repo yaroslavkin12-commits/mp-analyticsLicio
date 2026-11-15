@@ -4,8 +4,8 @@ export const inPlanPath = (p, parent) => !parent || p === parent || p.startsWith
 export const inPlanShop=(s,filter)=>!filter||filter.startsWith('market:')?( !filter || (s.platform||SHOPS.find(x=>x.id===s.id)?.platform)==filter.slice(7)):s.id===filter;
 export function planTotal(rows, shop = '') {
   const items=shop?rows.flatMap(r=>r.shops.filter(s=>inPlanShop(s,shop))):rows;
-  const qty=items.reduce((s,r)=>s+r.qty,0),amount=items.reduce((s,r)=>s+r.amount,0);
-  return {qty,amount,mean:qty>0?amount/qty:null};
+  const qty=items.every(r=>Number.isFinite(r.qty))?items.reduce((s,r)=>s+r.qty,0):null,amount=items.every(r=>Number.isFinite(r.amount))?items.reduce((s,r)=>s+r.amount,0):null;
+  return {qty,amount,mean:qty>0&&Number.isFinite(amount)?amount/qty:null};
 }
 export function planActual(fact, rows, shop = '', path = '', date = '') {
   const paths = new Set(rows.filter(r => inPlanPath(r.path, path)).map(r => r.path));

@@ -24,7 +24,7 @@ const wrap = fn => async (req, res) => {
   catch (e) { res.status(e.status || 400).json({ success: false, error: e.message }); }
 };
 router.get('/', wrap(async req => {
-  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), state = await load(month, scope);
+  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope).filter(id=>!req.categoryContexts||req.categoryContexts[id]), state = await load(month, scope);
   const legacyRows = await query('SELECT key, value FROM app_settings WHERE key = ANY($1::text[])', [SHOPS.map(s => `plan:${s}:${month}`)]);
   const prior=scope==='marketplaces'?await load(month,'ozon'):null;
   return { ...state, migration:prior?.versions?.find(v=>v.id===prior.activeId)||null, shops:SHOPS.map(id=>({id,label:CABINETS[id].label,platform:CABINETS[id].platform})), month, defaultPeriod: scope==='marketplaces'?await data.marketPeriod(month, SHOPS):data.defaultPeriod(month), cutoff: data.cutoff(), legacy: legacyRows.map(r => ({ shop: r.key.split(':')[1], plan: JSON.parse(r.value) })) };
@@ -72,9 +72,9 @@ router.post('/fix', wrap(async req => {
   finally { client.release(); }
 }));
 router.get('/execution', wrap(async req => {
-  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope), state = await load(month, scope);
-  const id = req.query.version || state.activeId, snapshot = state.versions.find(v => v.id === id);
+  const month = monthOf(req), scope = scopeOf(req), SHOPS = shopsOf(scope).filter(id=>!req.categoryContexts||req.categoryContexts[id]), state = await load(month, scope);
+  const id = req.query.version || state.activeId, original = state.versions.find(v => v.id === id), snapshot=req.categoryContexts?require('../lib/scopedReports').snapshot(original,req.categoryContexts):original;
   if (id && !snapshot) throw new Error('Версия плана не найдена');
-  return { snapshot: snapshot || null, revision: state.revision, ...await data.execution(month, snapshot, SHOPS) };
+  return { snapshot: snapshot || null, revision: state.revision, ...await data.execution(month, snapshot, SHOPS,req.categoryContexts),_categoryFiltered:!!req.categoryContexts };
 }));
 module.exports = router;
