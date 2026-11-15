@@ -167,7 +167,6 @@ function Workspace() {
         <div className="m-drawer"><Sidebar mobile page={page} setPage={id => { setPage(id); setDrawer(false); }} theme={theme} setTheme={setTheme} cabinet={cabinet} setCabinet={c => { setCabinet(c); setDrawer(false); }}/></div>
       </>) : <Sidebar page={page} setPage={setPage} theme={theme} setTheme={setTheme} cabinet={cabinet} setCabinet={setCabinet}/>}
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
-        {scope && <div style={{padding:'8px 18px',fontSize:12,borderBottom:'1px solid var(--border)',color:'var(--text2)',background:'var(--surface)'}}>Только просмотр и Excel · {scope.paths.join(' · ')}. Общие данные магазина скрыты.</div>}
         {isMobile && (
           <div className="m-topbar">
             <button type="button" className="m-burger" onClick={() => setDrawer(true)} aria-label="Меню">☰</button>
