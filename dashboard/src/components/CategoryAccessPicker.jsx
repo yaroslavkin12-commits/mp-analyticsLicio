@@ -1,30 +1,25 @@
-import React from 'react';
-const SEP=' / ';
+import React,{useState,useId} from 'react';
+import {ChevronDown,ChevronRight} from 'lucide-react';
+import CategoryBranches from './CategoryBranches';
+import {toggleCategory,selectionSummary} from '../lib/categorySelection';
 export default function CategoryAccessPicker({ value, onChange, options, status }) {
-  const limited=!!value, paths=value?.paths || [];
-  const toggle=path=>{
-    const next=paths.includes(path)?paths.filter(p=>p!==path):[...paths.filter(p=>!p.startsWith(path+SEP)),path];
-    onChange({paths:next,readOnly:true});
-  };
-  return <div style={{margin:'10px 0',padding:12,border:'1px solid var(--border)',borderRadius:10}}>
-    <b>Доступ к данным</b>
-    <div className="a-bar" style={{marginTop:8,gap:8}}>
-      <label><input type="radio" checked={!limited} onChange={()=>onChange(null)}/> Все данные и редактирование</label>
-      <label><input type="radio" checked={limited} onChange={()=>onChange({paths:[],readOnly:true})}/> Выбранные категории · только просмотр и Excel</label>
-    </div>
-    {limited && <>
-      <p className="a-hint">Выбор категории включает её подкатегории. Можно отметить несколько веток. Остальные товары, общие отчёты и изменение данных будут недоступны.</p>
-      {status && !status.keyConnected && <div className="c-msg">Сначала подключите расширение ключом и выполните сбор цен. Это позволит закрыть открытый доступ через старый адрес и безопасно включить ограничения.</div>}
-      {status && !status.legacyReady && <div className="a-hint">Завершается обновление доступа. Перед сохранением обновите список.</div>}
-      <div style={{maxHeight:280,overflowY:'auto',display:'flex',flexDirection:'column',gap:5}}>
-        {(options || []).map(path=>{
-          const parent=paths.some(p=>path.startsWith(p+SEP));
-          return <label key={path} style={{paddingLeft:(path.split(SEP).length-1)*18,opacity:parent ? 0.55 : 1}}>
-            <input type="checkbox" checked={parent || paths.includes(path)} disabled={parent} onChange={()=>toggle(path)}/> {path.split(SEP).at(-1)}
-          </label>;
-        })}
-        {!options?.length && <span className="a-hint">Список категорий загружается…</span>}
-      </div>
-    </>}
-  </div>;
+ const limited=!!value,paths=value?.paths||[],[expanded,setExpanded]=useState(true),id=useId();
+ const summary=limited?selectionSummary(paths):'Все данные и редактирование';
+ return <div className="category-access-picker">
+  <button type="button" className="category-picker-summary" aria-expanded={expanded} aria-controls={id} onClick={()=>setExpanded(v=>!v)}>
+   {expanded?<ChevronDown size={16}/>:<ChevronRight size={16}/>}<b>Доступ к данным</b><span className="category-picker-selection" title={summary}>{summary}</span>
+  </button>
+  {expanded&&<div id={id} className="category-picker-body">
+   <div className="category-picker-mode" role="group" aria-label="Режим доступа">
+    <button type="button" aria-pressed={!limited} onClick={()=>onChange(null)}>Все данные и редактирование</button>
+    <button type="button" aria-pressed={limited} onClick={()=>onChange({paths:[],readOnly:true})}>Выбранные категории · просмотр и Excel</button>
+   </div>
+   {limited&&<>
+    <p className="a-hint category-picker-hint">Выбор ветки включает её подкатегории. Остальные данные и редактирование будут недоступны.</p>
+    {status&&!status.keyConnected&&<div className="c-msg">Сначала подключите расширение ключом и выполните сбор цен. Это позволит закрыть открытый доступ через старый адрес и безопасно включить ограничения.</div>}
+    {status&&!status.legacyReady&&<div className="a-hint">Завершается обновление доступа. Перед сохранением обновите список.</div>}
+    <CategoryBranches options={options} paths={paths} onSelect={path=>onChange({paths:toggleCategory(paths,path),readOnly:true})}/>
+   </>}
+  </div>}
+ </div>;
 }

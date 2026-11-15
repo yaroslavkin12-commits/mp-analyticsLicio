@@ -1,8 +1,11 @@
+import {ArrowRightLeft} from 'lucide-react';
+import CategoryAssignment from '../components/CategoryAssignment';
+import {useReadOnly} from '../lib/AccessContext';
 import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
-import { getCostList, saveCostList } from '../api';
+import { getCostList, saveCostList, setSalesCategory } from '../api';
 import { fmtInt, fmtPct, naturalCompare, shortModel } from './AdsStats2';
 import './ads2.css';
 import './sales.css';
@@ -24,6 +27,8 @@ const parseCost = v => {
 };
 
 export default function Costs({ cabinet, nav }) {
+  const readOnly=useReadOnly();
+  const [assigning,setAssigning]=useState(null),[assignBusy,setAssignBusy]=useState(false);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState({}); // offerId -> строка ввода
@@ -43,7 +48,20 @@ export default function Costs({ cabinet, nav }) {
     setLoading(true);
     getCostList(cabinet).then(r => setItems(r.data.data.items || [])).catch(() => setMsg({ bad: true, text: 'Не удалось загрузить список артикулов.' })).finally(() => setLoading(false));
   }, [cabinet]);
-  useEffect(() => { load(); setDraft({}); setPreview(null); setCat(''); }, [load]);
+  useEffect(() => { load(); setDraft({}); setPreview(null); setCat('');setAssigning(null); }, [load]);
+
+  async function assignCategory(path){
+    if(readOnly||!assigning||assignBusy)return;
+    setAssignBusy(true);setMsg(null);
+    try{
+      await setSalesCategory(cabinet,[assigning.offerId],path);
+      if(path)setItems(prev=>prev.map(it=>it.offerId===assigning.offerId?{...it,category:path}:it));
+      else load();
+      setMsg({text:path?`Категория ${assigning.offerId} изменена: ${path.split(' / ').join(' › ')}.`:`Для ${assigning.offerId} включено автоопределение категории.`});
+      setAssigning(null);window.dispatchEvent(new Event('mp-data-changed'));
+    }catch(e){setMsg({bad:true,text:e.response?.data?.error||'Не удалось сохранить категорию.'});}
+    finally{setAssignBusy(false);}
+  }
 
   const artOpts = useMemo(() => items.map(it => ({ o: it.offerId, n: it.name })), [items]);
   const cats = useMemo(() => {
@@ -230,6 +248,7 @@ export default function Costs({ cabinet, nav }) {
         </span>
       </div>
 
+      {assigning&&!readOnly&&<CategoryAssignment key={assigning.offerId} item={assigning} options={cats} busy={assignBusy} onSave={assignCategory} onCancel={()=>setAssigning(null)}/>}
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>
         <div className="a-scroll">
           <table className="a-t c-table">
@@ -248,7 +267,7 @@ export default function Costs({ cabinet, nav }) {
                   <tr key={it.offerId}>
                     <td className="n">{it.offerId}</td>
                     <td title={it.name} style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</td>
-                    <td className="a-hint">{it.category}</td>
+                    <td className="a-hint">{readOnly?it.category:<button type="button" className="category-transfer-button" aria-label={`Изменить категорию ${it.offerId}`} title={it.category} onClick={()=>setAssigning(it)}><span>{it.category.split(' / ').join(' › ')}</span><ArrowRightLeft size={13}/></button>}</td>
                     <td className="n r">{it.orders30 ? fmtInt(it.orders30) : <span className="muted">—</span>}</td>
                     <td className="n r">{it.stock == null ? <span className="muted">—</span> : fmtInt(it.stock)}</td>
                     <td className="n r">{it.avgPrice30 ? fmtInt(it.avgPrice30) : <span className="muted">—</span>}</td>
