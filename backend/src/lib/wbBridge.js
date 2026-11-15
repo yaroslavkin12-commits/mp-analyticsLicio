@@ -73,22 +73,53 @@ async function ingest(input, { deferCommit = false } = {}) {
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
 let operationsCache, operationsLoading, operationsEpoch=0;
-async function read({ excludeFinance = false } = {}) {
+const selectedCache=new Map();
+async function read({ excludeFinance = false, kinds = null, from = null, to = null } = {}) {
+  if(kinds)return readSelected(kinds,from,to);
   await ensure();
   if(!excludeFinance)return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1',[CABINET]);
-  if(operationsCache && Date.now()-operationsCache.at<30000)return [...operationsCache.rows];
+  if(operationsCache && Date.now()-operationsCache.at<300000)return [...operationsCache.rows];
   if(!operationsLoading){const epoch=operationsEpoch;operationsLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind <> 'finance'",[CABINET]).then(rows=>{if(epoch===operationsEpoch)operationsCache={at:Date.now(),rows};return rows;}).finally(()=>{operationsLoading=null;});}
   const epoch=operationsEpoch,rows=await operationsLoading;
   if(epoch!==operationsEpoch)return read({excludeFinance:true});
   return [...rows];
 }
+// Сводка не должна скачивать всю рекламную статистику и складские строки WB.
+async function readSelected(kinds,from=null,to=null){
+ await ensure();
+ if(!Array.isArray(kinds)||!kinds.length||kinds.some(k=>!KINDS.includes(k)||k==='finance'))throw Error('Неизвестный набор WB');
+ if((from||to)&&![from,to].every(d=>/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d||'')))throw Error('Некорректный период WB');
+ const wanted=[...new Set(kinds)].sort(),key=JSON.stringify([wanted,from,to]),epoch=operationsEpoch,hit=selectedCache.get(key);
+ if(operationsCache&&Date.now()-operationsCache.at<300000)return operationsCache.rows.filter(r=>wanted.includes(r.kind)).map(r=>r.kind==='ads'&&from?{...r,rows:r.rows.filter(v=>v.date>=from&&v.date<=to)}:r);
+ if(hit&&hit.epoch===epoch&&Date.now()-hit.at<300000)return [...await hit.promise];
+ const promise=query(`SELECT kind,meta,updated_at,CASE WHEN kind='ads' AND $3::text IS NOT NULL THEN
+  COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality)
+    WHERE item.value->>'date' BETWEEN $3 AND $4),'[]'::jsonb) ELSE rows END AS rows
+  FROM wb_bridge_data d WHERE cabinet=$1 AND kind=ANY($2::text[])`,[CABINET,wanted,from,to]);
+ const entry={at:Date.now(),epoch,promise};selectedCache.set(key,entry);while(selectedCache.size>12)selectedCache.delete(selectedCache.keys().next().value);
+ try{const rows=await promise;if(epoch!==operationsEpoch)return readSelected(wanted,from,to);return [...rows];}
+ catch(e){if(selectedCache.get(key)===entry)selectedCache.delete(key);throw e;}
+}
 async function readMeta() { await ensure(); return query('SELECT kind, meta, updated_at FROM wb_bridge_data WHERE cabinet=$1', [CABINET]); }
 module.exports = { CABINET, KINDS, verify, validate, ingest, read, readMeta };
 
 let financeCache, financeLoading;
-async function readFinance() {
+const financeWindows=new Map();
+async function readFinance(options={}) {
   const meta=(await readMeta()).find(r=>r.kind==='finance');
   if(!meta)return null;
+  if(options.dateFrom||options.latest){
+    const to=options.latest?meta.meta.to:options.dateTo,from=options.latest?new Date(Date.parse(to)-29*86400000).toISOString().slice(0,10):options.dateFrom;
+    if(![from,to].every(d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d)))||from>to)throw Error('Некорректный период финансов WB');
+    const key=JSON.stringify([meta.meta.runId,from,to]),hit=financeWindows.get(key);if(hit)return hit;
+    const promise=query(`SELECT kind,meta,updated_at,
+      COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality)
+        WHERE left(item.value->>'rrDate',10) BETWEEN $2 AND $3
+          OR NOT COALESCE(left(item.value->>'rrDate',10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',false)), '[]'::jsonb) AS rows
+      FROM wb_bridge_data d WHERE cabinet=$1 AND kind='finance' AND run_id=$4`,[CABINET,from,to,meta.meta.runId]).then(rows=>{if(rows[0])return rows[0];financeWindows.delete(key);return readFinance(options);});
+    financeWindows.set(key,promise);while(financeWindows.size>12)financeWindows.delete(financeWindows.keys().next().value);
+    promise.catch(()=>{if(financeWindows.get(key)===promise)financeWindows.delete(key);});return promise;
+  }
   if(financeCache?.meta.runId===meta.meta.runId)return financeCache;
   if(!financeLoading)financeLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind='finance'",[CABINET]).then(rows=>financeCache=rows[0]||null).finally(()=>financeLoading=null);
   return financeLoading;

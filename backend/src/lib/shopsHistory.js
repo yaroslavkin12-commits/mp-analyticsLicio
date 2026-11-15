@@ -16,9 +16,10 @@ async function build(params,ctx){
  let sales,pnl,coefs,bs=null,coverage;
  if(cabinet==='defly_wb'){
   const bridge=require('./wbBridge'),V=require('./wbViews');
-  const ds=await bridge.read({excludeFinance:true}),fin=await bridge.readFinance();if(fin)ds.push(fin);
-  const m=V.build(ds,await V.preferences(),p),costs=await query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC");
-  sales=m.sales();pnl=m.pnl(costs);coefs=m.coefs(costs);
+  const ds=await bridge.read({kinds:['catalog','orders','sales','prices','ads','campaigns'],from:p.dateFrom,to:p.dateTo});
+  const [fin,latest]=await Promise.all([bridge.readFinance({dateFrom:p.dateFrom,dateTo:p.dateTo}),bridge.readFinance({latest:true})]);
+  const prefs=await V.preferences(),m=V.build(fin?[...ds,fin]:ds,prefs,p),costs=await query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC");
+  sales=m.sales();pnl=m.pnl(costs);coefs=V.build(latest?[...ds,latest]:ds,prefs,p).coefs(costs);
   coverage={orders:sales.coverage?.orders,finance:range(pnl.available),ads:sales.coverage?.ads};
  }else{
   const f=require('../routes/finance');

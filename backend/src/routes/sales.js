@@ -360,7 +360,7 @@ router.get('/summary', async (req, res) => {
     }
     if ((!req.categoryContexts||req.categoryContexts.defly_wb) && req.query.includeWb === '1' && req.query.cabinet !== 'licio' && listCabinets().some(c => c.id === 'defly_wb' && c.connected)) {
       try {
-        const datasets = await require('../lib/wbBridge').read({excludeFinance:true});
+        const datasets = await require('../lib/wbBridge').read({kinds:['catalog','orders']});
         const prefs = await require('../lib/wbViews').preferences();
         out.push(require('../lib/shopsSummary').wbShopSummary(datasets, prefs, {from,to,allowed:req.categoryContexts?.defly_wb?.allowed}));
       } catch (e) {

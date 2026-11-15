@@ -85,8 +85,8 @@ export default function ShopsSummary({ active, cabinet }) {
       for (const s of MARKETS) {
         try {
           const [cur, prev, bs, taxSettings] = await Promise.all([
-            getFinancePnl(s.id, { dateFrom: from, dateTo: to }).then(r => r.data.data),
-            getFinancePnl(s.id, { dateFrom: pFrom, dateTo: pTo }).then(r => r.data.data).catch(() => null),
+            getFinancePnl(s.id, { dateFrom: from, dateTo: to, projection:'summary' }).then(r => r.data.data),
+            getFinancePnl(s.id, { dateFrom: pFrom, dateTo: pTo, projection:'summary' }).then(r => r.data.data).catch(() => null),
             getBuyerShare(s.id).then(r => r.data.data).catch(() => null),
             loadTaxSettings(s.id),
           ]);
