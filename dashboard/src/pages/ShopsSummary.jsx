@@ -105,7 +105,7 @@ export default function ShopsSummary({ active, cabinet }) {
           forecasts=forecasts.then(async()=>{
             if(off)return;
             const [sales,coefs]=await Promise.all([
-              getSalesData(s.id,{dateFrom:from,dateTo:to}).then(r=>r.data.data).catch(()=>null),
+              getSalesData(s.id,{dateFrom:from,dateTo:to,projection:'summary'}).then(r=>r.data.data).catch(()=>null),
               getFinanceCoefs(s.id).then(r=>r.data.data).catch(()=>null),
             ]);
             if(!off)setFin(f=>({...f,[s.id]:{...f[s.id],rawSales:sales,coefs,forecastLoaded:true}}));

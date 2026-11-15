@@ -130,7 +130,8 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
 }
 
 // GET /api/sales/data?cabinet=defly&dateFrom=&dateTo=&compare=1
-async function loadSales(params = {}, onTiming) {
+async function loadSales(params = {}, onTiming, options = {}) {
+    const ordersOnly=options.ordersOnly===true;
     await ensureSchema();
     const cabinet = params.cabinet || 'defly';
     const { from, to } = period(params);
@@ -146,16 +147,16 @@ async function loadSales(params = {}, onTiming) {
     const [catalogRows, overrideRows, anRows, stockRows, stockBaseRows, stockNowRows, campaigns, campaignSkuRows, adRows, skuStatRows, cpoRows, prevAnRows] = await Promise.all([
       query(`SELECT offer_id, sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon'`, P),
       query(OV_SQL, overrideArgs(cabinet)),
-      query(`SELECT date::text AS date, sku, offer_id, hits_view, hits_view_pdp, hits_tocart, orders_item, revenue, position_category
-               FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]),
-      query(`SELECT snapshot_date::text AS date, offer_id, SUM(fbo_present + fbs_present) AS v
+      query(`SELECT date::text AS date, sku, offer_id, orders_item, revenue ${ordersOnly?'':', hits_view, hits_view_pdp, hits_tocart, position_category'}
+               FROM product_analytics_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3 ${ordersOnly?'AND (orders_item <> 0 OR revenue <> 0)':''}`, [cabinet, from, to]),
+      ordersOnly ? Promise.resolve([]) : query(`SELECT snapshot_date::text AS date, offer_id, SUM(fbo_present + fbs_present) AS v
                FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date BETWEEN $2 AND $3
               GROUP BY snapshot_date, offer_id`, [cabinet, from, to]),
       // Остаток на начало периода — последний снимок до него.
-      query(`SELECT DISTINCT ON (offer_id) offer_id, (fbo_present + fbs_present) AS v
+      ordersOnly ? Promise.resolve([]) : query(`SELECT DISTINCT ON (offer_id) offer_id, (fbo_present + fbs_present) AS v
                FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date < $2 AND snapshot_date >= $3
               ORDER BY offer_id, snapshot_date DESC`, [cabinet, from, dayjs(from).subtract(30, 'day').format('YYYY-MM-DD')]),
-      query(`SELECT offer_id, SUM(fbo_present + fbs_present) AS v FROM ad_product_stocks
+      ordersOnly ? Promise.resolve([]) : query(`SELECT offer_id, SUM(fbo_present + fbs_present) AS v FROM ad_product_stocks
               WHERE cabinet = $1 AND platform = 'ozon'
                 AND snapshot_date = (SELECT MAX(snapshot_date) FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon')
               GROUP BY offer_id`, P),
@@ -303,7 +304,7 @@ async function loadSales(params = {}, onTiming) {
 
     onTiming?.(`queries;dur=${tQ - t0}, compute;dur=${Date.now() - tQ}`);
     return {
-        dates, articles, rows: outRows, stock, prev,
+        dates, articles, rows: outRows, stock, prev, ...(ordersOnly?{_ordersOnly:true}:{}),
         // Самовыкупы по дню заказа: [ai, di, шт, ₽] (уже вычтены из заказов).
         self: selfRows.map(x => { const o = offerOf(x); const d = di.get(x.date); return o && idx.has(o) && d !== undefined ? [idx.get(o), d, x.q, r2(x.r)] : null; }).filter(Boolean),
         unallocated: { cur: r2(unallocatedCur), prev: r2(unallocatedPrev), byDate: unallocatedByDate },
@@ -313,7 +314,7 @@ async function loadSales(params = {}, onTiming) {
 router.get('/history', async (req,res)=>{try{res.set('Cache-Control','no-store');res.json({success:true,data:await require('../lib/shopsHistory').load(req.query,req.categoryContext)});}catch(e){res.status(400).json({success:false,error:e.message});}});
 
 router.get('/data', async (req, res) => {
-  try { res.json({ success: true, data: await loadSales(req.query, timing => res.set('Server-Timing', timing)) }); }
+  try { res.json({ success: true, data: await loadSales(req.query, timing => res.set('Server-Timing', timing),{ordersOnly:req.query.projection==='summary'}) }); }
   catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 

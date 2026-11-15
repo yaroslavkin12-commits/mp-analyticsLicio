@@ -11,6 +11,8 @@ async function build(params,ctx){
  const [{historyWindow,historyColumns},{makeShareAt}]=await models;
  const started=performance.now();
  const window=historyWindow(params.end,mode,today),p={cabinet,dateFrom:window.from,dateTo:window.to};
+ const stages={};
+ const timed=async(name,fn)=>{const start=performance.now();try{return await fn();}finally{stages[name]=Math.round(performance.now()-start);}};
  let sales,pnl,coefs,bs=null,coverage;
  if(cabinet==='defly_wb'){
   const bridge=require('./wbBridge'),V=require('./wbViews');
@@ -20,11 +22,11 @@ async function build(params,ctx){
   coverage={orders:sales.coverage?.orders,finance:range(pnl.available),ads:sales.coverage?.ads};
  }else{
   const f=require('../routes/finance');
-  [sales,pnl]=await Promise.all([require('../routes/sales').loadSales(p),f.loadPnl(p)]);
-  [coefs,bs]=await Promise.all([f.loadCoefs({cabinet}),f.loadBuyerShare(cabinet)]);
-  const [orders,ads]=await Promise.all([
+  [sales,pnl]=await Promise.all([timed('sales',()=>require('../routes/sales').loadSales(p,v=>{stages.salesQueries=v;},{ordersOnly:true})),timed('finance',()=>f.loadPnl(p))]);
+  [coefs,bs]=await Promise.all([timed('coefficients',()=>f.loadCoefs({cabinet})),timed('buyerShare',()=>f.loadBuyerShare(cabinet))]);
+  const [orders,ads]=await timed('coverage',()=>Promise.all([
    query("SELECT MIN(date)::text mn,MAX(date)::text mx FROM product_analytics_daily WHERE cabinet=$1 AND platform='ozon'",[cabinet]),
-   query("SELECT MIN(date)::text mn,MAX(date)::text mx FROM ad_stats_daily WHERE cabinet=$1 AND platform='ozon'",[cabinet])]);
+   query("SELECT MIN(date)::text mn,MAX(date)::text mx FROM ad_stats_daily WHERE cabinet=$1 AND platform='ozon'",[cabinet])]));
   coverage={orders:range(orders[0]),finance:range(pnl.available),ads:range(ads[0])};
   // P&L использует начисленную рекламу, а за ещё не проведённые дни — статистику РК.
   if(coverage.finance){const a=coverage.ads;coverage.ads={from:a?.from<coverage.finance.from?a.from:coverage.finance.from,to:a?.to>coverage.finance.to?a.to:coverage.finance.to};}
@@ -37,7 +39,7 @@ async function build(params,ctx){
  const loadedAt=performance.now(),diagnostics={};
  const periods=historyColumns(source,window.periods.filter(p=>!available.from||p.end>=available.from),mode,today,coverage,diagnostics);
  return {cabinet,mode,available,coverage,periods,olderThan:available.from&&window.olderThan>=available.from?window.olderThan:null,_categoryFiltered:!!ctx,
-  _timing:{loadMs:Math.round(loadedAt-started),calculateMs:Math.round(performance.now()-loadedAt),ranges:diagnostics.ranges}};
+  _timing:{loadMs:Math.round(loadedAt-started),calculateMs:Math.round(performance.now()-loadedAt),ranges:diagnostics.ranges,sources:stages}};
 }
 function load(params,ctx){
  const key=JSON.stringify([require('./dataVersion').get(),params.cabinet,params.mode,params.end,params.category,ctx?[...ctx.allowed.keys()].sort():null]);

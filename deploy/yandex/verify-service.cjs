@@ -52,8 +52,9 @@ function request(path, body, cookie) {
           request('/api/finance/pnl?cabinet=defly&dateFrom='+start+'&dateTo='+end,null,cookie),
           request('/api/finance/coefs?cabinet=defly',null,cookie)
         ]);
+        const summaryInputs=await request('/api/sales/data?cabinet=defly&projection=summary&dateFrom='+start+'&dateTo='+end,null,cookie);
         const weeks=await request('/api/sales/history?cabinet=defly&mode=weeks',null,cookie),repeat=await request('/api/sales/history?cabinet=defly&mode=weeks',null,cookie);
-        out.summaryPerformance={summary:{code:summary.code,ms:summary.durationMs,shops:summary.json?.data?.shops?.length},finance:{code:summaryFinance.code,ms:summaryFinance.durationMs},coefficients:{code:coefficients.code,ms:coefficients.durationMs},history:{code:weeks.code,ms:weeks.durationMs,bytes:weeks.bytes,timing:weeks.json?.data?._timing},repeatHistory:{code:repeat.code,ms:repeat.durationMs}};
+        out.summaryPerformance={inputs:{code:summaryInputs.code,ms:summaryInputs.durationMs,rows:summaryInputs.json?.data?.rows?.length,bytes:summaryInputs.bytes},summary:{code:summary.code,ms:summary.durationMs,shops:summary.json?.data?.shops?.length},finance:{code:summaryFinance.code,ms:summaryFinance.durationMs},coefficients:{code:coefficients.code,ms:coefficients.durationMs},history:{code:weeks.code,ms:weeks.durationMs,bytes:weeks.bytes,timing:weeks.json?.data?._timing},repeatHistory:{code:repeat.code,ms:repeat.durationMs}};
         out.scopedReports=await require('./verify-scoped.cjs')(env);
         probeId = require('crypto').randomUUID();
         const opened = await request('/api/auth/activity', {visitId:probeId,idleSeconds:0,visible:true,close:false,page:'service-check',cabinet:'defly'},cookie);
