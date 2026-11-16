@@ -1,0 +1,6 @@
+const {test}=require('node:test'), assert=require('node:assert/strict');
+const {scopedAdEvents}=require('../src/lib/scopedAdEvents');
+test('Журнал сотрудника содержит только разрешённые товары, без чужих названий и общих бюджетов',()=>{
+ const events=[{id:'1',offerId:'own',date:'2026-11-16',kind:'camp_on',auto:true,text:'PRIVATE кампания'}, {id:'2',offerId:'other',kind:'price_up',auto:true,text:'PRIVATE'}, {id:'3',offerId:null,kind:'budget',auto:true,text:'PRIVATE'}, {id:'4',offerId:'own',kind:'budget',auto:true,text:'PRIVATE 999999',oldValue:999999,newValue:999999}, {id:'5',offerId:'own',kind:'note',auto:false,text:'Проверили фото'}, {id:'6',offerId:'own',kind:'bid_cpc',auto:true,text:'PRIVATE кампания',oldValue:'20',newValue:'25'}, {id:'7',offerId:'own',kind:'price_up',auto:true,price:true,text:'Цена клиента 1 000 → 1 200 ₽ (20%) — PRIVATE'}];
+ const result=scopedAdEvents(events,new Map([['own',{}]]));assert.equal(result.length,5);const json=JSON.stringify(result);assert.ok(!json.includes('PRIVATE'));assert.ok(!json.includes('999999'));assert.ok(!json.includes('other'));assert.equal(result[2].text,'Проверили фото');assert.equal(result[3].newValue,25);assert.equal(result[4].text,'Цена клиента 1 000 → 1 200 ₽');assert.equal(events[0].text,'PRIVATE кампания');
+});

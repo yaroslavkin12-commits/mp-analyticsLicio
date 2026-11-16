@@ -155,8 +155,13 @@ router.post('/events', async (req, res) => {
 router.delete('/events/:id', async (req, res) => {
   try {
     await ensureAdEvents();
-    await query(`DELETE FROM ad_events WHERE id = $1 AND cabinet = $2 AND auto = false`,
-      [req.params.id, req.query.cabinet || 'defly']);
+    if (req.restricted) {
+      const allowed = [...(req.categoryContext?.allowed?.keys() || [])];
+      const removed = await query(`DELETE FROM ad_events WHERE id = $1 AND cabinet = $2 AND platform = 'ozon' AND auto = false AND kind = 'note' AND offer_id = ANY($3::text[]) RETURNING id`, [req.params.id, req.query.cabinet || 'defly', allowed]);
+      if (!removed.length) return res.status(403).json({success:false,error:'Можно удалить только ручную заметку по доступному товару'});
+    } else {
+      await query(`DELETE FROM ad_events WHERE id = $1 AND cabinet = $2 AND auto = false`, [req.params.id, req.query.cabinet || 'defly']);
+    }
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });

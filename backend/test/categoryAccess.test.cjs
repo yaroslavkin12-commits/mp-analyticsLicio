@@ -16,10 +16,10 @@ const context={cabinet:'defly',scope,allowed:new Map([[OWN,{path:PATH}]])};
 const articles=[{o:OWN,n:'Дефлектор',cat:PATH},{o:OTHER,n:'PRIVATE-COVER',cat:'Чехлы'},{o:THIRD,n:'3D',cat:'Дефлекторы / Окна / 3D'}];
 const arrayRows=[[0,0,7,700],[1,0,999999,999999],[2,0,9,900]];
 const secret=out=>assert.ok(!JSON.stringify(out).includes('PRIVATE-COVER')&&!JSON.stringify(out).includes('999999'));
-async function dispatch(path, method='GET', cabinet='defly', data={articles,rows:arrayRows,stock:[],prev:[],self:[],dates:['2026-11-14']},extra={}) {
+async function dispatch(path, method='GET', cabinet='defly', data={articles,rows:arrayRows,stock:[],prev:[],self:[],dates:['2026-11-14']},extra={}, requestBody) {
  let code=200,body,called=false;const headers={};
  const res={statusCode:200,status(n){code=n;this.statusCode=n;return this;},set(k,v){headers[k]=v;return this;},type(){return this;},send(v){body=JSON.parse(v);return this;},json(v){body=v;return this;}};
- await access.middleware()({path,method,query:{cabinet,...extra},user:{id:3,role:'user',accessScope:scope}},res,()=>{called=true;res.set('Cache-Control','private,max-age=300');res.json({success:true,data});});
+ await access.middleware()({path,method,body:requestBody,query:{cabinet,...extra},user:{id:3,role:'user',accessScope:scope}},res,()=>{called=true;res.set('Cache-Control','private,max-age=300');res.json({success:true,data});});
  return {code,body,called,headers};
 }
 test('Права нормализуются по границам веток, а одежда отделена от автомобильных категорий',()=>{
@@ -91,4 +91,16 @@ test('Сводка и география не принимают общие аг
  assert.throws(()=>access.projection('/sales/summary',{shops:[]},{contexts:{defly:context}}));
  assert.throws(()=>access.projection('/sales/geo',{articles,rows:arrayRows},context));
  const g=access.projection('/sales/geo',{_categoryFiltered:true,articles,regions:[{name:'Москва'},{name:'PRIVATE-COVER'}],cities:['Москва','PRIVATE-COVER'],dates:['2026-11-14'],rows:[[0,0,0,2,100],[1,1,1,999999,999999]],prev:[[0,0,1,50],[1,1,999999,999999]],days:[[0,0,2,100]],districts:[]},context);assert.equal(g.regions.length,1);assert.equal(g.days[0][2],2);secret(g);
+});
+
+test('Сотрудник может писать заметки только своим товарам; прочие изменения закрыты',async()=>{
+ assert.equal((await dispatch('/api/promo/events','POST','defly',{}, {}, {cabinet:'defly',offerId:OWN,text:'Заметка'})).called,true);
+ for(const body of [{cabinet:'defly',offerId:OTHER},{cabinet:'defly'},{cabinet:'licio',offerId:OWN}]) assert.equal((await dispatch('/api/ads/events','POST','defly',{}, {},body)).code,403);
+ assert.equal((await dispatch('/api/promo/events/123','DELETE')).called,true);
+ assert.equal((await dispatch('/api/promo/events/123','PUT')).code,403);
+ assert.equal((await dispatch('/api/wb/views/promo/events','POST','defly_wb',{}, {},{cabinet:'defly_wb',offerId:OWN})).code,403);
+});
+test('Журнал рекламы возвращает события только разрешённых артикулов',()=>{
+ const out=access.projection('/promo/events',[{id:'1',offerId:OWN,kind:'camp_on',auto:true,text:'PRIVATE-COVER'},{id:'2',offerId:OTHER,kind:'note',auto:false,text:'PRIVATE-COVER'},{id:'3',offerId:null,kind:'budget',auto:true,text:'999999'}],context);
+ assert.equal(out.length,1);assert.equal(out[0].offerId,OWN);secret(out);
 });

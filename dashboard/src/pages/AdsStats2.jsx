@@ -804,6 +804,8 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
 // выключение — красным.
 const EV_TONE = { restock: 'ev-good', camp_on: 'ev-good', cpo_on: 'ev-good', camp_off: 'ev-bad', cpo_off: 'ev-bad', stock_in: 'ev-good', stock_out: 'ev-bad', stock: 'ev-bad', price_up: 'ev-price', price_down: 'ev-price', price: 'ev-price' };
 function Journal({ events, offerId, onAdd, onDelete }) {
+  const readOnly = useReadOnly();
+  const canWrite = !readOnly || !!offerId;
   const [text, setText] = useState('');
   const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [saving, setSaving] = useState(false);
@@ -811,12 +813,12 @@ function Journal({ events, offerId, onAdd, onDelete }) {
     e.preventDefault();
     if (!text.trim()) return;
     setSaving(true);
-    try { await onAdd(offerId, date, text.trim()); setText(''); } finally { setSaving(false); }
+    try { if (await onAdd(offerId, date, text.trim()) !== false) setText(''); } finally { setSaving(false); }
   }
   return (
     <div>
       <div className="a-journal">
-        {events.length === 0 && <div className="a-hint">Пока нет записей. Добавьте заметку: «снизил ставку до 20 ₽», «сменил главное фото»…</div>}
+        {events.length === 0 && <div className="a-hint">{readOnly ? 'За выбранный период записей нет.' : 'Пока нет записей. Добавьте заметку: «снизил ставку до 20 ₽», «сменил главное фото»…'}</div>}
         {events.map(e => (
           <div key={e.id} className={`a-ev ${EV_TONE[e.kind] || ''}`}>
             <span className="dt">{e.date.slice(8)}.{e.date.slice(5, 7)}</span>
@@ -825,11 +827,12 @@ function Journal({ events, offerId, onAdd, onDelete }) {
           </div>
         ))}
       </div>
-      <form className="a-addnote" onSubmit={submit}>
+      {canWrite && <form className="a-addnote" onSubmit={submit}>
         <input className="a-input n" type="date" value={date} onChange={e => setDate(e.target.value)} style={{ flex: '0 0 auto', minWidth: 0 }} />
         <input className="a-input" value={text} onChange={e => setText(e.target.value)} placeholder="Что сделали: снизил ставку, сменил фото…" />
         <button type="submit" className="a-btn" disabled={saving || !text.trim()}>Добавить</button>
-      </form>
+      </form>}
+      {readOnly && !offerId && <div className="a-hint">Откройте товар, чтобы добавить заметку.</div>}
       <div className="a-hint" style={{ marginTop: 8 }}>Изменения ставок (за клик и за заказ), включение/выключение РК и оплаты за заказ, пополнения остатка появляются здесь сами с пометкой «авто» — кто бы их ни менял: вы в кабинете Ozon или автостратегия. Сюда же попадают смена бюджета РК, «остаток закончился» и «снова в наличии». «Цена» — изменения цены клиента: из «Журнала цен» и по цене на сайте (сдвиг от 1,5%, который держится); колебания репрайсера и скидки Ozon (когда меняется только цена реализации) не показываются.</div>
     </div>
   );
@@ -1514,11 +1517,11 @@ export default function AdsStats2({ cabinet }) {
     try {
       const r = await addAdsEvent(cabinet, offerId, date, text);
       setEvents(prev => [{ id: r.data.data.id, offerId, date, kind: 'note', text, auto: false }, ...prev].sort((x, y) => y.date.localeCompare(x.date)));
-    } catch { window.alert('Не удалось сохранить заметку.'); }
+    } catch { window.alert('Не удалось сохранить заметку.'); return false; }
   }
-  function deleteNote(id) {
-    setEvents(prev => prev.filter(e => e.id !== id));
-    deleteAdsEvent(cabinet, id).catch(console.error);
+  async function deleteNote(id) {
+    try { await deleteAdsEvent(cabinet, id); setEvents(prev => prev.filter(e => e.id !== id)); }
+    catch { window.alert('Не удалось удалить заметку. Автоматические записи удалять нельзя.'); }
   }
 
   if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
