@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import dayjs from 'dayjs';
 import {
-  getProduction, uploadProduction, saveProductionMaster, saveProductionSettings, saveProductionOrder, removeProductionOrder,
+  getProduction, uploadProduction, saveProductionMaster, saveProductionSettings, saveProductionOrder, removeProductionOrder, replaceProductionOrder,
 } from '../api';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { fmtInt } from './AdsStats2';
 import { SHOPS, MATERIALS, TOPS, DEFAULT_SETTINGS, calcRow, allocate, taskSizeOf, matOf, buildJournal, J_STATUS } from '../lib/production';
 import ProdJournal from './ProdJournal';
+import { parseProductionOrder } from '../lib/productionOrderImport.mjs';
 import Deflectors2d from './Deflectors2d';
 import './ads2.css';
 import './sales.css';
@@ -70,9 +71,11 @@ function SeatProduction({ cabinet, nav }) {
   const [busy, setBusy] = useState('');
   const [selectedOffer, setSelectedOffer] = useState('');
   const journalRef = useRef(null);
+  const [correction, setCorrection] = useState(null);
+  const [correctionError, setCorrectionError] = useState('');
   const [expandedOrders, setExpandedOrders] = useState(new Set());
   const load = useCallback(() => getProduction(cabinet).then(r => setD(r.data.data)).catch(e => setErr(e.response?.data?.error || e.message)), [cabinet]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setCorrection(null); setCorrectionError(''); load(); }, [load]);
 
   const settings = useMemo(() => ({ ...DEFAULT_SETTINGS, ...(d?.settings || {}), capacity: { ...DEFAULT_SETTINGS.capacity, ...(d?.settings?.capacity || {}) } }), [d]);
   const data = useMemo(() => {
@@ -231,6 +234,27 @@ function SeatProduction({ cabinet, nav }) {
       setMsg({ text: 'Заказ сохранён в истории.' });
     } catch (x) { setMsg({ bad: true, text: x.message }); } finally { setBusy(''); }
   }
+  async function importPast(order, event) {
+    const file = event.target.files?.[0]; event.target.value = '';
+    if (!file) return;
+    setBusy('import'); setCorrectionError('');
+    try {
+      const XLSX = await import('xlsx');
+      const book = XLSX.read(await file.arrayBuffer(), { type: 'array', codepage: 65001 });
+      const sheet = book.Sheets[book.SheetNames.includes(order.shop) ? order.shop : book.SheetNames[0]];
+      const items = parseProductionOrder(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }), new Set([...Object.keys(d.master || {}), ...order.items.map(r => r[0])]), offer => taskSizeOf(d.master?.[offer] || {}, settings));
+      setCorrection({ order, items, file: file.name });
+    } catch (x) { setMsg({ bad: true, text: x.message }); } finally { setBusy(''); }
+  }
+  async function confirmCorrection() {
+    setBusy('replace'); setCorrectionError('');
+    try {
+      const r = await replaceProductionOrder(cabinet, { id: correction.order.id, expected: correction.order, items: correction.items, file: correction.file });
+      setD(prev => ({ ...prev, orders: r.data.data })); setCorrection(null);
+      setMsg({ text: 'Заказ заменён данными Excel. Дата и цех сохранены; журнал пересчитан.' });
+    } catch (x) { setCorrectionError(x.response?.data?.error || x.message); } finally { setBusy(''); }
+  }
+
   async function downloadPast(o) {
     const XLSX = await import('xlsx');
     const aoa = [['Артикул', 'Наименование', 'Кол-во, шт', 'Заданий'], ...o.items.filter(r => !selectedOffer || r[0] === selectedOffer).map(([a, q, t]) => [a, d.master?.[a]?.n || '', q, t])];
@@ -477,6 +501,14 @@ function SeatProduction({ cabinet, nav }) {
       {(d.orders || []).length > 0 && (
         <div className="a-card pr-card">
           <div className="a-bar" style={{ marginBottom: 8 }}><b style={{ fontSize: 14 }}>Поданные заказы</b></div>
+          {correction && <div className="a-card" style={{ padding: 16, marginBottom: 16 }}>
+            <div className="a-bar"><b>Замена заказа · {correction.order.shop} · {dayjs(correction.order.date).format('DD.MM.YYYY')}</b><span>{correction.file}</span></div>
+            <p>Файл полностью заменит состав этого заказа. Отсутствующие в файле артикулы будут убраны. Дата, цех и остальные заказы сохранятся.</p>
+            <div style={{ maxHeight: 300, overflow: 'auto' }}><table className="a-t no-sh"><thead><tr><th>Артикул</th><th>Было, шт</th><th>Станет, шт</th></tr></thead><tbody>{[...new Set([...correction.order.items.map(r=>r[0]), ...correction.items.map(r=>r[0])])].map(offer => <tr key={offer}><td>{offer}</td><td>{fmtInt(correction.order.items.find(r=>r[0]===offer)?.[1] || 0)}</td><td>{fmtInt(correction.items.find(r=>r[0]===offer)?.[1] || 0)}</td></tr>)}</tbody></table></div>
+            <p>Всего: {fmtInt(correction.order.pcs)} → {fmtInt(correction.items.reduce((n,r)=>n+r[1],0))} шт.</p>
+            {correctionError && <p role="alert">{correctionError}</p>}
+            <div className="a-bar"><button className="a-btn" disabled={!!busy} onClick={confirmCorrection}>{busy === 'replace' ? 'Сохранение…' : 'Заменить заказ'}</button><button className="a-btn ghost" disabled={!!busy} onClick={()=>setCorrection(null)}>Отмена</button></div>
+          </div>}
           <table className="a-t s-slice">
             <thead><tr><th>Дата</th><th>Цех</th><th className="r">Заданий</th><th className="r">Штук</th><th className="r">Артикулов</th><th /></tr></thead>
             <tbody>
@@ -485,6 +517,7 @@ function SeatProduction({ cabinet, nav }) {
                   <td><button className="a-btn ghost" aria-expanded={expandedOrders.has(o.id)} onClick={() => setExpandedOrders(v => { const n = new Set(v); n.has(o.id) ? n.delete(o.id) : n.add(o.id); return n; })}>{expandedOrders.has(o.id) ? '▾' : '▸'} {dayjs(o.date).format('DD.MM.YYYY')}, {WD[dayjs(o.date).day()]}</button></td><td>{o.shop}</td>
                   <td className="n r">{selectedOffer ? fmtInt(o.items.reduce((n,r) => n + Number(r[2] || 0), 0)) : o.tasks}</td><td className="n r">{fmtInt(selectedOffer ? o.items.reduce((n,r) => n + r[1], 0) : o.pcs)}</td><td className="n r">{o.items.length}</td>
                   <td className="r">
+                    <label className="a-btn ghost pr-upb" style={{ opacity: busy ? .5 : 1 }}>Загрузить исправленный Excel<input type="file" accept=".xlsx,.xls,.csv" disabled={!!busy || !!correction} style={{ display: 'none' }} onChange={e => importPast(d.orders.find(row=>row.id===o.id), e)} /></label>{' '}
                     <button type="button" className="a-btn ghost" onClick={() => downloadPast(o)}>⬇ Excel</button>{' '}
                     <button type="button" className="a-btn ghost" onClick={() => { if (window.confirm('Удалить заказ из истории?')) removeProductionOrder(cabinet, o.id).then(r => setD(p => ({ ...p, orders: r.data.data }))); }}>×</button>
                   </td>

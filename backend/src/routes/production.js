@@ -1,5 +1,5 @@
 const express = require('express');
-const { query } = require('../db');
+const { query, getPool } = require('../db');
 
 // ─────────────────────────────────────────────────────────────────────────
 // «Производство» — потребность в пошив чехлов на сиденья.
@@ -94,15 +94,43 @@ router.post('/settings', async (req, res) => {
 // POST /orders { cabinet, order: { date, shop, tasks, pcs, items: [[артикул, шт, заданий, пошив, остаток, добор]] } }
 // (пошив и остаток — на момент заявки, для журнала заявок)
 router.post('/orders', async (req, res) => {
+  let client;
   try {
     const { cabinet, order, remove } = req.body || {};
     if (!cabinet) return res.status(400).json({ success: false, error: 'Нужен cabinet' });
-    let list = await getJson(key(cabinet, 'orders'), []);
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key(cabinet, 'orders')]);
+    const r = await client.query('SELECT value FROM app_settings WHERE key=$1 FOR UPDATE', [key(cabinet, 'orders')]);
+    let list = r.rows[0] ? JSON.parse(r.rows[0].value) : [];
     if (remove) list = list.filter(o => o.id !== remove);
     if (order) list = [{ ...order, id: Date.now().toString(36), savedAt: new Date().toISOString() }, ...list].slice(0, 60);
-    await setJson(key(cabinet, 'orders'), list);
+    await client.query(`INSERT INTO app_settings (key,value,updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()`, [key(cabinet, 'orders'), JSON.stringify(list)]);
+    await client.query('COMMIT');
+    require('../lib/dataVersion').bump();
     res.json({ success: true, data: list });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  } catch (e) { if (client) await client.query('ROLLBACK'); res.status(500).json({ success: false, error: e.message }); }
+  finally { if (client) client.release(); }
+});
+
+// Замена конкретного заказа без повторного добавления в журнал.
+router.post('/orders/replace', async (req, res) => {
+  let client;
+  try {
+    const { cabinet, ...replacement } = req.body || {};
+    if (!cabinet) throw new Error('Не указан магазин');
+    client = await getPool().connect();
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key(cabinet, 'orders')]);
+    const r = await client.query('SELECT value FROM app_settings WHERE key=$1 FOR UPDATE', [key(cabinet, 'orders')]);
+    const master = await getJson(key(cabinet, 'master'), {});
+    const list = require('../lib/productionOrderReplace').replaceProductionOrder(r.rows[0] ? JSON.parse(r.rows[0].value) : [], replacement, master);
+    await client.query('UPDATE app_settings SET value=$2, updated_at=NOW() WHERE key=$1', [key(cabinet, 'orders'), JSON.stringify(list)]);
+    await client.query('COMMIT');
+    require('../lib/dataVersion').bump();
+    res.json({ success: true, data: list });
+  } catch (e) { if (client) await client.query('ROLLBACK'); res.status(e.status || 400).json({ success: false, error: e.message }); }
+  finally { if (client) client.release(); }
 });
 
 // POST /journal { cabinet, offers: [...], close } — журнал заявок: закрыть артикулы

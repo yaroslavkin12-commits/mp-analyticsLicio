@@ -258,3 +258,5 @@ export const getCategoryAccessOptions = () => api.get('/auth/categories', { time
 export const getUserPassword = id => api.get(`/auth/users/${id}/password`);
 
 export const getShopsHistory = (cabinet, params) => api.get('/sales/history', {params:{cabinet,...params},timeout:180000});
+
+export const replaceProductionOrder = (cabinet, replacement) => api.post('/production/orders/replace', { cabinet, ...replacement });
