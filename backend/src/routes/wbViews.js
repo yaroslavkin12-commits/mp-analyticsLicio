@@ -61,7 +61,7 @@ router.use(async (req, res) => {
     const compactPnl=summaryFinance&&path==='/finance/pnl';
     const coefficients=path==='/finance/coefs';
     const selection=compactPnl?['catalog','orders','sales']:coefficients?['catalog','orders','sales','prices']:financial?['catalog','orders','sales','prices','ads','campaigns']:summaryInput?['catalog','orders','ads','campaigns']:null;
-    const readOptions=selection?{kinds:selection,...(compactPnl?{projection:'aliases'}:{}),...(summaryInput&&req.query.dateFrom&&req.query.dateTo?{from:req.query.dateFrom,to:req.query.dateTo}:{})}:{excludeFinance:true};
+    const readOptions=selection?{kinds:selection,...(compactPnl?{projection:'aliases'}:coefficients||summaryInput?{projection:'metrics'}:{}),...(summaryInput&&req.query.dateFrom&&req.query.dateTo?{from:req.query.dateFrom,to:req.query.dateTo}:{})}:{excludeFinance:true};
     let ds = await bridge.read(readOptions);
     if(req.query.fresh==='1'||!ds.length){await source.sync(req.query.fresh==='1');ds=await bridge.read(readOptions);}
     else source.sync().catch(()=>{});

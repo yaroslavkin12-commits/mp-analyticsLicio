@@ -89,15 +89,16 @@ async function readSelected(kinds,from=null,to=null,projection=null){
  await ensure();
  if(!Array.isArray(kinds)||!kinds.length||kinds.some(k=>!KINDS.includes(k)||k==='finance'))throw Error('Неизвестный набор WB');
  if((from||to)&&![from,to].every(d=>/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d||'')))throw Error('Некорректный период WB');
- if(projection&&projection!=='aliases')throw Error('Неизвестный срез WB');
+ if(projection&&!['aliases','metrics'].includes(projection))throw Error('Неизвестный срез WB');
  const wanted=[...new Set(kinds)].sort(),epoch=operationsEpoch;
- const aliases=d=>d&&projection==='aliases'&&['orders','sales'].includes(d.kind)?{...d,rows:d.rows.map(r=>({id:r.id,offer:r.offer,nmId:r.nmId,name:r.name}))}:d;
+ const aliases=d=>d&&projection&&['orders','sales'].includes(d.kind)?{...d,rows:d.rows.map(r=>projection==='aliases'?{id:r.id,offer:r.offer,nmId:r.nmId,name:r.name}:Object.fromEntries(['id','offer','nmId','name','date','price','srid','cancelled','warehouseType','type'].map(k=>[k,r[k]])))}:d;
  if(operationsCache&&Date.now()-operationsCache.at<300000)return operationsCache.rows.filter(r=>wanted.includes(r.kind)).map(r=>aliases(r.kind==='ads'&&from?{...r,rows:r.rows.filter(v=>v.date>=from&&v.date<=to)}:r));
  const key=k=>JSON.stringify([k,k==='ads'?from:null,k==='ads'?to:null,['orders','sales'].includes(k)?projection:null]);
  const missing=wanted.filter(k=>{const h=selectedKinds.get(key(k));return !h||h.epoch!==epoch||Date.now()-h.at>=300000;});
  if(missing.length){
   const batch=query(`SELECT kind,meta,updated_at,CASE
     WHEN $5::text='aliases' AND kind IN ('orders','sales') THEN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.value->'id','offer',a.value->'offer','nmId',a.value->'nmId','name',a.value->'name') ORDER BY a.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS a(value,ordinality)),'[]'::jsonb)
+    WHEN $5::text='metrics' AND kind IN ('orders','sales') THEN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.value->'id','offer',a.value->'offer','nmId',a.value->'nmId','name',a.value->'name','date',a.value->'date','price',a.value->'price','srid',a.value->'srid','cancelled',a.value->'cancelled','warehouseType',a.value->'warehouseType','type',a.value->'type') ORDER BY a.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS a(value,ordinality)),'[]'::jsonb)
     WHEN kind='ads' AND $3::text IS NOT NULL THEN COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality) WHERE item.value->>'date' BETWEEN $3 AND $4),'[]'::jsonb)
     ELSE rows END AS rows FROM wb_bridge_data d WHERE cabinet=$1 AND kind=ANY($2::text[])`,[CABINET,missing,from,to,projection]);
   for(const k of missing){const id=key(k),entry={at:Date.now(),epoch,promise:batch.then(rows=>rows.find(r=>r.kind===k)||null)};selectedKinds.set(id,entry);entry.promise.catch(()=>{if(selectedKinds.get(id)===entry)selectedKinds.delete(id);});}
