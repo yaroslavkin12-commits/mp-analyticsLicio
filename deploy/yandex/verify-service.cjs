@@ -19,7 +19,7 @@ function request(path, body, cookie) {
   });
 }
 (async () => {
-  let out = { transport: 'https', domain, interfaceVersion:2, summaryPerformanceVersion:9 }, cookie, probeId;
+  let out = { transport: 'https', domain, interfaceVersion:2, summaryPerformanceVersion:10 }, cookie, probeId;
   try {
     let ready = false;
     for (let i = 0; i < 45; i++) {

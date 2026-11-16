@@ -7,6 +7,13 @@ module.exports=async env=>{
  try{
   await client.connect();
   let start=performance.now();await client.query("SELECT repeat('x',1048576) AS probe");out.transfer1MbMs=Math.round(performance.now()-start);
+  const {neon,neonConfig}=require('../../backend/node_modules/@neondatabase/serverless'),originalFetch=neonConfig.fetchFunction;
+  let encoding=null;neonConfig.fetchFunction=async(...args)=>{const response=await fetch(...args);encoding=response.headers.get('content-encoding');return response;};
+  try{
+   const sql=neon(env.DATABASE_URL,{types:require('../../backend/node_modules/pg').types});
+   start=performance.now();const [probe]=await sql.query("SELECT repeat('x',1048576) AS probe",[],{fetchOptions:{signal:AbortSignal.timeout(15000)}});out.httpTransfer1MbMs=Math.round(performance.now()-start);out.httpEncoding=encoding;out.httpPayloadCorrect=probe.probe.length===1048576;
+   const [shape]=await sql.query("SELECT 12.34::numeric AS amount, true AS flag, jsonb_build_object('n',1) AS object",[],{fetchOptions:{signal:AbortSignal.timeout(15000)}});out.httpTypesCorrect=shape.amount==='12.34'&&shape.flag===true&&shape.object.n===1;
+  }catch(e){out.httpError=e.code||'unavailable';}finally{neonConfig.fetchFunction=originalFetch;}
   const to=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow'}).format(new Date()),from=new Date(Date.parse(to)-29*86400000).toISOString().slice(0,10);
   start=performance.now();const r=await client.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT date::text d,sku,name,SUM(amount) a,SUM(qty) q FROM finance_daily WHERE cabinet=$1 AND date BETWEEN $2 AND $3 GROUP BY date,sku,name',['defly',from,to]);
   const p=r.rows[0]['QUERY PLAN'][0];out.financePlan={roundtripMs:Math.round(performance.now()-start),executionMs:p['Execution Time'],planningMs:p['Planning Time'],nodes:[]};

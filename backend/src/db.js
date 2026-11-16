@@ -34,7 +34,7 @@ function toPostgres(sql) {
 async function query(sql, params = []) {
   const p=getPool(),start=performance.now(),waiting=p.waitingCount||0;queryCount++;
   let rows,error;
-  try{({rows}=await p.query(toPostgres(sql),params));return rows;}
+  try{const statement=toPostgres(sql);rows=await require('./lib/reportTransport').run(statement,params,async()=>{const result=await p.query(statement,params);return result.rows;});return rows;}
   catch(e){error=e.code||'error';errors++;throw e;}
   finally{
     const ms=Math.round(performance.now()-start);
@@ -67,4 +67,4 @@ async function testConnection() {
   catch (e) { console.error('❌ DB error:', e.message); return false; }
 }
 
-module.exports = { query, getPool, testConnection, initSchema, diagnostics:()=>({queries:queryCount,errors,pool:pool?{total:pool.totalCount,idle:pool.idleCount,waiting:pool.waitingCount}:null,recent:recent.filter(r=>!/^app_(sessions|users|access_|integration_)/.test(r.relation)).map(({at,...r})=>r)}) };
+module.exports = { query, getPool, testConnection, initSchema, diagnostics:()=>({queries:queryCount,errors,http:require('./lib/reportTransport').diagnostics(),pool:pool?{total:pool.totalCount,idle:pool.idleCount,waiting:pool.waitingCount}:null,recent:recent.filter(r=>!/^app_(sessions|users|access_|integration_)/.test(r.relation)).map(({at,...r})=>r)}) };
