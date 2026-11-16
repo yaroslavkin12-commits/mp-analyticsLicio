@@ -107,7 +107,6 @@ router.post('/orders', async (req, res) => {
     if (order) list = [{ ...order, id: Date.now().toString(36), savedAt: new Date().toISOString() }, ...list].slice(0, 60);
     await client.query(`INSERT INTO app_settings (key,value,updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()`, [key(cabinet, 'orders'), JSON.stringify(list)]);
     await client.query('COMMIT');
-    require('../lib/dataVersion').bump();
     res.json({ success: true, data: list });
   } catch (e) { if (client) await client.query('ROLLBACK'); res.status(500).json({ success: false, error: e.message }); }
   finally { if (client) client.release(); }
@@ -127,7 +126,6 @@ router.post('/orders/replace', async (req, res) => {
     const list = require('../lib/productionOrderReplace').replaceProductionOrder(r.rows[0] ? JSON.parse(r.rows[0].value) : [], replacement, master);
     await client.query('UPDATE app_settings SET value=$2, updated_at=NOW() WHERE key=$1', [key(cabinet, 'orders'), JSON.stringify(list)]);
     await client.query('COMMIT');
-    require('../lib/dataVersion').bump();
     res.json({ success: true, data: list });
   } catch (e) { if (client) await client.query('ROLLBACK'); res.status(e.status || 400).json({ success: false, error: e.message }); }
   finally { if (client) client.release(); }
