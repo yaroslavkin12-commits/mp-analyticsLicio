@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { accessMode } from './lib/accessClient';
+import { accessMode, canWriteScoped } from './lib/accessClient';
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
 export const getWbData = (cabinet, params) => api.get('/wb/data', { params: { cabinet, ...params }, timeout: 120000 });
 export const getTaxSettings = cabinet => api.get('/settings/tax', { params: { cabinet } });
@@ -9,7 +9,7 @@ export const saveTaxSettings = (cabinet, settings) => api.post('/settings/tax', 
 // WB использует те же страницы и контракты представления, что и Ozon.
 api.interceptors.request.use(cfg => {
   const access = accessMode(), method = (cfg.method || 'get').toLowerCase();
-  if (access.readOnly && !['get','head','options'].includes(method) && !/^\/auth\/(password|logout|activity)$/.test(cfg.url)) throw new Error('Доступ только для просмотра и выгрузки');
+  if (access.readOnly && !['get','head','options'].includes(method) && !canWriteScoped(cfg)) throw new Error('Доступ только для просмотра и выгрузки');
   if (access.cacheTag && ['get','head'].includes(method)) cfg.params = { ...cfg.params, _access: access.cacheTag };
   const cabinet = cfg.params?.cabinet || (cfg.data && typeof cfg.data === 'object' ? cfg.data.cabinet : null);
   if (cabinet === 'defly_wb') {

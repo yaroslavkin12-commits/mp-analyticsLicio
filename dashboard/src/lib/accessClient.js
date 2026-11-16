@@ -12,3 +12,14 @@ export const accessStorageKey = key => state.storagePrefix + key;
 export const accessStorage = { getItem:key=>localStorage.getItem(accessStorageKey(key)), setItem:(key,value)=>localStorage.setItem(accessStorageKey(key),value), removeItem:key=>localStorage.removeItem(accessStorageKey(key)) };
 
 export const canManageAccess = user => user?.role === 'admin' || (user?.role === 'owner' && user?.login === 'evgeniy');
+
+// Исключения для ограниченного профиля: личная сессия и ручные заметки
+// к конкретному товару. Принадлежность товара проверяет сервер.
+export function canWriteScoped(cfg) {
+  const method = String(cfg.method || 'get').toLowerCase();
+  if (/^\/auth\/(password|logout|activity)$/.test(cfg.url)) return true;
+  const cabinet = cfg.params?.cabinet || cfg.data?.cabinet;
+  if (cabinet === 'defly_wb') return false;
+  if (method === 'post' && /^\/(ads|promo)\/events$/.test(cfg.url)) return typeof cfg.data?.offerId === 'string' && !!cfg.data.offerId.trim();
+  return method === 'delete' && /^\/(ads|promo)\/events\/\d+$/.test(cfg.url);
+}
