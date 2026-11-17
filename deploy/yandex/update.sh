@@ -43,6 +43,16 @@ if [ -f /var/log/mp-migrate-safe.log ]; then
   elif grep -qE '^(ERROR:|pg_restore: error:)' /var/log/mp-migrate-safe.log; then MIG_ERROR='Ошибка восстановления SQL'; fi
   st migrationJob="$JOB_STATE" migrationExit="$JOB_EXIT" migrationError="$MIG_ERROR"
 fi
+# Одноразовое безопасное восстановление истории: исходник + сохранённые архивы.
+if [ -f "$APP/deploy/yandex/repair-history.cjs" ]; then
+  HISTORY_HASH=$(sha256sum "$APP/deploy/yandex/repair-history.cjs" | cut -d' ' -f1)
+  if [ ! -f "$STATE/history-repaired-v1" ]; then
+    if systemd-run --no-block --unit="mp-history-repair-${HISTORY_HASH:0:12}" /usr/bin/node "$APP/deploy/yandex/repair-history.cjs"; then
+      touch "$STATE/history-repaired-v1"
+    fi
+  fi
+fi
+
 # Разовая проверка рабочего входа и отчётов; пароль остаётся внутри сервера.
 VERIFY_HASH=$(sha256sum "$APP/deploy/yandex/verify-service.cjs" | cut -d' ' -f1)
 if grep -q '^USER_PASSWORD_VAULT_KEY=' /etc/mp/app.env; then VERIFY_HASH="$VERIFY_HASH-vault"; fi

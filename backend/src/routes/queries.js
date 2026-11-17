@@ -6,7 +6,7 @@ const { ORDER } = require('../lib/categories');
 const { meta } = require('./finance');
 const crypto = require('crypto');
 const { ensureFinTables } = require('../collectors/ads/sheetSync');
-const { bulkUpsert } = require('../collectors/ads/ozonHttp');
+const { importHistory } = require('../lib/historyImport');
 
 const num = v => Number(v) || 0;
 const r2 = v => Math.round(v * 100) / 100;
@@ -87,7 +87,7 @@ router.post('/ingest', async (req, res) => {
       out.push([cabinet, date, String(r[0]), String(r[1]).slice(0, 200), pos > 0 ? Math.round(pos * 100) / 100 : null,
         Math.round(num(r[3])), Math.round(num(r[4])), Math.round(num(r[5])), Math.round(num(r[6])), num(r[7]), r[8] === '' || r[8] == null ? null : num(r[8])]);
     }
-    const n = out.length ? await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], out, ['cabinet', 'date', 'sku', 'query']) : 0;
+    const n = out.length ? await importHistory('search_query_daily', cabinet, out, ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], ['cabinet', 'date', 'sku', 'query'], [], {partial:true}) : 0;
     if (req.body.sample) await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
       [`queries_sample:${cabinet}`, JSON.stringify({ at: new Date().toISOString(), date, sample: String(req.body.sample).slice(0, 1500) })]).catch(() => {});
     require('../lib/dataVersion').bump();
@@ -98,7 +98,7 @@ router.post('/ingest', async (req, res) => {
 // POST /api/queries/ingest-ext {cabinet, sku, date, rows: [{query, position, searches, views, ctr, orders, gmv}]}
 // — полный список запросов товара за день из кабинета Ozon (собирает браузерное
 // расширение «Аналитика товара → Запросы товара»: там все запросы, а не 15 лучших,
-// и есть конверсия в карточку). День товара заменяется целиком.
+// и есть конверсия в карточку). Обновляются переданные запросы; ранее сохранённые не удаляются.
 router.post('/ingest-ext', async (req, res) => {
   try {
     await ensureFinTables();
@@ -111,8 +111,7 @@ router.post('/ingest-ext', async (req, res) => {
       out.push([cabinet, date, String(sku), String(r.query).slice(0, 200), pos > 0 ? Math.round(pos * 100) / 100 : null, Math.round(num(r.searches)), v,
         Math.round(v * ctr / 100), Math.round(num(r.orders)), num(r.gmv), ctr || null]);
     }
-    await query(`DELETE FROM search_query_daily WHERE cabinet = $1 AND date = $2 AND sku = $3`, [cabinet, date, String(sku)]);
-    const n = out.length ? await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], out, ['cabinet', 'date', 'sku', 'query']) : 0;
+    const n = out.length ? await importHistory('search_query_daily', cabinet, out, ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], ['cabinet', 'date', 'sku', 'query'], [], {partial:true}) : 0;
     require('../lib/dataVersion').bump();
     res.json({ success: true, data: { rows: n } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }

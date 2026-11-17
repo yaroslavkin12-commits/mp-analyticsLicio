@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ночная копия именно рабочей базы из app.env; храним 7 последних архивов.
+# Ночная копия именно рабочей базы из app.env; храним 7 дневных архивов и постоянную копию каждого месяца.
 set -euo pipefail
 umask 077
 exec 9>/var/lib/mp/backup.lock
@@ -15,6 +15,9 @@ const dir = '/var/backups/mp';
 fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 const date = new Date().toISOString().slice(0, 10).replaceAll('-', '');
 const file = `${dir}/mp-${date}.dump`, temp = `${file}.tmp`;
+const monthly = `${dir}/mp-month-${date.slice(0,6)}.dump`;
+// Сначала защищаем имеющуюся копию, затем создаём новую дневную.
+if (fs.existsSync(file) && !fs.existsSync(monthly)) fs.linkSync(file, monthly);
 const connection = new URL(env.DATABASE_URL);
 const pgEnv = { ...process.env,
   PGHOST: connection.hostname, PGPORT: connection.port || '5432',
@@ -35,6 +38,7 @@ try {
   const check = spawnSync(`${process.env.PGBIN}/pg_restore`, ['--list', temp], { stdio: 'ignore' });
   if (check.error || check.status !== 0 || fs.statSync(temp).size === 0) throw Error('Архив базы не прошёл проверку');
   fs.renameSync(temp, file);
+  if (!fs.existsSync(monthly)) fs.linkSync(file, monthly);
 } catch (error) {
   try { fs.unlinkSync(temp); } catch {}
   console.error(error.message);
@@ -53,6 +57,7 @@ try { status = JSON.parse(fs.readFileSync(statusFile)); } catch {}
 status.backupError = '';
 status.backupAt = new Date().toISOString();
 status.backupBytes = fs.statSync(file).size;
+status.monthlyBackups = fs.readdirSync(dir).filter(n => /^mp-month-\d{6}\.dump$/.test(n)).length;
 status.backupDatabaseMode = status.databaseMode || 'configured';
 fs.writeFileSync(statusFile, JSON.stringify(status));
 NODE

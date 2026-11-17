@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { query } = require('../../db');
-const { delay, mskDate, sellerHeaders, request, bulkInsert } = require('./ozonHttp');
+const { delay, mskDate, sellerHeaders, request } = require('./ozonHttp');
 
 // Текущие остатки FBO/FBS по кабинету — снимок на сегодняшний день
 // (перезаписывается при каждом сборе за день). Запись пачкой, а не по одной
@@ -29,9 +29,7 @@ async function collectProductStocks(cabinet) {
   if (!rows.length) return { rows: 0 }; // не затираем вчерашний снимок пустотой
 
   // Удаляем сегодняшний снимок только когда новый уже полностью получен.
-  await query(`DELETE FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date = $2`, [cabinet, today]);
-  await bulkInsert('ad_product_stocks',
-    ['cabinet', 'platform', 'snapshot_date', 'sku', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'], rows);
+  await require('../../lib/stockSnapshot').saveStockSnapshot(cabinet,today,rows);
   console.log(`[Stocks:${cabinet}] ${rows.length}`);
   return { rows: rows.length };
 }

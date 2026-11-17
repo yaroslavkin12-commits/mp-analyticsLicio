@@ -2,7 +2,7 @@ const axios = require('axios');
 const { clusterOfWarehouse } = require('../../lib/warehouses');
 const { campLabel } = require('../../lib/adZone');
 const { query } = require('../../db');
-const { bulkUpsert, bulkInsert } = require('./ozonHttp');
+const { bulkUpsert } = require('./ozonHttp');
 const rowDiff = require('../../lib/rowDiff');
 
 // Запасной источник данных Ozon, когда прямые запросы с Render блокируются
@@ -46,6 +46,7 @@ function parseCsv(text) {
     else if (c === '\r') { /* пропускаем, перевод строки обработает \n */ }
     else field += c;
   }
+  if(inQuotes)throw new Error('CSV-выгрузка оборвалась. Накопленная история не изменена.');
   if (field.length || row.length) { row.push(field); rows.push(row); }
   return rows.filter(r => !(r.length === 1 && r[0] === ''));
 }
@@ -188,9 +189,7 @@ async function syncStocksFromSheet(cabinet) {
   // Остатки те же, что час назад, — в базу не пишем (и пополнений быть не может).
   const same = rowDiff.sameAsLast(`stocks:${cabinet}`, out);
   if (same.same) return { rows: 0 };
-  await query(`DELETE FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon' AND snapshot_date = $2`, [cabinet, today]);
-  await bulkInsert('ad_product_stocks',
-    ['cabinet', 'platform', 'snapshot_date', 'sku', 'offer_id', 'fbo_present', 'fbo_reserved', 'fbs_present', 'fbs_reserved'], out);
+  await require('../../lib/stockSnapshot').saveStockSnapshot(cabinet,today,out);
   same.save();
   console.log(`[SheetStocks:${cabinet}] ${out.length} (из Google-таблицы)`);
   // Пополнения остатков → уведомления (см. restock.js).
@@ -607,29 +606,10 @@ function ensureFinTables() {
   })().catch(e => { finTablesReady = null; throw e; });
   return finTablesReady;
 }
-// Заменяем в базе весь диапазон дат, который есть в таблице (там полные данные).
-// Чтобы не переписывать каждый час десятки тысяч одинаковых строк: если
-// память (lib/rowDiff) знает, что лежит в базе, и ни одна строка диапазона
-// не пропала — пишем только новые и изменившиеся. Иначе — как раньше:
-// удаляем диапазон и записываем его целиком.
+// Внешняя таблица содержит скользящее окно. Накопленная история хранится
+// независимо: атомарное добавление/обновление без удаления диапазона.
 async function replaceRange(table, cabinet, rows, columns, conflict, skip = []) {
-  if (!rows.length) return 0;
-  const id = `${table}:${cabinet}`;
-  const di = columns.indexOf('date');
-  const dates = rows.map(r => r[di]).sort();
-  const lo = dates[0], hi = dates[dates.length - 1];
-  const mem = rowDiff.state(id);
-  if (mem) {
-    const keyIdx = conflict.map(c => columns.indexOf(c));
-    const keys = new Set(rows.map(r => keyIdx.map(i => String(r[i])).join('|')));
-    const dPos = conflict.indexOf('date');
-    let removed = false;
-    for (const k of mem.keys()) { const d = k.split('|')[dPos]; if (d >= lo && d <= hi && !keys.has(k)) { removed = true; break; } }
-    if (!removed) return bulkUpsert(table, columns, rows, conflict, undefined, { diff: id, skip });
-  }
-  rowDiff.drop(id);
-  await query(`DELETE FROM ${table} WHERE cabinet = $1 AND date BETWEEN $2 AND $3`, [cabinet, lo, hi]);
-  return bulkUpsert(table, columns, rows, conflict, undefined, { diff: id, skip });
+  return require('../../lib/historyImport').importHistory(table,cabinet,rows,columns,conflict,skip);
 }
 // Поисковые запросы: вкладка большая (десятки тысяч строк в день), поэтому
 // тянем не всю, а только дни, где число строк в таблице изменилось с
@@ -671,8 +651,7 @@ async function syncQueriesIncremental(cabinet) {
       map.set(row.slice(1, 4).join('|'), row);
     }
     rows = null;
-    await query(`DELETE FROM search_query_daily WHERE cabinet = $1 AND date = $2`, [cabinet, d]);
-    if (map.size) n += await bulkUpsert('search_query_daily', ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], [...map.values()], ['cabinet', 'date', 'sku', 'query']);
+    if (map.size) n += await replaceRange('search_query_daily', cabinet, [...map.values()], ['cabinet', 'date', 'sku', 'query', 'position', 'searches', 'views', 'clicks', 'orders', 'revenue', 'conversion'], ['cabinet', 'date', 'sku', 'query']);
     prev[d] = sheetCnt[d];
     await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(prev)]);
   }
@@ -695,7 +674,6 @@ async function importPrices(cabinet) {
   return total;
 }
 
-let whCleanDay = null;
 async function syncFinanceFromSheet(cabinet, { coreOnly = false } = {}) {
   // Отдельная задача 'finance' раз в час (см. jobs.js) — со своим, более
   // длинным таймаутом: вкладки большие (Finance ~30 тыс. строк).
@@ -729,11 +707,8 @@ async function syncFinanceFromSheet(cabinet, { coreOnly = false } = {}) {
         if (cur) { cur[6] += row[6]; cur[7] += row[7]; cur[8] += row[8]; } else map.set(key, row);
       }
       if (map.size) {
-        // Старше 120 дней — чистим раз в сутки, не каждый час.
-        if (whCleanDay !== today) {
-          await query(`DELETE FROM stock_cluster_daily WHERE cabinet = $1 AND date < $2`, [cabinet, new Date(Date.now() - 120 * 86400e3).toISOString().slice(0, 10)]);
-          whCleanDay = today;
-        }
+        // Дневные снимки накапливаются в базе, даже когда их нет в источнике.
+        // Историю складских остатков сохраняем без ограничения срока.
         total += await replaceRange('stock_cluster_daily', cabinet, [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
           ['cabinet', 'date', 'offer_id', 'warehouse']);
       }
@@ -748,19 +723,25 @@ async function syncFinanceFromSheet(cabinet, { coreOnly = false } = {}) {
     total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
   }
   total += await importPrices(cabinet);
-  const fin = await fetchSheetRows('Finance', cabinet);
-  if (fin) {
-    const map = new Map();
-    for (const r of fin) {
-      if (r.cabinet !== cabinet || !r.date || !r.name) continue;
-      const row = [cabinet, String(r.date).slice(0, 10), String(r.sku || ''), String(r.name).slice(0, 160), num(r.amount), num(r.qty)];
-      const key = row.slice(1, 4).join('|');
-      const cur = map.get(key);
-      if (cur) { cur[4] += row[4]; cur[5] += row[5]; } else map.set(key, row);
-    }
-    total += await replaceRange('finance_daily', cabinet, [...map.values()], ['cabinet', 'date', 'sku', 'name', 'amount', 'qty'], ['cabinet', 'date', 'sku', 'name']);
-  }
+  total += await syncFinanceOnlyFromSheet(cabinet);
   return { rows: total };
+}
+
+async function syncFinanceOnlyFromSheet(cabinet) {
+  await ensureFinTables();
+  const fin=await fetchSheetRows('Finance',cabinet);
+  if(!fin || !fin.length) throw new Error('Финансовая выгрузка пуста или недоступна. Накопленная история сохранена.');
+  const map=new Map();
+  for(const r of fin){
+    if(r.cabinet!==cabinet)continue;
+    const amount=Number(String(r.amount ?? '').replace(/\s/g,'').replace(',','.')),qty=Number(String(r.qty ?? '').replace(/\s/g,'').replace(',','.'));
+    if(!r.date||!r.name||String(r.amount??'').trim()===''||String(r.qty??'').trim()===''||!Number.isFinite(amount)||!Number.isFinite(qty))throw new Error('Неполная финансовая строка. Накопленная история сохранена.');
+    const row=[cabinet,String(r.date).slice(0,10),String(r.sku||''),String(r.name).slice(0,160),amount,qty];
+    const key=JSON.stringify(row.slice(1,4)),cur=map.get(key);
+    if(cur){cur[4]+=row[4];cur[5]+=row[5];}else map.set(key,row);
+  }
+  if(!map.size)throw new Error('В выгрузке нет финансов выбранного кабинета. История сохранена.');
+  return replaceRange('finance_daily',cabinet,[...map.values()],['cabinet','date','sku','name','amount','qty'],['cabinet','date','sku','name']);
 }
 
 async function syncAdDetailsFromSheet(cabinet) {
@@ -793,7 +774,7 @@ async function cleanupSheetJunk() {
   }
 }
 
-module.exports = {
+module.exports = { syncFinanceOnlyFromSheet,
   parseCsv,
   backfillNewCampaigns, logCampaignSwitches,
   addAutoEvent,

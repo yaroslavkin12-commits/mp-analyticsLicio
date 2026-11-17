@@ -6,6 +6,7 @@ let ready;
 function ensure() {
   if (!ready) ready = (async () => {
     await query(`CREATE TABLE IF NOT EXISTS wb_bridge_data (cabinet TEXT NOT NULL, kind TEXT NOT NULL, run_id TEXT NOT NULL, collected_at TIMESTAMPTZ NOT NULL, meta JSONB NOT NULL, rows JSONB NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY(cabinet, kind))`);
+    await require('./wbHistory').ensureWbHistory(query);
     await query(`CREATE TABLE IF NOT EXISTS wb_bridge_parts (cabinet TEXT NOT NULL, kind TEXT NOT NULL, run_id TEXT NOT NULL, part INT NOT NULL, hash TEXT NOT NULL, meta JSONB NOT NULL, rows JSONB NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), PRIMARY KEY(cabinet,kind,run_id,part))`);
   })().catch(e => { ready = null; throw e; });
   return ready;
@@ -32,7 +33,7 @@ async function ingest(input, { deferCommit = false } = {}) {
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [meta.cabinet + ':' + meta.kind]);
-    const current = (await client.query('SELECT run_id, collected_at FROM wb_bridge_data WHERE cabinet=$1 AND kind=$2', [meta.cabinet, meta.kind])).rows[0];
+    const current = (await client.query('SELECT run_id, collected_at, meta FROM wb_bridge_data WHERE cabinet=$1 AND kind=$2', [meta.cabinet, meta.kind])).rows[0];
     if (current?.run_id === meta.runId) { await client.query('COMMIT'); return { complete: true, duplicate: true }; }
     if (current && Date.parse(current.collected_at) > Date.parse(meta.collectedAt)) throw new Error('Уже получена более новая версия WB');
     const hash = crypto.createHash('sha256').update(JSON.stringify({ meta, rows })).digest('hex');
@@ -42,6 +43,7 @@ async function ingest(input, { deferCommit = false } = {}) {
     const received = Number((await client.query('SELECT COUNT(*)::int AS received FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3', [meta.cabinet, meta.kind, meta.runId])).rows[0].received);
     let complete = false;
     if (received === meta.parts && !deferCommit) {
+      await require('./wbHistory').captureWbHistory(client,meta);
       const chunks = (await client.query(meta.kind === 'finance'
         ? 'SELECT part, meta, jsonb_array_length(rows) AS row_count FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3 ORDER BY part'
         : 'SELECT part, meta, rows FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3 ORDER BY part', [meta.cabinet, meta.kind, meta.runId])).rows;
@@ -63,6 +65,7 @@ async function ingest(input, { deferCommit = false } = {}) {
         if (all.length !== meta.total || new Set(all.map(r => r.id)).size !== all.length) throw new Error('Количество или идентификаторы строк WB не совпадают');
         await client.query(`INSERT INTO wb_bridge_data(cabinet,kind,run_id,collected_at,meta,rows) VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb) ON CONFLICT(cabinet,kind) DO UPDATE SET run_id=EXCLUDED.run_id,collected_at=EXCLUDED.collected_at,meta=EXCLUDED.meta,rows=EXCLUDED.rows,updated_at=NOW()`, [meta.cabinet, meta.kind, meta.runId, meta.collectedAt, JSON.stringify(meta), JSON.stringify(all)]);
       }
+      await require('./wbHistory').accumulateWbHistory(client,meta,current);
       await client.query('DELETE FROM wb_bridge_parts WHERE cabinet=$1 AND kind=$2 AND run_id=$3', [meta.cabinet, meta.kind, meta.runId]);
       complete = true;
     }
