@@ -1,6 +1,11 @@
 // Сохраняем историю независимо от скользящего окна очередной выгрузки WB.
 // Эти функции выполняются на том же клиенте и внутри транзакции импорта.
 const DATED=new Set(['orders','sales','ads','finance']);
+function coverageRanges(meta){return Array.isArray(meta?.ranges)?meta.ranges:meta?.from&&meta?.to?[[meta.from,meta.to]]:[];}
+function mergeCoverage(previous,next){
+ const ranges=[...coverageRanges(previous),...coverageRanges(next)].filter(r=>Array.isArray(r)&&r.length===2&&r.every(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d)))&&r[0]<=r[1]).map(r=>[...r]).sort((a,b)=>a[0].localeCompare(b[0]));
+ const out=[];for(const r of ranges){const last=out.at(-1);if(last&&Date.parse(r[0])<=Date.parse(last[1])+86400000){if(r[1]>last[1])last[1]=r[1];}else out.push(r);}return out;
+}
 async function ensureWbHistory(run){
  await run(`CREATE TABLE IF NOT EXISTS wb_history_rows(cabinet TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,value JSONB NOT NULL,collected_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(cabinet,kind,id))`);
  await run(`CREATE TABLE IF NOT EXISTS wb_history_snapshots(cabinet TEXT NOT NULL,kind TEXT NOT NULL,day DATE NOT NULL,meta JSONB NOT NULL,rows JSONB NOT NULL,collected_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(cabinet,kind,day))`);
@@ -29,6 +34,6 @@ async function accumulateWbHistory(client,meta,previous){
  const from=[previous?.meta?.from,meta.from].filter(Boolean).sort()[0]||null;
  const to=[previous?.meta?.to,meta.to].filter(Boolean).sort().at(-1)||null;
  await client.query(`WITH accumulated AS (SELECT COALESCE(jsonb_agg(value ORDER BY id),'[]'::jsonb) AS rows,COUNT(*)::int AS total FROM wb_history_rows WHERE cabinet=$1 AND kind=$2)
-   UPDATE wb_bridge_data d SET rows=a.rows,meta=d.meta||jsonb_build_object('total',a.total,'sourceTotal',$3::int,'from',$4::text,'to',$5::text,'historyAccumulated',true) FROM accumulated a WHERE d.cabinet=$1 AND d.kind=$2`,[meta.cabinet,meta.kind,meta.total,from,to]);
+   UPDATE wb_bridge_data d SET rows=a.rows,meta=d.meta||jsonb_build_object('total',a.total,'sourceTotal',$3::int,'from',$4::text,'to',$5::text,'historyAccumulated',true,'ranges',$6::jsonb) FROM accumulated a WHERE d.cabinet=$1 AND d.kind=$2`,[meta.cabinet,meta.kind,meta.total,from,to,JSON.stringify(mergeCoverage(previous?.meta,meta))]);
 }
-module.exports={ensureWbHistory,captureWbHistory,accumulateWbHistory,DATED};
+module.exports={ensureWbHistory,captureWbHistory,accumulateWbHistory,DATED,coverageRanges,mergeCoverage};

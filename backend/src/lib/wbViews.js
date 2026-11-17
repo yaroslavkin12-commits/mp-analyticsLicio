@@ -1,6 +1,7 @@
 const dayjs = require('dayjs');
 const { autoPath, carBrand, ORDER } = require('./categories');
 const { districtOf, DISTRICT_ORDER } = require('./regions');
+const {coverageRanges}=require('./wbHistory');
 const KEY = 'wb-ui:defly_wb:v1';
 const initial = () => ({ groups: [], members: {}, order: [], transit: {}, events: [], categories: {}, manual: {}, self: {}, clusterDecisions: {}, templates: null, sewing: {} });
 async function preferences() { const r = await require('../db').query('SELECT value FROM app_settings WHERE key=$1', [KEY]); return { ...initial(), ...(r[0] ? JSON.parse(r[0].value) : {}) }; }
@@ -18,8 +19,8 @@ function build(datasets, prefs = initial(), params = {}) {
   if (![from, to].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d)) && dayjs(d).format('YYYY-MM-DD') === d) || from > to || dayjs(to).diff(from, 'day') > 399) throw new Error('Укажите период не более 400 дней');
   const dates = dateRange(from, to), prevTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD'), prevFrom = dayjs(from).subtract(dates.length, 'day').format('YYYY-MM-DD');
   const ds = new Map(datasets.map(r => [r.kind, r])), get = k => ds.get(k)?.rows || [];
-  const covered = (kind, d) => !!ds.get(kind) && (!['orders', 'sales', 'ads', 'funnel'].includes(kind) || (ds.get(kind).meta.from <= d && ds.get(kind).meta.to >= d));
-  const full = (kind, f = from, t = to) => covered(kind, f) && covered(kind, t);
+  const covered = (kind, d) => !!ds.get(kind) && (!['orders', 'sales', 'ads', 'funnel'].includes(kind) || coverageRanges(ds.get(kind).meta).some(([f,t])=>f<=d&&t>=d));
+  const full = (kind, f = from, t = to) => !!ds.get(kind)&&coverageRanges(ds.get(kind).meta).some(([a,b])=>a<=f&&b>=t);
   const articles = [], byOffer = new Map(), nm = new Map();
   function art(offer, name, sku) {
     const o = String(offer || (sku ? 'WB ' + sku : 'Без артикула')).trim(), key = o.toLowerCase();
@@ -76,7 +77,7 @@ function build(datasets, prefs = initial(), params = {}) {
   function sales() {
     const rows = []; for (let ai = 0; ai < articles.length; ai++) dates.forEach((d, di) => { const x = make(ai, d, false); rows.push([ai, di, x.views, x.pdpViews, x.cart, x.orders, x.revenue, x.spendCpc, x.spendCpo, x.clicks, x.adOrders, x.adRevenue, x.position, x.adViews, x.spendOther]); });
     const prevDates = dateRange(prevFrom, prevTo), prev = articles.map((a, ai) => { const p = sum(ai, prevDates); return [ai, p.views, p.pdpViews, p.cart, p.orders, p.revenue, p.spend, p.adOrders]; });
-    return { _wb: true, dates, articles, rows, prev, stock: [], self: articles.flatMap((a, ai) => dates.map((d, di) => [ai, di, make(ai, d, false).selfQ, make(ai, d, false).selfR]).filter(r => r[2])), unallocated, order: ORDER.defly, coverage: Object.fromEntries(['orders','sales','ads'].map(k=>[k,ds.has(k)?{from:ds.get(k).meta.from,to:ds.get(k).meta.to}:null])), availability: { orders: full('orders'), sales: full('sales'), ads: full('ads') } };
+    return { _wb: true, dates, articles, rows, prev, stock: [], self: articles.flatMap((a, ai) => dates.map((d, di) => [ai, di, make(ai, d, false).selfQ, make(ai, d, false).selfR]).filter(r => r[2])), unallocated, order: ORDER.defly, coverage: Object.fromEntries(['orders','sales','ads'].map(k=>[k,ds.has(k)?{from:ds.get(k).meta.from,to:ds.get(k).meta.to,ranges:coverageRanges(ds.get(k).meta)}:null])), availability: { orders: full('orders'), sales: full('sales'), ads: full('ads') } };
   }
   function ads() {
     const campaignOffers=new Map(), campaignStats=new Map();

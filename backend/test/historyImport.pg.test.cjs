@@ -44,7 +44,7 @@ test('PostgreSQL: полный импорт, откат сбоя, запрет �
   await run('UPDATE wb_bridge_data SET run_id=$1,collected_at=$2,meta=$3,rows=$4',['new','2026-11-17',JSON.stringify(next),JSON.stringify([{id:'new',rrDate:'2026-11-02',quantity:2}])]);
   await wh.accumulateWbHistory(client,next,{meta:old});await run('COMMIT');
   const accumulated=(await db.query('SELECT meta,rows FROM wb_bridge_data')).rows[0];
-  assert.equal(accumulated.rows.length,2);assert.equal(accumulated.meta.from,'2025-11-01');assert.equal(accumulated.meta.total,2);assert.equal(accumulated.meta.sourceTotal,1);
+  assert.equal(accumulated.rows.length,2);assert.equal(accumulated.meta.from,'2025-11-01');assert.equal(accumulated.meta.total,2);assert.equal(accumulated.meta.sourceTotal,1);assert.deepEqual(accumulated.meta.ranges,[['2025-11-01','2025-11-30'],['2026-11-01','2026-11-16']]);
   await run('BEGIN');await run('UPDATE wb_bridge_data SET collected_at=$1,rows=$2',['2026-11-18',JSON.stringify([{id:'old',rrDate:'2025-11-02',quantity:3},{id:'new',rrDate:'2026-11-02',quantity:2}])]);
   await wh.captureWbHistory(client,next);await run('COMMIT');
   assert.equal((await db.query('SELECT COUNT(*)::int n FROM wb_history_revisions')).rows[0].n,1);

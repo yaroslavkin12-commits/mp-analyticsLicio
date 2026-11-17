@@ -654,7 +654,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
 
   const dates = data?.dates || [];
   const N = dates.length;
-  const orderDays=data?._wb&&data.coverage?.orders?dates.filter(d=>d>=data.coverage.orders.from&&d<=data.coverage.orders.to).length:N;
+  const orderDays=data?._wb&&data.coverage?.orders?dates.filter(d=>(data.coverage.orders.ranges||[[data.coverage.orders.from,data.coverage.orders.to]]).some(([f,t])=>d>=f&&d<=t)).length:N;
   const financeDays=fin?.pnl?.financeSource==='wb'?dates.filter(d=>d>=fin.pnl.available.mn&&d<=fin.pnl.available.mx).length:N;
   const all = useMemo(() => (data ? prepare(data) : []), [data]);
   const brands = useMemo(() => {

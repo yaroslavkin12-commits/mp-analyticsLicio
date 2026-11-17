@@ -80,3 +80,9 @@ test('Товары WB получают остаток из того же сни�
  costs.forEach((row,ai)=>assert.equal(row.stock,stock[ai][1]+stock[ai][3]));
  assert.equal(model(fixture().filter(x=>x.kind!=='stocks')).costs([]).items[0].stock,null);
 });
+
+test('WB: пробел между сохранёнными периодами остаётся без данных, а не нулём',()=>{
+ const ds=fixture();const order=ds.find(x=>x.kind==='orders');order.meta={from,to,ranges:[[from,from]]};
+ const s=model(ds).sales();assert.equal(s.rows.find(r=>r[0]===0&&r[1]===1)[5],null);assert.equal(s.availability.orders,false);
+ const {mergeCoverage}=require('../src/lib/wbHistory');assert.deepEqual(mergeCoverage({from:'2026-10-01',to:'2026-10-02'},{from:'2026-10-03',to:'2026-10-05'}),[['2026-10-01','2026-10-05']]);
+});
