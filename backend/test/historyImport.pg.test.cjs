@@ -20,6 +20,8 @@ test('PostgreSQL: полный импорт, откат сбоя, запрет �
   assert.equal((await db.query('SELECT COUNT(*)::int n FROM history_row_revisions')).rows[0].n,1);
   assert.equal((await db.query("SELECT COUNT(*)::int n FROM finance_daily WHERE date='2025-11-02'")).rows[0].n,1);
   assert.equal(await importHistory('finance_daily','defly',[r('2026-11-02','1',90),r('2026-11-02','2')],cols,key),0);
+  await importHistory('finance_daily','defly',[r('2026-11-02','1',80)],cols,key,[],{partial:true});
+  assert.equal((await db.query('SELECT COUNT(*)::int n FROM finance_daily')).rows[0].n,3);
   assert.throws(()=>prepare('finance_daily','defly',[r('2026-02-31','bad')],cols,key));
   await db.exec(`CREATE TABLE ad_product_stocks(id BIGSERIAL PRIMARY KEY,cabinet TEXT,platform TEXT,snapshot_date DATE,sku BIGINT,offer_id TEXT,fbo_present INT,fbo_reserved INT,fbs_present INT,fbs_reserved INT)`);
   const {saveStockSnapshot}=require('../src/lib/stockSnapshot'),stock=(date,offer,q)=>['defly','ozon',date,null,offer,q,0,0,0];

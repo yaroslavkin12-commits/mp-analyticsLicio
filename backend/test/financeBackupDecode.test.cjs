@@ -6,5 +6,5 @@ test('Резервная копия: читается только целева�
  const ctx={spawn,readline:require('node:readline'),candidateCabinets:['defly'],from:'2026-11-02',to:'2026-11-08',key:r=>JSON.stringify([r.cabinet,r.date,r.sku,r.name]),module:{exports:{}}};
  vm.runInNewContext(part+'\nmodule.exports={pgUnescape,backupRows};',ctx);
  assert.equal(ctx.module.exports.pgUnescape('\\N'),null);
- const rows=await ctx.module.exports.backupRows('pg_restore','test.dump');assert.equal(rows.size,2);assert.equal([...rows.values()][0].amount,100.5);assert.equal([...rows.values()][1].name,'Название\tс\nпереносом');
+ const rows=await ctx.module.exports.backupRows('pg_restore','test.dump');assert.equal(rows.size,2);assert.equal((await ctx.module.exports.backupRows('pg_restore','test.dump',{allDates:true})).size,3);assert.equal([...rows.values()][0].amount,100.5);assert.equal([...rows.values()][1].name,'Название\tс\nпереносом');
 });

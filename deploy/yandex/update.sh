@@ -46,9 +46,9 @@ fi
 # Одноразовое безопасное восстановление истории: исходник + сохранённые архивы.
 if [ -f "$APP/deploy/yandex/repair-history.cjs" ]; then
   HISTORY_HASH=$(sha256sum "$APP/deploy/yandex/repair-history.cjs" | cut -d' ' -f1)
-  if [ ! -f "$STATE/history-repaired-v2" ]; then
+  if [ ! -f "$STATE/history-repaired-v3" ]; then
     if systemd-run --no-block --unit="mp-history-repair-${HISTORY_HASH:0:12}" /usr/bin/node "$APP/deploy/yandex/repair-history.cjs"; then
-      touch "$STATE/history-repaired-v2"
+      touch "$STATE/history-repaired-v3"
     fi
   fi
 fi
