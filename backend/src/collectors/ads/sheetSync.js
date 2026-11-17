@@ -723,11 +723,12 @@ async function syncFinanceFromSheet(cabinet, { coreOnly = false } = {}) {
     total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
   }
   total += await importPrices(cabinet);
-  total += await syncFinanceOnlyFromSheet(cabinet);
-  return { rows: total };
+  const warnings=[];
+  total += await syncFinanceOnlyFromSheet(cabinet,{onWarning:m=>warnings.push(m)});
+  return { rows: total,warning:warnings.length?warnings.join('; '):null };
 }
 
-async function syncFinanceOnlyFromSheet(cabinet) {
+async function syncFinanceOnlyFromSheet(cabinet,{onWarning}={}) {
   await ensureFinTables();
   const fin=await fetchSheetRows('Finance',cabinet);
   if(!fin || !fin.length) throw new Error('Финансовая выгрузка пуста или недоступна. Накопленная история сохранена.');
@@ -741,7 +742,7 @@ async function syncFinanceOnlyFromSheet(cabinet) {
     if(cur){cur[4]+=row[4];cur[5]+=row[5];}else map.set(key,row);
   }
   if(!map.size)throw new Error('В выгрузке нет финансов выбранного кабинета. История сохранена.');
-  return replaceRange('finance_daily',cabinet,[...map.values()],['cabinet','date','sku','name','amount','qty'],['cabinet','date','sku','name']);
+  return require('../../lib/historyImport').importHistory('finance_daily',cabinet,[...map.values()],['cabinet','date','sku','name','amount','qty'],['cabinet','date','sku','name'],[],{preserveIncompleteDays:true,onIncomplete:m=>{console.warn('[SheetFinance] '+m);onWarning?.(m);}});
 }
 
 async function syncAdDetailsFromSheet(cabinet) {

@@ -28,23 +28,32 @@ function prepare(table,cabinet,rows,columns,conflict){
  }
  return [...unique.values()];
 }
-async function importHistory(table,cabinet,rows,columns,conflict,skip=[],{partial=false}={}){
+async function importHistory(table,cabinet,rows,columns,conflict,skip=[],{partial=false,preserveIncompleteDays=false,onIncomplete}={}){
  const objects=prepare(table,cabinet,rows,columns,conflict);
  if(!objects.length)return 0;
  await ensure();
  const client=await getPool().connect();
  const cols=columns.map(ident).join(','),keys=conflict.map(ident).join(','),join=conflict.map(c=>`t.${ident(c)}=s.${ident(c)}`).join(' AND ');
  const significant=columns.filter(c=>!skip.includes(c)),arr=a=>'jsonb_build_array('+significant.map(c=>`${a}.${ident(c)}`).join(',')+')';
- const dates=objects.map(r=>r.date).sort();
+ let dates=objects.map(r=>r.date).sort(),accepted=objects.length;
  let changed=0;
  try{
   await client.query('BEGIN');
   await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',['history:'+table+':'+cabinet]);
   await client.query(`CREATE TEMP TABLE history_stage (LIKE ${ident(table)} INCLUDING DEFAULTS) ON COMMIT DROP`);
   for(let i=0;i<objects.length;i+=1000)await client.query(`INSERT INTO history_stage (${cols}) SELECT ${cols} FROM jsonb_populate_recordset(NULL::${ident(table)},$1::jsonb)`,[JSON.stringify(objects.slice(i,i+1000))]);
-  const missing=(await client.query(`SELECT t.date::text AS date,COUNT(*)::int AS missing FROM ${ident(table)} t WHERE t.cabinet=$1 AND t.date IN (SELECT DISTINCT date FROM history_stage) AND NOT EXISTS (SELECT 1 FROM history_stage s WHERE ${join}) GROUP BY t.date ORDER BY t.date LIMIT 5`,[cabinet])).rows;
-  if(!partial&&missing.length)throw Object.assign(Error(`Неполная выгрузка ${table} (${cabinet}): отсутствуют сохранённые строки за ${missing.map(r=>r.date+' ('+r.missing+')').join(', ')}. История не изменена.`),{code:'INCOMPLETE_HISTORY'});
-  const run=(await client.query(`INSERT INTO history_import_runs(table_name,cabinet,date_from,date_to,incoming_rows) VALUES($1,$2,$3,$4,$5) RETURNING id`,[table,cabinet,dates[0],dates.at(-1),objects.length])).rows[0].id;
+  const missing=(await client.query(`SELECT t.date::text AS date,COUNT(*)::int AS missing FROM ${ident(table)} t WHERE t.cabinet=$1 AND t.date IN (SELECT DISTINCT date FROM history_stage) AND NOT EXISTS (SELECT 1 FROM history_stage s WHERE ${join}) GROUP BY t.date ORDER BY t.date`,[cabinet])).rows;
+  if(!partial&&missing.length){
+   const message=`Неполная выгрузка ${table} (${cabinet}): отсутствуют сохранённые строки за ${missing.slice(0,5).map(r=>r.date+' ('+r.missing+')').join(', ')}. Эти дни сохранены без изменений.`;
+   if(!preserveIncompleteDays||table!=='finance_daily')throw Object.assign(Error(message),{code:'INCOMPLETE_HISTORY'});
+   // Неполный старый день не мешает обновлять остальные полные дни.
+   // Удаляем только временные входящие строки, рабочую историю не трогаем.
+   const deferred=new Set(missing.map(r=>r.date));
+   const removed=await client.query('DELETE FROM history_stage WHERE date=ANY($1::date[])',[[...deferred]]);
+   accepted-=removed.rowCount;dates=dates.filter(d=>!deferred.has(d));onIncomplete?.(message);
+   if(!accepted){await client.query('COMMIT');return 0;}
+  }
+  const run=(await client.query(`INSERT INTO history_import_runs(table_name,cabinet,date_from,date_to,incoming_rows) VALUES($1,$2,$3,$4,$5) RETURNING id`,[table,cabinet,dates[0],dates.at(-1),accepted])).rows[0].id;
   await client.query(`INSERT INTO history_row_revisions(import_id,table_name,cabinet,row_date,before_row,after_row) SELECT $1,$2,$3,s.date,to_jsonb(t),to_jsonb(s) FROM history_stage s JOIN ${ident(table)} t ON ${join} WHERE ${arr('t')} IS DISTINCT FROM ${arr('s')}`,[run,table,cabinet]);
   const updated=columns.filter(c=>!conflict.includes(c)).map(c=>`${ident(c)}=EXCLUDED.${ident(c)}`).join(',');
   const result=await client.query(`INSERT INTO ${ident(table)} AS t (${cols}) SELECT ${cols} FROM history_stage WHERE true ON CONFLICT (${keys}) DO UPDATE SET ${updated} WHERE ${arr('t')} IS DISTINCT FROM ${arr('EXCLUDED')}`);

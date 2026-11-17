@@ -4,7 +4,7 @@ const fs=require('fs'),path=require('path'),{spawn}=require('child_process'),rea
 const APP=path.resolve(__dirname,'../..'),env=require(path.join(APP,'backend/node_modules/dotenv')).parse(fs.readFileSync('/etc/mp/app.env'));
 Object.assign(process.env,env);
 const file='/var/lib/mp/status.json',runId=new Date().toISOString().replace(/[:.]/g,'-'),from='2026-11-02',to='2026-11-08';
-const report={version:3,recoveryScope:'available-finance-history',startedAt:new Date().toISOString(),state:'running',period:{from,to},source:{},backups:[],restored:{}};
+const report={version:4,recoveryScope:'available-finance-history',startedAt:new Date().toISOString(),state:'running',period:{from,to},source:{},backups:[],restored:{}};
 function publish(){
  const crypto=require('crypto'),key=crypto.randomBytes(32),iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',key,iv);
  const ciphertext=Buffer.concat([cipher.update(JSON.stringify(report)),cipher.final()]);
@@ -54,7 +54,7 @@ async function backupRows(binary,dump,{allDates=false}={}){
   await db.query('INSERT INTO finance_history_rescue(recovery_id,cabinet,date,sku,name,amount,qty) SELECT $1,cabinet,date,sku,name,amount,qty FROM finance_daily',[runId]);
   report.historyBefore=await inventory();report.before=await week();report.state='reading-source';publish();
   for(const cabinet of candidateCabinets.filter(c=>c==='defly'||env['ADS_SHEET_ID_'+c.toUpperCase()])){
-   try{report.source[cabinet]={changed:await require(path.join(APP,'backend/src/collectors/ads/sheetSync')).syncFinanceOnlyFromSheet(cabinet)};}
+   try{const warnings=[];report.source[cabinet]={changed:await require(path.join(APP,'backend/src/collectors/ads/sheetSync')).syncFinanceOnlyFromSheet(cabinet,{onWarning:m=>warnings.push(m)}),warnings};}
    catch(e){report.source[cabinet]={error:safe(e)};}publish();
   }
   report.afterSource=await week();report.state='checking-backups';publish();
@@ -75,7 +75,9 @@ async function backupRows(binary,dump,{allDates=false}={}){
    report.restored[cabinet]={added,existingDifferences:conflicting};publish();
   }
   report.historyAfter=await inventory();report.after=await week();report.checkedAgainstExcel={expectedSeatCovers:163,matches:report.after.net===163};
-  report.state=report.checkedAgainstExcel.matches?'complete':'review-needed';report.finishedAt=new Date().toISOString();publish();
+  report.state='saving-backup';publish();
+  report.backupSaved=await new Promise(resolve=>{const p=spawn('/bin/bash',[path.join(__dirname,'backup.sh')],{stdio:'ignore'});p.on('error',()=>resolve(false));p.on('exit',code=>resolve(code===0));});
+  report.state=report.checkedAgainstExcel.matches&&report.backupSaved?'complete':'review-needed';report.finishedAt=new Date().toISOString();publish();
  }catch(e){report.state='error';report.error=safe(e);report.finishedAt=new Date().toISOString();publish();process.exitCode=1;}
  finally{await db.getPool().end().catch(()=>{});}
  // Сбрасываем кэши основного процесса, который не участвовал в этой записи.
