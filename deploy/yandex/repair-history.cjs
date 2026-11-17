@@ -4,7 +4,7 @@ const fs=require('fs'),path=require('path'),{spawn}=require('child_process'),rea
 const APP=path.resolve(__dirname,'../..'),env=require(path.join(APP,'backend/node_modules/dotenv')).parse(fs.readFileSync('/etc/mp/app.env'));
 Object.assign(process.env,env);
 const file='/var/lib/mp/status.json',runId=new Date().toISOString().replace(/[:.]/g,'-'),from='2026-11-02',to='2026-11-08';
-const report={version:1,startedAt:new Date().toISOString(),state:'running',period:{from,to},source:{},backups:[],restored:{}};
+const report={version:2,startedAt:new Date().toISOString(),state:'running',period:{from,to},source:{},backups:[],restored:{}};
 function publish(){
  const crypto=require('crypto'),key=crypto.randomBytes(32),iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',key,iv);
  const ciphertext=Buffer.concat([cipher.update(JSON.stringify(report)),cipher.final()]);
@@ -25,7 +25,7 @@ async function week(){
 }
 function pgUnescape(s){if(s==='\\N')return null;return s.replace(/\\([0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)/g,(_,a)=>/^[0-7]+$/.test(a)?String.fromCharCode(parseInt(a,8)):/^x/.test(a)?String.fromCharCode(parseInt(a.slice(1),16)):({t:'\t',n:'\n',r:'\r',b:'\b',f:'\f',v:'\v','\\':'\\'}[a]??a));}
 async function backupRows(binary,dump){
- const child=spawn(binary,['--data-only','--table=finance_daily',dump],{stdio:['ignore','pipe','pipe']});
+ const child=spawn(binary,['--data-only','--file=-','--table=finance_daily',dump],{stdio:['ignore','pipe','pipe']});
  let stderr='';child.stderr.on('data',b=>stderr+=b.toString().slice(0,500));let fields=null,inside=false;const rows=new Map();
  const exit=new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',code=>code===0?resolve():reject(Error('Не прочитана резервная копия: '+stderr)));});
  for await(const line of readline.createInterface({input:child.stdout,crlfDelay:Infinity})){

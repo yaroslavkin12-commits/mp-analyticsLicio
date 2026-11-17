@@ -735,7 +735,7 @@ async function syncFinanceOnlyFromSheet(cabinet) {
   for(const r of fin){
     if(r.cabinet!==cabinet)continue;
     const amount=Number(String(r.amount ?? '').replace(/\s/g,'').replace(',','.')),qty=Number(String(r.qty ?? '').replace(/\s/g,'').replace(',','.'));
-    if(!r.date||!r.name||String(r.amount??'').trim()===''||String(r.qty??'').trim()===''||!Number.isFinite(amount)||!Number.isFinite(qty))throw new Error('Неполная финансовая строка. Накопленная история сохранена.');
+    if(!r.date||!r.name||String(r.amount??'').trim()===''||String(r.qty??'').trim()===''||!Number.isFinite(amount)||!Number.isFinite(qty))throw new Error('Неполная финансовая строка. История сохранена. Поля: '+JSON.stringify({date:r.date,name:r.name,amount:r.amount,qty:r.qty}).slice(0,300));
     const row=[cabinet,String(r.date).slice(0,10),String(r.sku||''),String(r.name).slice(0,160),amount,qty];
     const key=JSON.stringify(row.slice(1,4)),cur=map.get(key);
     if(cur){cur[4]+=row[4];cur[5]+=row[5];}else map.set(key,row);
