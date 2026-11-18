@@ -33,7 +33,7 @@ test('Нулевой лимит, ручное превышение, валида
 });
 
 const store = new Map([['prod:defly:master', '{"unchanged":true}'], ['prod:defly:orders', '[{"id":"old"}]']]);
-const query = async (sql, args = []) => sql.includes('FROM ad_product_stocks') ? ['A','B'].map(offer_id=>({offer_id,date:'2026-10-31',fbo_present:0,fbs_present:0,fresh:true})) : sql.includes('SELECT value') ? store.has(args[0]) ? [{ value: store.get(args[0]) }] : [] : [];
+const query = async (sql, args = []) => sql.includes('FROM ad_product_stocks') ? ['A','B'].map(offer_id=>({offer_id,date:'2026-10-31',fbo_present:0,fbs_present:0,fresh:true})) : sql.includes('FROM ad_product_catalog') ? ['A','B'].map(offer_id => ({ offer_id, product_name: 'Дефлектор окон 2D Test' })) : sql.includes('SELECT value') ? store.has(args[0]) ? [{ value: store.get(args[0]) }] : [] : [];
 const client = { query: async (sql, args = []) => {
   if (sql.includes('SELECT value') || sql.includes('FROM ad_product_stocks')) return { rows: await query(sql, args) };
   if (sql.includes('INSERT INTO app_settings')) store.set(args[0], args[1]);

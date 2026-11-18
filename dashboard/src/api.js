@@ -196,11 +196,17 @@ export function latestOnly(key) {
 
 // «Производство» — потребность в пошив
 export const getProduction = cabinet => api.get('/production', { params: { cabinet } });
-export const getDeflectors2d = () => api.get('/production/deflectors2d');
-export const getDeflectors2dDemand = (refresh = false) => api.get('/production/deflectors2d/demand', { params: { refresh: refresh ? '1' : undefined } });
-export const getDeflectors2dCatalog = () => api.get('/production/deflectors2d/catalog');
-export const saveDeflectors2d = data => api.post('/production/deflectors2d/draft', data);
-export const submitDeflectors2d = data => api.post('/production/deflectors2d/journal', data);
+export function deflectorProductionApi(group) {
+  const path = '/production/deflectors' + group;
+  return {
+    load: () => api.get(path),
+    demand: refresh => api.get(path + '/demand', { params: { refresh: refresh ? '1' : undefined } }),
+    catalog: () => api.get(path + '/catalog'),
+    save: data => api.post(path + '/draft', data),
+    submit: data => api.post(path + '/journal', data),
+    inventory: receivingCabinet => api.get(path + '/inventory', { params: { receivingCabinet } }),
+  };
+}
 export const uploadProduction = (cabinet, kind, items, file) => api.post('/production/upload', { cabinet, kind, items, file });
 export const saveProductionMaster = (cabinet, items, replace) => api.post('/production/master', { cabinet, items, replace });
 export const saveProductionSettings = (cabinet, settings) => api.post('/production/settings', { cabinet, settings });
@@ -227,7 +233,6 @@ export const getOrderFeed = (cabinet, dateFrom, dateTo, kind) => api.get('/order
 export const setSelfBuyout = (cabinet, items, on) => api.post('/orders/self', { cabinet, items, on });
 export const getSalesSummary = (dateFrom, dateTo, cabinet) => api.get('/sales/summary', { params: { dateFrom, dateTo, cabinet, includeWb: cabinet === 'licio' ? undefined : '1' }, timeout: 120000 });
 
-export const getDeflectors2dInventory = receivingCabinet => api.get('/production/deflectors2d/inventory', { params: { receivingCabinet } });
 
 // Конкуренты во «Позициях в поиске» (данные из отчётов кабинета Ozon)
 export const getCompetitors = (cabinet, offerId) => api.get('/competitors', { params: { cabinet, offerId } });

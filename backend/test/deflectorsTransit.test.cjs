@@ -80,3 +80,21 @@ test('Актуальный остаток перекрывает старое р
   assert.equal(calculate2d(draft,null,{byOffer:{a:{stock:17,transit:0}}}).rows[0].stock,17);
   assert.equal(draft.rows[0].stock,999);
 });
+
+test('Перенесённый артикул: журналы раздельны, поступление закрывает заявки в общей очереди', async () => {
+  const { inventory, adsTransit, keyFor } = require('../src/lib/deflectorsTransit');
+  const batch = (id, day) => ({ id, tracked: true, receivingCabinet: 'defly', createdAt: day, items: [{ offer:'A', quantity:10 }] });
+  const old = batch('old', '2026-10-27T00:00:00Z');
+  const active = batch('new', '2026-10-28T00:00:00Z');
+  const run = async (sql, args) => {
+    if (sql.includes('restock_events') && sql.includes('to_regclass')) return [{name:'restock_events'}];
+    if (sql.includes('FROM restock_events')) return [{id:1,cabinet:'defly',offer_id:'A',at:'2026-10-29T00:00:00Z',fbo_before:0,fbs_before:0,fbo_after:12,fbs_after:0}];
+    if (args?.[0] === keyFor('2d')) return [{value:JSON.stringify({journal:[old]})}];
+    if (args?.[0] === keyFor('3d')) return [{value:JSON.stringify({journal:[active]})}];
+    return [];
+  };
+  const inv = await inventory({journal:[active]}, 'defly', run, keyFor('3d'));
+  assert.deepEqual(inv.journal.map(j => [j.id,j.received]), [['new',2]]);
+  assert.equal(inv.byOffer.a.productionTransit, 8);
+  assert.equal((await adsTransit('defly', {}, undefined, run)).A.q, 8);
+});

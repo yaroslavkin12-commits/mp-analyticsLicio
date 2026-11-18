@@ -13,7 +13,10 @@ const { query, getPool } = require('../db');
 // Расчёт — на клиенте (dashboard/src/lib/production.js).
 // ─────────────────────────────────────────────────────────────────────────
 const router = express.Router();
-router.use('/deflectors2d', require('./deflectors2d'));
+const deflectors = require('./deflectors2d');
+router.use('/deflectors2d', deflectors);
+router.use('/deflectors3d', deflectors.createDeflectorsRouter('3d'));
+router.use('/deflectorshood', deflectors.createDeflectorsRouter('hood'));
 const KINDS = ['year', 'w4', 'w8', 'stock'];
 const key = (c, k) => `prod:${c}:${k}`;
 async function getJson(k, def) {

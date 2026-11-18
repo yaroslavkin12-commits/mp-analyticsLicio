@@ -8,7 +8,8 @@ import { fmtInt } from './AdsStats2';
 import { SHOPS, MATERIALS, TOPS, DEFAULT_SETTINGS, calcRow, allocate, taskSizeOf, matOf, buildJournal, J_STATUS } from '../lib/production';
 import ProdJournal from './ProdJournal';
 import { parseProductionOrder } from '../lib/productionOrderImport.mjs';
-import Deflectors2d from './Deflectors2d';
+import DeflectorProduction from './Deflectors2d';
+import deflectorGroups from '../lib/deflectorGroups.json';
 import './ads2.css';
 import './sales.css';
 import './production.css';
@@ -60,8 +61,12 @@ function parseSheet(aoa, col) {
 export default function Production({ cabinet }) {
   const [tab, setTab] = useState(() => ld('mp-production-tab', 'covers'));
   const pick = value => { setTab(value); sv('mp-production-tab', value); };
-  const nav = <span className="a-seg"><button type="button" className={tab !== '2d' ? 'on' : ''} onClick={() => pick('covers')}>Чехлы на сиденья</button><button type="button" className={tab === '2d' ? 'on' : ''} onClick={() => pick('2d')}>Дефлекторы · 2D</button></span>;
-  return tab === '2d' ? <Deflectors2d nav={nav} /> : <SeatProduction cabinet={cabinet} nav={nav} />;
+  const group = Object.hasOwn(deflectorGroups, tab) ? tab : null;
+  const options = [['covers', 'Чехлы на сиденья'], ...Object.entries(deflectorGroups).map(([id, g]) => [id, g.label])];
+  const nav = <span className="a-seg">{options.map(([id, label]) => (
+    <button key={id} type="button" className={(group || 'covers') === id ? 'on' : ''} onClick={() => pick(id)}>{label}</button>
+  ))}</span>;
+  return group ? <DeflectorProduction key={group} group={group} nav={nav} /> : <SeatProduction cabinet={cabinet} nav={nav} />;
 }
 
 function SeatProduction({ cabinet, nav }) {

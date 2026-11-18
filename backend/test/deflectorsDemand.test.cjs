@@ -4,14 +4,14 @@ const dayjs = require('../node_modules/dayjs');
 const ids = ['defly', 'nabauto', 'alex', 'fullgas', 'accent'];
 const to = dayjs(new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date())).subtract(1, 'day').format('YYYY-MM-DD');
 const dates = Array.from({ length: 400 }, (_, i) => dayjs(to).subtract(i, 'day').format('YYYY-MM-DD'));
-const store = new Map(); let units = 2; const calls = [];
+const store = new Map(); let units = 2, extraCatalog = []; const calls = [];
 const query = async (sql, args = []) => {
   calls.push([sql, args]);
   if (sql.includes('SELECT value')) return store.has(args[0]) ? [{ value: store.get(args[0]) }] : [];
   if (sql.includes('FROM ad_product_stocks')) return [{offer_id:'A',date:to,fbo_present:0,fbs_present:0,fresh:true}];
   if (sql.includes('to_regclass')) return [];
   if (sql.includes('FROM product_category_override')) return [];
-  if (sql.includes('FROM ad_product_catalog')) return ids.map((cabinet, i) => ({ cabinet, offer_id: 'A', sku: String(i + 1), product_name: 'Дефлекторы окон 2D Test' }));
+  if (sql.includes('FROM ad_product_catalog')) return [...ids.map((cabinet, i) => ({ cabinet, offer_id: 'A', sku: String(i + 1), product_name: 'Дефлекторы окон 2D Test' })), ...extraCatalog];
   if (sql.includes('FROM product_analytics_daily')) {
     assert.deepEqual([...args[0]].sort(), [...ids].sort());
     if (sql.includes('GROUP BY cabinet, date')) return ids.flatMap(cabinet => dates.map(date => ({ cabinet, date })));
@@ -27,9 +27,9 @@ const client = { query: async (sql, args = []) => {
 }, release() {} };
 require.cache[require.resolve('../src/db')] = { exports: { query, getPool: () => ({ connect: async () => client }) } };
 const router = require('../src/routes/deflectors2d');
-async function call(path, method = 'get', body = {}) {
+async function call(path, method = 'get', body = {}, target = router) {
   let status = 200, value;
-  const route = router.stack.find(x => x.route?.path === path && x.route.methods[method]);
+  const route = target.stack.find(x => x.route?.path === path && x.route.methods[method]);
   await route.route.stack[0].handle({ query: { refresh: '1' }, body }, { set() {}, status(n) { status = n; return this; }, json(v) { value = v; } });
   return { status, ...value };
 }
@@ -67,4 +67,26 @@ test('Адаптер Ozon: все пять кабинетов, SKU, вычет �
     assert.equal((await call('/demand')).data.articles[0].rate, null);
   } finally { bridge.read = oldRead; if (previousSecret === undefined) delete process.env.ADS_SHEET_ID_DEFLY_WB; else process.env.ADS_SHEET_ID_DEFLY_WB = previousSecret; }
   assert.ok(calls.filter(([sql]) => sql.includes('FROM product_analytics_daily')).every(([, args]) => !args[0].includes('licio')));
+});
+
+test('2D, 3D и капот используют разные каталоги, черновики и журналы', async () => {
+  extraCatalog = [
+    { cabinet:'defly', offer_id:'B', sku:'20', product_name:'Дефлекторы окон 3D Test' },
+    { cabinet:'defly', offer_id:'C', sku:'30', product_name:'Дефлектор капота Test' },
+  ];
+  const routes = [router, router.createDeflectorsRouter('3d'), router.createDeflectorsRouter('hood')];
+  for (const [i, target] of routes.entries()) {
+    const offer = ['A','B','C'][i];
+    const { data } = await call('/catalog', 'get', {}, target);
+    assert.deepEqual(data.map(a => a.offer), [offer]);
+    const demand = await call('/demand', 'get', {}, target);
+    assert.deepEqual(demand.data.articles.map(a => a.offer), [offer]);
+  }
+  const [, windows, hood] = routes;
+  const current = (await call('/', 'get', {}, windows)).data;
+  assert.equal(current.revision, 0);
+  const draft = { ...current.draft, rows: [{offer:'B',sales:10}] };
+  assert.equal((await call('/draft', 'post', {revision:0,draft}, windows)).data.revision, 1);
+  assert.equal((await call('/', 'get', {}, hood)).data.draft.rows.length, 0);
+  assert.equal((await call('/')).data.journal.length, 2);
 });

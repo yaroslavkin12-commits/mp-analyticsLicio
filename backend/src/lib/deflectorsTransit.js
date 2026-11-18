@@ -1,6 +1,9 @@
 const { createHash } = require('crypto');
 const { query } = require('../db');
-const KEY = 'prod:defly:deflectors2d:v1';
+const groups = require('../../../dashboard/src/lib/deflectorGroups.json');
+const keyFor = group => `prod:defly:deflectors${group}:v1`;
+const KEY = keyFor('2d');
+const KEYS = Object.keys(groups).map(keyFor);
 const norm = s => String(s || '').trim().toLowerCase();
 const qty = n => Math.max(0, Number(n) || 0);
 
@@ -33,8 +36,15 @@ function reconcile(journal, events) {
   }
   return batches;
 }
-async function ledger(state, run = query) {
-  if (!state) { const rows = await run('SELECT value FROM app_settings WHERE key=$1', [KEY]); state = rows[0] ? JSON.parse(rows[0].value) : { journal: [] }; }
+async function ledger(state, run = query, key) {
+  if (!state || key) {
+    const journals = await Promise.all(KEYS.map(async source => {
+      const rows = source === key && state ? null : await run('SELECT value FROM app_settings WHERE key=$1', [source]);
+      const entry = rows === null ? state : rows[0] ? JSON.parse(rows[0].value) : {};
+      return (entry.journal || []).map(batch => ({ ...batch, productionKey: source }));
+    }));
+    state = { journal: journals.flat() };
+  }
   const tracked = (state.journal || []).filter(j => j.tracked);
   if (!tracked.length) return reconcile(state.journal || [], []);
   const first = tracked.reduce((s, j) => j.createdAt < s ? j.createdAt : s, tracked[0].createdAt);
@@ -65,8 +75,8 @@ function mergeTransit(journal, cabinet, manual) {
   }
   return result;
 }
-async function inventory(state, cabinet, run = query) {
-  const journal = await ledger(state, run);
+async function inventory(state, cabinet, run = query, key) {
+  const journal = await ledger(state, run, key);
   const [stocks, manualRows] = await Promise.all([
     run(`SELECT offer_id, snapshot_date::text date, SUM(fbo_present) AS fbo_present, SUM(fbs_present) AS fbs_present, snapshot_date >= CURRENT_DATE - INTERVAL '1 day' AS fresh
       FROM ad_product_stocks WHERE cabinet=$1 AND platform='ozon' AND snapshot_date >= CURRENT_DATE - INTERVAL '60 days'
@@ -87,6 +97,9 @@ async function inventory(state, cabinet, run = query) {
   }
   for (const r of Object.values(byOffer)) r.transit ??= 0;
   const version = createHash('sha256').update(JSON.stringify({ cabinet, byOffer })).digest('hex');
-  return { cabinet, byOffer, history, journal, version };
+  const ownJournal = key
+    ? journal.filter(batch => batch.productionKey === key).map(({ productionKey, ...batch }) => batch)
+    : journal;
+  return { cabinet, byOffer, history, journal: ownJournal, version };
 }
-module.exports = { KEY, reconcile, ledger, pendingMap, mergeTransit, adsTransit, inventory };
+module.exports = { KEY, keyFor, reconcile, ledger, pendingMap, mergeTransit, adsTransit, inventory };
