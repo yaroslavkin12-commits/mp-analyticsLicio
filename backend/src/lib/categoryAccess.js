@@ -131,6 +131,11 @@ function projection(path, data, ctx) {
   if(path==='/queries/data')return require('./scopedReports').queries(data,ctx,selectArticles);
   if(path==='/queries/series')return data;
   if(path==='/queries/article'){const names=new Set(data.rows.map(r=>r[1]));return {...pick(data,['offerId','name','from','to','rows','freq']),groups:Object.fromEntries(Object.entries(data.groups||{}).filter(([q])=>names.has(q)))};}
+  // Эти два отчёта фильтруются по артикулу и SKU в самом маршруте.
+  if(path==='/competitors'||path==='/competitors/serp'){
+    if(data?._categoryFiltered!==true)throw Error('Нужна фильтрация конкурентов');
+    return data.result;
+  }
   if(path==='/competitors/tracking')return pick(data,['queries','regions','allRegions']);
   if(path==='/sales/costs')return {_wb:data._wb,items:(data.items||[]).filter(r=>ctx.allowed.has(String(r.offerId))).map(r=>({...pick(r,['offerId','name','cost','updatedAt','orders30','avgPrice30','stock']),category:ctx.allowed.get(String(r.offerId)).path})),order:[...new Set([...ctx.allowed.values()].map(a=>a.path.split(SEP)[0]))]};
   if (path === '/promo/stats') return ads(data,ctx);
@@ -157,7 +162,7 @@ function routeOf(path) {
   const normalized = path.toLowerCase().replace(/\/+$/, '').replace(/^\/api\/wb\/views/, '/api').replace(/^\/api\/ads(?=\/)/, '/api/promo');
   return normalized.replace(/^\/api/, '');
 }
-const EXTRA = ['/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
+const EXTRA = ['/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
 function middleware() {
   return async (req,res,next) => {
     if (req.user?.accessScope == null || !/^\/api(?:\/|$)/i.test(req.path)) return next();
@@ -187,7 +192,8 @@ function middleware() {
     if (typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || (/^\/api\/wb\/views/i.test(req.path) && cabinet !== 'defly_wb')) return res.status(403).json({ success:false, error:'Нет доступа к этому кабинету' });
     try {
       const ctx = await context(cabinet,scope);
-      if(['/queries/article','/queries/series','/competitors/tracking'].includes(path)&&!ctx.allowed.has(String(req.query.offerId||'')))return res.status(403).json({success:false,error:'Нет доступа к этому товару'});
+      if(['/queries/article','/queries/series','/competitors','/competitors/serp','/competitors/tracking'].includes(path) &&
+        (typeof req.query.offerId !== 'string' || !ctx.allowed.has(req.query.offerId)))return res.status(403).json({success:false,error:'Нет доступа к этому товару'});
       req.categoryContext=ctx;
       if (journalWrite) {
         if (req.method === 'POST' && (typeof req.body?.offerId !== 'string' || !ctx.allowed.has(req.body.offerId))) return res.status(403).json({success:false,error:'Выберите доступный товар для заметки'});

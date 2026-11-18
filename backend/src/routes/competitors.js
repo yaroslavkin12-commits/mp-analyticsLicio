@@ -37,6 +37,32 @@ const isDate = d => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ''));
 const numOrNull = v => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 const cut = (v, n) => (v == null ? null : String(v).slice(0, n));
 
+// Сравнение показывает внешних конкурентов и разрешённые товары нашего каталога.
+function visibleSkuSql(sku, allowedParam) {
+  return `(${sku} = ANY(${allowedParam}::bigint[]) OR NOT EXISTS (
+    SELECT 1 FROM ad_product_catalog c WHERE c.platform = 'ozon' AND c.sku = ${sku}
+  ))`;
+}
+
+function allowedSkus(ctx) {
+  return [...new Set([...ctx.allowed.values()].map(p => String(p.sku || '')).filter(sku => /^\d+$/.test(sku)))];
+}
+
+function comparisonResponse(ctx, result) {
+  return { success: true, data: ctx ? { _categoryFiltered: true, result } : result };
+}
+
+async function scopedSerp(cabinet, offerId, ctx) {
+  await require('../collectors/ads/sheetSync').ensureFinTables();
+  const tracked = await getSetting(`serp_track:${cabinet}:${offerId}`, []);
+  const condition = `(s.query = ANY($2::text[]) OR EXISTS (
+    SELECT 1 FROM search_query_daily q
+    JOIN ad_product_catalog c ON c.cabinet = q.cabinet AND c.sku = q.sku
+    WHERE q.cabinet = s.cabinet AND q.query = s.query AND c.platform = 'ozon' AND c.offer_id = $3
+  )) AND ${visibleSkuSql('s.sku', '$4')}`;
+  return { condition, params: [cabinet, Array.isArray(tracked) ? tracked : [], offerId, allowedSkus(ctx)] };
+}
+
 // GET /api/competitors?cabinet=&offerId= — всё для вкладки «Конкуренты» артикула.
 router.get('/', async (req, res) => {
   try {
@@ -45,7 +71,12 @@ router.get('/', async (req, res) => {
     const offerId = String(req.query.offerId || '');
     const cat = await query(`SELECT sku, product_name FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND offer_id = $2 AND sku IS NOT NULL`, [cabinet, offerId]);
     const ourSkus = cat.map(r => Number(r.sku));
-    const comps = await query(`SELECT sku, label, created_at FROM search_competitors WHERE cabinet = $1 AND offer_id = $2 ORDER BY created_at`, [cabinet, offerId]);
+    const ctx = req.categoryContext;
+    const compFilter = ctx ? ' AND ' + visibleSkuSql('s.sku', '$3') : '';
+    const comps = await query(`SELECT sku, label, created_at FROM search_competitors s
+      WHERE cabinet = $1 AND offer_id = $2${compFilter} ORDER BY created_at`,
+    ctx ? [cabinet, offerId, allowedSkus(ctx)] : [cabinet, offerId]);
+    const serp = ctx ? await scopedSerp(cabinet, offerId, ctx) : { condition: 'TRUE', params: [cabinet] };
     // «Конкурент», который на самом деле наш товар (другая наша карточка) — помечаем.
     const ownComp = comps.length ? new Set((await query(`SELECT sku FROM ad_product_catalog WHERE cabinet = $1 AND platform = 'ozon' AND sku = ANY($2::bigint[])`, [cabinet, comps.map(r => String(r.sku))])).map(r => String(r.sku))) : new Set();
     const all = [...new Set([...ourSkus, ...comps.map(r => Number(r.sku))])];
@@ -55,7 +86,7 @@ router.get('/', async (req, res) => {
       // Запросы, по которым есть снимки выдачи с нашим товаром или конкурентом.
       // Все загруженные выдачи магазина (раньше — только где есть наши SKU или
       // конкуренты: из-за этого выдача «пропадала», если товара в ней не было).
-      query(`SELECT query, region, MAX(date)::text last, COUNT(DISTINCT date)::int n FROM serp_snapshot WHERE cabinet = $1 GROUP BY query, region ORDER BY MAX(date) DESC, query LIMIT 300`, [cabinet]),
+      query(`SELECT query, region, MAX(date)::text last, COUNT(DISTINCT date)::int n FROM serp_snapshot s WHERE cabinet = $1 AND ${serp.condition} GROUP BY query, region ORDER BY MAX(date) DESC, query LIMIT 300`, serp.params),
     ]) : [[], [], []];
     const cards = all.length ? await query(`SELECT sku, date::text d, photo, title, price, card_price, rating, reviews, checked_at FROM sku_cards WHERE sku = ANY($1::bigint[]) ORDER BY sku, date`, [all]) : [];
     const cardOf = {};
@@ -71,16 +102,22 @@ router.get('/', async (req, res) => {
       for (const r of sn) names.set(String(r.sku), { name: r.name, seller: r.seller });
     }
     for (const m of market) if (m.name) names.set(String(m.sku), { name: m.name, seller: m.seller });
-    res.json({ success: true, data: {
+    const view = await loadView(cabinet, offerId);
+    if (ctx) {
+      const visible = new Set(all.map(String));
+      view.order = view.order.filter(sku => visible.has(String(sku)));
+      view.labels = Object.fromEntries(Object.entries(view.labels).filter(([sku]) => visible.has(sku)));
+    }
+    res.json(comparisonResponse(ctx, {
       our: ourSkus.map(s => ({ sku: String(s), name: cat.find(r => Number(r.sku) === s)?.product_name || '' })),
       competitors: comps.map(r => ({ sku: String(r.sku), label: r.label || '', ours: ownComp.has(String(r.sku)), ...(names.get(String(r.sku)) || {}) })),
-      view: await loadView(cabinet, offerId),
+      view,
       photos: Object.fromEntries(photos.map(r => [String(r.sku), r.photo])),
       cards: cardOf,
       market: market.map(r => ({ sku: String(r.sku), date: r.d, window: Number(r.w), name: r.name, seller: r.seller, brand: r.brand,
         data: r.data && r.data._raw ? { ...mapMarketRaw(r.data._raw), _src: 'ext', _keys: Object.keys(r.data._raw) } : (r.data || {}) })),
       serpQueries: serpQ.map(r => ({ query: r.query, region: r.region, last: r.last, n: r.n })),
-    } });
+    }));
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -110,9 +147,11 @@ router.get('/serp', async (req, res) => {
   try {
     await ensure();
     const cabinet = req.query.cabinet || 'defly';
+    const serp = req.categoryContext ? await scopedSerp(cabinet, req.query.offerId, req.categoryContext) : { condition: 'TRUE', params: [cabinet] };
+    const queryIndex = serp.params.length + 1;
     const rows = await query(`SELECT date::text d, sku, position, total, name, seller, status, cpc, strategy, cpo, relevance, rating, reviews, price, popularity, promo, delivery
-      FROM serp_snapshot WHERE cabinet = $1 AND query = $2 AND region = $3 ORDER BY date, position NULLS LAST`, [cabinet, String(req.query.query || ''), String(req.query.region || '')]);
-    res.json({ success: true, data: rows.map(r => ({ ...r, sku: String(r.sku), cpc: numOrNull(r.cpc), relevance: numOrNull(r.relevance), rating: numOrNull(r.rating), price: numOrNull(r.price), popularity: numOrNull(r.popularity) })) });
+      FROM serp_snapshot s WHERE cabinet = $1 AND ${serp.condition} AND query = $${queryIndex} AND region = $${queryIndex + 1} ORDER BY date, position NULLS LAST`, [...serp.params, String(req.query.query || ''), String(req.query.region || '')]);
+    res.json(comparisonResponse(req.categoryContext, rows.map(r => ({ ...r, sku: String(r.sku), cpc: numOrNull(r.cpc), relevance: numOrNull(r.relevance), rating: numOrNull(r.rating), price: numOrNull(r.price), popularity: numOrNull(r.popularity) }))));
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 

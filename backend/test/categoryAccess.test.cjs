@@ -104,3 +104,21 @@ test('Журнал рекламы возвращает события тольк
  const out=access.projection('/promo/events',[{id:'1',offerId:OWN,kind:'camp_on',auto:true,text:'PRIVATE-COVER'},{id:'2',offerId:OTHER,kind:'note',auto:false,text:'PRIVATE-COVER'},{id:'3',offerId:null,kind:'budget',auto:true,text:'999999'}],context);
  assert.equal(out.length,1);assert.equal(out[0].offerId,OWN);secret(out);
 });
+
+test('Сравнение конкурентов доступно по разрешённому артикулу, изменения закрыты', async () => {
+  for (const route of ['/api/competitors', '/api/competitors/serp']) {
+    const data = { rows: [] };
+    const allowed = await dispatch(route, 'GET', 'defly', { _categoryFiltered: true, result: data }, { offerId: OWN });
+    assert.equal(allowed.called, true);
+    assert.deepEqual(allowed.body.data, data);
+    for (const offerId of [undefined, OTHER, [OWN]]) {
+      const denied = await dispatch(route, 'GET', 'defly', {}, { offerId });
+      assert.equal(denied.code, 403);
+      assert.equal(denied.called, false);
+    }
+    assert.equal((await dispatch(route, 'GET', 'defly', {}, { offerId: OWN })).code, 403);
+  }
+  for (const route of ['/api/competitors', '/api/competitors/photo', '/api/competitors/import', '/api/competitors/view']) {
+    assert.equal((await dispatch(route, 'POST', 'defly', {}, { offerId: OWN })).code, 403);
+  }
+});

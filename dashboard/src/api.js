@@ -231,7 +231,7 @@ export const getDeflectors2dInventory = receivingCabinet => api.get('/production
 
 // Конкуренты во «Позициях в поиске» (данные из отчётов кабинета Ozon)
 export const getCompetitors = (cabinet, offerId) => api.get('/competitors', { params: { cabinet, offerId } });
-export const getSerp = (cabinet, query, region) => api.get('/competitors/serp', { params: { cabinet, query, region } });
+export const getSerp = (cabinet, query, region, offerId) => api.get('/competitors/serp', { params: { cabinet, query, region, offerId } });
 export const addCompetitor = (cabinet, offerId, sku, label) => api.post('/competitors', { cabinet, offerId, sku, label });
 export const removeCompetitor = (cabinet, offerId, sku) => api.delete('/competitors', { params: { cabinet, offerId, sku } });
 export const saveCompetitorView = (cabinet, offerId, body) => api.post('/competitors/view', { cabinet, offerId, ...body });

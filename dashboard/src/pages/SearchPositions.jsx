@@ -448,10 +448,10 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
           {options.map(a => <option key={a.o} value={a.o}>{a.o} — {a.short}</option>)}
         </select>
         <div className="sp-name">{data?.name || art?.n || ''}</div>
-        <span className="a-seg sp-tabs">{[['q', 'Поисковые запросы'], ...(!readOnly? [['c', 'Сравнение с конкурентами']]:[])].map(([k, l]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</span>
+        <span className="a-seg sp-tabs">{[['q', 'Поисковые запросы'], ['c', 'Сравнение с конкурентами']].map(([k, l]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</span>
       </div>
 
-      {tab === 'c' ? <SearchCompetitors cabinet={cabinet} offer={offer} tip={tip} /> : err ? <Empty>Не удалось загрузить: {err}</Empty> : !data ? <div className="a-hint" style={{ padding: 20 }}>Загрузка…</div> : !queries.length ? (
+      {tab === 'c' ? <SearchCompetitors key={offer} cabinet={cabinet} offer={offer} tip={tip} readOnly={readOnly} /> : err ? <Empty>Не удалось загрузить: {err}</Empty> : !data ? <div className="a-hint" style={{ padding: 20 }}>Загрузка…</div> : !queries.length ? (
         <Empty>За выбранный период по этому товару нет данных о поисковых запросах.</Empty>
       ) : (
         <>
