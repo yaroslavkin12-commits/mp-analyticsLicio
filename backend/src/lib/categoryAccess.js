@@ -171,7 +171,8 @@ function middleware() {
     req.restricted = true;
     const read = req.method === 'GET' || req.method === 'HEAD';
     const journalWrite = !/^\/api\/wb\/views/i.test(req.path) && ((req.method === 'POST' && path === '/promo/events') || (req.method === 'DELETE' && /^\/promo\/events\/\d+$/.test(path)));
-    if (!read && !journalWrite) return res.status(403).json({ success:false, error:'Доступ только для просмотра и выгрузки' });
+    const competitorWrite = /^\/api\/competitors\/?$/i.test(req.path) && ['POST', 'DELETE'].includes(req.method);
+    if (!read && !journalWrite && !competitorWrite) return res.status(403).json({ success:false, error:'Доступ только для просмотра и выгрузки' });
     const scope = publicScope(req.user.accessScope);
     if (path === '/promo/cabinets') {
       const list = require('../config/cabinets').listCabinets().filter(c => scope.cabinets.includes(c.id));
@@ -188,10 +189,19 @@ function middleware() {
         return filtered({contexts:req.categoryContexts});
       }catch{return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'});}
     }
-    const cabinet = journalWrite && req.method === 'POST' ? req.body?.cabinet : (req.query.cabinet === undefined ? 'defly' : req.query.cabinet);
+    const cabinet = (journalWrite || competitorWrite) && req.method === 'POST' ? req.body?.cabinet : (req.query.cabinet === undefined ? 'defly' : req.query.cabinet);
     if (typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || (/^\/api\/wb\/views/i.test(req.path) && cabinet !== 'defly_wb')) return res.status(403).json({ success:false, error:'Нет доступа к этому кабинету' });
     try {
       const ctx = await context(cabinet,scope);
+      if (competitorWrite) {
+        const offerId = req.method === 'POST' ? req.body?.offerId : req.query.offerId;
+        if (cabinet === 'defly_wb' || typeof offerId !== 'string' || !ctx.allowed.has(offerId)) {
+          return res.status(403).json({ success:false, error:'Нет доступа к этому товару' });
+        }
+        req.categoryContext = ctx;
+        res.set('Cache-Control', 'no-store');
+        return next();
+      }
       if(['/queries/article','/queries/series','/competitors','/competitors/serp','/competitors/tracking'].includes(path) &&
         (typeof req.query.offerId !== 'string' || !ctx.allowed.has(req.query.offerId)))return res.status(403).json({success:false,error:'Нет доступа к этому товару'});
       req.categoryContext=ctx;

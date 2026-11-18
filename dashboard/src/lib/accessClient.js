@@ -20,6 +20,10 @@ export function canWriteScoped(cfg) {
   if (/^\/auth\/(password|logout|activity)$/.test(cfg.url)) return true;
   const cabinet = cfg.params?.cabinet || cfg.data?.cabinet;
   if (cabinet === 'defly_wb') return false;
+  if (cfg.url === '/competitors' && ['post', 'delete'].includes(method)) {
+    const input = method === 'post' ? cfg.data : cfg.params;
+    return typeof input?.offerId === 'string' && !!input.offerId.trim();
+  }
   if (method === 'post' && /^\/(ads|promo)\/events$/.test(cfg.url)) return typeof cfg.data?.offerId === 'string' && !!cfg.data.offerId.trim();
   return method === 'delete' && /^\/(ads|promo)\/events\/\d+$/.test(cfg.url);
 }

@@ -105,7 +105,7 @@ test('Журнал рекламы возвращает события тольк
  assert.equal(out.length,1);assert.equal(out[0].offerId,OWN);secret(out);
 });
 
-test('Сравнение конкурентов доступно по разрешённому артикулу, изменения закрыты', async () => {
+test('Сравнение и список конкурентов доступны только по разрешённому артикулу', async () => {
   for (const route of ['/api/competitors', '/api/competitors/serp']) {
     const data = { rows: [] };
     const allowed = await dispatch(route, 'GET', 'defly', { _categoryFiltered: true, result: data }, { offerId: OWN });
@@ -118,7 +118,11 @@ test('Сравнение конкурентов доступно по разре
     }
     assert.equal((await dispatch(route, 'GET', 'defly', {}, { offerId: OWN })).code, 403);
   }
-  for (const route of ['/api/competitors', '/api/competitors/photo', '/api/competitors/import', '/api/competitors/view']) {
+  assert.equal((await dispatch('/api/competitors', 'POST', 'defly', {}, {}, { cabinet: 'defly', offerId: OWN })).called, true);
+  assert.equal((await dispatch('/api/competitors', 'DELETE', 'defly', {}, { offerId: OWN })).called, true);
+  assert.equal((await dispatch('/api/competitors', 'POST', 'defly', {}, {}, { cabinet: 'defly', offerId: OTHER })).code, 403);
+  assert.equal((await dispatch('/api/competitors', 'DELETE', 'defly', {}, { offerId: OTHER })).code, 403);
+  for (const route of ['/api/competitors/photo', '/api/competitors/import', '/api/competitors/view']) {
     assert.equal((await dispatch(route, 'POST', 'defly', {}, { offerId: OWN })).code, 403);
   }
 });

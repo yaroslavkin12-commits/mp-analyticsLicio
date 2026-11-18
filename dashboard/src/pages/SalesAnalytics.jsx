@@ -11,7 +11,7 @@ import { isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
-import { unitCoefs, unitProfit } from './unitModel';
+import { unitCoefs, unitProfit, returnOnCost, ROI_HINT } from './unitModel';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { useTax, useBuyerShare, useGroups } from './finShared';
 import TableBuilder from './TableBuilder';
@@ -37,7 +37,7 @@ const SEP = ' / ';
 // Цвет закреплён за категорией по её месту в справочнике, а не по рангу.
 const CAT_COLORS = ['var(--s-c1)', 'var(--s-c2)', 'var(--s-c3)', 'var(--s-c4)', 'var(--s-c5)', 'var(--s-c6)'];
 const OTHER_COLOR = 'var(--a-ink3)';
-const HIDE_DAY_ROWS = ['avgCpcSearch', 'avgCpcRec'];
+const HIDE_DAY_ROWS = ['avgCpcSearch', 'avgCpcRec', 'payoutPerBuyoutF', 'marginF', 'roiF'];
 const SALES_CHART_METRICS = [...CHART_METRICS.filter(m => !/^avgCpc(Search|Rec|Cir|Auto|Top)$/.test(m.key)), ...FIN_CHART_METRICS];
 
 const fmtShort = v => {
@@ -694,7 +694,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   // prevMode — прошлый период: финансы прошлого периода и заказы артикула за него (a.prev).
   const finCalc = (finPer, prevMode) => {
     if (!finPer && !unitK) return null;
-    let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fAny = false, taxBase = 0;
+    let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fCost = 0, fMissingCost = false, fAny = false, taxBase = 0;
     const selDay = finPer ? new Float64Array(finPer.nd) : null;
     const taxDay = finPer ? new Float64Array(finPer.nd) : null; // налог — по дням, как в «P&L» (день с отрицательной базой — 0)
     for (const a of node.arts) {
@@ -711,7 +711,8 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
       if (k && prevMode) {
         if ((a.prev?.orders || 0) > 0 || (a.prev?.spend || 0) > 0) {
           const r = unitProfit(k, { ordRub: a.prev.revenue, ordQty: a.prev.orders, ads: a.prev.spend }, tax);
-          fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
+          fp += r.profit; fPay += r.payout; fQty += r.expQty; fCost += r.cost; fAny = true;
+          if (r.expQty > 0 && !(k.cost > 0)) fMissingCost = true;
         }
       } else if (k && (a.tOrders > 0 || a.tSpend > 0)) {
         for (let d = 0; d < N; d++) {
@@ -720,7 +721,8 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
           if (!ordRub && !ordQty && !ads) continue;
           const fs = fbsDay.get(a.o + '|' + dates[d]);
           const r = unitProfit(k, { ordRub, ordQty, ads, fbs: fs }, tax);
-          fp += r.profit; fPay += r.expRev - r.comm - r.logi - r.acq - r.other - r.ads; fQty += r.expQty; fAny = true;
+          fp += r.profit; fPay += r.payout; fQty += r.expQty; fCost += r.cost; fAny = true;
+          if (r.expQty > 0 && !(k.cost > 0)) fMissingCost = true;
         }
       }
     }
@@ -737,9 +739,12 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     if (taxDay) for (let d = 0; d < taxDay.length; d++) if (taxDay[d] > 0) taxBase += taxDay[d];
     if(fin?.pnl?._operational && finPer && !finPer.complete){sRub=NaN;sQty=NaN;}
     const pay = fin?.pnl?._operational ? null : sRub + oz;
+    const profit = finPer && pay != null ? pay - cost - taxBase * tax / 100 : null;
     return {
+      roiForecast: returnOnCost(fAny ? fp : null, fCost, fMissingCost),
+      roiActual: returnOnCost(profit, cost, noCost > 0),
       has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: pay != null && sQty > 0 ? pay / sQty : null,
-      payOrder: !fin?.pnl?._operational && fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit: finPer && !fin?.pnl?._operational ? pay - cost - taxBase * tax / 100 : null, noCost,
+      payOrder: !fin?.pnl?._operational && fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit, noCost,
     };
   };
   const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay, bsF.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1146,12 +1151,12 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         <div className="a-kpi" title="С заказов периода: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог (как в «Юнит-экономике»)">
           <span className="lbl">Прогнозируемая прибыль (с заказов), ₽</span>
           <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
-          <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> налог {tax}%</span>
+          <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> <span title={ROI_HINT}>ROI прогноз {fmtPct(finK?.roiForecast)}</span> · налог {tax}%</span>
         </div>
         <div className="a-kpi" title="По выкупам периода, как в «P&L»: поступления на счёт минус себестоимость выкупленных товаров и налог (налог — от суммы, оплаченной покупателем, по отчётам «Начисления»)">
           <span className="lbl">Фактическая прибыль (с выкупов), ₽</span>
           <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
-          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {fin?.pnl?._operational ? 'финансы пока не подключены' : finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {fin?.pnl?._operational ? 'финансы пока не подключены' : finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`} · <span title={ROI_HINT}>ROI факт {fmtPct(finK?.roiActual)}</span></span>
         </div>
         <div className="a-kpi" title="Фактическая прибыль / выручка с выкупов периода — как «Маржа» в P&L">
           <span className="lbl">Маржа факт, %</span>

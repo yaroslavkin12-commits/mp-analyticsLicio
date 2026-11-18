@@ -14,7 +14,7 @@ import {
   getAdsGroups, addAdsGroup, removeAdsGroup, renameAdsGroup, assignAdsGroup, getSiblingClusters, addAdsGroupFromCluster,
   reorderAdsGroups, getAdsCatalog, getAdsEvents, addAdsEvent, deleteAdsEvent, getFinanceCoefs, latestOnly,
 } from '../api';
-import { unitCoefs, unitProfit } from './unitModel';
+import { unitCoefs, unitProfit, returnOnCost, ROI_HINT } from './unitModel';
 import { useBuyerShare } from './buyerShare';
 import DateRangePicker from '../components/DateRangePicker';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
@@ -214,7 +214,7 @@ export const drrClass = v => v === null || v === undefined || !Number.isFinite(v
 // ── Модель: сырые суммы по дням для одного артикула или группы ─────────
 const RAW_KEYS = ['views', 'pdpViews', 'cart', 'orders', 'revenue', 'spend', 'spendCpc', 'spendCpo', 'spendOther', 'clicks', 'adViews', 'adOrders', 'adRevenue',
   'spendSearch', 'clicksSearch', 'spendRec', 'clicksRec', 'spendCir', 'clicksCir', 'spendAuto', 'clicksAuto', 'spendTop', 'clicksTop',
-  'spendCpoUndated', 'expRev', 'profitF', 'selfQ', 'selfR', 'selfFbs'];
+  'spendCpoUndated', 'expRev', 'profitF', 'expQtyF', 'payoutF', 'costF', 'missingCostF', 'selfQ', 'selfR', 'selfFbs'];
 // Коэффициенты юнит-экономики по артикулам (ставит страница «Реклама»): для ДРР
 // с учётом выкупа и прогнозируемой прибыли по дням.
 const UNIT_CTX = { k: null, tax: 6 };
@@ -262,6 +262,9 @@ export function derive(r, mode) {
   }
   out.drr = r.revenue > 0 ? r.spend / r.revenue * 100 : null;
   // ДРР с учётом выкупа: расход / ожидаемая выручка (заказы × % выкупа артикула).
+  out.payoutPerBuyoutF = r.expQtyF > 0 ? r.payoutF / r.expQtyF : null;
+  out.marginF = r.expRev > 0 && r.missingCostF === 0 ? r.profitF / r.expRev * 100 : null;
+  out.roiF = returnOnCost(r.profitF, r.costF, r.missingCostF !== 0);
   out.drrB = r.expRev > 0 ? r.spend / r.expRev * 100 : null;
   // Средняя цена клика: общая и отдельно по зонам (в поиске ставка выше,
   // в "поиск + рекомендации" ниже). Расход за заказ в цену клика не входит.
@@ -302,14 +305,16 @@ function buildModel(articles, dates, mode, unknown = false) {
     }
     // Прогноз по заказам дня: ожидаемая выручка (с выкупом) и прибыль после рекламы.
     if (UNIT_CTX.k) {
-      let er = 0, pf = 0, any = false;
+      let er = 0, pf = 0, qty = 0, payout = 0, cost = 0, missingCost = 0, any = false;
       for (const a of articles) {
         const k = UNIT_CTX.k.get(a.offerId); if (!k) continue;
         const dr = dayRaw(a.byDate[d], mode);
         const u = unitProfit(k, { ordRub: dr.revenue, ordQty: dr.orders, ads: dr.spend, selfRub: dr.selfR, selfFbs: dr.selfFbs }, UNIT_CTX.tax);
-        er += u.expRev; pf += u.profit; any = true;
+        er += u.expRev; pf += u.profit; qty += u.expQty; payout += u.payout; cost += u.cost;
+        if (u.expQty > 0 && !(k.cost > 0)) missingCost++;
+        any = true;
       }
-      if (any) { raw.expRev = er; raw.profitF = pf; }
+      if (any) Object.assign(raw, { expRev: er, profitF: pf, expQtyF: qty, payoutF: payout, costF: cost, missingCostF: missingCost });
     }
     byDate[d] = { ...derive(raw, mode), stock: stockKnown ? stock : null, position: posN ? posSum / posN : null };
     for (const key of ['sellerPrice', 'clientPrice']) {
@@ -678,7 +683,10 @@ const DAY_ROWS = [
   { key: 'drr', label: 'ДРР', fmt: 'pct', good: 'down', hint: 'Расход / сумма заказов (без учёта выкупа)' },
   { key: 'drrB', label: 'ДРР с учётом выкупа', fmt: 'pct', good: 'down', sub: true, hint: 'Расход / (сумма заказов × % выкупа артикула) — сколько реклама будет стоить с каждой продажи. Так же считается ДРР в «Цены и маржа» и калькуляторе' },
   { block: 'Прогноз', tone: 'rev' },
+  { key: 'payoutPerBuyoutF', label: 'Прогнозируемое поступление на счёт с 1 выкупа, ₽', fmt: 'money', good: 'up', hint: 'Ожидаемое перечисление после удержаний площадки и рекламы, до налога и себестоимости, / ожидаемое число выкупов' },
   { key: 'profitF', label: 'Прогнозируемая прибыль после рекламы, ₽', fmt: 'money0', good: 'up', hint: 'С заказов дня: ожидаемая выручка (с % выкупа) минус комиссия, логистика, эквайринг, хранение, себестоимость, налог и реклама — как в «Юнит-экономике». Самовыкупы в заказы не входят, но их комиссия, эквайринг, налог и сервисный сбор 20 ₽ за FBS-отправление вычитаются как расход (логистики у самовыкупа нет)' },
+  { key: 'marginF', label: 'Прогнозируемая маржинальность, %', fmt: 'pct', good: 'up', hint: 'Прогнозируемая чистая прибыль / ожидаемая выручка × 100%' },
+  { key: 'roiF', label: 'Прогнозируемый ROI, %', fmt: 'pct', good: 'up', hint: ROI_HINT },
 ];
 
 function rowTotal(row, byDate, dates, totals) {

@@ -48,6 +48,12 @@ function allowedSkus(ctx) {
   return [...new Set([...ctx.allowed.values()].map(p => String(p.sku || '')).filter(sku => /^\d+$/.test(sku)))];
 }
 
+async function canEditCompetitor(ctx, sku) {
+  if (!ctx) return true;
+  const [row] = await query(`SELECT ${visibleSkuSql('$1::bigint', '$2')} AS allowed`, [sku, allowedSkus(ctx)]);
+  return row?.allowed === true;
+}
+
 function comparisonResponse(ctx, result) {
   return { success: true, data: ctx ? { _categoryFiltered: true, result } : result };
 }
@@ -162,6 +168,7 @@ router.post('/', async (req, res) => {
     const { cabinet = 'defly', offerId, label } = req.body || {};
     const sku = String(req.body?.sku || '').replace(/\D/g, '');
     if (!offerId || !sku || sku.length > 15) return res.status(400).json({ success: false, error: 'Укажите артикул Ozon (SKU) конкурента — только цифры' });
+    if (!await canEditCompetitor(req.categoryContext, sku)) return res.status(403).json({ success:false, error:'Нет доступа к этому товару' });
     await query(`INSERT INTO search_competitors (cabinet, offer_id, sku, label) VALUES ($1, $2, $3, $4)
       ON CONFLICT (cabinet, offer_id, sku) DO UPDATE SET label = EXCLUDED.label`, [cabinet, String(offerId), sku, cut(label, 120) || null]);
     res.json({ success: true });
@@ -172,7 +179,9 @@ router.post('/', async (req, res) => {
 router.delete('/', async (req, res) => {
   try {
     await ensure();
-    await query(`DELETE FROM search_competitors WHERE cabinet = $1 AND offer_id = $2 AND sku = $3`, [req.query.cabinet || 'defly', String(req.query.offerId || ''), String(req.query.sku || '').replace(/\D/g, '') || '0']);
+    const sku = String(req.query.sku || '').replace(/\D/g, '') || '0';
+    if (sku.length > 15 || !await canEditCompetitor(req.categoryContext, sku)) return res.status(403).json({ success:false, error:'Нет доступа к этому товару' });
+    await query(`DELETE FROM search_competitors WHERE cabinet = $1 AND offer_id = $2 AND sku = $3`, [req.query.cabinet || 'defly', String(req.query.offerId || ''), sku]);
     res.json({ success: true });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });

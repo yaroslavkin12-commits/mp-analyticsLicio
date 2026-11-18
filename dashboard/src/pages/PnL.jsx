@@ -1,3 +1,4 @@
+import { returnOnCost, ROI_HINT } from './unitModel';
 import { accessStorage } from '../lib/accessClient';
 import { sumAvailable } from '../lib/availableSum';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -40,6 +41,7 @@ const ROWS = [
   { block: 'Результат', tone: 'conv' },
   { key: 'profit', label: 'Прибыль, ₽', fmt: 'int', good: 'up', strong: true, signed: true },
   { key: 'margin', label: 'Маржа, %', fmt: 'pct', good: 'up', hint: 'Прибыль / выручка' },
+  { key: 'roi', label: 'ROI, %', fmt: 'pct', good: 'up', hint: ROI_HINT },
   { key: 'drr', label: 'ДРР факт, %', fmt: 'pct', good: 'down', hint: 'ДРР фактический: списания на рекламу (по начислениям Ozon) / выручка по выкупам (выкупы − возвраты). В «Цены и маржа» и калькуляторе — ДРР прогнозный: реклама / (заказы × % выкупа)' },
 ];
 function WbAdsTiming({data,items,deductions,allScope}) {
@@ -214,6 +216,7 @@ export default function PnL({ cabinet }) {
     for (const k of B) v[k] = new Float64Array(n);
     v.qty = new Float64Array(n); v.adsRaw = new Float64Array(n); v.costRaw = new Float64Array(n); v.taxBase = new Float64Array(n);
     let noCost = 0;
+    const missingCost = new Uint8Array(n);
     for (const a of items) {
       const x = per[a.i]; if (!x) continue;
       const cp = data.cost[a.i];
@@ -227,6 +230,7 @@ export default function PnL({ cabinet }) {
         v.qty[i] += x.qty[i]; v.adsRaw[i] += x.ads[i]; sold += x.qty[i];
         v.taxBase[i] += data.taxBase ? x.taxBase[i] : (x.b[iSale][i] + x.b[iRet][i]) * (shD ? shD[i] : 1);
         if (cp) v.costRaw[i] += cp * (x.qty[i] - x.self[i]);
+        else if (x.qty[i] !== x.self[i]) missingCost[i] = 1;
       }
       if (!cp && sold > 0) noCost++;
     }
@@ -242,7 +246,7 @@ export default function PnL({ cabinet }) {
       for (const [d, bi, a] of data.noSku) { const k = data.buckets[bi]; v[B.includes(k) ? k : 'other'][d] += a * (k === 'ads' && adSh !== null ? adSh : shD[d]); }
       data.adNoSku.forEach((a, d) => { v.adsRaw[d] += a * shD[d]; });
     }
-    const out = { ...v, revenue: [], ozon: [], ozonX: [], payout: [], ads: [], cost: [], tax: [], profit: [], margin: [], drr: [], ozonAbs: [], adsAbs: [] };
+    const out = { ...v, revenue: [], ozon: [], ozonX: [], payout: [], ads: [], cost: [], tax: [], profit: [], margin: [], roi: [], drr: [], ozonAbs: [], adsAbs: [] };
     for (let i = 0; i < n; i++) {
       const rev = v.sale[i] + v.return[i];
       const ozX = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
@@ -253,6 +257,7 @@ export default function PnL({ cabinet }) {
       const p = rev + oz - v.costRaw[i] + t;
       out.revenue.push(rev); out.ozon.push(oz); out.ozonX.push(ozX); out.payout.push(rev + oz); out.ads.push(ad); out.cost.push(-v.costRaw[i]);
       out.tax.push(t); out.profit.push(p); out.margin.push(rev > 0 ? p / rev * 100 : null); out.drr.push(rev > 0 ? -ad / rev * 100 : null);
+      out.roi.push(returnOnCost(p, v.costRaw[i], missingCost[i]));
       out.ozonAbs.push(-ozX); out.adsAbs.push(-ad);
     }
     if(data.financeSource === 'wb') data.dates.forEach((date,i)=>{if(date<data.available.mn||date>data.available.mx)for(const a of Object.values(out))if(a.length===n)a[i]=NaN;});
@@ -261,7 +266,7 @@ export default function PnL({ cabinet }) {
     for (const k of [...B, 'qty', 'taxBase', 'revenue', 'ozon', 'ozonX', 'payout', 'ads', 'cost', 'tax', 'profit', 'ozonAbs', 'adsAbs']) T[k] = sum(out[k]);
     T.margin = T.revenue > 0 ? T.profit / T.revenue * 100 : null;
     T.drr = T.revenue > 0 ? -T.ads / T.revenue * 100 : null;
-    T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;
+    T.roi = returnOnCost(T.profit, -T.cost, missingCost.some(Boolean));
     return { vals: out, totals: T, noCost };
   }, [per, n, data, tax, lastFin, bs.shareAt, netDayAll, adsAll]);
 
@@ -282,7 +287,7 @@ export default function PnL({ cabinet }) {
 
   const dates = data.dates;
   const { vals, totals: T, noCost } = main;
-  const KEEP = new Set(['qty', 'margin', 'drr']);
+  const KEEP = new Set(['qty', 'margin', 'roi', 'drr']);
   const perQ = (v, q) => (v === null || v === undefined || !(q > 0) ? null : v / q);
   const perR = (v, r) => (v === null || v === undefined || !(r > 0) ? null : v / r * 100);
   const shownVals = perUnit ? Object.fromEntries(ROWS.filter(r => r.key).map(r => [r.key, KEEP.has(r.key) ? vals[r.key] : Array.from(vals[r.key] || [], (x, i) => perQ(x, vals.qty[i]))]))

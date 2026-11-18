@@ -68,6 +68,10 @@ export function unitCoefs(coefs, arts, shareOf) {
 // доставку Ozon списывает, но столько же перечисляет «за доставку от покупателя».
 // selfFbs — отправлений FBS/rFBS: сервисный сбор за интеграцию с логистической платформой.
 export const SELF_FBS_FEE = 20;
+export const ROI_HINT = 'Чистая прибыль после расходов и налога / себестоимость × 100%. Без полной себестоимости ROI не рассчитывается.';
+export function returnOnCost(profit, cost, missingCost = false) {
+  return !missingCost && Number.isFinite(profit) && Number.isFinite(cost) && cost > 0 ? profit / cost * 100 : null;
+}
 export function unitProfit(k, { ordRub, ordQty, ads = 0, fbs, selfRub = 0, selfFbs = 0 }, taxPct = 6) {
   const sh = fbs === undefined || fbs === null ? k.fbs30 : fbs;
   const expRev = ordRub * k.buyout, expQty = ordQty * k.buyout;
@@ -77,5 +81,5 @@ export function unitProfit(k, { ordRub, ordQty, ads = 0, fbs, selfRub = 0, selfF
   const cost = k.cost ? expQty * k.cost : 0, tax = expRev * (k.share ?? 1) * taxPct / 100;
   const selfCost = (selfRub > 0 ? selfRub * (k.commFbo * (1 - sh) + k.commFbs * sh + k.acq) + selfRub * (k.share ?? 1) * taxPct / 100 : 0) + selfFbs * (k.platform === 'wb' ? 0 : SELF_FBS_FEE);
   const profit = expRev - comm - logi - acq - other - cost - tax - ads - selfCost;
-  return { expRev, expQty, comm, logi, acq, other, cost, tax, ads, selfCost, profit, margin: expRev > 0 ? profit / expRev * 100 : null, noCost: !k.cost };
+  return { expRev, expQty, payout: expRev - comm - logi - acq - other - ads, comm, logi, acq, other, cost, tax, ads, selfCost, profit, margin: expRev > 0 ? profit / expRev * 100 : null, noCost: !k.cost };
 }

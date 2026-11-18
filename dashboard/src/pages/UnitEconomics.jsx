@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
 import { getSalesData, getFinanceCoefs } from '../api';
 import { fmtInt, fmtMoney2, useTip, DualChart, Delta } from './AdsStats2';
 import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, Empty, inPath, matchQ, pct1, money, useTax, TaxInput, useBuyerShare, SEP } from './finShared';
-import { unitCoefs, unitProfit } from './unitModel';
+import { unitCoefs, unitProfit, returnOnCost, ROI_HINT } from './unitModel';
 import './ads2.css';
 import './sales.css';
 
@@ -47,7 +47,7 @@ const ROWS = [
   { key: 'payUnit', label: 'Поступление на счёт с 1 выкупа, ₽', fmt: 'int', good: 'up', sub: true, hint: 'Поступление на счёт / ожидаемое число выкупов' },
   { key: 'drr', label: 'ДРР от заказов, %', fmt: 'pct', good: 'down', hint: 'Расход на рекламу / сумма заказов' },
   { key: 'perUnit', label: 'Прибыль на 1 выкуп, ₽', fmt: 'int', good: 'up', hint: 'Прогнозируемая прибыль / ожидаемое число выкупов' },
-  { key: 'roi', label: 'ROI, %', fmt: 'pct', good: 'up', hint: 'Прибыль / себестоимость' },
+  { key: 'roi', label: 'ROI, %', fmt: 'pct', good: 'up', hint: ROI_HINT },
   { key: 'margin', label: 'Маржа, %', fmt: 'pct', good: 'up', hint: 'Прибыль / ожидаемая выручка' },
   { key: 'profit', label: 'Прогнозируемая прибыль, ₽', fmt: 'int', good: 'up', strong: true, signed: true, hint: 'С заказов дня: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог' },
 ];
@@ -133,10 +133,11 @@ export default function UnitEconomics({ cabinet }) {
     const v = {};
     for (const k of SUM_KEYS) v[k] = new Float64Array(n);
     let noCost = 0, noCostRub = 0;
+    const missingCost = new Uint8Array(n);
     for (const a of items) {
       const x = per[a.i]; if (!x) continue;
       for (const k of SUM_KEYS) { const s = x[k], t = v[k]; for (let i = 0; i < n; i++) t[i] += s[i]; }
-      if (!K[a.i].cost) { let s = 0; for (let i = 0; i < n; i++) s += x.ordRub[i]; if (s > 0) { noCost++; noCostRub += s; } }
+      if (!K[a.i].cost) { let s = 0; for (let i = 0; i < n; i++) { s += x.ordRub[i]; if (x.expQty[i] > 0) missingCost[i] = 1; } if (s > 0) { noCost++; noCostRub += s; } }
     }
     const out = { ...v, buyout: [], exp: [], profit: [], margin: [], perUnit: [], roi: [], drr: [], adsAbs: [], pay: [], payUnit: [] };
     const tx = tax / 100;
@@ -148,7 +149,7 @@ export default function UnitEconomics({ cabinet }) {
       const py = v.expRev[i] + v.comm[i] + v.logi[i] + v.acq[i] + v.other[i] + v.ads[i];
       out.pay.push(py); out.payUnit.push(v.expQty[i] > 0 ? py / v.expQty[i] : null);
       out.exp.push(e); out.profit.push(p); out.margin.push(v.expRev[i] > 0 ? p / v.expRev[i] * 100 : null);
-      out.perUnit.push(v.expQty[i] > 0 ? p / v.expQty[i] : null); out.roi.push(v.cost[i] < 0 ? p / -v.cost[i] * 100 : null);
+      out.perUnit.push(v.expQty[i] > 0 ? p / v.expQty[i] : null); out.roi.push(returnOnCost(p, -v.cost[i], missingCost[i]));
       out.drr.push(v.ordRub[i] > 0 ? -v.ads[i] / v.ordRub[i] * 100 : null); out.adsAbs.push(-v.ads[i]);
     }
     const sum = arr => { let s = 0; for (let i = 0; i < n; i++) s += arr[i] || 0; return s; };
@@ -158,7 +159,7 @@ export default function UnitEconomics({ cabinet }) {
     T.buyout = T.ordRub > 0 ? T.expRev / T.ordRub * 100 : null;
     T.margin = T.expRev > 0 ? T.profit / T.expRev * 100 : null;
     T.perUnit = T.expQty > 0 ? T.profit / T.expQty : null;
-    T.roi = T.cost < 0 ? T.profit / -T.cost * 100 : null;
+    T.roi = returnOnCost(T.profit, -T.cost, missingCost.some(Boolean));
     T.drr = T.ordRub > 0 ? -T.ads / T.ordRub * 100 : null;
     return { vals: out, totals: T, noCost, noCostRub };
   }, [per, n, K, tax]);

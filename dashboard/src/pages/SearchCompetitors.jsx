@@ -161,7 +161,11 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
     try { await addCompetitor(cabinet, offer, clean, l || ''); setSku(''); setLabel(''); load(); }
     catch (e) { setLog(v => [{ ok: false, text: e.response?.data?.error || e.message }, ...v]); }
   };
-  const remove = async s => { if (!window.confirm('Убрать конкурента из сравнения? Загруженные отчёты останутся.')) return; await removeCompetitor(cabinet, offer, s); load(); };
+  const remove = async s => {
+    if (!window.confirm('Убрать конкурента из сравнения? Загруженные отчёты останутся.')) return;
+    try { await removeCompetitor(cabinet, offer, s); load(); }
+    catch (e) { setLog(v => [{ ok: false, text: e.response?.data?.error || e.message }, ...v]); }
+  };
   const savePhoto = async (s, p) => { await saveSkuPhoto(cabinet, s, p); load(); };
 
   const upload = async files => {
@@ -195,7 +199,7 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
       const full = last?.name || card?.title || name || '';
       const lastOf = w => (data.market || []).filter(m => m.sku === sku && m.window === w).reduce((a, m) => (!a || m.date > a.date ? m : a), null);
       const l7 = lastOf(7), l28 = lastOf(28);
-      return { sku, kind, own, l7, l28, label: labels[sku] || label, name: full, short: shortName(full), seller: last?.seller || seller || '', last, prev, list, card, manualPhoto: data.photos[sku] || null, photo: data.photos[sku] || card?.photo || null };
+      return { sku, kind, own, l7, l28, label: kind === 'comp' ? label : labels[sku] || label, name: full, short: shortName(full), seller: last?.seller || seller || '', last, prev, list, card, manualPhoto: data.photos[sku] || null, photo: data.photos[sku] || card?.photo || null };
     };
     const shop = SHOP[cabinet] || cabinet;
     const list = [...data.our.map(o => mk(o.sku, 'our', shop, o.name, shop, true)), ...data.competitors.map(c => mk(c.sku, 'comp', c.label || c.seller || 'Конкурент', c.name, c.seller, !!c.ours))];
@@ -232,9 +236,11 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
     }).catch(() => setSerpMap(null));
   }, [cabinet, offer, serpSel]);
   const rename = async (x, text) => {
-    if (x.kind === 'comp') await addCompetitor(cabinet, offer, x.sku, text);
-    await saveCompetitorView(cabinet, offer, { label: { sku: x.sku, text } });
-    load();
+    try {
+      if (x.kind === 'comp') await addCompetitor(cabinet, offer, x.sku, text);
+      if (!readOnly) await saveCompetitorView(cabinet, offer, { label: { sku: x.sku, text } });
+      load();
+    } catch (e) { setLog(v => [{ ok: false, text: e.response?.data?.error || e.message }, ...v]); }
   };
   // Колонки сравнения: цена и рейтинг с витрины, место/ставка из выдачи, показатели отчёта.
   // Необязательные группы колонок: «Витрина» и «Выдача» — по переключателю (помним в браузере).
@@ -274,18 +280,16 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
   return (
     <>
       <div className="a-card sc-bar">
-        {!readOnly && <>
         <form className="sc-add" onSubmit={e => { e.preventDefault(); add(sku, label); }}>
           <b>+ Конкурент</b>
           <input className="a-input" placeholder="SKU Ozon (из ссылки)" value={sku} onChange={e => setSku(e.target.value)} style={{ width: 170 }} />
           <input className="a-input" placeholder="Как назвать: «Автопилот»" value={label} onChange={e => setLabel(e.target.value)} style={{ width: 190 }} />
           <button type="submit" className="a-btn" disabled={!sku.replace(/\D/g, '')}>Добавить</button>
         </form>
-        <label className={`a-btn ${busy ? 'dis' : ''}`} title="Можно выбрать сразу несколько файлов">
+        {!readOnly && <label className={`a-btn ${busy ? 'dis' : ''}`} title="Можно выбрать сразу несколько файлов">
           {busy ? 'Загружаю…' : 'Загрузить отчёты Ozon (.xlsx)'}
           <input ref={fileRef} type="file" accept=".xlsx" multiple hidden disabled={busy} onChange={e => e.target.files?.length && upload([...e.target.files])} />
-        </label>
-        </>}
+        </label>}
         <span className="a-seg">{[7, 28].map(w => <button key={w} type="button" className={win === w ? 'on' : ''} onClick={() => setWin(w)}>{w} дней</button>)}</span>
       </div>
       {log.length > 0 && (
@@ -337,7 +341,7 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
                   <td className="stk s0 sc-grip">{dragOn ? <span className="a-handle" title="Перетащите, чтобы поменять порядок">⠿</span> : null}</td>
                   <td className="stk s1"><Photo sku={x.sku} src={x.photo} auto={!x.manualPhoto && !!x.card?.photo} onSave={readOnly ? undefined : savePhoto} /></td>
                   <td className="stk s2 sc-name">
-                    <div className="sc-l1"><Label x={x} onSave={readOnly ? undefined : t => rename(x, t)} />{x.own && x.label !== (SHOP[cabinet] || cabinet) && <span className="sc-own" title="Наш товар">{SHOP[cabinet] || 'наш'}</span>}</div>
+                    <div className="sc-l1"><Label x={x} onSave={readOnly && x.kind !== 'comp' ? undefined : t => rename(x, t)} />{x.own && x.label !== (SHOP[cabinet] || cabinet) && <span className="sc-own" title="Наш товар">{SHOP[cabinet] || 'наш'}</span>}</div>
                     <div className="muted sc-short" title={`${x.name}${x.seller && !x.own ? '\nПродавец: ' + x.seller : ''}`}>{x.seller && !x.own ? `${x.seller} · ` : ''}{x.short || '—'}</div>
                     <div className="sc-sku" data-no-art><a href={ozonUrl(x.sku)} target="_blank" rel="noreferrer" title="Открыть карточку на Ozon">{x.sku}</a><span className="art-cp" data-copy={x.sku} title="Скопировать артикул Ozon">⧉</span></div>
                     {x.card?.photoChanged && (Date.now() - Date.parse(x.card.photoChanged)) < 14 * 864e5 && <div className="sc-flag">фото сменилось {dd(x.card.photoChanged)}</div>}
@@ -354,7 +358,7 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
                     );
                   })}
                   <td className="n c gs">{x.last ? <>{dd(x.last.date)}<div className="sc-d" title="Ozon не включает в отчёт сегодня и вчера">данные по {dd(dayjs(x.last.date).subtract(2, 'day').format('YYYY-MM-DD'))}</div>{x.last.data?._empty && <div className="sc-d" title={`Ozon вернул пустую строку: за ${win} дней у товара не было заказов`}>нет заказов</div>}</> : <span className="muted" title="Загрузите отчёт «Товары на Ozon» с этим товаром">нет отчёта</span>}</td>
-                  <td>{!readOnly && x.kind === 'comp' && <button type="button" className="sp-reset" title="Убрать из сравнения" onClick={() => remove(x.sku)}>×</button>}</td>
+                  <td>{x.kind === 'comp' && <button type="button" className="sp-reset" title="Убрать из сравнения" onClick={() => remove(x.sku)}>×</button>}</td>
                 </tr>
               ))}
             </tbody>
@@ -403,7 +407,7 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
         </div>
       )}
 
-      <SerpBlock cabinet={cabinet} offer={offer} queries={data.serpQueries} items={items} onAdd={readOnly ? undefined : add} />
+      <SerpBlock cabinet={cabinet} offer={offer} queries={data.serpQueries} items={items} onAdd={add} />
     </>
   );
 }
