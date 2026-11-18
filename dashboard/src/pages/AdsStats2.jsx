@@ -1124,6 +1124,8 @@ const MATRIX_METRICS = [
 function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls }) {
   const [metric, setMetric] = useState('orders');
   const [view,setView]=useState('articles');
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState('');
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length, rows.length]);
   const cfg = MATRIX_METRICS.find(m => m.key === metric);
@@ -1135,6 +1137,41 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
   const completedValues=dates.filter(d=>d<dayjs().format('YYYY-MM-DD')).map(d=>all.byDate[d]?.[metric]).filter(Number.isFinite);
   const periodMean=completedValues.length?completedValues.reduce((s,v)=>s+v,0)/completedValues.length:null;
   const totalOf = m => metric === 'stock' ? m.stockNow : rowTotal(cfg, m.byDate, dates, m.totals);
+
+  async function exportMatrix() {
+    setExportBusy(true);
+    setExportError('');
+    try {
+      const XLSX = await import('xlsx');
+      const metricCell = value => {
+        if (!Number.isFinite(value)) return null;
+        if (cfg.fmt === 'pct') return { t: 'n', v: value / 100, z: '0.0%' };
+        const format = cfg.fmt === 'pos' ? '0.0' : '#,##0';
+        return { t: 'n', v: value, z: format };
+      };
+      const values = model => [
+        metricCell(totalOf(model)),
+        Number.isFinite(model.stockNow) ? model.stockNow : null,
+        ...dates.map(date => metricCell(model.byDate[date]?.[metric])),
+      ];
+      const sheet = XLSX.utils.aoa_to_sheet([
+        ['Метрика', cfg.label],
+        ['Выборка', scopeLabel],
+        ['Артикул', 'Товар', 'Итого', 'Остаток', ...dates.map(date => dayjs(date).format('DD.MM.YYYY'))],
+        ...models.map(({ a, m }) => [a.offerId, a.productName || '', ...values(m)]),
+        ['Итого', '', ...values(all)],
+      ]);
+      sheet['!cols'] = [{ wch: 22 }, { wch: 38 }, ...Array.from({ length: dates.length + 2 }, () => ({ wch: 14 }))];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, 'Артикулы по дням');
+      XLSX.writeFile(workbook, `Реклама_артикулы_по_дням_${cabinet}_${dates[0]}_${dates.at(-1)}.xlsx`);
+    } catch {
+      setExportError('Не удалось скачать Excel. Попробуйте ещё раз.');
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   return (
     <div className="a-card" style={{ padding: 14 }}>
       <div className="a-bar" style={{ marginBottom: 10 }}>
@@ -1147,6 +1184,13 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
             <button key={m.key} type="button" className={metric === m.key ? 'on' : ''} onClick={() => setMetric(m.key)}>{m.label}</button>
           ))}
         </span>}
+        {view === 'articles' && (
+          <button type="button" className="a-btn" style={{ marginLeft: 'auto' }}
+            onClick={exportMatrix} disabled={exportBusy || !rows.length || !dates.length}>
+            {exportBusy ? 'Подготавливаем…' : 'Скачать Excel'}
+          </button>
+        )}
+        {view === 'articles' && exportError && <span role="alert" className="a-hint">{exportError}</span>}
       </div>
       {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable showPrices dates={dates} model={all} mode={mode} />:<React.Fragment>
       {metric === 'position' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }} title="Цветовая шкала постоянная и не зависит от периода, фильтров и крайних значений. Между ориентирами цвет меняется плавно.">
