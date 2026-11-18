@@ -67,7 +67,9 @@ export default function AvgCheck({ cabinet }) {
   const load = useCallback(() => {
     setLoading(true); setError(null);
     const ok = latestOnly('check:' + cabinet);
-    Promise.all([getSalesData(cabinet, { dateFrom, dateTo }), getFinancePnl(cabinet, { dateFrom, dateTo })])
+    // Для среднего чека из аналитики нужны только количество и сумма заказов.
+    const salesPeriod = cabinet === 'defly_wb' ? { dateFrom, dateTo } : { dateFrom, dateTo, projection: 'summary' };
+    Promise.all([getSalesData(cabinet, salesPeriod), getFinancePnl(cabinet, { dateFrom, dateTo })])
       .then(ok(([s, p]) => { setSales(s.data.data); setPnl(p.data.data); }))
       .catch(ok(e => setError(e.response?.data?.error || e.message)))
       .finally(ok(() => setLoading(false)));
