@@ -311,6 +311,30 @@ async function loadSales(params = {}, onTiming, options = {}) {
         order: ORDER[cabinet] || [],
     };
 }
+// Тот же источник дневных замеров, что в таблице «Реклама → По дням».
+router.get('/daily-prices', async (req, res) => {
+  try {
+    const cabinet = req.query.cabinet || 'defly';
+    if (['licio', 'defly_wb'].includes(cabinet)) return res.json({ success: true, data: { rows: [] } });
+    const { from, to } = period(req.query);
+    if (![from, to].every(date => /^\d{4}-\d{2}-\d{2}$/.test(date))) {
+      return res.status(400).json({ success: false, error: 'Укажите корректный период' });
+    }
+    const offers = req.categoryContext
+      ? [...req.categoryContext.allowed.keys()]
+      : (await query(`SELECT DISTINCT offer_id FROM ad_product_catalog
+          WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet])).map(r => r.offer_id).filter(Boolean);
+    await require('../lib/priceEvents').ensurePriceDaily();
+    const prices = await require('../lib/dailyAdPrices').dailyAdPrices(cabinet, from, to, offers);
+    const rows = [...prices].map(([key, price]) => [
+      key.slice(0, -11), key.slice(-10), price.sellerPrice, price.clientPrice,
+    ]);
+    res.json({ success: true, data: { rows } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 router.get('/history', async (req,res)=>{try{res.set('Cache-Control','no-store');res.json({success:true,data:await require('../lib/shopsHistory').load(req.query,req.categoryContext)});}catch(e){res.status(400).json({success:false,error:e.message});}});
 
 router.get('/data', async (req, res) => {

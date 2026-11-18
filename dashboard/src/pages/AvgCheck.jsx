@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getSalesData, getFinancePnl, latestOnly } from '../api';
+import { getSalesData, getFinancePnl, getDailySalesPrices, latestOnly } from '../api';
 import { fmtInt, useTip, ChartPane, niceScale, CAT_COLORS, Delta } from './AdsStats2';
 import { bucketsOf } from './SalesAnalytics';
 import { useCats, useGroups, FinHeader, RowsTable, CatTable, Kpi, inPath, matchQ, pct1, SEP, OTHER } from './finShared';
@@ -20,6 +20,14 @@ import './sales.css';
 
 const BASES = [['orders', 'от заказов'], ['sales', 'от выкупов'], ['payout', 'поступления на счёт']];
 const OZON = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other', 'ads'];
+const PRICE_ROWS = [
+  { block: 'Цены текущие', tone: 'rev' },
+  { key: 'sellerPrice', label: 'Предельная цена, ₽', fmt: 'money', good: 'up',
+    hint: 'Цена продавца до скидки Ozon. Среднее по замерам дня и выбранным артикулам. Итого — среднее по дням с данными.' },
+  { key: 'clientPrice', label: 'Цена клиента, ₽', fmt: 'money', good: 'down',
+    hint: 'Цена покупателя с Ozon-картой. Среднее по замерам дня и выбранным артикулам. Итого — среднее по дням с данными.' },
+];
+const average = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const ROWS = [
   { block: 'Заказы', tone: 'rev' },
   { key: 'oRub', label: 'Заказано, ₽', fmt: 'int', good: 'up' },
@@ -41,6 +49,9 @@ export default function AvgCheck({ cabinet }) {
   const [dateTo, setDateTo] = useState(today);
   const [sales, setSales] = useState(null);
   const [pnl, setPnl] = useState(null);
+  const [prices, setPrices] = useState(null);
+  const showPrices = !['licio', 'defly_wb'].includes(cabinet);
+  const pricePeriod = `${cabinet}|${dateFrom}|${dateTo}`;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sel, setSel] = useState('');
@@ -62,6 +73,14 @@ export default function AvgCheck({ cabinet }) {
       .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!showPrices) return;
+    const controller = new AbortController();
+    getDailySalesPrices(cabinet, { dateFrom, dateTo }, controller.signal)
+      .then(({ data }) => { if (!controller.signal.aborted) setPrices({ period: pricePeriod, rows: data.data.rows }); })
+      .catch(() => { if (!controller.signal.aborted) setPrices({ period: pricePeriod, error: true }); });
+    return () => controller.abort();
+  }, [cabinet, dateFrom, dateTo, pricePeriod, showPrices]);
 
   const cats = useCats(sales?.articles, sales?.order);
   const dates = sales?.dates || [];
@@ -140,6 +159,22 @@ export default function AvgCheck({ cabinet }) {
   const q = search.trim().toLowerCase();
   const list = useMemo(() => ({ q, arts: cats.arts.filter(a => per[a.i] && inPath(a, sel) && matchQ(a, q) && grp.test(a)) }), [cats.arts, per, sel, q, grp.test]);
   const S = useMemo(() => sumOf(list.arts), [sumOf, list]);
+  const dailyPrices = useMemo(() => {
+    if (!showPrices || prices?.period !== pricePeriod || !prices.rows) return {};
+    const offers = new Set(cats.arts.filter(a => inPath(a, sel) && matchQ(a, q) && grp.test(a)).map(a => a.o));
+    const index = new Map(dates.map((date, i) => [date, i]));
+    const sums = [new Float64Array(n), new Float64Array(n)];
+    const counts = [new Uint32Array(n), new Uint32Array(n)];
+    for (const [offer, date, seller, client] of prices.rows) {
+      const i = index.get(date);
+      if (i === undefined || !offers.has(offer)) continue;
+      if (Number.isFinite(seller) && seller > 0) { sums[0][i] += seller; counts[0][i]++; }
+      if (Number.isFinite(client) && client > 0) { sums[1][i] += client; counts[1][i]++; }
+    }
+    return Object.fromEntries(['sellerPrice', 'clientPrice'].map((key, k) => [
+      key, dates.map((_, i) => counts[k][i] ? sums[k][i] / counts[k][i] : null),
+    ]));
+  }, [prices, pricePeriod, showPrices, cats.arts, dates, n, sel, q, grp.test]);
   const all = dates.map((_, i) => i);
   // Последние 7 полных дней против 7 до них.
   const last7 = all.filter(i => dates[i] < today).slice(-7), prev7 = all.filter(i => dates[i] < today).slice(-14, -7);
@@ -175,7 +210,8 @@ export default function AvgCheck({ cabinet }) {
   const sc = niceScale(allV.length ? Math.min(...allV) : 0, allV.length ? Math.max(...allV) : 1, true);
   series.forEach(s => { s.scale = sc; });
 
-  const vals = {}, totals = {};
+  const vals = { ...dailyPrices }, totals = {};
+  for (const [key, values] of Object.entries(dailyPrices)) totals[key] = average(values.filter(Number.isFinite));
   for (const r of ROWS) if (r.key) { vals[r.key] = all.map(i => metricsOf(S, [i])[r.key]); totals[r.key] = T[r.key]; }
 
   const cols = [
@@ -219,7 +255,8 @@ export default function AvgCheck({ cabinet }) {
 
       <div className="a-card">
         <div className="a-bar" style={{ padding: '12px 14px 8px' }}><b style={{ fontSize: 14 }}>По дням</b></div>
-        <RowsTable dates={dates} rows={ROWS} vals={vals} totals={totals} firstCol="Показатель" />
+        {showPrices && prices?.period === pricePeriod && prices.error && <div className="a-hint" role="status" style={{ padding: '0 14px 8px' }}>Не удалось загрузить дневные цены.</div>}
+        <RowsTable dates={dates} rows={showPrices ? [...PRICE_ROWS, ...ROWS] : ROWS} vals={vals} totals={totals} firstCol="Показатель" />
       </div>
       {tip.node}
     </div>

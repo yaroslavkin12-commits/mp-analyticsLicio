@@ -141,6 +141,7 @@ function projection(path, data, ctx) {
   if (path === '/promo/stats') return ads(data,ctx);
   if (path === '/orders/feed') return { ...pick(data,['from','to','since','_wb']), rows: (data.rows || []).filter(r => ctx.allowed.has(offerOf(r))).map(r => ({ ...pick(r,['p','sku','o','n','price','est','qty','st','wh','at','sch','self']), cat: ctx.allowed.get(offerOf(r)).path })) };
   if (path === '/discounts/overview') return { ...pick(data,['cabinet','lastCheckedAt']), items: (data.items || []).filter(r => ctx.allowed.has(offerOf(r))).map(r => ({ ...pick(r,['o','n','seller','site','card','pct','pctCard','schema','c1','c7','d1','d7','orders30','revenue30','checkedAt']), cat: ctx.allowed.get(offerOf(r)).path })) };
+  if (path === '/sales/daily-prices') return { rows: data.rows.filter(r => ctx.allowed.has(String(r[0]))) };
   if (path === '/discounts/history') return { dates: data.dates, from:data.from,to:data.to, rows: (data.rows || []).filter(r => ctx.allowed.has(String(r[0]))), base: (data.base || []).filter(r => ctx.allowed.has(String(r[0]))) };
   if (path === '/promo/groups') {
     const members = filterMap(data.members,ctx), ids = new Set(Object.values(members));
@@ -162,7 +163,7 @@ function routeOf(path) {
   const normalized = path.toLowerCase().replace(/\/+$/, '').replace(/^\/api\/wb\/views/, '/api').replace(/^\/api\/ads(?=\/)/, '/api/promo');
   return normalized.replace(/^\/api/, '');
 }
-const EXTRA = ['/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
+const EXTRA = ['/sales/daily-prices','/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
 function middleware() {
   return async (req,res,next) => {
     if (req.user?.accessScope == null || !/^\/api(?:\/|$)/i.test(req.path)) return next();

@@ -1,8 +1,15 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
-const path='Дефлекторы / Окна / 2D',other='Чехлы',geoChecks=[];
+const path='Дефлекторы / Окна / 2D',other='Чехлы',geoChecks=[],priceChecks=[];
 const ctx={cabinet:'defly',scope:{paths:[path]},allowed:new Map([['A',{path}]])};
 require.cache[require.resolve('../src/db')]={exports:{query:async(sql,args=[])=>{
  if(sql.includes('FROM ad_product_catalog'))return [{offer_id:'A',sku:1,product_name:'Дефлекторы окон 2D'},{offer_id:'PRIVATE-COVER',sku:2,product_name:'Чехлы'}];
+ if(sql.includes('FROM ad_price_samples_daily') || sql.includes('FROM product_discount_history') || sql.includes('FROM price_daily')){
+  priceChecks.push(args);
+  assert.deepEqual(args,['defly','2026-11-13','2026-11-13',['A']]);
+  if(sql.includes('FROM ad_price_samples_daily')) return [{offer_id:'A',d:'2026-11-13',seller:'1200.50',client:null}];
+  if(sql.includes('FROM price_daily')) return [{offer_id:'A',d:'2026-11-13',seller:'1000',client:'900'}];
+  return [];
+ }
  if(sql.includes('FROM product_category_override'))return [{offer_id:'A',path},{offer_id:'PRIVATE-COVER',path:other}];
  if(sql.includes('FROM product_analytics_daily'))return [{date:'2026-11-13',sku:1,orders_item:2,revenue:200},{date:'2026-11-13',sku:2,orders_item:999999,revenue:999999}];
  if(sql.includes('GROUP BY date, region, city')){geoChecks.push(args);assert.deepEqual(args[3],['A']);return [{date:'2026-11-13',region:'Москва',city:'',q:2,r:200}];}
@@ -22,4 +29,11 @@ test('Заказы сводки фильтруются по разрешённы
 test('Дневная география ограничивает SQL, включая чужие товары в том же регионе',async()=>{
  const data=await get('/geo',{categoryContext:ctx}),out=access.projection('/sales/geo',data,ctx);
  assert.equal(geoChecks.length,1);assert.equal(out.rows.length,1);assert.equal(out.days[0][2],2);assert.equal(out.days[0][3],200);assert.ok(!JSON.stringify(out).includes('999999'));
+});
+
+test('Дневные цены используют источник рекламы и ограничиваются разрешёнными артикулами', async () => {
+ const data = await get('/daily-prices', {categoryContext:ctx});
+ assert.equal(priceChecks.length,3);
+ assert.deepEqual(data.rows,[['A','2026-11-13',1200.5,900]]);
+ assert.deepEqual(access.projection('/sales/daily-prices',{rows:[...data.rows,['PRIVATE-COVER','2026-11-13',999,999]]},ctx),data);
 });
