@@ -908,6 +908,17 @@ router.get('/stats', async (req, res) => {
       }
     }
 
+    // Статус "оплаты за заказ" на товаре и текущая ставка.
+    const cpoStatusByOffer = new Map();
+    for (const r of cpoProductRows) {
+      const offerId = offerBySkuCat.get(String(r.sku)) || r.offer_id;
+      if (offerId) cpoStatusByOffer.set(offerId, {
+        enabled: !!r.enabled, available: r.available !== false,
+        bidPct: r.bid_pct !== null ? Number(r.bid_pct) : null, bidRub: r.bid_rub !== null ? Number(r.bid_rub) : null,
+        checkedAt: r.checked_at,
+      });
+    }
+
     // Расход "оплаты за заказ" по товарам — отдельной строкой-кампанией у
     // каждого артикула (точные суммы из отчёта по заказам).
     const cpoTotalsByOffer = new Map();
@@ -926,20 +937,10 @@ router.get('/stats', async (req, res) => {
       }
       const article = getArticle(offerId, skuByOfferId.get(offerId) || null);
       article.campaigns.push({
-        campaignId: `cpo:${offerId}`, title: 'Оплата за заказ (по заказам)', state: 'CAMPAIGN_STATE_RUNNING',
+        campaignId: `cpo:${offerId}`, title: 'Оплата за заказ (по заказам)',
+        state: cpoStatusByOffer.get(offerId)?.enabled ? 'CAMPAIGN_STATE_RUNNING' : null,
         advObjectType: 'SEARCH_PROMO', paymentType: 'CPO', totalSpend, totalClicks: 0, totalAdViews: 0,
         totalAdOrders, totalAdRevenue, avgCpc: 0, splitAcross: null, byDate,
-      });
-    }
-
-    // Статус "оплаты за заказ" на товаре и текущая ставка.
-    const cpoStatusByOffer = new Map();
-    for (const r of cpoProductRows) {
-      const offerId = offerBySkuCat.get(String(r.sku)) || r.offer_id;
-      if (offerId) cpoStatusByOffer.set(offerId, {
-        enabled: !!r.enabled, available: r.available !== false,
-        bidPct: r.bid_pct !== null ? Number(r.bid_pct) : null, bidRub: r.bid_rub !== null ? Number(r.bid_rub) : null,
-        checkedAt: r.checked_at,
       });
     }
 

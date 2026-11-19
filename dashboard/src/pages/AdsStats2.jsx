@@ -181,6 +181,8 @@ function TransitCell({ value, onSave }) {
   );
 }
 const isCpoCampaign = c => String(c.paymentType || '').toUpperCase() === 'CPO';
+const isRunningCampaign = c => c.state === 'CAMPAIGN_STATE_RUNNING';
+const isCpoActive = (cpo, campaigns) => cpo?.enabled ?? campaigns.some(c => isCpoCampaign(c) && isRunningCampaign(c) && !String(c.campaignId || c.id || '').startsWith('cpo:'));
 // Стратегия РК с оплатой за клик (как в кабинете Ozon): поле productAutopilotStrategy.
 export const STRATEGY = {
   TARGET_BIDS: { t: 'Средняя стоимость клика', s: 'ср. клик' },
@@ -848,7 +850,7 @@ function Journal({ events, offerId, onAdd, onDelete }) {
 
 // «Работает»: какие виды рекламы запущены у товара — по стратегиям и зонам, плюс ОЗЗ.
 const KIND_ORDER = ['поиск', 'п+р', 'ср. клик', 'ЦР', 'АС', 'ТОП'];
-function AdKinds({ cpcAll, cpo, hasCpo }) {
+function AdKinds({ cpcAll, cpo, cpoOn }) {
   const by = new Map();
   for (const c of cpcAll) {
     const st = stratOf(c), k = st.s;
@@ -858,7 +860,6 @@ function AdKinds({ cpcAll, cpo, hasCpo }) {
     by.set(k, x);
   }
   const list = [...by.values()].sort((a, b) => (b.on.length > 0) - (a.on.length > 0) || (KIND_ORDER.indexOf(a.k) + 99) % 99 - (KIND_ORDER.indexOf(b.k) + 99) % 99);
-  const cpoOn = cpo ? !!cpo.enabled : hasCpo;
   const chips = list.filter(x => x.on.length).map(x => (
     <span key={x.k} className="a-kind on" title={`${x.t}: запущено ${x.on.length}${x.off.length ? `, выключено ${x.off.length}` : ''}\n${x.on.map(c => `• ${c.title || c.campaignId}`).join('\n')}`}>
       {x.k}{x.target ? ` ${String(x.target).replace('.', ',')}%` : ''}</span>));
@@ -995,14 +996,13 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
   const selfN = sumT('selfQ');
   const margin = t.expRev > 0 && t.profitF !== undefined ? t.profitF / t.expRev * 100 : null;
   const cpcAll = campaigns.filter(c => !isCpoCampaign(c));
-  const hasCpo = campaigns.some(isCpoCampaign);
   return (
     <div className="a-dwrap a-dwrap2">
       <div className="a-dhead">
         {!isAggregate
           ? <><b className="a-dh-id">{offerId}</b><span className="a-dh-nm">{a?.productName}</span></>
           : <><b className="a-dh-id">{articles.length} арт.</b><span className="a-dh-nm">итого по списку</span></>}
-        {!isAggregate && <AdKinds cpcAll={cpcAll} cpo={a?.cpo} hasCpo={hasCpo} />}
+        {!isAggregate && <AdKinds cpcAll={cpcAll} cpo={a?.cpo} cpoOn={isCpoActive(a?.cpo, campaigns)} />}
         {!isAggregate && a?.cpo && !a.cpo.enabled && <span className="tag off" title={cpoText(a.cpo)}>ОЗЗ выкл</span>}
         {mode === 'ads' && <span className="tag off">только реклама</span>}
         {!isAggregate && offerId && groups && (
@@ -1361,7 +1361,7 @@ export default function AdsStats2({ cabinet }) {
   }
 
   return <div className="mpui ads-page">
-    <div className="page-sticky">
+    <div className="page-sticky ads-page-header">
       <div className="a-top ads-top">
         <h1>Реклама</h1>
         <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 190, minWidth: 140 }} />
@@ -1504,8 +1504,9 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
       if (q && (isExactArt(q) ? String(a.offerId || '').toLowerCase() !== q : !(String(a.offerId || '').toLowerCase().includes(q) || (a.productName || '').toLowerCase().includes(q)
         || a.campaigns.some(c => (c.title || '').toLowerCase().includes(q))))) return false;
       if (!onlyActive) return true;
+      if (isCpoActive(a.cpo, a.campaigns)) return true;
       if (a.campaigns.length === 0) return tab !== 'all' && !isCat;
-      return a.campaigns.some(c => c.state === 'CAMPAIGN_STATE_RUNNING');
+      return a.campaigns.some(c => !isCpoCampaign(c) && isRunningCampaign(c));
     });
     const orderIndex = new Map(manualOrder.map((id, i) => [id, i]));
     const valK = (a, k) => {
@@ -1717,10 +1718,9 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
     const m = buildModel([a], dates, mode);
     const st = a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null;
     const daysCls = st === null ? '' : (st < 5 || (a.stockDays !== null && a.stockDays < 7)) ? 'b' : (a.stockDays !== null && a.stockDays < 14) ? 'w' : '';
-    const hasCpo = a.campaigns.some(isCpoCampaign);
     const cpcAll = a.campaigns.filter(c => !isCpoCampaign(c));
-    const cpcOn = cpcAll.filter(c => c.state === 'CAMPAIGN_STATE_RUNNING');
-    const cpoOn = a.cpo ? !!a.cpo.enabled : a.campaigns.some(c => isCpoCampaign(c) && c.state === 'CAMPAIGN_STATE_RUNNING');
+    const cpcOn = cpcAll.filter(isRunningCampaign);
+    const cpoOn = isCpoActive(a.cpo, a.campaigns);
     const adsOn = cpcOn.length > 0 || cpoOn;
     const split = a.campaigns.some(c => c.splitAcross > 1 && c.totalSpend > 0);
     return (
@@ -1775,7 +1775,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
               <td>{pr && pr.margin !== null ? <span className={`pill ${pr.margin < 0 ? 'b' : pr.margin < 10 ? 'w' : 'g'}`}>{fmtPct(pr.margin)}</span> : '—'}</td>
             </>
           ); })()}
-          <td className="a-kinds-td"><AdKinds cpcAll={cpcAll} cpo={a.cpo} hasCpo={hasCpo} />
+          <td className="a-kinds-td"><AdKinds cpcAll={cpcAll} cpo={a.cpo} cpoOn={cpoOn} />
             <span className="a-spendsub" title="Рекламных кампаний: запущено / всего">РК {a.campaigns.filter(c => c.state === 'CAMPAIGN_STATE_RUNNING').length}/{a.campaigns.length}</span></td>
         </tr>
         {isOpen && (

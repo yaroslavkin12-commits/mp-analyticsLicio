@@ -352,7 +352,10 @@ tr:hover .a-ungroup { opacity: 1; }
 .mpui .ads-top .a-seg button{padding-left:8px;padding-right:8px}
 .mpui .ads-date-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:100%}
 .mpui .ads-date-controls .quick-periods{flex-wrap:wrap}
-@media(max-width:760px){.mpui .ads-date-controls{flex-basis:100%}}
+@media(max-width:760px){
+  .ads-page > .ads-page-header{position:sticky;top:-10px}
+  .mpui .ads-date-controls{flex-basis:100%}
+}
 
 .mpui .ads-top h1{font-size:20px}
 .mpui .ads-top .a-seg button,.mpui .ads-top .a-fresh{font-size:11px}

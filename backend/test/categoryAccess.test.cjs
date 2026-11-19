@@ -52,6 +52,20 @@ test('Чужие товары исключены из рекламы, склее
  secret(access.projection('/discounts/history',{rows:[[OWN,0,10],[OTHER,0,999999]],base:[[OTHER,999999]]},context));
  secret(access.projection('/orders/feed',{rows:[{o:OWN,price:100},{o:OTHER,price:999999}],summary:999999},context));
 });
+test('Реклама передаёт сотруднику текущий статус ОЗЗ его артикула независимо от исторического расхода',()=>{
+ const current={enabled:false,available:true,bidPct:5,bidRub:null,checkedAt:'2026-11-14T10:00:00Z'};
+ const result=access.projection('/promo/stats',{
+  articles:[
+   {offerId:OWN,cpo:{...current,internal:'PRIVATE-COVER'},campaigns:[{campaignId:'cpo:' + OWN,paymentType:'CPO',state:null}]},
+   {offerId:OTHER,cpo:{enabled:true,bidPct:999999}},
+  ],
+  cpoCharge:[[OWN,'2026-11-14',5]],
+ },context);
+ assert.equal(result.articles.length,1);
+ assert.deepEqual(result.articles[0].cpo,current);
+ assert.deepEqual(result.cpoCharge,[[OWN,'2026-11-14',5]]);
+ secret(result);
+});
 test('Прямые обращения к сырым данным WB, общим отчётам, журналу владельца и неизвестным API запрещены',async()=>{
  for(const path of ['/api/wb/data','/api/production/data','/api/auth/activity/report','/api/env-check','/api/plan/ozon/basis','/api/settings/costs','/api/anything']){
   const r=await dispatch(path);assert.equal(r.code,403,path);assert.equal(r.called,false);
