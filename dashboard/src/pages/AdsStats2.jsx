@@ -1324,6 +1324,7 @@ export default function AdsStats2({ cabinet }) {
   const [taxPct] = useTax(cabinet);
   UNIT_CTX.k = unitK; UNIT_CTX.tax = taxPct;
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [collecting, setCollecting] = useState(false);
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState('all');
@@ -1352,10 +1353,11 @@ export default function AdsStats2({ cabinet }) {
 
   const load = useCallback(() => {
     setLoading(true);
+    setLoadError(false);
     const ok = latestOnly('ads:' + cabinet), okE = latestOnly('adsev:' + cabinet);
     getAdsStats(cabinet, { dateFrom, dateTo, compare: 1 })
       .then(ok(r => setData(r.data.data)))
-      .catch(console.error)
+      .catch(ok(() => setLoadError(true)))
       .finally(ok(() => setLoading(false)));
     getAdsEvents(cabinet, dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), dateTo)
       .then(okE(r => setEvents(r.data.data || []))).catch(okE(() => setEvents([])));
@@ -1576,7 +1578,33 @@ export default function AdsStats2({ cabinet }) {
     catch { window.alert('Не удалось удалить заметку. Автоматические записи удалять нельзя.'); }
   }
 
-  if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
+  const header = (
+      <div className="page-sticky"><div className="a-top ads-top">
+        <h1>Реклама</h1>
+        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 190, minWidth: 140 }} />
+        <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} />
+        <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
+        <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
+          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
+          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
+        </span>
+        <div className="a-top-actions">
+          <Freshness status={status} />
+          {!readOnly && <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>}
+        </div>
+      </div></div>
+  );
+  const reportError = loadError && (
+    <div className="a-empty" role="alert">
+      Не удалось загрузить рекламу за выбранный период. <button type="button" className="a-btn" onClick={load}>Повторить</button>
+    </div>
+  );
+  if (!data) return (
+    <div className="mpui">
+      {header}
+      {loading ? <div className="a-empty" role="status">Загрузка…</div> : reportError}
+    </div>
+  );
 
   // ── KPI ──
   const T = total.totals, P = total.prev;
@@ -1713,20 +1741,8 @@ export default function AdsStats2({ cabinet }) {
 
   return (
     <div className="mpui">
-      <div className="page-sticky"><div className="a-top ads-top">
-        <h1>Реклама</h1>
-        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 190, minWidth: 140 }} />
-        <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} />
-        <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
-        <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
-          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
-          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
-        </span>
-        <div className="a-top-actions">
-          <Freshness status={status} />
-          <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>
-        </div>
-      </div></div>
+      {header}
+      {reportError}
 
       <CategoryNav allActive={tab==='all'} tops={catKids('').map(([c])=>c)} value={isCat?catPath:''} onChange={path=>selectTab(path?'cat:'+path:'all')} childrenOf={path=>catKids(path).map(([c])=>c)} groups={<>
           {groups.length > 0 && <span className="a-hint" style={{ margin: '0 2px 0 8px' }}>группы:</span>}
