@@ -1362,7 +1362,7 @@ export default function AdsStats2({ cabinet }) {
 
   return <div className="mpui ads-page">
     <div className="page-sticky ads-page-header">
-      <div className="a-top ads-top">
+      <div className="a-top campaign-toolbar">
         <h1>Реклама</h1>
         <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 190, minWidth: 140 }} />
         <div className="ads-date-controls" role="group" aria-label="Период рекламы">
