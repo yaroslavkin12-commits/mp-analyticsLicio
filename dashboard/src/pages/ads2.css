@@ -350,7 +350,9 @@ tr:hover .a-ungroup { opacity: 1; }
 .mpui .ads-top>.as-wrap{flex:0 1 190px}
 .mpui .ads-top .a-seg{flex-shrink:0;white-space:nowrap;flex-wrap:nowrap}
 .mpui .ads-top .a-seg button{padding-left:8px;padding-right:8px}
-.mpui .ads-top .quick-periods{flex-wrap:wrap}
+.mpui .ads-date-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:100%}
+.mpui .ads-date-controls .quick-periods{flex-wrap:wrap}
+@media(max-width:760px){.mpui .ads-date-controls{flex-basis:100%}}
 
 .mpui .ads-top h1{font-size:20px}
 .mpui .ads-top .a-seg button,.mpui .ads-top .a-fresh{font-size:11px}

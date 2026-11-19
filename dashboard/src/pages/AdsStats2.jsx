@@ -1298,11 +1298,97 @@ function AddToGroupForm({ catalog, exclude, onPick }) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+class AdsReportBoundary extends React.Component {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('Ошибка таблицы рекламы', error);
+  }
+
+  componentDidUpdate(previous) {
+    if (this.state.failed && previous.period !== this.props.period) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return <div className="a-empty" role="alert">
+      Не удалось показать отчёт за этот период. Выберите другие даты или{' '}
+      <button type="button" className="a-btn" onClick={() => this.setState({ failed: false })}>Повторить</button>
+    </div>;
+  }
+}
+
 export default function AdsStats2({ cabinet }) {
-  const readOnly=useReadOnly();
-  CAB_CTX.cabinet = cabinet;
+  const readOnly = useReadOnly();
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
+  const [collecting, setCollecting] = useState(false);
+  const [status, setStatus] = useState(null);
+  const [mode, setMode] = useState('all');
+  const [search, setSearch] = useState('');
+  const [artOpts, setArtOpts] = useState([]);
+  const [refresh, setRefresh] = useState(0);
+  const [collectError, setCollectError] = useState(false);
+  const loadStatus = useCallback(() => getAdsDataStatus(cabinet).then(r => { setStatus(r.data.data); return r.data.data; }).catch(() => null), [cabinet]);
+  useEffect(() => { loadStatus(); const t = setInterval(loadStatus, 60000); return () => clearInterval(t); }, [loadStatus]);
+
+  const changePeriod = (from, to) => {
+    setDateFrom(from);
+    setDateTo(to);
+  };
+
+  async function handleCollect() {
+    setCollecting(true);
+    setCollectError(false);
+    try {
+      await collectAds(cabinet, Math.min(90, Math.max(7, dayjs().diff(dayjs(dateFrom), 'day') + 1)));
+      const started = Date.now();
+      await new Promise(r => setTimeout(r, 4000));
+      while (Date.now() - started < 6 * 60000) {
+        const st = await loadStatus();
+        if (st && !st.running) break;
+        await new Promise(r => setTimeout(r, 5000));
+      }
+      setRefresh(v => v + 1);
+    } catch { setCollectError(true); }
+    finally { setCollecting(false); }
+  }
+
+  return <div className="mpui ads-page">
+    <div className="page-sticky">
+      <div className="a-top ads-top">
+        <h1>Реклама</h1>
+        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 190, minWidth: 140 }} />
+        <div className="ads-date-controls" role="group" aria-label="Период рекламы">
+          <QuickPeriods from={dateFrom} to={dateTo} onChange={changePeriod} />
+          <DateRangePicker from={dateFrom} to={dateTo} onChange={changePeriod} />
+        </div>
+        <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
+          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
+          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
+        </span>
+        <div className="a-top-actions">
+          <Freshness status={status} />
+          {!readOnly && <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>}
+        </div>
+      </div>
+    </div>
+    {collectError && <div className="a-empty" role="alert">Не удалось запустить обновление рекламы.</div>}
+    <AdsReportBoundary period={`${dateFrom}|${dateTo}`}>
+      <AdsReport cabinet={cabinet} dateFrom={dateFrom} dateTo={dateTo} mode={mode} search={search} refresh={refresh} setArtOpts={setArtOpts} />
+    </AdsReportBoundary>
+  </div>;
+}
+
+function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpts }) {
+  const readOnly=useReadOnly();
+  CAB_CTX.cabinet = cabinet;
   const [data, setData] = useState(null);
   // Юнит-экономика для прогнозной прибыли по артикулу (те же коэффициенты, что во вкладке «Юнит-экономика»).
   const [coefsData, setCoefsData] = useState(null);
@@ -1325,9 +1411,6 @@ export default function AdsStats2({ cabinet }) {
   UNIT_CTX.k = unitK; UNIT_CTX.tax = taxPct;
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [collecting, setCollecting] = useState(false);
-  const [status, setStatus] = useState(null);
-  const [mode, setMode] = useState('all');
   const [groupsData, setGroupsData] = useState({ groups: [], members: {} });
   const [manualOrder, setManualOrder] = useState([]);
   const [transit, setTransit] = useState({}); // «В пути», шт — ручной ввод
@@ -1337,7 +1420,6 @@ export default function AdsStats2({ cabinet }) {
   const [tab, setTab] = useState('all');
   const [sort, setSort] = useState({ key: 'spend', dir: -1 });
   const fctl = useTableCtl('ads-list'); // фильтры «от … до …» по колонкам
-  const [search, setSearch] = useState('');
   const [onlyActive, setOnlyActive] = useState(false);
   const [open, setOpen] = useState(() => new Set());
   const [dragKey, setDragKey] = useState(null);
@@ -1362,10 +1444,8 @@ export default function AdsStats2({ cabinet }) {
     getAdsEvents(cabinet, dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), dateTo)
       .then(okE(r => setEvents(r.data.data || []))).catch(okE(() => setEvents([])));
   }, [cabinet, dateFrom, dateTo]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refresh]);
 
-  const loadStatus = useCallback(() => getAdsDataStatus(cabinet).then(r => { setStatus(r.data.data); return r.data.data; }).catch(() => null), [cabinet]);
-  useEffect(() => { loadStatus(); const t = setInterval(loadStatus, 60000); return () => clearInterval(t); }, [loadStatus]);
   useEffect(() => {
     getAdsGroups(cabinet).then(r => setGroupsData(r.data.data || { groups: [], members: {} })).catch(() => {});
     getAdsOrder(cabinet).then(r => setManualOrder(r.data.data || [])).catch(() => {});
@@ -1384,6 +1464,7 @@ export default function AdsStats2({ cabinet }) {
   const dates = data?.dates || [];
   const articlesRaw = useMemo(() => (data?.articles || []).filter(a => a.offerId), [data]);
   const artOpts = useMemo(() => articlesRaw.map(a => ({ o: a.offerId, n: a.productName })), [articlesRaw]);
+  useEffect(() => { setArtOpts(artOpts); }, [artOpts, setArtOpts]);
   const groups = groupsData.groups;
   const members = groupsData.members;
   const activeGroup = tab !== 'all' ? groups.find(g => g.id === tab) : null;
@@ -1473,20 +1554,6 @@ export default function AdsStats2({ cabinet }) {
   const total = useMemo(() => buildModel(rows, dates, mode, !!data?._wb), [rows, dates, mode, unitK, taxPct, data?._wb]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── действия ──
-  async function handleCollect() {
-    setCollecting(true);
-    try {
-      await collectAds(cabinet, Math.min(90, Math.max(7, dayjs().diff(dayjs(dateFrom), 'day') + 1)));
-      const started = Date.now();
-      await new Promise(r => setTimeout(r, 4000));
-      while (Date.now() - started < 6 * 60000) {
-        const st = await loadStatus();
-        if (st && !st.running) break;
-        await new Promise(r => setTimeout(r, 5000));
-      }
-      load();
-    } finally { setCollecting(false); }
-  }
   function saveTransit(offerId, patch) {
     saveAdsTransit(cabinet, offerId, patch).then(() => Promise.all([getAdsTransit(cabinet), getSewing(cabinet).catch(() => null)])).then(([r, sw]) => setTransit(withSewing(r.data.data || {}, sw?.data?.data?.items))).catch(console.error);
   }
@@ -1578,32 +1645,15 @@ export default function AdsStats2({ cabinet }) {
     catch { window.alert('Не удалось удалить заметку. Автоматические записи удалять нельзя.'); }
   }
 
-  const header = (
-      <div className="page-sticky"><div className="a-top ads-top">
-        <h1>Реклама</h1>
-        <ArtSearch value={search} onChange={setSearch} placeholder="Артикул, модель или название РК" options={artOpts} style={{ width: 190, minWidth: 140 }} />
-        <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} />
-        <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
-        <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
-          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
-          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
-        </span>
-        <div className="a-top-actions">
-          <Freshness status={status} />
-          {!readOnly && <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>}
-        </div>
-      </div></div>
-  );
   const reportError = loadError && (
     <div className="a-empty" role="alert">
       Не удалось загрузить рекламу за выбранный период. <button type="button" className="a-btn" onClick={load}>Повторить</button>
     </div>
   );
   if (!data) return (
-    <div className="mpui">
-      {header}
+    <>
       {loading ? <div className="a-empty" role="status">Загрузка…</div> : reportError}
-    </div>
+    </>
   );
 
   // ── KPI ──
@@ -1740,8 +1790,7 @@ export default function AdsStats2({ cabinet }) {
   }
 
   return (
-    <div className="mpui">
-      {header}
+    <>
       {reportError}
 
       <CategoryNav allActive={tab==='all'} tops={catKids('').map(([c])=>c)} value={isCat?catPath:''} onChange={path=>selectTab(path?'cat:'+path:'all')} childrenOf={path=>catKids(path).map(([c])=>c)} groups={<>
@@ -1900,6 +1949,6 @@ export default function AdsStats2({ cabinet }) {
       <React.Suspense fallback={null}><AdSpendCats data={data} cabinet={cabinet} tip={tip} /></React.Suspense>
 
       {tip.node}
-    </div>
+    </>
   );
 }
