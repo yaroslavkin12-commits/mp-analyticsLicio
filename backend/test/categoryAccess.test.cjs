@@ -146,6 +146,8 @@ test('Сотрудник читает и завершает гипотезы т�
     ['/api/ad-hypotheses', 'GET'],
     ['/api/ad-hypotheses', 'POST'],
     ['/api/ad-hypotheses/42/finish', 'POST'],
+    ['/api/ad-hypotheses/42', 'DELETE'],
+    ['/api/ad-hypotheses/reorder', 'POST'],
   ];
   for (const [path, method] of paths) {
     const allowed = await dispatch(path, method, 'defly', [], { offerId: OWN });
@@ -158,7 +160,7 @@ test('Сотрудник читает и завершает гипотезы т�
     }
   }
   assert.equal((await dispatch('/api/ad-hypotheses/42/finish', 'POST', 'licio', [], { offerId: OWN })).called, false);
-  assert.equal((await dispatch('/api/ad-hypotheses/42', 'DELETE', 'defly', [], { offerId: OWN })).called, false);
+  assert.equal((await dispatch('/api/ad-hypotheses/42/finish', 'DELETE', 'defly', [], { offerId: OWN })).called, false);
   assert.equal((await dispatch('/api/wb/views/ad-hypotheses', 'POST', 'defly_wb', [], { offerId: OWN })).called, false);
 });
 

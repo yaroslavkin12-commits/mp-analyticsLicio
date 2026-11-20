@@ -177,7 +177,8 @@ function middleware() {
     if (path === '/ad-hypotheses' || path.startsWith('/ad-hypotheses/')) {
       const allowedMethod = path === '/ad-hypotheses'
         ? read || req.method === 'POST'
-        : req.method === 'POST' && /^\/ad-hypotheses\/[1-9]\d{0,17}\/finish$/.test(path);
+        : (req.method === 'POST' && (path === '/ad-hypotheses/reorder' || /^\/ad-hypotheses\/[1-9]\d{0,17}\/finish$/.test(path)))
+          || (req.method === 'DELETE' && /^\/ad-hypotheses\/[1-9]\d{0,17}$/.test(path));
       const scope = publicScope(req.user.accessScope);
       const { cabinet, offerId } = req.query;
       const deny = () => res.status(403).json({ success:false, error:'Нет доступа к этому товару' });

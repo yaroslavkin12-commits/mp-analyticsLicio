@@ -20,6 +20,7 @@ function ensureTable() {
       comparison JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       finished_at TIMESTAMPTZ, CHECK (plans_end_on >= starts_on), CHECK (ends_on >= starts_on)
     )`);
+    await query('ALTER TABLE ad_hypotheses ADD COLUMN IF NOT EXISTS sort_order INTEGER, ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ');
     await query('CREATE INDEX IF NOT EXISTS ad_hypotheses_article ON ad_hypotheses (cabinet, offer_id, id DESC)');
   })().catch(error => { ready = null; throw error; });
   return ready;
@@ -44,7 +45,7 @@ router.use((req, res, next) => {
 router.get('/', async (req, res, next) => {
   try {
     await ensureTable();
-    const data = await query(`SELECT ${fields} FROM ad_hypotheses WHERE cabinet = $1 AND offer_id = $2 ORDER BY id DESC`,
+    const data = await query(`SELECT ${fields} FROM ad_hypotheses WHERE cabinet = $1 AND offer_id = $2 AND deleted_at IS NULL ORDER BY sort_order NULLS FIRST, id DESC`,
       [req.query.cabinet, req.query.offerId]);
     res.json({ success: true, data });
   } catch (error) { next(error); }
@@ -80,11 +81,48 @@ router.post('/:id/finish', async (req, res, next) => {
     await ensureTable();
     const [data] = await query(`UPDATE ad_hypotheses SET ends_on = $4, verdict = $5, result_note = $6,
       comparison = CASE WHEN goal = 'custom' THEN NULL ELSE $7::jsonb END, finished_at = NOW()
-      WHERE cabinet = $1 AND offer_id = $2 AND id = $3 AND ends_on IS NULL AND starts_on <= $4::date
+      WHERE cabinet = $1 AND offer_id = $2 AND id = $3 AND deleted_at IS NULL AND ends_on IS NULL AND starts_on <= $4::date
       RETURNING ${fields}`, [req.query.cabinet, req.query.offerId, id, end, verdict, string(req.body?.note, 5000),
       snapshot ? JSON.stringify(snapshot) : null]);
     if (!data) return res.status(409).json({ success: false, error: 'Тест уже завершён или дата завершения раньше начала' });
     res.json({ success: true, data });
+  } catch (error) { next(error); }
+});
+
+const validId = id => typeof id === 'string' && /^[1-9]\d{0,17}$/.test(id);
+
+router.post('/reorder', async (req, res, next) => {
+  try {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || !ids.length || ids.length > 5000 || new Set(ids).size !== ids.length || !ids.every(validId)) {
+      return res.status(400).json({ success: false, error: 'Некорректный порядок гипотез' });
+    }
+    await ensureTable();
+    const updated = await query(`
+      WITH requested AS (SELECT id, position FROM unnest($3::bigint[]) WITH ORDINALITY AS r(id, position)),
+      current AS MATERIALIZED (
+        SELECT id FROM ad_hypotheses WHERE cabinet = $1 AND offer_id = $2 AND deleted_at IS NULL ORDER BY id FOR UPDATE
+      )
+      UPDATE ad_hypotheses h SET sort_order = r.position
+        FROM requested r
+        WHERE h.id = r.id AND h.id IN (SELECT id FROM current)
+          AND NOT EXISTS (SELECT id FROM current EXCEPT SELECT id FROM requested)
+          AND NOT EXISTS (SELECT id FROM requested EXCEPT SELECT id FROM current)
+      RETURNING h.id`, [req.query.cabinet, req.query.offerId, ids]);
+    if (updated.length !== ids.length) return res.status(409).json({ success: false, error: 'Список гипотез изменился. Порядок обновлён, попробуйте ещё раз.' });
+    res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    if (!validId(req.params.id)) return res.status(400).json({ success: false, error: 'Некорректный номер гипотезы' });
+    await ensureTable();
+    const [removed] = await query(`UPDATE ad_hypotheses SET deleted_at = NOW()
+      WHERE cabinet = $1 AND offer_id = $2 AND id = $3 AND deleted_at IS NULL RETURNING id`,
+    [req.query.cabinet, req.query.offerId, req.params.id]);
+    if (!removed) return res.status(404).json({ success: false, error: 'Гипотеза уже удалена или недоступна' });
+    res.json({ success: true });
   } catch (error) { next(error); }
 });
 

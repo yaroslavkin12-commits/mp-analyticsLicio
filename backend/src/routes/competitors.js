@@ -195,19 +195,34 @@ router.get('/product-ratings', async (req, res) => {
     const rows = await query(`
       WITH products AS (
         SELECT offer_id, sku
-          FROM ad_product_catalog
-          WHERE cabinet = $1 AND platform = 'ozon' AND sku > 0
-            AND ($2::text[] IS NULL OR offer_id = ANY($2::text[]))
+        FROM ad_product_catalog
+        WHERE cabinet = $1 AND platform = 'ozon' AND sku > 0
+          AND ($2::text[] IS NULL OR offer_id = ANY($2::text[]))
+      ), recent_search AS (
+        SELECT DISTINCT ON (s.sku) s.sku, s.rating, s.reviews, s.date
+        FROM serp_snapshot s
+        JOIN (SELECT DISTINCT sku FROM products) p ON p.sku = s.sku
+        WHERE s.cabinet = $1 AND s.date >= CURRENT_DATE - 30
+          AND (s.rating BETWEEN 1 AND 5 OR s.reviews >= 0)
+        ORDER BY s.sku, s.date DESC, (s.rating BETWEEN 1 AND 5 AND s.reviews >= 0) DESC NULLS LAST,
+          s.region, s.query
       )
-      SELECT p.offer_id, c.rating, c.reviews, c.date::text AS date
+      SELECT p.offer_id, c.rating, c.reviews, c.date::text AS date, c.source
       FROM products p
       CROSS JOIN LATERAL (
-        SELECT rating, reviews, date FROM sku_cards
-          WHERE sku = p.sku AND (rating IS NOT NULL OR reviews IS NOT NULL)
-          ORDER BY date DESC LIMIT 1
+        SELECT rating, reviews, date, source FROM (
+          (SELECT rating, reviews, date, 'card' AS source FROM sku_cards
+            WHERE sku = p.sku AND (rating BETWEEN 1 AND 5 OR reviews >= 0)
+            ORDER BY date DESC LIMIT 1)
+          UNION ALL
+          SELECT rating, reviews, date, 'search' AS source FROM recent_search WHERE sku = p.sku
+        ) samples
+        ORDER BY date DESC, (rating BETWEEN 1 AND 5 AND reviews >= 0) DESC NULLS LAST, source
+        LIMIT 1
       ) c`, [cabinet, offers]);
     res.json({ success: true, data: Object.fromEntries(rows.map(r => [r.offer_id, {
-      rating: numOrNull(r.rating), reviews: numOrNull(r.reviews), date: r.date,
+      rating: Number(r.rating) >= 1 && Number(r.rating) <= 5 ? Number(r.rating) : null,
+      reviews: r.reviews != null && Number(r.reviews) >= 0 ? Number(r.reviews) : null, date: r.date, source: r.source,
     }])) });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: 'Не удалось загрузить рейтинг и отзывы' }); }
 });
@@ -230,9 +245,9 @@ router.get('/skus', async (req, res) => {
         SELECT p.sku FROM candidates p
         LEFT JOIN LATERAL (SELECT date FROM sku_cards WHERE sku = p.sku ORDER BY date DESC LIMIT 1) c ON TRUE
         WHERE NOT EXISTS (SELECT 1 FROM tracked t WHERE t.sku = p.sku)
-          AND (c.date IS NULL OR c.date < CURRENT_DATE)
+          AND (c.date IS NULL OR c.date < (NOW() AT TIME ZONE 'Europe/Moscow')::date)
         ORDER BY c.date NULLS FIRST, md5(p.sku::text || floor(extract(epoch FROM NOW()) / 21600)::text)
-        LIMIT 40
+        LIMIT 100
       )
       SELECT sku FROM tracked UNION ALL SELECT sku FROM extra`);
     res.json({ success: true, data: rows.map(r => String(r.sku)) });
@@ -249,7 +264,9 @@ router.post('/cards', async (req, res) => {
       .filter(c => /^\d{5,15}$/.test(String(c.sku || '')) && (c.photo || c.title || c.price))
       .map(c => [String(c.sku), date, /^https:\/\/[^\s"'<>]{8,600}$/.test(String(c.photo || '')) ? String(c.photo) : null, cut(c.title, 512),
         priceNum(c.price), priceNum(c.cardPrice), numOrNull(String(c.rating ?? '').replace(',', '.')), numOrNull(String(c.reviews ?? '').replace(/\D/g, '')), new Date()]);
-    const n = list.length ? await bulkUpsert('sku_cards', ['sku', 'date', 'photo', 'title', 'price', 'card_price', 'rating', 'reviews', 'checked_at'], list, ['sku', 'date']) : 0;
+    const n = list.length ? await bulkUpsert('sku_cards', ['sku', 'date', 'photo', 'title', 'price', 'card_price', 'rating', 'reviews', 'checked_at'],
+      list, ['sku', 'date'], ['photo', 'title', 'price', 'card_price', 'checked_at',
+        'rating = COALESCE(EXCLUDED.rating, sku_cards.rating)', 'reviews = COALESCE(EXCLUDED.reviews, sku_cards.reviews)']) : 0;
     res.json({ success: true, data: { saved: n } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });

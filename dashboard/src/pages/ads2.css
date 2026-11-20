@@ -380,8 +380,16 @@ tr:hover .a-ungroup { opacity: 1; }
 .mpui .ah-wide{grid-column:1/-1}
 .mpui .ah-actions{display:flex;gap:8px;flex-wrap:wrap}
 .mpui .ah-history{display:grid;gap:5px}
-.mpui .ah-history-item{display:flex;align-items:flex-start;gap:9px;text-align:left;width:100%;padding:8px 9px;background:var(--a-panel);border:1px solid var(--a-line);border-radius:7px;overflow-wrap:anywhere}
-.mpui .ah-history-item[aria-pressed=true]{border-color:var(--a-accent)}
+.mpui .ah-history-row{display:flex;gap:5px;align-items:flex-start;background:var(--a-panel);border:1px solid var(--a-line);border-radius:7px}
+.mpui .ah-history-row:has(.ah-history-item[aria-pressed=true]){border-color:var(--a-accent)}
+.mpui .ah-history-row.dragging{opacity:.55}
+.mpui .ah-handle{cursor:grab;padding:8px 0 8px 6px;color:var(--a-ink3)}
+.mpui .ah-history-item{display:flex;flex:1;min-width:0;align-items:flex-start;gap:9px;text-align:left;padding:8px 4px;background:transparent;border:0;overflow-wrap:anywhere}
+.mpui .ah-history-actions{display:flex;gap:2px;padding:4px 5px 4px 0}
+.mpui .ah-history-actions button{background:transparent;border:0;border-radius:4px;padding:2px 5px;color:var(--a-ink2)}
+.mpui .ah-history-actions button:hover:not(:disabled){background:var(--a-panel2);color:var(--a-ink)}
+.mpui .ah-history-actions button.ah-delete{color:var(--a-bad)}
+.mpui .ah-history-actions button:disabled{opacity:.3}
 .mpui .ah-history-item small,.mpui .ah-comparison span{display:block;color:var(--a-ink2)}
 .mpui .ah-dot{width:8px;height:8px;flex:0 0 8px;border-radius:50%;margin-top:5px;background:var(--a-good)}
 .mpui .ah-dot.planned{background:var(--a-ink3)}

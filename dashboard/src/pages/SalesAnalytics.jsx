@@ -854,7 +854,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     const card = article && ratings && Object.hasOwn(ratings, article.o) ? ratings[article.o] : null;
     return (
       <>
-        <td className="n s-card-rating" title={card?.date ? `Витрина Ozon · ${dayjs(card.date).format('DD.MM.YYYY')}` : undefined}>
+        <td className="n s-card-rating" title={card?.date ? `${card.source === 'search' ? 'Выдача Ozon' : 'Витрина Ozon'} · ${dayjs(card.date).format('DD.MM.YYYY')}` : undefined}>
           {card ? <><b>{card.rating == null ? '—' : card.rating.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}</b>
             {card.reviews != null && <small className="muted">{fmtInt(card.reviews)} отз.</small>}</> : '—'}
         </td>

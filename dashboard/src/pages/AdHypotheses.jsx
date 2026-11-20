@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
-import { addAdHypothesis, finishAdHypothesis, getAdHypotheses } from '../api';
+import { addAdHypothesis, finishAdHypothesis, getAdHypotheses, removeAdHypothesis, reorderAdHypotheses } from '../api';
 
 const GOALS = {
   ctr: 'Рост CTR', crToCart: 'Рост CR в корзину', crToOrder: 'Рост CR в заказ',
@@ -96,6 +96,8 @@ function FinishHypothesis({ row, onSave, onCancel, busy, compare, today }) {
 export default function AdHypotheses({ cabinet, offerId, mode, compare, marked, onMarked, onSelection }) {
   const [rows, setRows] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [dragged, setDragged] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const [form, setForm] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -127,6 +129,36 @@ export default function AdHypotheses({ cabinet, offerId, mode, compare, marked, 
     } finally { setBusy(false); }
   }
 
+  async function remove(item) {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await removeAdHypothesis(cabinet, offerId, item.id);
+      setRows(items => items.filter(entry => entry.id !== item.id));
+      setConfirmDelete(null);
+      if (row?.id === item.id) { setSelected(null); setForm(''); }
+    } catch (error) {
+      setError(error.response?.data?.error || 'Не удалось удалить гипотезу');
+      if (error.response?.status === 404) setAttempt(n => n + 1);
+    } finally { setBusy(false); }
+  }
+
+  async function move(from, to) {
+    if (busy || from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) return;
+    const next = [...rows];
+    next.splice(to, 0, next.splice(from, 1)[0]);
+    setBusy(true);
+    setError('');
+    try {
+      await reorderAdHypotheses(cabinet, offerId, next.map(item => item.id));
+      setRows(next);
+    } catch (error) {
+      setError(error.response?.data?.error || 'Не удалось изменить порядок');
+      if (error.response?.status === 409) setAttempt(n => n + 1);
+    } finally { setBusy(false); }
+  }
+
   return <section className="a-box ah-panel">
     <h4>Тестируемые гипотезы
       <button type="button" className="a-btn" onClick={() => { setError(''); setForm('create'); }} disabled={!rows || busy}>+ Гипотеза</button>
@@ -148,13 +180,33 @@ export default function AdHypotheses({ cabinet, offerId, mode, compare, marked, 
     {row && <label className="a-toggle ah-marks"><input type="checkbox" checked={marked} onChange={event => onMarked(event.target.checked)} />Отметки теста на графике и в таблице</label>}
     {rows?.length === 0 && !form && <span className="a-hint">Гипотез пока нет</span>}
     <div className="ah-history" aria-label="История гипотез">
-      {rows?.map(item => <button type="button" key={item.id} aria-pressed={item.id === row?.id} disabled={busy}
-        className={`ah-history-item ah-result-${item.verdict || 'active'}`}
-        onClick={() => { setSelected(item.id); setForm(''); setError(''); }}>
-        <span className={`ah-dot ${item.end ? 'finished' : item.start > today ? 'planned' : ''}`} aria-hidden="true" />
-        <span><b>{item.title}</b><small>{dateLabel(item.start)}{item.end ? ` — ${dateLabel(item.end)}` : item.plannedEnd ? ` · план до ${dateLabel(item.plannedEnd)}` : ''}
-          {' · '}{item.end ? `Завершена · ${VERDICTS[item.verdict]}` : item.start > today ? 'Запланирована' : 'В тесте'}{' · '}{goalOf(item)}</small></span>
-      </button>)}
+      {rows?.map((item, index) => (
+        <div key={item.id} className={`ah-history-row ah-result-${item.verdict || 'active'}${dragged === item.id ? ' dragging' : ''}`}
+          onDragOver={event => { if (dragged && !busy) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }}
+          onDrop={event => { if (!dragged) return; event.preventDefault(); move(rows.findIndex(entry => entry.id === dragged), index); setDragged(null); }}>
+          <span className="ah-handle" aria-hidden="true" title="Перетащить гипотезу" draggable={!busy && rows.length > 1}
+            onDragStart={event => { setDragged(item.id); event.dataTransfer.setData('text/plain', item.id); event.dataTransfer.effectAllowed = 'move'; }}
+            onDragEnd={() => setDragged(null)}>⠿</span>
+          <button type="button" aria-pressed={item.id === row?.id} disabled={busy}
+            className="ah-history-item" onClick={() => { setSelected(item.id); setForm(''); setError(''); }}>
+            <span className={`ah-dot ${item.end ? 'finished' : item.start > today ? 'planned' : ''}`} aria-hidden="true" />
+            <span><b>{item.title}</b><small>{dateLabel(item.start)}{item.end ? ` — ${dateLabel(item.end)}` : item.plannedEnd ? ` · план до ${dateLabel(item.plannedEnd)}` : ''}
+              {' · '}{item.end ? `Завершена · ${VERDICTS[item.verdict]}` : item.start > today ? 'Запланирована' : 'В тесте'}{' · '}{goalOf(item)}</small></span>
+          </button>
+          <span className="ah-history-actions">
+            {confirmDelete === item.id ? <>
+              <button type="button" disabled={busy} className="ah-delete" onClick={() => remove(item)}>Удалить</button>
+              <button type="button" disabled={busy} onClick={() => setConfirmDelete(null)}>Отмена</button>
+            </> : <>
+            {rows.length > 1 && <>
+              <button type="button" disabled={busy || index === 0} aria-label={`Поднять «${item.title}»`} title="Выше" onClick={() => move(index, index - 1)}>↑</button>
+              <button type="button" disabled={busy || index === rows.length - 1} aria-label={`Опустить «${item.title}»`} title="Ниже" onClick={() => move(index, index + 1)}>↓</button>
+            </>}
+            <button type="button" disabled={busy} aria-label={`Удалить «${item.title}»`} title="Удалить гипотезу" onClick={() => setConfirmDelete(item.id)}>×</button>
+            </>}
+          </span>
+        </div>
+      ))}
     </div>
   </section>;
 }
