@@ -1307,10 +1307,11 @@ class AdsReportBoundary extends React.Component {
 
   componentDidCatch(error) {
     console.error('Ошибка таблицы рекламы', error);
+    this.props.onReportError();
   }
 
   componentDidUpdate(previous) {
-    if (this.state.failed && previous.period !== this.props.period) {
+    if (this.state.failed && (previous.period !== this.props.period || previous.refresh !== this.props.refresh)) {
       this.setState({ failed: false });
     }
   }
@@ -1329,6 +1330,7 @@ export default function AdsStats2({ cabinet }) {
   const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
   const [dateTo, setDateTo] = useState(dayjs().format('YYYY-MM-DD'));
   const [collecting, setCollecting] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const [status, setStatus] = useState(null);
   const [mode, setMode] = useState('all');
   const [search, setSearch] = useState('');
@@ -1343,7 +1345,12 @@ export default function AdsStats2({ cabinet }) {
     setDateTo(to);
   };
 
-  async function handleCollect() {
+  async function handleRefresh() {
+    if (readOnly) {
+      loadStatus();
+      setRefresh(v => v + 1);
+      return;
+    }
     setCollecting(true);
     setCollectError(false);
     try {
@@ -1375,18 +1382,22 @@ export default function AdsStats2({ cabinet }) {
         </span>
         <div className="a-top-actions">
           <Freshness status={status} />
-          {!readOnly && <button type="button" className="a-btn" onClick={handleCollect} disabled={collecting}>{collecting ? 'Собираем…' : 'Обновить'}</button>}
+          <button type="button" className="a-btn" onClick={handleRefresh}
+            title={readOnly ? 'Загрузить свежие данные отчёта за выбранный период' : undefined}
+            disabled={collecting || (readOnly && reportLoading)}>
+            {collecting ? 'Собираем…' : readOnly && reportLoading ? 'Загрузка…' : 'Обновить'}
+          </button>
         </div>
       </div>
     </div>
     {collectError && <div className="a-empty" role="alert">Не удалось запустить обновление рекламы.</div>}
-    <AdsReportBoundary period={`${dateFrom}|${dateTo}`}>
-      <AdsReport cabinet={cabinet} dateFrom={dateFrom} dateTo={dateTo} mode={mode} search={search} refresh={refresh} setArtOpts={setArtOpts} />
+    <AdsReportBoundary period={`${dateFrom}|${dateTo}`} refresh={refresh} onReportError={() => setReportLoading(false)}>
+      <AdsReport cabinet={cabinet} dateFrom={dateFrom} dateTo={dateTo} mode={mode} search={search} refresh={refresh} setArtOpts={setArtOpts} setReportLoading={setReportLoading} />
     </AdsReportBoundary>
   </div>;
 }
 
-function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpts }) {
+function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpts, setReportLoading }) {
   const readOnly=useReadOnly();
   CAB_CTX.cabinet = cabinet;
   const [data, setData] = useState(null);
@@ -1435,15 +1446,16 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
 
   const load = useCallback(() => {
     setLoading(true);
+    setReportLoading(true);
     setLoadError(false);
     const ok = latestOnly('ads:' + cabinet), okE = latestOnly('adsev:' + cabinet);
     getAdsStats(cabinet, { dateFrom, dateTo, compare: 1 })
       .then(ok(r => setData(r.data.data)))
       .catch(ok(() => setLoadError(true)))
-      .finally(ok(() => setLoading(false)));
+      .finally(ok(() => { setLoading(false); setReportLoading(false); }));
     getAdsEvents(cabinet, dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), dateTo)
       .then(okE(r => setEvents(r.data.data || []))).catch(okE(() => setEvents([])));
-  }, [cabinet, dateFrom, dateTo]);
+  }, [cabinet, dateFrom, dateTo, setReportLoading]);
   useEffect(() => { load(); }, [load, refresh]);
 
   useEffect(() => {
