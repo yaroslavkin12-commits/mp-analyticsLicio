@@ -131,6 +131,9 @@ export const addTrackedGroup = (cabinet, name) =>
 export const removeTrackedGroup = (cabinet, id) =>
   api.delete(`/tracked-articles/groups/${id}`, { params: { cabinet } });
 
+export const getAdHypotheses = (cabinet, offerId) => api.get('/ad-hypotheses', { params: { cabinet, offerId } });
+export const addAdHypothesis = (cabinet, offerId, data) => api.post('/ad-hypotheses', data, { params: { cabinet, offerId } });
+export const finishAdHypothesis = (cabinet, offerId, id, data) => api.post(`/ad-hypotheses/${id}/finish`, data, { params: { cabinet, offerId } });
 export const getAdsEvents   = (cabinet, dateFrom, dateTo) => api.get('/promo/events', { params: { cabinet, dateFrom, dateTo } });
 export const addAdsEvent    = (cabinet, offerId, date, text) => api.post('/promo/events', { cabinet, offerId, date, text });
 export const deleteAdsEvent = (cabinet, id) => api.delete(`/ads/events/${id}`, { params: { cabinet } });

@@ -18,6 +18,7 @@ export const canManageAccess = user => user?.role === 'admin' || (user?.role ===
 export function canWriteScoped(cfg) {
   const method = String(cfg.method || 'get').toLowerCase();
   if (/^\/auth\/(password|logout|activity)$/.test(cfg.url)) return true;
+  if (method === 'post' && /^\/ad-hypotheses(?:\/[1-9]\d{0,17}\/finish)?$/.test(cfg.url)) return true;
   const cabinet = cfg.params?.cabinet || cfg.data?.cabinet;
   if (cabinet === 'defly_wb') return false;
   if (cfg.url === '/competitors' && ['post', 'delete'].includes(method)) {

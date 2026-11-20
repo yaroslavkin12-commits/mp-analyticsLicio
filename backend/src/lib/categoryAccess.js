@@ -172,6 +172,22 @@ function middleware() {
     if (['/auth/me','/auth/logout','/auth/password','/auth/activity'].includes(path)) return next();
     req.restricted = true;
     const read = req.method === 'GET' || req.method === 'HEAD';
+    if (path === '/ad-hypotheses' || path.startsWith('/ad-hypotheses/')) {
+      const allowedMethod = path === '/ad-hypotheses'
+        ? read || req.method === 'POST'
+        : req.method === 'POST' && /^\/ad-hypotheses\/[1-9]\d{0,17}\/finish$/.test(path);
+      const scope = publicScope(req.user.accessScope);
+      const { cabinet, offerId } = req.query;
+      const deny = () => res.status(403).json({ success:false, error:'Нет доступа к этому товару' });
+      if (!/^\/api\/ad-hypotheses(?:\/|$)/i.test(req.path) || !allowedMethod || !scope.pages.includes('ads')
+        || typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || typeof offerId !== 'string') return deny();
+      try {
+        if (!(await context(cabinet, scope)).allowed.has(offerId)) return deny();
+      } catch { return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'}); }
+      res.set('Cache-Control', 'no-store');
+      res.set('Vary', 'Cookie');
+      return next();
+    }
     const journalWrite = !/^\/api\/wb\/views/i.test(req.path) && ((req.method === 'POST' && path === '/promo/events') || (req.method === 'DELETE' && /^\/promo\/events\/\d+$/.test(path)));
     const competitorWrite = /^\/api\/competitors\/?$/i.test(req.path) && ['POST', 'DELETE'].includes(req.method);
     if (!read && !journalWrite && !competitorWrite) return res.status(403).json({ success:false, error:'Доступ только для просмотра и выгрузки' });

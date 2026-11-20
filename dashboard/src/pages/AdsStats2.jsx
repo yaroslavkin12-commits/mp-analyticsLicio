@@ -1,3 +1,4 @@
+import AdHypotheses from './AdHypotheses';
 import FloatingInfo from '../components/FloatingInfo';
 import { accessStorage } from '../lib/accessClient';
 import { useReadOnly } from '../lib/AccessContext';
@@ -6,7 +7,7 @@ import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import { barSignals } from '../lib/chartSignals';
 import { useTax } from '../lib/taxSettings';
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import {
@@ -294,7 +295,7 @@ function sumRaw(list) {
   return t;
 }
 // Модель по набору артикулов: byDate (с производными), totals, prev.
-function buildModel(articles, dates, mode, unknown = false) {
+function buildModel(articles, dates, mode, unknown = false, units = UNIT_CTX) {
   const byDate = {};
   for (const d of dates) {
     const raw = sumRaw(unknown && !articles.length ? [dayRaw({_strict:true},mode)] : articles.map(a => dayRaw(a.byDate[d], mode)));
@@ -306,12 +307,12 @@ function buildModel(articles, dates, mode, unknown = false) {
       if (articles.length === 1 && p !== null && p !== undefined) { posSum += p; posN++; }
     }
     // Прогноз по заказам дня: ожидаемая выручка (с выкупом) и прибыль после рекламы.
-    if (UNIT_CTX.k) {
+    if (units.k) {
       let er = 0, pf = 0, qty = 0, payout = 0, cost = 0, missingCost = 0, any = false;
       for (const a of articles) {
-        const k = UNIT_CTX.k.get(a.offerId); if (!k) continue;
+        const k = units.k.get(a.offerId); if (!k) continue;
         const dr = dayRaw(a.byDate[d], mode);
-        const u = unitProfit(k, { ordRub: dr.revenue, ordQty: dr.orders, ads: dr.spend, selfRub: dr.selfR, selfFbs: dr.selfFbs }, UNIT_CTX.tax);
+        const u = unitProfit(k, { ordRub: dr.revenue, ordQty: dr.orders, ads: dr.spend, selfRub: dr.selfR, selfFbs: dr.selfFbs }, units.tax);
         er += u.expRev; pf += u.profit; qty += u.expQty; payout += u.payout; cost += u.cost;
         if (u.expQty > 0 && !(k.cost > 0)) missingCost++;
         any = true;
@@ -478,9 +479,15 @@ function useWidth(ref, fallback) {
   return w;
 }
 
-export function ChartPane({ dates, series, events, tip, height, showX, onHover, hoverIdx }) {
+function testDay(date, test) {
+  if (!test || date < test.start || date > test.end) return '';
+  return 'ah-test-day' + (date === test.start ? ' ah-test-start' : '') + (date === test.end && test.closedEnd ? ' ah-test-end' : '');
+}
+
+export function ChartPane({ dates, series, events, tip, height, showX, onHover, hoverIdx, testPeriod }) {
   // series: [{ key, label, fmt, color, kind: 'bar'|'line', side: 'left'|'right', values, scale }]
   series = series.map(s => s.kind === 'bar' && s.signals === undefined ? {...s, signals:barSignals(s.values,{dates,metric:s.key,direction:s.good,pending:dates.map(d=>/^\d{4}-\d{2}-\d{2}$/.test(d) && d>=new Date().toLocaleDateString('en-CA',{timeZone:'Europe/Moscow'}))})} : s);
+  const testPattern = useId();
   const boxRef = useRef(null);
   const w = useWidth(boxRef, 680), h = height, pl = 48, pr = series.some(s => s.side === 'right') ? 48 : 12, pt = 26, pb = showX ? 22 : 8;
   const iw = w - pl - pr, ih = h - pt - pb, n = dates.length || 1, bw = iw / n;
@@ -494,6 +501,20 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
   return (
     <div ref={boxRef} style={{ width: '100%' }}>
     <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h} role="img" style={{ display: 'block' }} onMouseLeave={() => { tip.hide(); onHover(null); }}>
+      {testPeriod && <g pointerEvents="none">
+        <defs><pattern id={testPattern} width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <path d="M0 0V7" fill="none" stroke="var(--a-accent)" strokeWidth="2" opacity=".25" />
+        </pattern></defs>
+        {dates.map((date, i) => {
+          if (!testDay(date, testPeriod)) return null;
+          const x0 = pl + i * bw;
+          return <g key={date}>
+            <rect x={x0} y={pt} width={bw} height={ih} fill={`url(#${testPattern})`} />
+            {date === testPeriod.start && <line x1={x0} x2={x0} y1={pt} y2={pt + ih} stroke="var(--a-accent)" />}
+            {date === testPeriod.end && testPeriod.closedEnd && <line x1={x0 + bw} x2={x0 + bw} y1={pt} y2={pt + ih} stroke="var(--a-accent)" />}
+          </g>;
+        })}
+      </g>}
       {left && left.scale.ticks.map(v => (
         <g key={'l' + v}>
           <line x1={pl} x2={w - pr} y1={yOf(left, v)} y2={yOf(left, v)} stroke="var(--a-grid)" />
@@ -558,6 +579,7 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
               <div>
                 <div style={{ color: 'var(--a-ink3)', marginBottom: 3 }}>{dayjs(d).format('DD.MM.YYYY')}</div>
                 {series.map(s => <div key={s.key}><span style={{ color: s.kind === 'bar' ? s.signals?.[i]?.color || s.color : s.color }}>●</span> {s.label}: <b>{fmtBy(s.values[i], s.fmt)}</b>{s.kind === 'bar' && s.signals?.[i] && <div style={{fontSize:11,color:'var(--a-ink3)',maxWidth:260}}>{s.signals[i].text}</div>}</div>)}
+                {testDay(d, testPeriod) && <div>Тест · {testPeriod.title}</div>}
                 {(evByDate[d] || []).map(e => <div key={e.id} style={{ marginTop: 4, color: 'var(--a-accent)' }}>● {e.text}</div>)}
               </div>
             ));
@@ -568,7 +590,7 @@ export function ChartPane({ dates, series, events, tip, height, showX, onHover, 
   );
 }
 
-export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults, remember = true, singleMetric, trafficLight = true, gran = 'day', hideControls = false, signalBaseline = 'previous' }) {
+export function DualChart({ dates, byDate, events, tip, mode, metricsList, storeKey = CHART_STORE, defaults, remember = true, singleMetric, trafficLight = true, gran = 'day', hideControls = false, signalBaseline = 'previous', testPeriod }) {
   const [cfg, setCfg] = useState(() => {
     try { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}), ...(remember ? JSON.parse(accessStorage.getItem(storeKey) || '{}') : {}) }; }
     catch (e) { return { left: 'revenue', right: 'spend', type: 'combo', ...(defaults || {}) }; }
@@ -611,11 +633,11 @@ export function DualChart({ dates, byDate, events, tip, mode, metricsList, store
       }
       {cfg.type === 'split' && R ? (
         <>
-          <ChartPane dates={dates} series={[{ ...L, kind: 'bar' }]} events={events} tip={tip} height={130} showX={false} onHover={setHover} hoverIdx={hover} />
-          <ChartPane dates={dates} series={[{ ...R, side: 'left', kind: 'line' }]} events={[]} tip={tip} height={140} showX onHover={setHover} hoverIdx={hover} />
+          <ChartPane dates={dates} series={[{ ...L, kind: 'bar' }]} events={events} tip={tip} height={130} showX={false} onHover={setHover} hoverIdx={hover} testPeriod={testPeriod} />
+          <ChartPane dates={dates} series={[{ ...R, side: 'left', kind: 'line' }]} events={[]} tip={tip} height={140} showX onHover={setHover} hoverIdx={hover} testPeriod={testPeriod} />
         </>
       ) : (
-        <ChartPane dates={dates} series={R ? [L, R] : [L]} events={events} tip={tip} height={230} showX onHover={setHover} hoverIdx={hover} />
+        <ChartPane dates={dates} series={R ? [L, R] : [L]} events={events} tip={tip} height={230} showX onHover={setHover} hoverIdx={hover} testPeriod={testPeriod} />
       )}
     </div>
   );
@@ -709,12 +731,12 @@ function rowTotal(row, byDate, dates, totals) {
   return totals[row.key];
 }
 
-function EditCell({ value, fmt, bg, manual, onSave }) {
+function EditCell({ value, fmt, bg, manual, onSave, dayClass = '' }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   if (editing) {
     return (
-      <td style={{ background: bg }}>
+      <td className={dayClass} style={{ backgroundColor: bg }}>
         <input autoFocus type="number" min="0" value={draft} onChange={e => setDraft(e.target.value)}
           onBlur={() => { setEditing(false); if (draft !== String(value ?? '')) onSave(draft.trim() === '' ? null : draft.trim()); }}
           onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); if (e.key === 'Escape') setEditing(false); }} />
@@ -722,14 +744,14 @@ function EditCell({ value, fmt, bg, manual, onSave }) {
     );
   }
   return (
-    <td className="edit" style={{ background: bg }} title={manual ? 'Введено вручную — заменится данными Ozon, когда они появятся' : 'Нажмите, чтобы ввести вручную'}
+    <td className={`edit ${dayClass}`} style={{ backgroundColor: bg }} title={manual ? 'Введено вручную — заменится данными Ozon, когда они появятся' : 'Нажмите, чтобы ввести вручную'}
       onClick={() => { setDraft(value !== null && value !== undefined ? String(value) : ''); setEditing(true); }}>
       {fmtBy(value, fmt)}{manual && <span className="mdot" />}
     </td>
   );
 }
 
-export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys, showPrices = false }) {
+export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys, showPrices = false, testPeriod }) {
   const ref = useRef(null);
   const [openSub, setOpenSub] = useState(false);
   const [expanded, setExpanded] = useState({});
@@ -762,7 +784,7 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
           <tr>
             <th className="lbl">Метрика</th>
             <th className="tot">Итого</th>
-            {dates.map(d => <th key={d} className={d === today ? 'today' : ''}>{d.slice(8)}.{d.slice(5, 7)}</th>)}
+            {dates.map(d => <th key={d} className={`${d === today ? 'today' : ''} ${testDay(d, testPeriod)}`} title={testDay(d, testPeriod) ? testPeriod.title : undefined}>{d.slice(8)}.{d.slice(5, 7)}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -779,26 +801,27 @@ export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys
                 <td className="tot">{fmtBy(rowTotal(row, model.byDate, dates, model.totals), row.fmt)}</td>
                 {vals.map((v, i) => {
                   const d = dates[i];
+                  const dayClass = testDay(d, testPeriod);
                   const bg = row.key === 'sppPct' ? sppHeatColor(v, min, max) : row.key === 'sellerPrice' ? heatColor(v, min, max, 'up') : row.key === 'clientPrice' ? heatColor(v, min, max, 'down') : row.prices ? priceHeatColor(v, min, max) : heatColor(v, min, max, row.good);
                   if ((row.key === 'drr' || row.key === 'drrB') && (v === null || v === undefined)) {
                     const spent = model.byDate[d]?.spend > 0;
-                    return <td key={d} style={{ color: 'var(--a-ink3)' }} title={spent ? 'Был расход, заказов не было' : ''}>{spent ? '×' : '—'}</td>;
+                    return <td key={d} className={dayClass} style={{ color: 'var(--a-ink3)' }} title={spent ? 'Был расход, заказов не было' : ''}>{spent ? '×' : '—'}</td>;
                   }
                   if (editable && row.editable && onManualSave) {
-                    return <EditCell key={d} value={v} fmt={row.fmt} bg={bg} manual={!!model.byDate[d]?.manual?.[row.key]}
+                    return <EditCell key={d} value={v} fmt={row.fmt} bg={bg} dayClass={dayClass} manual={!!model.byDate[d]?.manual?.[row.key]}
                       onSave={val => onManualSave(d, row.key, val)} />;
                   }
                   const und = row.key === 'spendCpo' ? (model.byDate[d]?.spendCpoUndated || 0) : 0;
                   if (und > 0) {
                     return (
-                      <td key={d} style={{ background: bg, position: 'relative' }}
+                      <td key={d} className={dayClass} style={{ backgroundColor: bg, position: 'relative' }}
                         title={`${fmtInt(und)} ₽ из ${fmtInt(v)} ₽: дата заказа не определилась — учтено по дню списания (выкупа). Как только дата найдётся, расход сам переедет на день заказа, без задвоения.`}>
                         {fmtBy(v, row.fmt)}<span className="a-undated">!</span>
                       </td>
                     );
                   }
                   const cl = row.clicks ? model.byDate[d]?.[row.clicks] : null;
-                  return <td key={d} style={{ background: bg }} title={cl ? `${fmtInt(cl)} клик. · ${fmtInt(model.byDate[d]?.[row.spendKey || row.key] || 0)} ₽` : undefined}>{fmtBy(v, row.fmt)}</td>;
+                  return <td key={d} className={dayClass} style={{ backgroundColor: bg }} title={cl ? `${fmtInt(cl)} клик. · ${fmtInt(model.byDate[d]?.[row.spendKey || row.key] || 0)} ₽` : undefined}>{fmtBy(v, row.fmt)}</td>;
                 })}
               </tr>
             );
@@ -945,12 +968,42 @@ function AssociatedTable({ associated, dates }) {
 }
 
 // ── Раскрытая строка артикула (или группы целиком) ───────────────────────
-function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAddNote, onDeleteNote, groups, currentGroupId, onAssignGroup, tip, showAssoc, associated, activeGroupId, trafficLight = true }) {
+function Detail({ cabinet, unitCoefficients, taxPct, articles, dates, mode, events, isAggregate, onManualSave, onAddNote, onDeleteNote, groups, currentGroupId, onAssignGroup, tip, showAssoc, associated, activeGroupId, trafficLight = true }) {
   const [editMode, setEditMode] = useState(false);
   const [showCampaigns, setShowCampaigns] = useState(false);
   const model = useMemo(() => buildModel(articles, dates, mode), [articles, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const a = articles[0];
   const offerId = isAggregate ? null : a?.offerId;
+  const [marked, setMarked] = useState(true);
+  const [hypothesis, setHypothesis] = useState(null);
+  const testPeriod = marked && hypothesis && offerId ? {
+    ...hypothesis,
+    end: hypothesis.end || hypothesis.plannedEnd || new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }),
+    closedEnd: Boolean(hypothesis.end || hypothesis.plannedEnd),
+  } : null;
+  const compareHypothesis = useCallback(async (row, end) => {
+    const days = dayjs(end).diff(row.start, 'day') + 1;
+    if (days < 1 || days > 93) return null;
+    if (['profitF', 'payoutPerBuyoutF'].includes(row.goal) && !unitCoefficients?.has(offerId)) return null;
+    const previousEnd = dayjs(row.start).subtract(1, 'day').format('YYYY-MM-DD');
+    const previousStart = dayjs(row.start).subtract(days, 'day').format('YYYY-MM-DD');
+    const load = async (dateFrom, dateTo) => {
+      const response = await getAdsStats(cabinet, { dateFrom, dateTo });
+      const period = response.data.data;
+      const article = period.articles.find(item => item.offerId === offerId);
+      if (!article || period.dates.length !== days || period.dates[0] !== dateFrom || period.dates.at(-1) !== dateTo
+        || period.dates.some(date => !article.byDate?.[date])) return null;
+      const units = { k: unitCoefficients, tax: taxPct };
+      const { totals } = buildModel([article], period.dates, row.mode, false, units);
+      if (![totals.views, totals.pdpViews, totals.orders, totals.spend].some(v => v > 0)) return null;
+      if (row.goal === 'profitF' && totals.missingCostF !== 0) return null;
+      return { value: totals[row.goal], orderFromCart: totals.cart != null };
+    };
+    const [before, during] = await Promise.all([load(previousStart, previousEnd), load(row.start, end)]);
+    if (!Number.isFinite(before?.value) || !Number.isFinite(during?.value)
+      || (row.goal === 'crToOrder' && before.orderFromCart !== during.orderFromCart)) return null;
+    return { before: before.value, during: during.value };
+  }, [cabinet, offerId, unitCoefficients, taxPct]);
   const campaigns = useMemo(() => articles.flatMap(x => x.campaigns), [articles]);
   const offerSet = new Set(articles.map(x => x.offerId));
   const myEvents = useMemo(() => {
@@ -1040,11 +1093,10 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
           <div className={`v ${t.profitF > 0 ? 'pos' : t.profitF < 0 ? 'neg' : ''}`}>{t.profitF === undefined || t.profitF === null ? '—' : `${t.profitF > 0 ? '+' : ''}${fmtInt(t.profitF)}`}</div>
           <div className="s">маржа <b>{fmtPct(margin)}</b><br />на заказ <b>{t.orders > 0 && t.profitF !== undefined ? `${fmtInt(t.profitF / t.orders)} ₽` : '—'}</b></div></div>
       </div>
-      <div className="a-drow">
-        <div className="a-box">
-          <h4>Воронка за период<span className="a-hint">к прошлому периоду той же длины</span></h4>
-          <FunnelSteps totals={t} prev={P} mode={mode} />
-        </div>
+      <ConversionStrip totals={t} prev={P} />
+      <div className={offerId ? 'a-drow ah-journals' : 'ah-journal-only'}>
+        {offerId && <AdHypotheses key={`${cabinet}:${offerId}`} cabinet={cabinet} offerId={offerId} mode={mode}
+          compare={compareHypothesis} marked={marked} onMarked={setMarked} onSelection={setHypothesis} />}
         <div className="a-box">
           <h4>Журнал изменений</h4>
           <Journal events={myEvents} offerId={offerId} onAdd={onAddNote} onDelete={onDeleteNote} />
@@ -1059,14 +1111,14 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
             </button>
           )}
         </h4>
-        <DaysTable showPrices dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
+        <DaysTable showPrices testPeriod={testPeriod} dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
           onManualSave={offerId ? (d, k, v) => onManualSave(offerId, d, k, v) : null} />
       </div>
       <div className="a-box wide">
         <h4>Динамика по дням
           <span className="a-legend"><span><i style={{ background: 'var(--a-accent)', borderRadius: '50%' }} />запись журнала</span></span>
         </h4>
-        <DualChart dates={dates} byDate={model.byDate} events={myEvents} tip={tip} mode={mode} trafficLight={trafficLight} />
+        <DualChart testPeriod={testPeriod} dates={dates} byDate={model.byDate} events={myEvents} tip={tip} mode={mode} trafficLight={trafficLight} />
       </div>
       <div className="a-box wide">
         <h4 style={{ cursor: 'pointer', marginBottom: showCampaigns ? 10 : 0 }} onClick={() => setShowCampaigns(v => !v)}>
@@ -1081,37 +1133,16 @@ function Detail({ articles, dates, mode, events, isAggregate, onManualSave, onAd
 }
 
 // Воронка ступенями: полосы в логарифмической шкале, между ступенями — конверсия и её изменение.
-function FunnelSteps({ totals, prev, mode }) {
-  const steps = mode === 'ads'
-    ? [['Показы рекламы', 'views'], ['Клики', 'pdpViews'], ...(totals.cart !== null && totals.cart !== undefined ? [['Корзины', 'cart']] : []), ['Заказы', 'orders']]
-    : [['Показы', 'views'], ['Переходы', 'pdpViews'], ['Корзины', 'cart'], ['Заказы', 'orders']];
-  const convName = { pdpViews: 'CTR', cart: 'в корзину', orders: 'в заказ' };
-  const top = Math.max(1, totals[steps[0][1]] || 1);
-  const w = v => (v > 0 ? Math.max(9, Math.log10(v + 1) / Math.log10(top + 1) * 100) : 3);
-  return (
-    <div className="a-fs">
-      {steps.map(([label, k], i) => {
-        const v = totals[k];
-        const pk = i ? steps[i - 1][1] : null;
-        const conv = i && totals[pk] > 0 && v !== null && v !== undefined ? v / totals[pk] * 100 : null;
-        const pconv = i && prev && prev[pk] > 0 && prev[k] !== null && prev[k] !== undefined ? prev[k] / prev[pk] * 100 : null;
-        return (
-          <React.Fragment key={k}>
-            {i > 0 && (
-              <div className="a-fs-cv"><span />
-                <span>↓ {convName[k] || 'конверсия'} <b>{conv !== null ? fmtPct(conv) : '—'}</b>{' '}
-                  {conv !== null && pconv !== null ? <Delta value={conv - pconv} unit="pp" title={`В прошлом периоде: ${fmtPct(pconv)}`} /> : null}</span><span /></div>
-            )}
-            <div className="a-fs-st">
-              <span className="nm">{label}</span>
-              <div><div className="bar" style={{ width: `${w(v)}%` }}>{fmtInt(v)}</div></div>
-              <span className="dl"><Delta value={prev ? changePct(v, prev[k]) : null} title="Изменение к прошлому периоду той же длины" /></span>
-            </div>
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
+function ConversionStrip({ totals, prev }) {
+  return <div className="a-box ah-conversions" aria-label="Конверсии за период">
+    {[['ctr', 'CTR'], ['crToCart', 'CR в корзину'], ['crToOrder', 'CR в заказ']].map(([key, label]) => (
+      <div key={key} title={key === 'crToOrder' && totals.cart == null ? 'Заказы из переходов. Данные о корзинах недоступны.' : undefined}>
+        <span>{label}</span>
+        <b>{fmtPct(totals[key])}</b>
+        {Number.isFinite(totals[key]) && Number.isFinite(prev?.[key]) && <Delta value={totals[key] - prev[key]} unit="pp" />}
+      </div>
+    ))}
+  </div>;
 }
 
 // ── Матрица «артикулы × дни» с выбором метрики ───────────────────────────
@@ -1792,7 +1823,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
         </tr>
         {isOpen && (
           <tr className="a-detail"><td colSpan={COLS.length}>
-            <Detail trafficLight={cabinet !== 'licio'} articles={[a]} dates={dates} mode={mode} events={events} onManualSave={manualSave} onAddNote={addNote} onDeleteNote={deleteNote}
+            <Detail cabinet={cabinet} unitCoefficients={unitK} taxPct={taxPct} trafficLight={cabinet !== 'licio'} articles={[a]} dates={dates} mode={mode} events={events} onManualSave={manualSave} onAddNote={addNote} onDeleteNote={deleteNote}
               groups={groups} currentGroupId={members[a.offerId]} onAssignGroup={assignGroup} tip={tip}
               showAssoc={showAssoc} associated={a.associated || []} activeGroupId={isGroup ? tab : null} />
           </td></tr>

@@ -40,7 +40,7 @@ app.use((req, res, next) => {
   if (req.restricted) return next(); // закрытые профили получают только проверенную проекцию, без общего кэша
   if (req.path === '/api/wb/import') return next(); // кэши обновляются после приёма целого набора
   // Шаблоны конструктора и «отшивается» отчёты не меняют — кэш не трогаем.
-  if (req.method !== 'GET' && (req.path === '/api/sales/builder-templates' || req.path === '/api/sales/sewing' || req.path.startsWith('/api/production') || req.path.startsWith('/api/pricelog'))) return next();
+  if (req.method !== 'GET' && (req.path === '/api/sales/builder-templates' || req.path === '/api/sales/sewing' || req.path.startsWith('/api/production') || req.path.startsWith('/api/pricelog') || req.path.startsWith('/api/ad-hypotheses'))) return next();
   if (req.method !== 'GET' && (req.path.startsWith('/api/auth') || req.path.startsWith('/api/competitors/agent') || req.path.startsWith('/api/queries/ingest'))) return next(); // вход и приём от расширения отчёты не меняют
   if (req.method !== 'GET') {
     // Любое сохранение может поменять отчёты (себестоимость, категории, группы…).
@@ -130,6 +130,7 @@ app.use('/api/analytics', require('./routes/analytics'));
 const adsRouter = require('./routes/ads');
 app.use('/api/ads', adsRouter);
 app.use('/api/promo', adsRouter);
+app.use('/api/ad-hypotheses', require('./routes/adHypotheses'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/production', require('./routes/production'));
 app.use('/api/pricelog', require('./routes/pricelog'));
