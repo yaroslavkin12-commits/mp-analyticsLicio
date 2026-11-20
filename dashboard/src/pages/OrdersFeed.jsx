@@ -29,6 +29,22 @@ const msk = iso => dayjs(new Date(Date.parse(iso) + 3 * 3600e3).toISOString().sl
 const PROFIT_LABEL = 'Прогнозируемая прибыль с выкупа';
 const PROFIT_HINT = 'Прибыль на одну ожидаемую выкупленную штуку по цене заказа. Учитывает себестоимость, комиссию, логистику, налог и долю расходов на рекламу из финансовой истории.';
 
+const PAYOUT_LABEL = 'Среднее поступление с выкупа (прогноз)';
+const PAYOUT_HINT = 'Ожидаемое поступление на счёт на одну выкупленную штуку после удержаний площадки и расходов на рекламу.';
+
+function ForecastCard({ label, hint, metric, eligible }) {
+  const value = metric.buyouts > 0 ? metric.total / metric.buyouts : null;
+  return <div className="a-kpi" title={hint}>
+    <span className="lbl">{label}</span>
+    <span className={`val ${value < 0 ? 's-down' : ''}`}>{value == null ? '—' : `${fmtInt(value)} ₽`}</span>
+    <span className="sub">{metric.count === 0
+      ? 'Нет данных для прогноза'
+      : metric.count < eligible
+        ? `На 1 шт. · рассчитано для ${fmtInt(metric.count)} из ${fmtInt(eligible)} строк`
+        : 'На 1 выкупленную штуку · по фильтрам'}</span>
+  </div>;
+}
+
 export default function OrdersFeed({ cabinet }) {
   const today = dayjs().format('YYYY-MM-DD');
   const [kind, setKind] = useState('orders');
@@ -107,23 +123,33 @@ export default function OrdersFeed({ cabinet }) {
   }, [coefficients, articles, shareOf]);
   const forecast = useMemo(() => {
     const perRow = new Map();
-    let profit = 0, buyouts = 0, eligible = 0;
+    const payout = { total: 0, buyouts: 0, count: 0 };
+    const profit = { total: 0, buyouts: 0, count: 0 };
+    let eligible = 0;
     for (const row of rows) {
       if (row.self || row.st === 'cancelled' || row.st === 'returned') continue;
       eligible++;
       const model = profitModel.get(row.o);
-      if (!model?.unit.cost || !(row.price > 0) || !(row.qty > 0)) continue;
+      if (!model || !(row.price > 0) || !(row.qty > 0)) continue;
       const ordRub = row.price * row.qty;
       const scheme = String(row.sch || '').toLowerCase();
       const fbs = scheme === 'fbs' || scheme === 'rfbs' ? 1 : scheme === 'fbo' ? 0 : undefined;
       const ads = ordRub * model.unit.buyout * model.adRate;
       const result = unitProfit(model.unit, { ordRub, ordQty: row.qty, fbs, ads }, tax);
-      if (!(result.expQty > 0) || !Number.isFinite(result.profit)) continue;
-      perRow.set(row, result.profit / result.expQty);
-      profit += result.profit;
-      buyouts += result.expQty;
+      if (!(result.expQty > 0) || !Number.isFinite(result.payout)) continue;
+      const values = { payout: result.payout / result.expQty, profit: null };
+      payout.total += result.payout;
+      payout.buyouts += result.expQty;
+      payout.count++;
+      if (model.unit.cost && Number.isFinite(result.profit)) {
+        values.profit = result.profit / result.expQty;
+        profit.total += result.profit;
+        profit.buyouts += result.expQty;
+        profit.count++;
+      }
+      perRow.set(row, values);
     }
-    return { perRow, average: buyouts > 0 ? profit / buyouts : null, eligible };
+    return { perRow, payout, profit, eligible };
   }, [rows, profitModel, tax]);
   const sum = useMemo(() => {
     const all = catRows.filter(x => x.st !== 'cancelled');
@@ -171,15 +197,8 @@ export default function OrdersFeed({ cabinet }) {
             <div className="a-kpi"><span className="lbl">Самовыкупы</span><span className="val" style={{ color: sum.sn ? 'var(--a-accent)' : undefined }}>{fmtInt(sum.sn)}</span><span className="sub">{fmtInt(sum.sq)} шт · {fmtInt(sum.sr)} ₽ — не в заказах</span></div>
             <div className="a-kpi"><span className="lbl">Средний чек</span><span className="val">{sum.q ? fmtInt(sum.r / sum.q) : '—'}</span><span className="sub">без самовыкупов, ₽ за шт</span></div>
             <div className="a-kpi"><span className="lbl">Отменено</span><span className="val">{fmtInt(sum.c)}</span><span className="sub">за период</span></div>
-            <div className="a-kpi" title={PROFIT_HINT}>
-              <span className="lbl">{PROFIT_LABEL}</span>
-              <span className={`val ${forecast.average < 0 ? 's-down' : ''}`}>{forecast.average == null ? '—' : `${fmtInt(forecast.average)} ₽`}</span>
-              <span className="sub">{forecast.perRow.size === 0
-                ? 'Нет данных для прогноза'
-                : forecast.perRow.size < forecast.eligible
-                  ? `На 1 шт. · рассчитано для ${fmtInt(forecast.perRow.size)} из ${fmtInt(forecast.eligible)} строк`
-                  : 'На 1 выкупленную штуку · по фильтрам'}</span>
-            </div>
+            <ForecastCard label={PAYOUT_LABEL} hint={PAYOUT_HINT} metric={forecast.payout} eligible={forecast.eligible} />
+            <ForecastCard label={PROFIT_LABEL} hint={PROFIT_HINT} metric={forecast.profit} eligible={forecast.eligible} />
           </div>
           <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 8px' }}>
             <span className="a-seg">{[['all', 'Все'], ['real', 'Заказы'], ['self', `Самовыкупы (${fmtInt(sum.sn)})`]].map(([k, t]) => <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => setView(k)}>{t}</button>)}</span>
@@ -211,27 +230,29 @@ export default function OrdersFeed({ cabinet }) {
                   <th className="l">Артикул</th>
                   <th className="r">Кол-во</th>
                   <th className="r">Цена</th>
+                  <th className="r of-profit" title={PAYOUT_HINT}>{PAYOUT_LABEL}, ₽</th>
                   <th className="r of-profit" title={PROFIT_HINT}>{PROFIT_LABEL}, ₽</th>
                   <th className="l">Схема · склад</th>
                   <th className="l">Статус</th>
                   <th className="l" title="Самовыкуп не считается в заказах, а себестоимость за него не вычитается">Самовыкуп</th>
                 </tr></thead>
                 <tbody>
-                  {!shown.length && <tr><td colSpan={9} className="muted" style={{ padding: 16, textAlign: 'center' }}>Заказов нет</td></tr>}
+                  {!shown.length && <tr><td colSpan={10} className="muted" style={{ padding: 16, textAlign: 'center' }}>Заказов нет</td></tr>}
                   {shown.map(x => {
                     const t = x.at ? msk(x.at) : null;
                     const day = t ? t.format('YYYY-MM-DD') : x.date || ''; const dateLabel=t || (x.date ? dayjs(x.date):null);
-                    const profit = forecast.perRow.get(x);
+                    const { payout, profit } = forecast.perRow.get(x) || {};
                     const sep = day !== lastDay ? (lastDay = day, true) : false;
                     return (
                       <React.Fragment key={key(x)}>
-                        {sep && rows.length && <tr className="of-day"><td colSpan={9}>{dateLabel ? dateLabel.format('dddd, D MMMM').replace(/^./, c => c.toUpperCase()) : '—'}</td></tr>}
+                        {sep && rows.length && <tr className="of-day"><td colSpan={10}>{dateLabel ? dateLabel.format('dddd, D MMMM').replace(/^./, c => c.toUpperCase()) : '—'}</td></tr>}
                         <tr className={`${x.self ? 'of-self' : ''} ${x.st === 'cancelled' ? 'of-cancel' : ''} ${picked.has(key(x)) ? 'pr-in-order' : ''}`}>
                           <td><input type="checkbox" checked={picked.has(key(x))} onChange={() => toggle(x)} /></td>
                           <td className="l n">{t ? t.format('HH:mm') : '—'}<small className="of-sub">{x.p}</small></td>
                           <td className="l"><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.o || x.sku}</div><div className="model" title={x.n}>{x.n}</div><div className="of-cat">{String(x.cat || '').split(' / ').slice(-1)[0]}</div></div></div></td>
                           <td className="n r">{x.qty}</td>
                           <td className="n r" title={x.est ? 'Ozon не передал цену в заказе — показана цена продавца на день заказа из истории цен' : undefined}>{x.est ? '≈' : ''}{fmtInt(x.price)}</td>
+                          <td className={`n r ${payout < 0 ? 's-down' : ''}`}><b>{fmtInt(payout)}</b></td>
                           <td className={`n r ${profit < 0 ? 's-down' : ''}`}><b>{fmtInt(profit)}</b></td>
                           <td className="l"><span className="of-sch">{String(x.sch || '').toUpperCase()}</span> <span className="muted">{x.wh}</span></td>
                           <td className="l">{ST[x.st] || x.st || '—'}</td>

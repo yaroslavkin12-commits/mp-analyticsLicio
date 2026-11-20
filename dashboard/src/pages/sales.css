@@ -371,9 +371,9 @@
 .mpui table.rnp-t td.rnp-head { overflow: visible; z-index: 3; }
 .mpui table.rnp-t td.rnp-head .rnp-nm { position: absolute; top: 5px; right: 6px; }
 /* Лента заказов */
-.mpui .of-kpis{grid-template-columns:repeat(5,minmax(0,1fr))}
+.mpui .of-kpis{grid-template-columns:repeat(6,minmax(0,1fr))}
 .mpui .of-kpis .lbl{white-space:normal}
-@media(max-width:1100px){.mpui .of-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:1350px){.mpui .of-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){.mpui .of-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .mpui .of-t th.of-profit{white-space:normal;min-width:155px}
 .mpui .of-t td { font-size: 13px; padding: 7px 10px; }
