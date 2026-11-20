@@ -2,10 +2,12 @@ import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
-import { getOrderFeed, setSelfBuyout } from '../api';
+import { getOrderFeed, setSelfBuyout, getFinanceCoefs, latestOnly } from '../api';
 import DateRangePicker from '../components/DateRangePicker';
 import ArtSearch, { artFilter } from '../components/ArtSearch';
 import { fmtInt } from './AdsStats2';
+import { C, unitCoefs, unitProfit } from './unitModel';
+import { useBuyerShare, useTax } from './finShared';
 import './ads2.css';
 import './sales.css';
 
@@ -23,6 +25,9 @@ const ST = { ordered:'заказан', returned:'возврат',
   arbitration: 'спор', client_arbitration: 'спор', awaiting_approve: 'ожидает подтверждения', sent_by_seller: 'отправлен продавцом',
 };
 const msk = iso => dayjs(new Date(Date.parse(iso) + 3 * 3600e3).toISOString().slice(0, 19));
+
+const PROFIT_LABEL = 'Прогнозируемая прибыль с выкупа';
+const PROFIT_HINT = 'Прибыль на одну ожидаемую выкупленную штуку по цене заказа. Учитывает себестоимость, комиссию, логистику, налог и долю расходов на рекламу из финансовой истории.';
 
 export default function OrdersFeed({ cabinet }) {
   const today = dayjs().format('YYYY-MM-DD');
@@ -42,8 +47,11 @@ export default function OrdersFeed({ cabinet }) {
   const [cat, setCat] = useState(''); // путь категории: «Чехлы», «Чехлы / Чехлы на сиденья»…
 
   const load = useCallback(() => {
+    const isLatest = latestOnly('orders-feed');
     setErr('');
-    return getOrderFeed(cabinet, from, to, cabinet === 'defly_wb' ? kind : undefined).then(r => setD(r.data.data)).catch(e => setErr(e.response?.data?.error || e.message));
+    return getOrderFeed(cabinet, from, to, cabinet === 'defly_wb' ? kind : undefined)
+      .then(r => { if (isLatest()) setD(r.data.data); })
+      .catch(e => { if (isLatest()) setErr(e.response?.data?.error || e.message); });
   }, [cabinet, from, to, kind]);
   useEffect(() => { setD(null); setPicked(new Set()); load(); }, [load]);
   // Свежие заказы — обновление раз в минуту, пока вкладка открыта.
@@ -75,6 +83,48 @@ export default function OrdersFeed({ cabinet }) {
     if (Number.isFinite(hi)) r = r.filter(x => x.price != null && x.price <= hi);
     return q.trim() ? artFilter(r, q, x => x.o || '', x => `${x.n || ''} ${x.p}`) : r;
   }, [catRows, q, view, hideCancel, pMin, pMax]);
+  const [finance, setFinance] = useState(null);
+  const [tax] = useTax(cabinet);
+  useEffect(() => {
+    let current = true;
+    getFinanceCoefs(cabinet).then(r => {
+      if (current) setFinance({ cabinet, data: r.data.data });
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [cabinet]);
+  const coefficients = finance?.cabinet === cabinet ? finance.data : null;
+  const articles = useMemo(() => (coefficients?.articles || []).map(a => ({
+    o: a.o, parts: String(a.cat || '').split(' / ').filter(Boolean),
+  })), [coefficients]);
+  const { shareOf } = useBuyerShare(cabinet, articles);
+  const profitModel = useMemo(() => {
+    if (!coefficients?.coefs?.length || coefficients._metadataOnly) return new Map();
+    const units = unitCoefs(coefficients, articles, shareOf);
+    const adRates = new Map(coefficients.coefs.map(c => [
+      c[0], c[C.sale] > 0 ? Math.max(0, -(c[C.ads] || 0) / c[C.sale]) : 0,
+    ]));
+    return new Map(articles.map((a, i) => [a.o, { unit: units[i], adRate: adRates.get(i) || 0 }]));
+  }, [coefficients, articles, shareOf]);
+  const forecast = useMemo(() => {
+    const perRow = new Map();
+    let profit = 0, buyouts = 0, eligible = 0;
+    for (const row of rows) {
+      if (row.self || row.st === 'cancelled' || row.st === 'returned') continue;
+      eligible++;
+      const model = profitModel.get(row.o);
+      if (!model?.unit.cost || !(row.price > 0) || !(row.qty > 0)) continue;
+      const ordRub = row.price * row.qty;
+      const scheme = String(row.sch || '').toLowerCase();
+      const fbs = scheme === 'fbs' || scheme === 'rfbs' ? 1 : scheme === 'fbo' ? 0 : undefined;
+      const ads = ordRub * model.unit.buyout * model.adRate;
+      const result = unitProfit(model.unit, { ordRub, ordQty: row.qty, fbs, ads }, tax);
+      if (!(result.expQty > 0) || !Number.isFinite(result.profit)) continue;
+      perRow.set(row, result.profit / result.expQty);
+      profit += result.profit;
+      buyouts += result.expQty;
+    }
+    return { perRow, average: buyouts > 0 ? profit / buyouts : null, eligible };
+  }, [rows, profitModel, tax]);
   const sum = useMemo(() => {
     const all = catRows.filter(x => x.st !== 'cancelled');
     const s = { n: 0, q: 0, r: 0, sn: 0, sq: 0, sr: 0, c: catRows.length - all.length };
@@ -116,11 +166,20 @@ export default function OrdersFeed({ cabinet }) {
       {d && (
         <>
           <CategoryNav tops={cats.top.map(([k])=>k)} value={cat} onChange={setCat} childrenOf={path=>[...new Set([...cats.sub.keys()].filter(k=>k.startsWith(path+' / ')&&k.split(' / ').length===path.split(' / ').length+1).map(k=>k.split(' / ').at(-1)))]} />
-          <div className="cl-kpis">
+          <div className="cl-kpis of-kpis">
             <div className="a-kpi"><span className="lbl">Заказы</span><span className="val">{fmtInt(sum.n)}</span><span className="sub">{fmtInt(sum.q)} шт · {fmtInt(sum.r)} ₽</span></div>
             <div className="a-kpi"><span className="lbl">Самовыкупы</span><span className="val" style={{ color: sum.sn ? 'var(--a-accent)' : undefined }}>{fmtInt(sum.sn)}</span><span className="sub">{fmtInt(sum.sq)} шт · {fmtInt(sum.sr)} ₽ — не в заказах</span></div>
             <div className="a-kpi"><span className="lbl">Средний чек</span><span className="val">{sum.q ? fmtInt(sum.r / sum.q) : '—'}</span><span className="sub">без самовыкупов, ₽ за шт</span></div>
             <div className="a-kpi"><span className="lbl">Отменено</span><span className="val">{fmtInt(sum.c)}</span><span className="sub">за период</span></div>
+            <div className="a-kpi" title={PROFIT_HINT}>
+              <span className="lbl">{PROFIT_LABEL}</span>
+              <span className={`val ${forecast.average < 0 ? 's-down' : ''}`}>{forecast.average == null ? '—' : `${fmtInt(forecast.average)} ₽`}</span>
+              <span className="sub">{forecast.perRow.size === 0
+                ? 'Нет данных для прогноза'
+                : forecast.perRow.size < forecast.eligible
+                  ? `На 1 шт. · рассчитано для ${fmtInt(forecast.perRow.size)} из ${fmtInt(forecast.eligible)} строк`
+                  : 'На 1 выкупленную штуку · по фильтрам'}</span>
+            </div>
           </div>
           <div className="a-bar" style={{ gap: 8, flexWrap: 'wrap', margin: '12px 0 8px' }}>
             <span className="a-seg">{[['all', 'Все'], ['real', 'Заказы'], ['self', `Самовыкупы (${fmtInt(sum.sn)})`]].map(([k, t]) => <button key={k} type="button" className={view === k ? 'on' : ''} onClick={() => setView(k)}>{t}</button>)}</span>
@@ -152,7 +211,7 @@ export default function OrdersFeed({ cabinet }) {
                   <th className="l">Артикул</th>
                   <th className="r">Кол-во</th>
                   <th className="r">Цена</th>
-                  <th className="r">Сумма</th>
+                  <th className="r of-profit" title={PROFIT_HINT}>{PROFIT_LABEL}, ₽</th>
                   <th className="l">Схема · склад</th>
                   <th className="l">Статус</th>
                   <th className="l" title="Самовыкуп не считается в заказах, а себестоимость за него не вычитается">Самовыкуп</th>
@@ -162,6 +221,7 @@ export default function OrdersFeed({ cabinet }) {
                   {shown.map(x => {
                     const t = x.at ? msk(x.at) : null;
                     const day = t ? t.format('YYYY-MM-DD') : x.date || ''; const dateLabel=t || (x.date ? dayjs(x.date):null);
+                    const profit = forecast.perRow.get(x);
                     const sep = day !== lastDay ? (lastDay = day, true) : false;
                     return (
                       <React.Fragment key={key(x)}>
@@ -172,7 +232,7 @@ export default function OrdersFeed({ cabinet }) {
                           <td className="l"><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.o || x.sku}</div><div className="model" title={x.n}>{x.n}</div><div className="of-cat">{String(x.cat || '').split(' / ').slice(-1)[0]}</div></div></div></td>
                           <td className="n r">{x.qty}</td>
                           <td className="n r" title={x.est ? 'Ozon не передал цену в заказе — показана цена продавца на день заказа из истории цен' : undefined}>{x.est ? '≈' : ''}{fmtInt(x.price)}</td>
-                          <td className="n r"><b>{x.est ? '≈' : ''}{fmtInt(x.price == null ? null : x.price * x.qty)}</b></td>
+                          <td className={`n r ${profit < 0 ? 's-down' : ''}`}><b>{fmtInt(profit)}</b></td>
                           <td className="l"><span className="of-sch">{String(x.sch || '').toUpperCase()}</span> <span className="muted">{x.wh}</span></td>
                           <td className="l">{ST[x.st] || x.st || '—'}</td>
                           <td className="l">
