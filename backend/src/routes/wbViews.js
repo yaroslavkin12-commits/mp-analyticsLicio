@@ -23,7 +23,15 @@ router.use(async (req, res) => {
         if (path === '/promo/manual') { if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(body.date || '') || !['views', 'pdpViews', 'cart', 'orders', 'revenue'].includes(body.metric)) throw new Error('Некорректная ручная метрика'); const key = id + '|' + body.date; p.manual[key] ||= {}; if (body.value == null || body.value === '') delete p.manual[key][body.metric]; else { if (!finite(body.value) || Number(body.value) < 0) throw new Error('Укажите неотрицательное число'); p.manual[key][body.metric] = Number(body.value); } return p.manual[key]; }
         if (path === '/promo/groups' && req.method === 'POST') { const name = bounded(body.name, 100); if (!name) throw new Error('Введите название'); p.groups.push({ id: randomUUID(), name }); return groups(p); }
         if (path.startsWith('/promo/groups/') && req.method === 'DELETE') { p.groups = p.groups.filter(g => g.id !== groupId); for (const [o, g] of Object.entries(p.members)) if (g === groupId) delete p.members[o]; return groups(p); }
-        if (path === '/promo/groups/assign') { if (!id || (body.groupId && !p.groups.some(g => g.id === body.groupId))) throw new Error('Неизвестный артикул или группа'); if (body.groupId) p.members[id] = body.groupId; else delete p.members[id]; return groups(p); }
+        if (path === '/promo/groups/assign') {
+          if (!id || (body.groupId && !p.groups.some(g => g.id === body.groupId))) throw new Error('Неизвестный артикул или группа');
+          const ctx = req.categoryContext;
+          if (ctx && !Object.entries(p.members).some(([offer, group]) => group === body.groupId && ctx.allowed.has(offer))) {
+            throw new Error('Нет доступа к группе');
+          }
+          if (body.groupId) p.members[id] = body.groupId; else delete p.members[id];
+          return groups(p);
+        }
         if (path === '/promo/groups/rename') { const g = p.groups.find(g => g.id === body.id); if (!g || !bounded(body.name, 100)) throw new Error('Неизвестная группа'); g.name = bounded(body.name, 100); return groups(p); }
         if (path === '/promo/groups/reorder') { const ids = Array.isArray(body.order) ? body.order : []; p.groups.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id)); return groups(p); }
         if (path === '/promo/groups/from-cluster') { const name = bounded(body.name, 100), offers = body.offerIds; if (!name || !Array.isArray(offers) || offers.length > 5000) throw new Error('Некорректная группа'); const g = { id: randomUUID(), name }; p.groups.push(g); for (const o of offers) p.members[bounded(o, 128)] = g.id; return groups(p); }

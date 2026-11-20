@@ -144,7 +144,9 @@ function projection(path, data, ctx) {
   if (path === '/discounts/overview') return { ...pick(data,['cabinet','lastCheckedAt']), items: (data.items || []).filter(r => ctx.allowed.has(offerOf(r))).map(r => ({ ...pick(r,['o','n','seller','site','card','pct','pctCard','schema','c1','c7','d1','d7','orders30','revenue30','checkedAt']), cat: ctx.allowed.get(offerOf(r)).path })) };
   if (path === '/sales/daily-prices') return { rows: data.rows.filter(r => ctx.allowed.has(String(r[0]))) };
   if (path === '/discounts/history') return { dates: data.dates, from:data.from,to:data.to, rows: (data.rows || []).filter(r => ctx.allowed.has(String(r[0]))), base: (data.base || []).filter(r => ctx.allowed.has(String(r[0]))) };
-  if (path === '/promo/groups') {
+  if (path === '/promo/catalog') return (data || []).filter(a => ctx.allowed.has(offerOf(a))).map(a => pick(a,['offerId','productName']));
+  if (path === '/competitors/product-ratings') return filterMap(data,ctx);
+  if (['/promo/groups','/promo/groups/assign'].includes(path)) {
     const members = filterMap(data.members,ctx), ids = new Set(Object.values(members));
     return { members, groups: (data.groups || []).filter(g => ids.has(g.id)).map(g => pick(g,['id','name','color'])) };
   }
@@ -164,7 +166,7 @@ function routeOf(path) {
   const normalized = path.toLowerCase().replace(/\/+$/, '').replace(/^\/api\/wb\/views/, '/api').replace(/^\/api\/ads(?=\/)/, '/api/promo');
   return normalized.replace(/^\/api/, '');
 }
-const EXTRA = ['/sales/daily-prices','/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
+const EXTRA = ['/sales/daily-prices','/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/catalog','/competitors/product-ratings','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
 function middleware() {
   return async (req,res,next) => {
     if (req.user?.accessScope == null || !/^\/api(?:\/|$)/i.test(req.path)) return next();
@@ -189,14 +191,15 @@ function middleware() {
       return next();
     }
     const journalWrite = !/^\/api\/wb\/views/i.test(req.path) && ((req.method === 'POST' && path === '/promo/events') || (req.method === 'DELETE' && /^\/promo\/events\/\d+$/.test(path)));
+    const groupAssignment = req.method === 'POST' && path === '/promo/groups/assign';
     const competitorWrite = /^\/api\/competitors\/?$/i.test(req.path) && ['POST', 'DELETE'].includes(req.method);
-    if (!read && !journalWrite && !competitorWrite) return res.status(403).json({ success:false, error:'Доступ только для просмотра и выгрузки' });
+    if (!read && !journalWrite && !competitorWrite && !groupAssignment) return res.status(403).json({ success:false, error:'Доступ только для просмотра и выгрузки' });
     const scope = publicScope(req.user.accessScope);
     if (path === '/promo/cabinets') {
       const list = require('../config/cabinets').listCabinets().filter(c => scope.cabinets.includes(c.id));
       return res.json({ success:true, data:list.map(c => pick(c,['id','label','platform','family','connected'])) });
     }
-    if (!journalWrite && !INDEXED[path] && !EXTRA.includes(path)) return res.status(403).json({ success:false, error:'Этот раздел недоступен в вашем профиле' });
+    if (!journalWrite && !groupAssignment && !INDEXED[path] && !EXTRA.includes(path)) return res.status(403).json({ success:false, error:'Этот раздел недоступен в вашем профиле' });
     if(['/sales/summary','/plan/ozon','/plan/ozon/execution'].includes(path)){
       try{
         const requested=path==='/sales/summary'?(req.query.cabinet==='licio'?'licio':'marketplaces'):(req.query.scope||'ozon');
@@ -207,10 +210,14 @@ function middleware() {
         return filtered({contexts:req.categoryContexts});
       }catch{return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'});}
     }
-    const cabinet = (journalWrite || competitorWrite) && req.method === 'POST' ? req.body?.cabinet : (req.query.cabinet === undefined ? 'defly' : req.query.cabinet);
+    const cabinet = (journalWrite || competitorWrite || groupAssignment) && req.method === 'POST' ? req.body?.cabinet : (req.query.cabinet === undefined ? 'defly' : req.query.cabinet);
     if (typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || (/^\/api\/wb\/views/i.test(req.path) && cabinet !== 'defly_wb')) return res.status(403).json({ success:false, error:'Нет доступа к этому кабинету' });
     try {
       const ctx = await context(cabinet,scope);
+      if (groupAssignment && (typeof req.body?.offerId !== 'string' || !ctx.allowed.has(req.body.offerId)
+        || typeof req.body?.groupId !== 'string' || !req.body.groupId)) {
+        return res.status(403).json({success:false,error:'Выберите доступный артикул и группу'});
+      }
       if (competitorWrite) {
         const offerId = req.method === 'POST' ? req.body?.offerId : req.query.offerId;
         if (cabinet === 'defly_wb' || typeof offerId !== 'string' || !ctx.allowed.has(offerId)) {
@@ -234,7 +241,9 @@ function middleware() {
       res.set('Cache-Control','no-store');
       res.json = body => {
         res.set('Cache-Control','no-store'); res.set('Vary','Cookie');
-        if (res.statusCode >= 400 || !body?.success) return json({ success:false, error:'Не удалось получить данные разрешённых категорий' });
+        if (res.statusCode >= 400 || !body?.success) return json({ success:false, error:groupAssignment
+          ? 'Не удалось добавить артикул. Проверьте доступ к группе и обновите отчёт.'
+          : 'Не удалось получить данные разрешённых категорий' });
         try { return json({ success:true, data:projection(path,body.data,ctx) }); }
         catch { return res.status(403).type('json').send(JSON.stringify({ success:false,error:'Раздел временно недоступен для ограниченного профиля' })); }
       };

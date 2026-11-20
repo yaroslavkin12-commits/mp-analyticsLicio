@@ -141,6 +141,7 @@ export const getNotificationsHealth = cabinet => api.get('/tracked-articles/heal
 export const testTelegram = () => api.post('/tracked-articles/test-telegram');
 
 // «Аналитика продаж» и «Себестоимость»
+export const getSalesCardRatings = cabinet => api.get('/competitors/product-ratings', { params: { cabinet } });
 export const getSalesData = (cabinet, p) => api.get('/sales/data', { params: { cabinet, ...p }, timeout: 90000 });
 export const getSewing = cabinet => api.get('/sales/sewing', { params: { cabinet } });
 export const saveSewing = (cabinet, items) => api.post('/sales/sewing', { cabinet, items });

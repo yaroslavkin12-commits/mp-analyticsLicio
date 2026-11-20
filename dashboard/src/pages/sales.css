@@ -673,3 +673,6 @@
 .mpui .ss-history .a-scroll{padding-bottom:12px;scrollbar-gutter:stable}
 .mpui .ss-history .ss-week-table tr> :first-child{transform:translateZ(0);z-index:3}
 .mpui .ss-history .ss-week-table thead tr>th:first-child{position:sticky;left:0;z-index:6;background:var(--a-panel)}
+
+.mpui .s-tree .s-card-rating{white-space:nowrap;text-align:center}
+.mpui .s-card-rating small{display:block;font-size:11px}

@@ -10,7 +10,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
-import { getSalesData, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
+import { getSalesData, getSalesCardRatings, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
 import { unitCoefs, unitProfit, returnOnCost, ROI_HINT } from './unitModel';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { useTax, useBuyerShare, useGroups } from './finShared';
@@ -561,6 +561,18 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
       .finally(ok(() => setLoading(false)));
   }, [cabinet, dateFrom, dateTo]);
   useEffect(() => { load(); }, [load]);
+  const [cardRatings, setCardRatings] = useState(null);
+  useEffect(() => {
+    if (!active || cabinet === 'defly_wb') return;
+    let current = true;
+    const refresh = () => getSalesCardRatings(cabinet).then(({ data }) => {
+      if (current) setCardRatings({ cabinet, entries: data.data });
+    }).catch(() => {});
+    refresh();
+    const timer = setInterval(() => { if (!document.hidden) refresh(); }, 5 * 60 * 1000);
+    return () => { current = false; clearInterval(timer); };
+  }, [cabinet, active]);
+  const ratings = cardRatings?.cabinet === cabinet ? cardRatings.entries : null;
   useEffect(() => { setSel(''); setBrand(''); setOpenArt(null); }, [cabinet]);
 
   // Выкупы, поступления на счёт и прибыль — из финансовых данных Ozon (как во
@@ -824,7 +836,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     }
   };
   const COLS = [
-    ['name', 'Категория / артикул'], [null, 'Заказы по дням'], ['revenue', 'Заказано, ₽'], ['delta', 'Δ'], [null, 'Доля'],
+    ['name', 'Категория / артикул'], [null, 'Рейтинг / отзывы'], [null, 'Заказы по дням'], ['revenue', 'Заказано, ₽'], ['delta', 'Δ'], [null, 'Доля'],
     ['orders', 'Заказы, шт'], ['check', 'Ср. чек'], ['views', 'Показы'], ['ctr', 'CTR'], ['crc', 'CR корз.'], ['cro', 'CR заказ'],
     ['stock', 'Остаток'], ['days', 'Запас'], ['spend', 'Расход'], ['drr', 'ДРР'],
   ];
@@ -832,15 +844,20 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   const toggle = path => setOpen(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
   // Доля — от родителя: подкатегория от категории, артикул от своей
   // подкатегории (в подсказке — доля от всего выбранного).
-  const metricCells = (st, base, isTotal=false) => {
+  const metricCells = (st, base, isTotal=false, article) => {
     const tint=(key,good='up')=>isTotal?{background:resultTint(st.t[key],st.p?.[key],good)}:undefined;
     const t = st.t;
     const b = base === undefined ? totalRev : base;
     const share = b > 0 ? t.revenue / b * 100 : null;
     const shareAll = totalRev > 0 ? t.revenue / totalRev * 100 : null;
     const daysCls = st.g.stockNow === null ? '' : st.sd !== null && st.sd < 7 ? 'b' : st.sd !== null && st.sd < 14 ? 'w' : '';
+    const card = article && ratings && Object.hasOwn(ratings, article.o) ? ratings[article.o] : null;
     return (
       <>
+        <td className="n s-card-rating" title={card?.date ? `Витрина Ozon · ${dayjs(card.date).format('DD.MM.YYYY')}` : undefined}>
+          {card ? <><b>{card.rating == null ? '—' : card.rating.toLocaleString('ru-RU', { maximumFractionDigits: 2 })}</b>
+            {card.reviews != null && <small className="muted">{fmtInt(card.reviews)} отз.</small>}</> : '—'}
+        </td>
         <td><SparkBars values={st.spark} dates={dates} /></td>
         <td className="n r" style={tint('revenue')} >{fmtInt(t.revenue)}</td>
         <td className="r"><Delta value={st.p ? changePct(t.revenue, st.p.revenue) : null} /></td>
@@ -897,7 +914,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
               </div>
             </div>
           </td>
-          {metricCells(st, nd.arts.length > 1 ? statsOf(nd.arts, 'c' + nd.path).t.revenue : undefined)}
+          {metricCells(st, nd.arts.length > 1 ? statsOf(nd.arts, 'c' + nd.path).t.revenue : undefined, false, a)}
         </tr>
       );
       if (isArt) treeRows.push(

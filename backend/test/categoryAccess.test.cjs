@@ -161,3 +161,28 @@ test('Сотрудник читает и завершает гипотезы т�
   assert.equal((await dispatch('/api/ad-hypotheses/42', 'DELETE', 'defly', [], { offerId: OWN })).called, false);
   assert.equal((await dispatch('/api/wb/views/ad-hypotheses', 'POST', 'defly_wb', [], { offerId: OWN })).called, false);
 });
+
+test('Каталог группы и рейтинг содержат только доступные сотруднику артикулы', async () => {
+  const catalog = await dispatch('/api/promo/catalog', 'GET', 'defly', [
+    { offerId: OWN, productName: 'Дефлектор' }, { offerId: OTHER, productName: 'PRIVATE-COVER' },
+  ]);
+  assert.deepEqual(catalog.body.data, [{ offerId: OWN, productName: 'Дефлектор' }]);
+  const ratings = await dispatch('/api/competitors/product-ratings', 'GET', 'defly', {
+    [OWN]: { rating: 4.8, reviews: 157 }, [OTHER]: { rating: 5, reviews: 999999 },
+  });
+  assert.deepEqual(ratings.body.data, { [OWN]: { rating: 4.8, reviews: 157 } });
+});
+
+test('Сотрудник может добавить только доступный артикул и получает отфильтрованный состав группы', async () => {
+  const data = { groups: [{ id: 'g1', name: 'Своя' }, { id: 'g2', name: 'PRIVATE-COVER' }], members: { [OWN]: 'g1', [OTHER]: 'g2' } };
+  for (const [path, cabinet] of [['/api/promo/groups/assign', 'defly'], ['/api/wb/views/promo/groups/assign', 'defly_wb']]) {
+    const result = await dispatch(path, 'POST', cabinet, data, {}, { cabinet, offerId: OWN, groupId: 'g1' });
+    assert.equal(result.called, true);
+    assert.deepEqual(result.body.data, { groups: [data.groups[0]], members: { [OWN]: 'g1' } });
+    for (const fields of [{ offerId: OTHER, groupId: 'g1' }, { offerId: OWN, groupId: null }]) {
+      const denied = await dispatch(path, 'POST', cabinet, data, {}, { cabinet, ...fields });
+      assert.equal(denied.code, 403);
+      assert.equal(denied.called, false);
+    }
+  }
+});

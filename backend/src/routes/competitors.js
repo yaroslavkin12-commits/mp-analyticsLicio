@@ -186,15 +186,57 @@ router.delete('/', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
 });
 
-// GET /api/competitors/skus — для браузерного расширения: SKU конкурентов и
-// наших товаров, у которых есть конкуренты (во всех магазинах).
+// Последнее известное состояние карточки, независимо от периода отчёта продаж.
+router.get('/product-ratings', async (req, res) => {
+  try {
+    await ensure();
+    const cabinet = req.query.cabinet || 'defly';
+    const offers = req.categoryContext ? [...req.categoryContext.allowed.keys()] : null;
+    const rows = await query(`
+      WITH products AS (
+        SELECT offer_id, sku
+          FROM ad_product_catalog
+          WHERE cabinet = $1 AND platform = 'ozon' AND sku > 0
+            AND ($2::text[] IS NULL OR offer_id = ANY($2::text[]))
+      )
+      SELECT p.offer_id, c.rating, c.reviews, c.date::text AS date
+      FROM products p
+      CROSS JOIN LATERAL (
+        SELECT rating, reviews, date FROM sku_cards
+          WHERE sku = p.sku AND (rating IS NOT NULL OR reviews IS NOT NULL)
+          ORDER BY date DESC LIMIT 1
+      ) c`, [cabinet, offers]);
+    res.json({ success: true, data: Object.fromEntries(rows.map(r => [r.offer_id, {
+      rating: numOrNull(r.rating), reviews: numOrNull(r.reviews), date: r.date,
+    }])) });
+  } catch (e) { console.error(e); res.status(500).json({ success: false, error: 'Не удалось загрузить рейтинг и отзывы' }); }
+});
+
+// Сохраняем обязательные карточки сравнения, остальные товары витрины
+// обновляем небольшой порцией в каждом существующем цикле расширения.
 router.get('/skus', async (req, res) => {
   try {
     await ensure();
-    const rows = await query(`SELECT DISTINCT sku FROM search_competitors
-      UNION SELECT DISTINCT c.sku FROM ad_product_catalog c JOIN search_competitors s ON s.cabinet = c.cabinet AND s.offer_id = c.offer_id WHERE c.platform = 'ozon' AND c.sku IS NOT NULL`);
+    const rows = await query(`
+      WITH tracked AS (
+        SELECT sku FROM search_competitors
+        UNION SELECT c.sku FROM ad_product_catalog c
+          JOIN search_competitors s ON s.cabinet = c.cabinet AND s.offer_id = c.offer_id
+          WHERE c.platform = 'ozon' AND c.sku > 0
+      ), candidates AS (
+        SELECT DISTINCT sku FROM ad_product_catalog p
+          WHERE platform = 'ozon' AND cabinet <> 'licio' AND sku > 0 AND (to_jsonb(p)->>'archived') IS DISTINCT FROM 'true'
+      ), extra AS (
+        SELECT p.sku FROM candidates p
+        LEFT JOIN LATERAL (SELECT date FROM sku_cards WHERE sku = p.sku ORDER BY date DESC LIMIT 1) c ON TRUE
+        WHERE NOT EXISTS (SELECT 1 FROM tracked t WHERE t.sku = p.sku)
+          AND (c.date IS NULL OR c.date < CURRENT_DATE)
+        ORDER BY c.date NULLS FIRST, md5(p.sku::text || floor(extract(epoch FROM NOW()) / 21600)::text)
+        LIMIT 40
+      )
+      SELECT sku FROM tracked UNION ALL SELECT sku FROM extra`);
     res.json({ success: true, data: rows.map(r => String(r.sku)) });
-  } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // POST /api/competitors/cards {cards: [{sku, photo, title, price, cardPrice, rating, reviews}]} — от расширения.

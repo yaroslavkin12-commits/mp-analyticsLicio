@@ -76,6 +76,7 @@
 .mpui .a-ac{position:relative}
 .mpui .a-ac-list{position:absolute;top:calc(100% + 4px);right:0;min-width:300px;max-width:440px;max-height:300px;overflow-y:auto;background:var(--a-panel);border:1px solid var(--a-line2);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);z-index:30}
 .mpui .a-ac-item{padding:8px 12px;font-size:12.5px;cursor:pointer;border-bottom:1px solid var(--a-line)}
+.mpui .a-ac-choice{display:block;width:100%;border:0;border-bottom:1px solid var(--a-line);background:transparent;text-align:left}
 .mpui .a-ac-item:hover{background:var(--a-panel2)}
 .mpui .a-ac-item span{color:var(--a-ink3)}
 

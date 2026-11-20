@@ -969,6 +969,7 @@ function AssociatedTable({ associated, dates }) {
 
 // ── Раскрытая строка артикула (или группы целиком) ───────────────────────
 function Detail({ cabinet, unitCoefficients, taxPct, articles, dates, mode, events, isAggregate, onManualSave, onAddNote, onDeleteNote, groups, currentGroupId, onAssignGroup, tip, showAssoc, associated, activeGroupId, trafficLight = true }) {
+  const readOnly = useReadOnly();
   const [editMode, setEditMode] = useState(false);
   const [showCampaigns, setShowCampaigns] = useState(false);
   const model = useMemo(() => buildModel(articles, dates, mode), [articles, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1061,10 +1062,10 @@ function Detail({ cabinet, unitCoefficients, taxPct, articles, dates, mode, even
         {!isAggregate && offerId && groups && (
           <span className="a-dh-grp">
             <select className="a-sel" value={currentGroupId || ''} onChange={e => onAssignGroup(offerId, e.target.value || null)} title="Группа">
-              <option value="">Без группы</option>
+              <option value="" disabled={readOnly}>{readOnly ? 'Выберите группу' : 'Без группы'}</option>
               {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
-            {activeGroupId && currentGroupId === activeGroupId && (
+            {!readOnly && activeGroupId && currentGroupId === activeGroupId && (
               <button type="button" className="a-btn" onClick={() => onAssignGroup(offerId, null)}>Убрать из группы</button>
             )}
           </span>
@@ -1303,24 +1304,32 @@ function Freshness({ status }) {
 }
 
 // ── Поиск артикула для добавления в группу ───────────────────────────────
-export function AddToGroup(props) { const readOnly=useReadOnly(); return readOnly ? null : <AddToGroupForm {...props}/>; }
-function AddToGroupForm({ catalog, exclude, onPick }) {
+export function AddToGroup(props) { const readOnly=useReadOnly(); return readOnly && !props.allowScoped ? null : <AddToGroupForm {...props}/>; }
+function AddToGroupForm({ catalog, exclude, onPick, disabled }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ex = new Set(exclude);
   const s = q.trim().toLowerCase();
   const res = s ? catalog.filter(a => !ex.has(a.offerId) && (String(a.offerId || '').toLowerCase().includes(s) || (a.productName || '').toLowerCase().includes(s))).slice(0, 30) : [];
+  const pick = offerId => { onPick(offerId); setQ(''); setOpen(false); };
   return (
-    <div className="a-ac" style={{ marginLeft: 'auto' }}>
-      <input className="a-input" value={q} placeholder="+ Добавить артикул в группу…" style={{ minWidth: 260 }}
-        onChange={e => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} />
+    <div className="a-ac" style={{ marginLeft: 'auto' }}
+      onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
+      <input className="a-input" value={q} disabled={disabled} placeholder="+ Добавить артикул в группу…" style={{ minWidth: 260 }}
+        onChange={e => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)}
+        onKeyDown={event => {
+          if (event.key === 'Escape') setOpen(false);
+          if (event.key !== 'Enter' || !open) return;
+          const match = res.find(a => a.offerId.toLowerCase() === s) || (res.length === 1 ? res[0] : null);
+          if (match) { event.preventDefault(); pick(match.offerId); }
+        }} />
       {open && s && (
         <div className="a-ac-list">
           {!res.length && <div className="a-ac-item" style={{ cursor: 'default' }}><span>Ничего не найдено</span></div>}
           {res.map(a => (
-            <div key={a.offerId} className="a-ac-item" onMouseDown={() => { onPick(a.offerId); setQ(''); setOpen(false); }}>
+            <button key={a.offerId} type="button" className="a-ac-item a-ac-choice" onClick={() => pick(a.offerId)}>
               <b>{a.offerId}</b> <span>{(a.productName || '').slice(0, 60)}</span>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -1453,6 +1462,9 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
   UNIT_CTX.k = unitK; UNIT_CTX.tax = taxPct;
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const assigningGroup = useRef(false);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [groupError, setGroupError] = useState('');
   const [groupsData, setGroupsData] = useState({ groups: [], members: {} });
   const [manualOrder, setManualOrder] = useState([]);
   const [transit, setTransit] = useState({}); // «В пути», шт — ручной ввод
@@ -1605,13 +1617,21 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
   function toggleOpen(key) {
     setOpen(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }
-  function assignGroup(offerId, groupId) {
-    setGroupsData(prev => {
-      const m = { ...prev.members };
-      if (groupId) m[offerId] = groupId; else delete m[offerId];
-      return { ...prev, members: m };
-    });
-    assignAdsGroup(cabinet, offerId, groupId).catch(console.error);
+  async function assignGroup(offerId, groupId) {
+    if (assigningGroup.current) return;
+    assigningGroup.current = true;
+    setGroupSaving(true);
+    setGroupError('');
+    try {
+      const { data } = await assignAdsGroup(cabinet, offerId, groupId);
+      setGroupsData(data.data);
+      load();
+    } catch (error) {
+      setGroupError(error.response?.data?.error || 'Не удалось сохранить состав группы.');
+    } finally {
+      setGroupSaving(false);
+      assigningGroup.current = false;
+    }
   }
   function reorderRows(dragged, target) {
     if (!dragged || dragged === target) return;
@@ -1784,7 +1804,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
                 <div className="id">{a.offerId}</div>
                 <div className="model" title={a.productName || ''}>{shortModel(a.productName)}</div>
               </div>
-              {isGroup && members[a.offerId] === tab && (
+              {!readOnly && isGroup && members[a.offerId] === tab && (
                 <button type="button" className="a-ungroup" title={`Убрать из группы «${activeGroup.name}»`}
                   onClick={e => { e.stopPropagation(); if (window.confirm(`Убрать ${a.offerId} из группы «${activeGroup.name}»?`)) assignGroup(a.offerId, null); }}>×</button>
               )}
@@ -1835,6 +1855,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
   return (
     <>
       {reportError}
+      {groupError && <div className="c-msg bad" role="alert">{groupError}</div>}
 
       <CategoryNav allActive={tab==='all'} tops={catKids('').map(([c])=>c)} value={isCat?catPath:''} onChange={path=>selectTab(path?'cat:'+path:'all')} childrenOf={path=>catKids(path).map(([c])=>c)} groups={<>
           {groups.length > 0 && <span className="a-hint" style={{ margin: '0 2px 0 8px' }}>группы:</span>}
@@ -1936,7 +1957,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
         {isGroup && sort.key !== 'manual' && (
           <button type="button" className="a-btn ghost" onClick={() => setSort({ key: 'manual', dir: 1 })}>↺ Свой порядок</button>
         )}
-        {isGroup && <AddToGroup catalog={catalog} exclude={memberIds} onPick={id => assignGroup(id, tab)} />}
+        {isGroup && <AddToGroup allowScoped disabled={groupSaving} catalog={catalog} exclude={memberIds} onPick={id => assignGroup(id, tab)} />}
       </div></>} />
 
       <div className={`a-card ${loading ? 'a-loading' : ''}`}>

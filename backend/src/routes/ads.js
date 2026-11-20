@@ -406,9 +406,20 @@ router.post('/groups/assign', async (req, res) => {
     const { cabinet, offerId, groupId } = req.body || {};
     if (!cabinet || !offerId) return res.status(400).json({ success: false, error: 'Нужны cabinet и offerId' });
     const { groups, members } = await loadAdsGroups(cabinet);
-    if (groupId) members[offerId] = groupId; else delete members[offerId];
-    await saveAdsGroupsSetting(`ads_group_members:${cabinet}`, members);
-    res.json({ success: true, data: { groups, members } });
+    const ctx = req.categoryContext;
+    if (groupId && !groups.some(group => group.id === groupId)) {
+      return res.status(404).json({ success: false, error: 'Группа не найдена' });
+    }
+    if (ctx && !Object.entries(members).some(([offer, id]) => id === groupId && ctx.allowed.has(offer))) {
+      return res.status(403).json({ success: false, error: 'Нет доступа к группе' });
+    }
+    const patch = JSON.stringify(groupId ? { [offerId]: groupId } : {});
+    const [updated] = await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        value = ((app_settings.value::jsonb - $3::text) || EXCLUDED.value::jsonb)::text, updated_at = NOW()
+      RETURNING value`, [`ads_group_members:${cabinet}`, patch, offerId]);
+    require('../lib/dataVersion').bump();
+    res.json({ success: true, data: { groups, members: JSON.parse(updated.value) } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
