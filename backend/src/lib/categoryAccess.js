@@ -112,7 +112,7 @@ function indexed(path, data, ctx) {
 function ads(data, ctx) {
   if (!Array.isArray(data.articles)) throw Error('Неизвестный формат рекламы');
   const articles = data.articles.filter(a => ctx.allowed.has(offerOf(a))).map(a => ({
-    ...pick(a,['offerId','sku','productName','byDate','totals','stock','stockDays','prev']), cat: ctx.allowed.get(offerOf(a)).path,
+    ...pick(a,['offerId','sku','productName','byDate','totals','stock','stockDays','prev','prevTotals','_strict']), cat: ctx.allowed.get(offerOf(a)).path,
     ...(a.cpo ? { cpo: pick(a.cpo, ['enabled','available','bidPct','bidRub','checkedAt']) } : {}),
     // Числа смешанной кампании могут включать чужие товары. Сохраняем только статус и вид рекламы.
     campaigns: (a.campaigns || []).map(c => ({ ...pick(c, ['campaignId','id','status','state','paymentType','payment_type','type','zone','kind','strategy','targetDrr','adObjectType']), name: 'Реклама товара' })),

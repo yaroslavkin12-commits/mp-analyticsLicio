@@ -237,7 +237,7 @@ const zoneRaw = d => {
 };
 
 // Значения дня с учётом режима: "all" — общая аналитика товара, "ads" —
-// только то, что Ozon отнёс к рекламе (корзин в рекламной статистике нет).
+// только показатели, которые площадка отнесла к рекламе.
 function dayRaw(day, mode) {
   const d = day || {};
   if (d._strict) { const read = k => d[k] == null ? NaN : d[k]; return { _strict:true, views:read(mode === 'ads' ? 'adViews' : 'views'), pdpViews:read(mode === 'ads' ? 'clicks' : 'pdpViews'), cart:read(mode === 'ads' ? 'adToCart' : 'cart'), orders:read(mode === 'ads' ? 'adOrders' : 'orders'), revenue:read(mode === 'ads' ? 'adRevenue' : 'revenue'), spend:read('spend'), spendCpc:read('spendCpc'), spendCpo:read('spendCpo'), spendOther:read('spendOther'), clicks:read('clicks'), adViews:read('adViews'), adOrders:read('adOrders'), adRevenue:read('adRevenue'), selfQ:read('selfQ'),selfR:read('selfR'),selfFbs:read('selfFbs'), ...zoneRaw(d) }; }
@@ -337,7 +337,7 @@ function buildModel(articles, dates, mode, unknown = false, units = UNIT_CTX) {
   const prevList = articles.filter(a => a.prevTotals).map(a => {
     const p = a.prevTotals;
     return mode === 'ads'
-      ? { _strict: !!p._strict, views: p.adViews, pdpViews: p.clicks, cart: null, orders: p.adOrders, revenue: p.adRevenue, spend: p.spend, clicks: p.clicks }
+      ? { _strict: !!p._strict, views: p.adViews, pdpViews: p.clicks, cart: p.adToCart ?? null, orders: p.adOrders, revenue: p.adRevenue, spend: p.spend, clicks: p.clicks }
       : { _strict: !!p._strict, views: p.views, pdpViews: p.pdpViews, cart: p.cart, orders: p.orders, revenue: p.revenue, spend: p.spend, clicks: p.clicks };
   });
   const prev = prevList.length ? derive(sumRaw(prevList), mode) : null;
@@ -751,13 +751,13 @@ function EditCell({ value, fmt, bg, manual, onSave, dayClass = '' }) {
   );
 }
 
-export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys, showPrices = false, testPeriod }) {
+export function DaysTable({ dates, model, mode, editable, onManualSave, hideKeys, showPrices = false, testPeriod, showAdPosition = false }) {
   const ref = useRef(null);
   const [openSub, setOpenSub] = useState(false);
   const [expanded, setExpanded] = useState({});
   const today = dayjs().format('YYYY-MM-DD');
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length]);
-  const availableRows = DAY_ROWS.filter(r => !r.prices || showPrices).filter(r => r.block || (!(mode === 'ads' && r.onlyAll) && !(hideKeys && hideKeys.includes(r.key))
+  const availableRows = DAY_ROWS.filter(r => !r.prices || showPrices).filter(r => r.block || (!(mode === 'ads' && r.onlyAll && !(showAdPosition && r.key === 'position')) && !(hideKeys && hideKeys.includes(r.key))
     // Строки стратегий — только если у товара за период был такой расход.
     && !(r.onlyWhenNonZero && !dates.some(d => (model.byDate[d]?.[r.key] || 0) > 0))
     && !(r.hideEmpty && !dates.some(d => (model.byDate[d]?.[r.spendKey || r.key] || 0) > 0))
@@ -1113,7 +1113,7 @@ function Detail({ cabinet, unitCoefficients, taxPct, articles, dates, mode, even
             </button>
           )}
         </h4>
-        <DaysTable showPrices testPeriod={testPeriod} dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
+        <DaysTable showPrices showAdPosition={cabinet === 'defly_wb'} testPeriod={testPeriod} dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
           onManualSave={!readOnly && offerId ? (d, k, v) => onManualSave(offerId, d, k, v) : null} />
       </div>
       <div className="a-box wide">
@@ -1170,6 +1170,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length, rows.length]);
   const cfg = MATRIX_METRICS.find(m => m.key === metric);
+  const metricLabel = item => cabinet === 'defly_wb' && mode === 'ads' && item.key === 'pdpViews' ? 'Клики' : item.label;
   const models = useMemo(() => rows.map(a => ({ a, m: buildModel([a], dates, mode) })), [rows, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const all = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const vals = [];
@@ -1196,7 +1197,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
         ...dates.map(date => metricCell(model.byDate[date]?.[metric])),
       ];
       const sheet = XLSX.utils.aoa_to_sheet([
-        ['Метрика', cfg.label],
+        ['Метрика', metricLabel(cfg)],
         ['Выборка', scopeLabel],
         ['Артикул', 'Товар', 'Итого', 'Остаток', ...dates.map(date => dayjs(date).format('DD.MM.YYYY'))],
         ...models.map(({ a, m }) => [a.offerId, a.productName || '', ...values(m)]),
@@ -1221,8 +1222,8 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
         <span className="a-hint"><span className={scopeActive?'a-scope':''}>{scopeLabel}</span> · {rows.length} арт.</span>
         {controls}
         {view==='articles'&&<span className="a-seg">
-          {MATRIX_METRICS.filter(m => !(mode === 'ads' && m.key === 'cart')).map(m => (
-            <button key={m.key} type="button" className={metric === m.key ? 'on' : ''} onClick={() => setMetric(m.key)}>{m.label}</button>
+          {MATRIX_METRICS.filter(m => !(mode === 'ads' && m.key === 'cart' && cabinet !== 'defly_wb')).map(m => (
+            <button key={m.key} type="button" className={metric === m.key ? 'on' : ''} onClick={() => setMetric(m.key)}>{metricLabel(m)}</button>
           ))}
         </span>}
         {view === 'articles' && (
@@ -1233,7 +1234,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
         )}
         {view === 'articles' && exportError && <span role="alert" className="a-hint">{exportError}</span>}
       </div>
-      {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable showPrices dates={dates} model={all} mode={mode} />:<React.Fragment>
+      {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable showPrices showAdPosition={cabinet === 'defly_wb'} dates={dates} model={all} mode={mode} />:<React.Fragment>
       {metric === 'position' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }} title="Цветовая шкала постоянная и не зависит от периода, фильтров и крайних значений. Между ориентирами цвет меняется плавно.">
         <span>Цвет позиции:</span>
         {[[10, '1–10'], [30, '30'], [60, '60 и выше']].map(([v, label]) => <span key={v}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: positionHeatColor(v) }} />{label}</span>)}
@@ -1373,7 +1374,8 @@ export default function AdsStats2({ cabinet }) {
   const [collecting, setCollecting] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [status, setStatus] = useState(null);
-  const [mode, setMode] = useState('all');
+  const isWb = cabinet === 'defly_wb';
+  const [mode, setMode] = useState(() => isWb ? 'ads' : 'all');
   const [search, setSearch] = useState('');
   const [artOpts, setArtOpts] = useState([]);
   const [refresh, setRefresh] = useState(0);
@@ -1417,9 +1419,9 @@ export default function AdsStats2({ cabinet }) {
           <QuickPeriods from={dateFrom} to={dateTo} onChange={changePeriod} />
           <DateRangePicker from={dateFrom} to={dateTo} onChange={changePeriod} />
         </div>
-        <span className="a-seg" title="Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый.">
+        <span className="a-seg" title={isWb ? "Все заказы WB или показатели рекламных кампаний" : "Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый."}>
           <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
-          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Заказы с рекламы</button>
+          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>{isWb ? 'Рекламная статистика' : 'Заказы с рекламы'}</button>
         </span>
         <div className="a-top-actions">
           <Freshness status={status} />
@@ -1431,6 +1433,9 @@ export default function AdsStats2({ cabinet }) {
         </div>
       </div>
     </div>
+    {isWb && mode === 'all' && <div className="a-hint" style={{ margin: '12px 20px 0' }}>
+      Показы, клики и добавления в корзину с кампаний доступны в режиме «Рекламная статистика».
+    </div>}
     {collectError && <div className="a-empty" role="alert">Не удалось запустить обновление рекламы.</div>}
     <AdsReportBoundary period={`${dateFrom}|${dateTo}`} refresh={refresh} onReportError={() => setReportLoading(false)}>
       <AdsReport cabinet={cabinet} dateFrom={dateFrom} dateTo={dateTo} mode={mode} search={search} refresh={refresh} setArtOpts={setArtOpts} setReportLoading={setReportLoading} />
