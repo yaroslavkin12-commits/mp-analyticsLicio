@@ -1,6 +1,6 @@
 const express = require('express');
 const dayjs = require('dayjs');
-const { query } = require('../db');
+const { query, getPool } = require('../db');
 const OF = require('../lib/orderFeed');
 const { autoPath, OV_SQL, overrideArgs } = require('../lib/categories');
 
@@ -63,6 +63,45 @@ router.post('/self', async (req, res) => {
     await OF.ensure();
     const { cabinet, items, on } = req.body || {};
     if (!cabinet || !Array.isArray(items) || !items.length) return res.status(400).json({ success: false, error: 'Нужны cabinet и items' });
+    if (req.categoryContext) {
+      if (items.length > 2000 || typeof on !== 'boolean' || !items.every(it => it &&
+        typeof it.p === 'string' && it.p.length > 0 && it.p.length <= 64 &&
+        /^[1-9]\d{0,15}$/.test(String(it.sku)) && Number.isSafeInteger(Number(it.sku)))) {
+        return res.status(400).json({success:false,error:'Проверьте выбранные заказы'});
+      }
+      const postings = items.map(it => it.p), skus = items.map(it => String(it.sku));
+      const client = await getPool().connect();
+      try {
+        await client.query('BEGIN');
+        const {rows} = await client.query(`SELECT f.posting_number, f.sku, f.offer_id
+          FROM order_feed f JOIN (SELECT DISTINCT * FROM unnest($2::text[], $3::bigint[])) AS ids(p, sku)
+          ON f.posting_number=ids.p AND f.sku=ids.sku WHERE f.cabinet=$1 ORDER BY f.posting_number,f.sku FOR UPDATE OF f`, [cabinet, postings, skus]);
+        const allowed = req.categoryContext.allowed;
+        if (rows.length !== new Set(items.map(it => JSON.stringify([it.p, String(it.sku)]))).size ||
+          rows.some(row => !allowed.has(String(row.offer_id)))) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({success:false,error:'Нет доступа к одному из заказов'});
+        }
+        const offers = [...allowed.keys()];
+        const result = await client.query(on
+          ? `INSERT INTO self_buyouts (cabinet, posting_number, sku, offer_id, qty, price, order_date)
+             SELECT f.cabinet, f.posting_number, f.sku, f.offer_id, f.qty, f.price, (f.created_at + INTERVAL '3 hours')::date
+             FROM order_feed f JOIN (SELECT DISTINCT * FROM unnest($2::text[], $3::bigint[])) AS ids(p,sku)
+             ON f.posting_number=ids.p AND f.sku=ids.sku WHERE f.cabinet=$1 AND f.offer_id=ANY($4::text[])
+             ON CONFLICT (cabinet, posting_number, sku) DO NOTHING`
+          : `DELETE FROM self_buyouts s USING unnest($2::text[], $3::bigint[]) AS ids(p,sku)
+             WHERE s.cabinet=$1 AND s.posting_number=ids.p AND s.sku=ids.sku
+             AND s.offer_id=ANY($4::text[])`, [cabinet, postings, skus, offers]);
+        await client.query('COMMIT');
+        require('../lib/dataVersion').bump();
+        return res.json({success:true,data:{changed:result.rowCount}});
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
     let n = 0;
     for (const it of items.slice(0, 2000)) {
       const p = String(it.p || '').slice(0, 64), sku = Math.round(Number(it.sku)) || 0;

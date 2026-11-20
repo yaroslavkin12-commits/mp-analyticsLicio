@@ -1,3 +1,4 @@
+import { useReadOnly } from '../lib/AccessContext';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getPriceLog, getPriceSnap, getPriceHistory, uploadPriceLog, deletePriceLog, markPriceLog, getSalesData, getCalcBase, getPriceRules, setSnapRule } from '../api';
@@ -218,12 +219,12 @@ function verdict(dir, goal, before, after, days) {
 }
 
 // Цель для всей группы: одна — показываем её; разные — по количеству. Выбор ставит всем.
-function GroupGoal({ g, onSet }) {
+function GroupGoal({ g, onSet, readOnly }) {
   const list = [...g.goals.entries()].sort((a, b) => b[1] - a[1]);
   const one = list.length === 1 ? list[0][0] : null;
   return (
     <span className="pl-ggoal" onClick={e => e.stopPropagation()}>
-      <select className="a-input pr-sel" value={one ?? '*'} onChange={e => { if (e.target.value !== '*') onSet(g.offers, e.target.value === '' ? null : e.target.value); }}>
+      <select className="a-input pr-sel" disabled={readOnly} value={one ?? '*'} onChange={e => { if (e.target.value !== '*') onSet(g.offers, e.target.value === '' ? null : e.target.value); }}>
         {one === null && <option value="*">разные…</option>}
         <option value="">— цель —</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
       </select>
@@ -236,7 +237,8 @@ const MIS = 3; // расхождение с ценой на сайте, %, пр�
 const lastSeg = c => (c || '').split(SEP).slice(-1)[0] || 'без категории';
 
 export default function PriceLog({ cabinet }) {
-  const platform = 'ozon';
+  const platform = cabinet === 'defly_wb' ? 'wb' : 'ozon';
+  const readOnly = useReadOnly();
   const [log, setLog] = useState(null);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState(null);
@@ -250,7 +252,7 @@ export default function PriceLog({ cabinet }) {
   const [catOf, setCatOf] = useState(new Map());
 
   const load = useCallback(() => getPriceLog(cabinet, platform).then(r => { setLog(r.data.data); return r.data.data; }).catch(e => setErr(e.response?.data?.error || e.message)), [cabinet]);
-  useEffect(() => { setSnapCache({}); load().then(d => { if (d?.snaps?.length) setSel(s => s || d.snaps[d.snaps.length - 1].id); }); }, [load]);
+  useEffect(() => { setSnapCache({}); load().then(d => { if (d?.snaps?.length) setSel(s => d.snaps.some(x => x.id === s) ? s : d.snaps.at(-1).id); }); }, [load]);
 
   const snaps = log?.snaps || [];
   const idx = snaps.findIndex(s => s.id === sel);
@@ -516,7 +518,7 @@ export default function PriceLog({ cabinet }) {
         <div className="a-top">
           <h1>Журнал цен</h1>
           <input className="a-input" aria-label="Поиск по журналу цен" placeholder="Артикул или категория" value={q} onChange={e => setQ(e.target.value)} style={{ width: 220 }} />
-          <span className="a-seg"><button type="button" className="on">Ozon · Дефлай</button><button type="button" disabled title="Добавим позже">WB — позже</button></span>
+          <span className="a-seg"><button type="button" className="on">{platform === 'wb' ? 'Wildberries' : 'Ozon'}</button></span>
           <span className="a-seg">{[['log', 'Журнал'], ['dyn', 'Динамика цен']].map(([k, t]) => <button key={k} type="button" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{t}</button>)}</span>
           <span className="a-hint" style={{ margin: 0 }}>{tab === 'log' ? 'цены для клиента из репрайсера, раз в неделю' : 'как меняются цены по категориям и артикулам'}</span>
         </div>
@@ -533,18 +535,18 @@ export default function PriceLog({ cabinet }) {
                 {dayjs(s.date).format('DD.MM.YY')}<b className="n">{s.fmt === 'two' ? s.up + s.down : s.n}</b>
               </button>
             ))}
-            {!snaps.length && <span className="muted">пока нет — загрузите первую выгрузку репрайсера</span>}
+            {!snaps.length && <span className="muted">{readOnly ? 'Нет снимков цен по доступным товарам' : 'пока нет — загрузите первую выгрузку репрайсера'}</span>}
           </span>
-          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          {!readOnly && <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
             <input className="a-input" type="date" value={upDate} onChange={e => setUpDate(e.target.value)} title="Дата, с которой действуют новые цены (обычно среда). Если выбрать сразу несколько файлов, дата берётся из имени каждого" />
             <label className={`a-btn ${busy ? 'dis' : ''}`} style={{ cursor: 'pointer' }}>{busy ? 'Загружаю…' : 'Загрузить цены'}<input type="file" multiple accept=".xlsx,.xls,.csv" style={{ display: 'none' }} disabled={busy} onChange={onFiles} /></label>
             {curMeta && <button type="button" className="a-btn ghost" title="Удалить этот снимок" onClick={() => { if (window.confirm(`Удалить снимок цен на ${dayjs(curMeta.date).format('DD.MM.YYYY')}?`)) deletePriceLog(cabinet, platform, curMeta.id).then(r => { setLog(l => ({ ...l, snaps: r.data.data.snaps })); setSel(r.data.data.snaps.at(-1)?.id || null); }); }}>×</button>}
-          </span>
+          </span>}
         </div>
-        <div className="a-hint" style={{ marginTop: 6 }}>
+        {!readOnly && <div className="a-hint" style={{ marginTop: 6 }}>
           Общий файл на все магазины: «Артикул · Defly · Alex · NABauto · Fullgas» — по колонке новых цен на магазин, пусто или 0 = без изменений; загружается сразу во все магазины, текущие цены («было») сервис берёт с сайта (плагин Соинвест). Подходит и выгрузка репрайсера «Артикул продавца · Название · Цена клиента на удержание · Новые цены».
           Прошлые недели можно догрузить: выберите сразу несколько файлов — дата возьмётся из имени («… 14.10.xlsx»).
-        </div>
+        </div>}
       </div>
 
       {curMeta && !ready && <div className="a-card pr-card"><div className="a-empty" style={{ padding: 20, textAlign: 'center' }}>Загрузка снимка…</div></div>}
@@ -586,7 +588,7 @@ export default function PriceLog({ cabinet }) {
                         <tr key={g.key} className={`pl-click ${fGroup === g.key ? 'pr-in-order' : ''}`} onClick={() => pickFilter('changed', fGroup === g.key ? '' : g.key)}>
                           <td><b className={g.kind === 'zero' ? 's-down' : g.kind === 'user' ? (g.sb > g.sa ? 's-up' : 's-down') : g.sort > 0 ? 's-up' : 's-down'}>{g.kind === 'user' ? <span className="pl-user" title="Своё правило">★ </span> : null}{g.label}</b>{g.details.size > 0 && <small className="pr-sub2">{topList(g.details, 4)}</small>}</td>
                           <td className="n r"><b>{g.n}</b></td>
-                          <td><GroupGoal g={g} onSet={(offers, goal) => mark(offers, goal, undefined)} /></td>
+                          <td><GroupGoal g={g} readOnly={readOnly} onSet={(offers, goal) => mark(offers, goal, undefined)} /></td>
                           <td className="pl-cats">{topList(g.cats)}</td>
                           <td className="n r">{rub(g.sa / g.n)}</td>
                           <td className="n r">{g.kind === 'zero' ? '0 ₽' : rub(g.sb / g.n)}</td>
@@ -644,14 +646,14 @@ export default function PriceLog({ cabinet }) {
               {[['changed', 'Изменённые'], ['all', 'Все']].map(([k, t]) => <button key={k} type="button" className={fKind === k ? 'on' : ''} onClick={() => setFKind(k)}>{t}</button>)}
             </span>
             {(fGroup || fCat) && <button type="button" className="s-chip on" onClick={() => { setFGroup(''); setFCat(''); }} title="Снять отбор">{fGroup ? ruleRows.find(g => g.key === fGroup)?.label : fCat} ×</button>}
-            {fGroup && ruleRows.find(g => g.key === fGroup) && <span className="pl-gg-lbl">цель всей группы: <GroupGoal g={ruleRows.find(g => g.key === fGroup)} onSet={(offers, goal) => mark(offers, goal, undefined)} /></span>}
+            {!readOnly && fGroup && ruleRows.find(g => g.key === fGroup) && <span className="pl-gg-lbl">цель всей группы: <GroupGoal g={ruleRows.find(g => g.key === fGroup)} onSet={(offers, goal) => mark(offers, goal, undefined)} /></span>}
             <select className="a-input" value={fGoal} onChange={e => setFGoal(e.target.value)} style={{ padding: '5px 8px' }}>
               <option value="">Все цели</option><option value="—">Без цели</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
             </select>
             <span className="muted" style={{ fontSize: 12.5 }}>{shown.length} арт.</span>
             <ResetCtl ctl={ctl} style={{ marginLeft: 'auto' }} />
           </div>
-          {picked.size > 0 && (
+          {!readOnly && picked.size > 0 && (
             <div className="pl-bulk">
               Выбрано {picked.size}:
               <select className="a-input" value={bulkGoal} onChange={e => setBulkGoal(e.target.value)}><option value="">цель…</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}<option value="-">снять цель</option></select>
@@ -668,7 +670,7 @@ export default function PriceLog({ cabinet }) {
           <div className="a-scroll">
             <table className="a-t pr-t">
               <thead><tr>
-                <th style={{ width: 28 }}><input type="checkbox" checked={vis.length > 0 && vis.every(r => picked.has(r.o))} onChange={e => setPicked(e.target.checked ? new Set(shown.map(r => r.o)) : new Set())} title="Выбрать все в списке" /></th>
+                <th style={{ width: 28 }}><input type="checkbox" disabled={readOnly} checked={vis.length > 0 && vis.every(r => picked.has(r.o))} onChange={e => setPicked(e.target.checked ? new Set(shown.map(r => r.o)) : new Set())} title="Выбрать все в списке" /></th>
                 <ThCtl ctl={ctl} k="o" className="" filter={false}>Артикул</ThCtl>
                 <ThCtl ctl={ctl} k="a">Было</ThCtl>
                 <ThCtl ctl={ctl} k="b">Стало</ThCtl>
@@ -684,7 +686,7 @@ export default function PriceLog({ cabinet }) {
                 {!vis.length && <tr><td colSpan={11} className="muted" style={{ padding: 14 }}>{two || prev ? 'Ничего не подходит под фильтр' : 'Изменения появятся после второй загрузки'}</td></tr>}
                 {vis.map(r => (
                   <tr key={r.o} className={`${picked.has(r.o) ? 'pr-in-order' : ''} ${r.mis ? 'pl-mis' : ''}`}>
-                    <td><input type="checkbox" checked={picked.has(r.o)} onChange={() => togglePick(r.o)} /></td>
+                    <td><input type="checkbox" disabled={readOnly} checked={picked.has(r.o)} onChange={() => togglePick(r.o)} /></td>
                     <td><div className="a-art" style={{ cursor: 'pointer' }} onClick={() => openHist(r.o)} title="История цены и заказов"><div style={{ minWidth: 0 }}><div className="id">{r.o}</div><div className="model" title={r.cat}>{r.cat1}</div></div></div></td>
                     <td className="n r">{rub(r.a)}{r.drift ? <small className="pr-sub2 s-warn" title="Цена в прошлой загрузке («стало») — между загрузками цену меняли">в прошлой загрузке {rub(r.drift)}</small> : null}</td>
                     <td className="n r"><b>{r.kind === 'zero' ? <span className="s-down">0 ₽</span> : rub(r.b)}</b></td>
@@ -694,10 +696,10 @@ export default function PriceLog({ cabinet }) {
                     <td className="n r">{daysAfter > 0 ? <>{fmtInt(r.after)}{r.before > 0 && daysAfter >= 3 ? <small className={`pr-sub2 ${r.afterN >= r.before ? 's-up' : 's-down'}`}>{f1((r.afterN / r.before - 1) * 100)}</small> : <small className="pr-sub2">за {daysAfter} дн</small>}</> : '…'}</td>
                     <td className={`n r ${r.mis ? 'pl-bad' : ''}`}>{r.st?.card ? <span title={`с Ozon-картой ${rub(r.st.card)}${r.st.noCard ? `, без карты ${rub(r.st.noCard)}` : ''}, проверено ${r.st.at || '—'}${r.st.stored ? ' (запомнено при загрузке, против «было»)' : ''}`}>{rub(r.st.card)}{r.off !== null ? <small className={`pr-sub2 ${r.mis ? 's-down' : ''}`}>{r.mis ? 'расходится ' : ''}{f1(r.off)}</small> : null}</span> : '—'}</td>
                     <td className="pr-l pl-gl" style={{ minWidth: 220 }}>
-                      <select className="a-input pr-sel" value={r.goal} onChange={e => mark([r.o], e.target.value || null, undefined)}>
+                      <select className="a-input pr-sel" disabled={readOnly} value={r.goal} onChange={e => mark([r.o], e.target.value || null, undefined)}>
                         <option value="">— цель —</option>{GOALS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
                       </select>
-                      <input className="a-input pl-note" defaultValue={r.note} key={sel + r.o + r.note} placeholder="заметка" onBlur={e => { if (e.target.value !== r.note) mark([r.o], undefined, e.target.value || null); }} />
+                      <input className="a-input pl-note" readOnly={readOnly} defaultValue={r.note} key={sel + r.o + r.note} placeholder="заметка" onBlur={e => { if (e.target.value !== r.note) mark([r.o], undefined, e.target.value || null); }} />
                     </td>
                     <td className="pr-l" style={{ whiteSpace: 'normal', minWidth: 220 }}>{r.v ? <span className={`pr-sig ${r.v.cls}`} style={{ whiteSpace: 'normal' }}>{r.v.t}</span> : <span className="muted">—</span>}</td>
                   </tr>

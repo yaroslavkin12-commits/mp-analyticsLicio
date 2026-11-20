@@ -151,8 +151,9 @@ router.get('/arts', async (req, res) => {
 
 // Ручные группы запросов: app_settings query_groups:<кабинет> = { запрос: группа }.
 const GROUP_KEYS = ['target', 'model', 'type', 'other'];
-async function loadGroups(cabinet) {
-  const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [`query_groups:${cabinet}`]).catch(() => []);
+const articleGroupKey = (cabinet, offer) => `query_groups_article:${cabinet}:${offer}`;
+async function loadGroups(cabinet, offer) {
+  const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [offer === undefined ? `query_groups:${cabinet}` : articleGroupKey(cabinet, offer)]).catch(() => []);
   try { return JSON.parse(rows[0]?.value || '{}') || {}; } catch (e) { return {}; }
 }
 
@@ -178,7 +179,7 @@ router.get('/article', async (req, res) => {
     res.json({ success: true, data: {
       offerId, name: cat.find(r => r.product_name)?.product_name || '', from, to,
       rows: rows.map(r => [r.d, r.query, r.p == null ? null : r2(num(r.p)), num(r.s), num(r.v), num(r.c), num(r.o), Math.round(num(r.r))]),
-      groups: await loadGroups(cabinet),
+      groups: { ...await loadGroups(cabinet), ...await loadGroups(cabinet, offerId) },
       freq: await loadFreq(cabinet),
     } });
   } catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
@@ -206,6 +207,14 @@ router.post('/groups', async (req, res) => {
   try {
     const { cabinet = 'defly', query: q, group } = req.body || {};
     if (!q || (group != null && !GROUP_KEYS.includes(group))) return res.status(400).json({ success: false, error: 'Нужны запрос и группа' });
+    if (req.categoryContext) {
+      if (typeof q !== 'string' || q.length > 200 || !q.trim()) return res.status(400).json({success:false,error:'Неверный запрос'});
+      const key = articleGroupKey(cabinet, req.body.offerId);
+      const [row] = await query(`INSERT INTO app_settings (key,value) VALUES ($1,$2)
+          ON CONFLICT (key) DO UPDATE SET value=((app_settings.value::jsonb - $3::text) || EXCLUDED.value::jsonb)::text
+          RETURNING value`, [key, JSON.stringify(group == null ? {} : {[q]:group}), q]);
+      return res.json({success:true,data:JSON.parse(row.value)});
+    }
     const g = await loadGroups(cabinet);
     if (group == null) delete g[q]; else g[String(q).slice(0, 200)] = group;
     await query(`INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [`query_groups:${cabinet}`, JSON.stringify(g)]);

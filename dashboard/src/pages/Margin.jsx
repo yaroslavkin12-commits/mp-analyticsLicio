@@ -1,3 +1,4 @@
+import { useReadOnly } from '../lib/AccessContext';
 import { accessStorage } from '../lib/accessClient';
 import SetMark from '../components/SetMark';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -166,15 +167,16 @@ export default function Margin({ cabinet }) {
   }, [cabinet]);
   // Ручное обновление цен: Google-скрипт выгружает свежие цены и комиссии из Ozon
   // в таблицу, сервис их забирает и пересчитывает страницу.
+  const readOnly = useReadOnly();
   const [refr, setRefr] = useState({ busy: false, msg: '' });
   const doRefresh = async () => {
     setRefr({ busy: true, msg: 'Обновляем цены…' });
     try {
-      const f = await refreshPrices(cabinet);
-      const r = await getCalcBase(cabinet, true);
+      const f = readOnly ? null : await refreshPrices(cabinet);
+      const r = await getCalcBase(cabinet, !readOnly);
       setData(r.data.data);
-      const t = f.data.data?.checkedAt ? new Date(f.data.data.checkedAt) : null;
-      setRefr({ busy: false, msg: t ? `Цены из Ozon на ${t.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : 'Цены обновлены' });
+      const t = f?.data.data?.checkedAt ? new Date(f.data.data.checkedAt) : null;
+      setRefr({ busy: false, msg: t ? `Цены из Ozon на ${t.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : readOnly ? 'Отчёт обновлён' : 'Цены обновлены' });
     } catch (e) {
       setRefr({ busy: false, msg: `Не удалось обновить: ${e.response?.data?.error || e.message}` });
     }
@@ -462,7 +464,7 @@ export default function Margin({ cabinet }) {
   return (
     <div className="mpui sa-page">
       <FinHeader title="Цены и маржа" cats={cats} sel={sel} setSel={setSel} search={search} setSearch={setSearch} grp={grp}>
-        <button type="button" className="a-btn" onClick={doRefresh} disabled={refr.busy} title="Забрать свежие цены и комиссии (Google-скрипт выгружает их из Ozon каждые 30 минут)">{refr.busy ? '↻ обновляем…' : '↻ Обновить цены'}</button>
+        <button type="button" className="a-btn" onClick={doRefresh} disabled={refr.busy} title={readOnly ? 'Перечитать сохранённые цены и комиссии' : 'Забрать свежие цены и комиссии'}>{refr.busy ? '↻ обновляем…' : '↻ Обновить цены'}</button>
         {refr.msg && <span className="a-hint" style={{ maxWidth: 360 }}>{refr.msg}</span>}
         <label className="a-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>целевая маржа
           <input className="a-input" type="number" min="0" max="80" value={target} onChange={e => setTarget(Math.max(0, Number(e.target.value) || 0))} style={{ width: 60, padding: '4px 8px' }} />%

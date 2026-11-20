@@ -1,6 +1,6 @@
 import AdHypotheses from './AdHypotheses';
 import FloatingInfo from '../components/FloatingInfo';
-import { accessStorage } from '../lib/accessClient';
+import { accessStorage, readPersonalOrder, savePersonalOrder } from '../lib/accessClient';
 import { useReadOnly } from '../lib/AccessContext';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
@@ -895,6 +895,7 @@ function AdKinds({ cpcAll, cpo, cpoOn }) {
 // Кабинет страницы — для сохранения цели ДРР из списка кампаний.
 const CAB_CTX = { cabinet: null };
 function TargetInput({ c }) {
+  const readOnly = useReadOnly();
   const [v, setV] = useState(c.targetDrr ? String(c.targetDrr).replace('.', ',') : '');
   const [st, setSt] = useState('');
   const save = () => {
@@ -907,7 +908,7 @@ function TargetInput({ c }) {
   };
   return (
     <span className="a-target" title="Цель ДРР, которую вы поставили в стратегии «Целевой расход» в кабинете Ozon (Ozon её в API не отдаёт)">
-      цель ДРР <input value={v} onChange={e => setV(e.target.value)} onBlur={save} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} placeholder="—" />% {st}
+      цель ДРР {readOnly ? (c.targetDrr || '—') : <input value={v} onChange={e => setV(e.target.value)} onBlur={save} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} placeholder="—" />}% {st}
     </span>
   );
 }
@@ -1062,10 +1063,10 @@ function Detail({ cabinet, unitCoefficients, taxPct, articles, dates, mode, even
         {!isAggregate && offerId && groups && (
           <span className="a-dh-grp">
             <select className="a-sel" value={currentGroupId || ''} onChange={e => onAssignGroup(offerId, e.target.value || null)} title="Группа">
-              <option value="" disabled={readOnly}>{readOnly ? 'Выберите группу' : 'Без группы'}</option>
+              <option value="">Без группы</option>
               {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
-            {!readOnly && activeGroupId && currentGroupId === activeGroupId && (
+            {currentGroupId && (!activeGroupId || currentGroupId === activeGroupId) && (
               <button type="button" className="a-btn" onClick={() => onAssignGroup(offerId, null)}>Убрать из группы</button>
             )}
           </span>
@@ -1106,14 +1107,14 @@ function Detail({ cabinet, unitCoefficients, taxPct, articles, dates, mode, even
       <div className="a-box wide">
         <h4>По дням
           <span className="a-hint">свежие дни справа · «×» — был расход, заказов не было</span>
-          {!isAggregate && mode === 'all' && (
+          {!readOnly && !isAggregate && mode === 'all' && (
             <button type="button" className="a-toggle" style={{ marginLeft: 'auto' }} onClick={() => setEditMode(v => !v)}>
               <span className={`a-sw ${editMode ? 'on' : ''}`} />Режим правки
             </button>
           )}
         </h4>
         <DaysTable showPrices testPeriod={testPeriod} dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
-          onManualSave={offerId ? (d, k, v) => onManualSave(offerId, d, k, v) : null} />
+          onManualSave={!readOnly && offerId ? (d, k, v) => onManualSave(offerId, d, k, v) : null} />
       </div>
       <div className="a-box wide">
         <h4>Динамика по дням
@@ -1467,6 +1468,8 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
   const [groupError, setGroupError] = useState('');
   const [groupsData, setGroupsData] = useState({ groups: [], members: {} });
   const [manualOrder, setManualOrder] = useState([]);
+  const [groupOrder, setGroupOrder] = useState([]);
+  const rowOrderKey = 'ads-row-order:' + cabinet, groupOrderKey = 'ads-group-order:' + cabinet;
   const [transit, setTransit] = useState({}); // «В пути», шт — ручной ввод
   const [catalog, setCatalog] = useState([]);
   const [clusters, setClusters] = useState([]);
@@ -1503,10 +1506,13 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
 
   useEffect(() => {
     getAdsGroups(cabinet).then(r => setGroupsData(r.data.data || { groups: [], members: {} })).catch(() => {});
-    getAdsOrder(cabinet).then(r => setManualOrder(r.data.data || [])).catch(() => {});
+    const personal = readOnly && readPersonalOrder(rowOrderKey);
+    if (personal) setManualOrder(personal);
+    else getAdsOrder(cabinet).then(r => setManualOrder(r.data.data || [])).catch(() => {});
+    setGroupOrder(readOnly ? readPersonalOrder(groupOrderKey) || [] : []);
     getAdsCatalog(cabinet).then(r => setCatalog(r.data.data || [])).catch(() => {});
     getSiblingClusters(cabinet).then(r => setClusters(r.data.data || [])).catch(() => {});
-  }, [cabinet]);
+  }, [cabinet, readOnly, rowOrderKey, groupOrderKey]);
 
   useEffect(() => {
     let alive = true;
@@ -1520,7 +1526,11 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
   const articlesRaw = useMemo(() => (data?.articles || []).filter(a => a.offerId), [data]);
   const artOpts = useMemo(() => articlesRaw.map(a => ({ o: a.offerId, n: a.productName })), [articlesRaw]);
   useEffect(() => { setArtOpts(artOpts); }, [artOpts, setArtOpts]);
-  const groups = groupsData.groups;
+  const groups = useMemo(() => {
+    if (!readOnly || !groupOrder.length) return groupsData.groups;
+    const positions = new Map(groupOrder.map((id, index) => [id, index]));
+    return [...groupsData.groups].sort((a,b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity));
+  }, [groupsData.groups, groupOrder, readOnly]);
   const members = groupsData.members;
   const activeGroup = tab !== 'all' ? groups.find(g => g.id === tab) : null;
   // Категории — как на других вкладках (вкладка 'cat:<путь>'), рядом с группами.
@@ -1649,7 +1659,8 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
     slots.forEach((slot, k) => { next[slot] = nextVisible[k]; });
     for (const id of nextVisible) if (!next.includes(id)) next.push(id);
     setManualOrder(next);
-    saveAdsOrder(cabinet, next).catch(console.error);
+    if (readOnly) savePersonalOrder(rowOrderKey, next);
+    else saveAdsOrder(cabinet, next).catch(console.error);
   }
   function reorderTabs(dragged, target) {
     if (!dragged || dragged === target) return;
@@ -1657,6 +1668,11 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
     const from = ids.indexOf(dragged), to = ids.indexOf(target);
     if (from === -1 || to === -1) return;
     ids.splice(from, 1); ids.splice(to, 0, dragged);
+    if (readOnly) {
+      setGroupOrder(ids);
+      savePersonalOrder(groupOrderKey, ids);
+      return;
+    }
     const byId = new Map(groups.map(g => [g.id, g]));
     setGroupsData(prev => ({ ...prev, groups: ids.map(id => byId.get(id)) }));
     reorderAdsGroups(cabinet, ids).catch(console.error);
@@ -1677,7 +1693,12 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
     e.preventDefault();
     const name = (newGroup || '').trim();
     if (!name) return;
-    addAdsGroup(cabinet, name).then(r => { setGroupsData(r.data.data); setNewGroup(null); }).catch(err => window.alert(err.response?.data?.error || 'Не удалось создать группу'));
+    addAdsGroup(cabinet, name).then(r => {
+      const created = r.data.data.groups.filter(g => g.name === name.slice(0, 100) && !groups.some(old => old.id === g.id)).at(-1);
+      setGroupsData(r.data.data);
+      if (created) setTab(created.id);
+      setNewGroup(null);
+    }).catch(err => window.alert(err.response?.data?.error || 'Не удалось создать группу'));
   }
   function createFromCluster(primary) {
     const c = clusters.find(x => x.primary === primary);
@@ -1804,7 +1825,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
                 <div className="id">{a.offerId}</div>
                 <div className="model" title={a.productName || ''}>{shortModel(a.productName)}</div>
               </div>
-              {!readOnly && isGroup && members[a.offerId] === tab && (
+              {isGroup && members[a.offerId] === tab && (
                 <button type="button" className="a-ungroup" title={`Убрать из группы «${activeGroup.name}»`}
                   onClick={e => { e.stopPropagation(); if (window.confirm(`Убрать ${a.offerId} из группы «${activeGroup.name}»?`)) assignGroup(a.offerId, null); }}>×</button>
               )}
@@ -1886,7 +1907,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
 
       </>} actions={<>
           {newGroup === null ? (
-            readOnly ? null : <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
+            <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
           ) : (
             <form onSubmit={createGroup} style={{ display: 'flex', gap: 6 }}>
               <input className="a-input" autoFocus value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Название, напр. Haval M6"

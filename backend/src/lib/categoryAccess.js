@@ -2,7 +2,7 @@ const { query } = require('../db');
 const { CABINETS, familyOf } = require('../config/cabinets');
 const { autoPath, OV_SQL, overrideArgs } = require('./categories');
 const SEP = ' / ';
-const PAGES = ['summary','plan','geo','search','costs','sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator'];
+const PAGES = ['summary','plan','geo','search','costs','sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator','pricelog'];
 const ROOTS = ['Чехлы','Дефлекторы','Утеплители','Аксессуары','Одежда'];
 function normalize(value) {
   if (value == null) return null;
@@ -137,6 +137,13 @@ function projection(path, data, ctx) {
     if(data?._categoryFiltered!==true)throw Error('Нужна фильтрация конкурентов');
     return data.result;
   }
+  if (path === '/finance/ops') {
+    return { ...pick(data,['dates']), rows: (data.rows || []).filter(row => row[2] != null && ctx.allowed.has(String(row[2]))) };
+  }
+  if (['/pricelog','/pricelog/snap','/pricelog/history','/pricelog/rules'].includes(path)) {
+    if (data?._categoryFiltered !== true) throw Error('Нужна фильтрация журнала цен');
+    return data.result;
+  }
   if(path==='/competitors/tracking')return pick(data,['queries','regions','allRegions']);
   if(path==='/sales/costs')return {_wb:data._wb,items:(data.items||[]).filter(r=>ctx.allowed.has(String(r.offerId))).map(r=>({...pick(r,['offerId','name','cost','updatedAt','orders30','avgPrice30','stock']),category:ctx.allowed.get(String(r.offerId)).path})),order:[...new Set([...ctx.allowed.values()].map(a=>a.path.split(SEP)[0]))]};
   if (path === '/promo/stats') return ads(data,ctx);
@@ -148,14 +155,17 @@ function projection(path, data, ctx) {
   if (path === '/competitors/product-ratings') return filterMap(data,ctx);
   if (['/promo/groups','/promo/groups/assign'].includes(path)) {
     const members = filterMap(data.members,ctx), ids = new Set(Object.values(members));
-    return { members, groups: (data.groups || []).filter(g => ids.has(g.id)).map(g => pick(g,['id','name','color'])) };
+    return { members, groups: (data.groups || []).filter(g => (ids.has(g.id) || (ctx.userId != null && ctx.userId === g.createdBy))).map(g => pick(g,['id','name','color'])) };
   }
   if (path === '/sales/sewing') return {items:filterMap(data.items,ctx)};
   if (['/promo/transit','/sales/skus'].includes(path)) return filterMap(data,ctx);
   if (path === '/promo/order') return (data || []).filter(o => ctx.allowed.has(String(o)));
   if (path === '/promo/events') return require('./scopedAdEvents').scopedAdEvents(data, ctx.allowed);
   if (path === '/pricelog/dynamics') return { ...pick(data,['from','to','days']), items: filterMap(data.items,ctx) };
-  if (path === '/sales/builder-templates') return {templates:[]}; // общие шаблоны могут содержать списки чужих артикулов
+  if (path === '/sales/builder-templates') {
+    if (data?._categoryFiltered !== true) throw Error('Нужен личный шаблон сотрудника');
+    return {templates:data.templates ?? null};
+  }
   if (path === '/finance/buyer-share') return { periods: (data?.periods || []).map(p => ({ ...pick(p,['from','to','total','at']), byOffer: filterMap(p.byOffer,ctx) })) };
   if (path === '/settings/tax') return pick(data,['cabinet','enabled','rate','effectiveRate','configured']);
   if (path === '/promo/data-status') return { ...pick(data,['automatic']), running: false, jobs: (data.jobs || []).map(j=>pick(j,['job','everyMin','lastSuccessAt'])) };
@@ -166,7 +176,7 @@ function routeOf(path) {
   const normalized = path.toLowerCase().replace(/\/+$/, '').replace(/^\/api\/wb\/views/, '/api').replace(/^\/api\/ads(?=\/)/, '/api/promo');
   return normalized.replace(/^\/api/, '');
 }
-const EXTRA = ['/sales/daily-prices','/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/catalog','/competitors/product-ratings','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
+const EXTRA = ['/finance/ops','/pricelog','/pricelog/snap','/pricelog/history','/pricelog/rules','/sales/daily-prices','/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/catalog','/competitors/product-ratings','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
 function middleware() {
   return async (req,res,next) => {
     if (req.user?.accessScope == null || !/^\/api(?:\/|$)/i.test(req.path)) return next();
@@ -194,13 +204,19 @@ function middleware() {
     const journalWrite = !/^\/api\/wb\/views/i.test(req.path) && ((req.method === 'POST' && path === '/promo/events') || (req.method === 'DELETE' && /^\/promo\/events\/\d+$/.test(path)));
     const groupAssignment = req.method === 'POST' && path === '/promo/groups/assign';
     const competitorWrite = /^\/api\/competitors\/?$/i.test(req.path) && ['POST', 'DELETE'].includes(req.method);
-    if (!read && !journalWrite && !competitorWrite && !groupAssignment) return res.status(403).json({ success:false, error:'Доступ только для просмотра и выгрузки' });
+    const groupCreate = req.method === 'POST' && path === '/promo/groups';
+    const transitWrite = req.method === 'POST' && path === '/promo/transit';
+    const templateWrite = req.method === 'POST' && path === '/sales/builder-templates';
+    const orderWrite = req.method === 'POST' && path === '/orders/self';
+    const queryWrite = req.method === 'POST' && ['/queries/groups','/competitors/tracking'].includes(path);
+    const scopedWrite = groupAssignment || groupCreate || transitWrite || templateWrite || orderWrite || queryWrite;
+    if (!read && !journalWrite && !competitorWrite && !scopedWrite) return res.status(403).json({ success:false, error:'Доступ только для просмотра и выгрузки' });
     const scope = publicScope(req.user.accessScope);
     if (path === '/promo/cabinets') {
       const list = require('../config/cabinets').listCabinets().filter(c => scope.cabinets.includes(c.id));
       return res.json({ success:true, data:list.map(c => pick(c,['id','label','platform','family','connected'])) });
     }
-    if (!journalWrite && !groupAssignment && !INDEXED[path] && !EXTRA.includes(path)) return res.status(403).json({ success:false, error:'Этот раздел недоступен в вашем профиле' });
+    if (!journalWrite && !scopedWrite && !INDEXED[path] && !EXTRA.includes(path)) return res.status(403).json({ success:false, error:'Этот раздел недоступен в вашем профиле' });
     if(['/sales/summary','/plan/ozon','/plan/ozon/execution'].includes(path)){
       try{
         const requested=path==='/sales/summary'?(req.query.cabinet==='licio'?'licio':'marketplaces'):(req.query.scope||'ozon');
@@ -211,13 +227,17 @@ function middleware() {
         return filtered({contexts:req.categoryContexts});
       }catch{return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'});}
     }
-    const cabinet = (journalWrite || competitorWrite || groupAssignment) && req.method === 'POST' ? req.body?.cabinet : (req.query.cabinet === undefined ? 'defly' : req.query.cabinet);
+    const cabinet = (journalWrite || competitorWrite || scopedWrite) && req.method === 'POST' ? req.body?.cabinet : (req.query.cabinet === undefined ? 'defly' : req.query.cabinet);
     if (typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || (/^\/api\/wb\/views/i.test(req.path) && cabinet !== 'defly_wb')) return res.status(403).json({ success:false, error:'Нет доступа к этому кабинету' });
+    if (queryWrite && cabinet === 'defly_wb') return res.status(403).json({success:false,error:'Поисковые запросы WB недоступны'});
     try {
       const ctx = await context(cabinet,scope);
-      if (groupAssignment && (typeof req.body?.offerId !== 'string' || !ctx.allowed.has(req.body.offerId)
-        || typeof req.body?.groupId !== 'string' || !req.body.groupId)) {
-        return res.status(403).json({success:false,error:'Выберите доступный артикул и группу'});
+      ctx.userId = req.user.id;
+      if ((groupAssignment || transitWrite || queryWrite) && !ctx.allowed.has(req.body?.offerId)) {
+        return res.status(403).json({success:false,error:'Нет доступа к этому товару'});
+      }
+      if (groupAssignment && req.body.groupId !== null && (typeof req.body.groupId !== 'string' || !req.body.groupId)) {
+        return res.status(400).json({success:false,error:'Выберите группу'});
       }
       if (competitorWrite) {
         const offerId = req.method === 'POST' ? req.body?.offerId : req.query.offerId;
@@ -228,12 +248,16 @@ function middleware() {
         res.set('Cache-Control', 'no-store');
         return next();
       }
-      if(['/queries/article','/queries/series','/competitors','/competitors/serp','/competitors/tracking'].includes(path) &&
+      if(!queryWrite && ['/queries/article','/queries/series','/competitors','/competitors/serp','/competitors/tracking'].includes(path) &&
         (typeof req.query.offerId !== 'string' || !ctx.allowed.has(req.query.offerId)))return res.status(403).json({success:false,error:'Нет доступа к этому товару'});
       req.categoryContext=ctx;
       if (journalWrite) {
         if (req.method === 'POST' && (typeof req.body?.offerId !== 'string' || !ctx.allowed.has(req.body.offerId))) return res.status(403).json({success:false,error:'Выберите доступный товар для заметки'});
         return next(); // Удаление дополнительно ограничено разрешёнными артикулами в самом SQL.
+      }
+      if (orderWrite || queryWrite || templateWrite) {
+        res.set('Cache-Control', 'no-store');
+        return next();
       }
       return filtered(ctx);
     } catch { return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'}); }
@@ -242,8 +266,8 @@ function middleware() {
       res.set('Cache-Control','no-store');
       res.json = body => {
         res.set('Cache-Control','no-store'); res.set('Vary','Cookie');
-        if (res.statusCode >= 400 || !body?.success) return json({ success:false, error:groupAssignment
-          ? 'Не удалось добавить артикул. Проверьте доступ к группе и обновите отчёт.'
+        if (res.statusCode >= 400 || !body?.success) return json({ success:false, error:(groupAssignment || groupCreate)
+          ? 'Не удалось сохранить группу. Проверьте доступ и обновите отчёт.'
           : 'Не удалось получить данные разрешённых категорий' });
         try { return json({ success:true, data:projection(path,body.data,ctx) }); }
         catch { return res.status(403).type('json').send(JSON.stringify({ success:false,error:'Раздел временно недоступен для ограниченного профиля' })); }

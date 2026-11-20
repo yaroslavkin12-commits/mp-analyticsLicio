@@ -284,15 +284,25 @@ router.post('/transit', async (req, res) => {
     const { cabinet, offerId, qty, date } = req.body || {};
     if (!cabinet || !offerId) return res.status(400).json({ success: false, error: 'cabinet и offerId обязательны' });
     const key = `ads_transit:${cabinet}`, o = String(offerId).slice(0, 128);
-    const rows = await query('SELECT value FROM app_settings WHERE key=$1', [key]);
-    const m = rows[0] ? JSON.parse(rows[0].value) : {};
-    const cur = typeof m[o] === 'number' ? { q: m[o] } : { ...(m[o] || {}) };
-    if (qty !== undefined) { const n = Math.round(Number(qty)); if (Number.isFinite(n) && n > 0) cur.q = n; else delete cur.q; }
-    if (date !== undefined) { if (/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) cur.d = date; else delete cur.d; }
-    if (cur.q || cur.d) m[o] = cur; else delete m[o];
-    await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [key, JSON.stringify(m)]);
-    res.json({ success: true, data: m });
+    const patch = {}, remove = [];
+    if (qty !== undefined) {
+      const n = Math.round(Number(qty));
+      if (Number.isFinite(n) && n > 0) patch.q = n;
+      remove.push('q');
+    }
+    if (date !== undefined) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) patch.d = date;
+      remove.push('d');
+    }
+    const [row] = await query(`INSERT INTO app_settings (key, value, updated_at)
+      VALUES ($1, jsonb_build_object($2::text, $3::jsonb)::text, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = jsonb_set(app_settings.value::jsonb, ARRAY[$2::text],
+        (((CASE jsonb_typeof(app_settings.value::jsonb->$2::text)
+            WHEN 'object' THEN app_settings.value::jsonb->$2::text
+            WHEN 'number' THEN jsonb_build_object('q', app_settings.value::jsonb->$2::text)
+            ELSE '{}'::jsonb END) - $4::text[]) || $3::jsonb))::text, updated_at = NOW()
+      RETURNING value`, [key, o, JSON.stringify(patch), remove]);
+    res.json({ success: true, data: JSON.parse(row.value) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -365,11 +375,12 @@ router.post('/groups', async (req, res) => {
     if (!cabinet || !name || !String(name).trim()) {
       return res.status(400).json({ success: false, error: 'Нужны cabinet и name' });
     }
-    const { groups, members } = await loadAdsGroups(cabinet);
-    const id = `${Date.now()}`;
-    groups.push({ id, name: String(name).trim() });
-    await saveAdsGroupsSetting(`ads_groups:${cabinet}`, groups);
-    res.json({ success: true, data: { groups, members } });
+    const group = { id: require('crypto').randomUUID(), name: String(name).trim().slice(0, 100) };
+    if (req.categoryContext) group.createdBy = req.categoryContext.userId;
+    await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = (app_settings.value::jsonb || EXCLUDED.value::jsonb)::text, updated_at = NOW()`,
+    [`ads_groups:${cabinet}`, JSON.stringify([group])]);
+    res.json({ success: true, data: await loadAdsGroups(cabinet) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -410,7 +421,8 @@ router.post('/groups/assign', async (req, res) => {
     if (groupId && !groups.some(group => group.id === groupId)) {
       return res.status(404).json({ success: false, error: 'Группа не найдена' });
     }
-    if (ctx && !Object.entries(members).some(([offer, id]) => id === groupId && ctx.allowed.has(offer))) {
+    if (ctx && groupId && !groups.some(g => g.id === groupId && g.createdBy === ctx.userId)
+      && !Object.entries(members).some(([offer, id]) => id === groupId && ctx.allowed.has(offer))) {
       return res.status(403).json({ success: false, error: 'Нет доступа к группе' });
     }
     const patch = JSON.stringify(groupId ? { [offerId]: groupId } : {});

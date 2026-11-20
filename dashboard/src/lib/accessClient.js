@@ -22,13 +22,27 @@ export function canWriteScoped(cfg) {
   if (method === 'delete' && /^\/ad-hypotheses\/[1-9]\d{0,17}$/.test(cfg.url)) return true;
   const cabinet = cfg.params?.cabinet || cfg.data?.cabinet;
   if (method === 'post' && cfg.url === '/promo/groups/assign') {
-    return typeof cfg.data?.offerId === 'string' && typeof cfg.data?.groupId === 'string' && Boolean(cfg.data.groupId);
+    return typeof cfg.data?.offerId === 'string' && (cfg.data.groupId === null || (typeof cfg.data.groupId === 'string' && Boolean(cfg.data.groupId)));
   }
+  if (method === 'post' && ['/promo/groups','/promo/transit','/sales/builder-templates','/orders/self'].includes(cfg.url)) return true;
   if (cabinet === 'defly_wb') return false;
+  if (method === 'post' && ['/queries/groups','/competitors/tracking'].includes(cfg.url)) {
+    return typeof cfg.data?.offerId === 'string' && Boolean(cfg.data.offerId) && cfg.data.regions === undefined;
+  }
   if (cfg.url === '/competitors' && ['post', 'delete'].includes(method)) {
     const input = method === 'post' ? cfg.data : cfg.params;
     return typeof input?.offerId === 'string' && !!input.offerId.trim();
   }
   if (method === 'post' && /^\/(ads|promo)\/events$/.test(cfg.url)) return typeof cfg.data?.offerId === 'string' && !!cfg.data.offerId.trim();
   return method === 'delete' && /^\/(ads|promo)\/events\/\d+$/.test(cfg.url);
+}
+
+export function readPersonalOrder(key) {
+  try {
+    const order = JSON.parse(accessStorage.getItem(key) || 'null');
+    return Array.isArray(order) ? order : null;
+  } catch { return null; }
+}
+export function savePersonalOrder(key, order) {
+  try { accessStorage.setItem(key, JSON.stringify(order)); } catch { /* без сохранения в браузере */ }
 }

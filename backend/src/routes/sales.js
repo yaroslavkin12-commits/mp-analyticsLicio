@@ -490,7 +490,11 @@ router.post('/category', async (req, res) => {
 // ── Шаблоны конструктора таблицы (общие для всех устройств) ──
 // GET  /api/sales/builder-templates?cabinet= → { templates: { name: {...} } }
 // POST /api/sales/builder-templates { cabinet, templates } — список целиком.
-const tplKey = c => `builder-tpl:${c}`;
+const tplKey = (c, ctx) => {
+  if (!ctx) return `builder-tpl:${c}`;
+  const hash = require('crypto').createHash('sha256').update(JSON.stringify([...ctx.scope.paths].sort())).digest('hex');
+  return `builder-tpl:user:${ctx.userId}:${c}:${hash}`;
+};
 // GET /skus?cabinet= — артикул → SKU Ozon (для ссылки на карточку товара).
 router.get('/skus', async (req, res) => {
   try {
@@ -506,8 +510,8 @@ router.get('/skus', async (req, res) => {
 router.get('/builder-templates', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';
-    const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [tplKey(cabinet)]);
-    res.json({ success: true, data: { templates: rows[0] ? JSON.parse(rows[0].value) : null } });
+    const rows = await query(`SELECT value FROM app_settings WHERE key = $1`, [tplKey(cabinet, req.categoryContext)]);
+    res.json({ success: true, data: { templates: rows[0] ? JSON.parse(rows[0].value) : null, ...(req.categoryContext && {_categoryFiltered:true}) } });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 router.post('/builder-templates', async (req, res) => {
@@ -517,7 +521,7 @@ router.post('/builder-templates', async (req, res) => {
     const str = JSON.stringify(templates);
     if (str.length > 500000) return res.status(400).json({ success: false, error: 'Слишком много шаблонов' });
     await query(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1, $2, NOW())
-      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [tplKey(cabinet), str]);
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [tplKey(cabinet, req.categoryContext), str]);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });

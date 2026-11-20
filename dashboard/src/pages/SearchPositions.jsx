@@ -284,10 +284,9 @@ function FreqTag({ f }) {
   return <span className={`sp-fq fq-${f}`} title={FREQ.find(x => x.key === f)?.title}>{FREQ_LABEL[f]}</span>;
 }
 function TargetBox({ x, onToggle }) {
-  const readOnly=useReadOnly();
   return (
-    <input type="checkbox" className="sp-tg" disabled={readOnly} checked={x.t} onChange={() => onToggle(x)}
-      title={readOnly?'Целевой запрос':x.manual ? 'Отмечено вами. Снимите или поставьте галочку, чтобы поменять' : 'Подсказка по названию товара — поставьте или снимите галочку, чтобы закрепить вручную'}
+    <input type="checkbox" className="sp-tg" checked={x.t} onChange={() => onToggle(x)}
+      title={x.manual ? 'Отмечено вами. Снимите или поставьте галочку, чтобы поменять' : 'Подсказка по названию товара — поставьте или снимите галочку, чтобы закрепить вручную'}
       style={x.manual ? undefined : { opacity: 0.55 }} />
   );
 }
@@ -307,10 +306,11 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const [track, setTrack] = useState({ queries: [], regions: ['Москва'], allRegions: [] });
   useEffect(() => { getSerpTracking(cabinet, offer).then(r => setTrack(r.data.data)).catch(() => {}); }, [cabinet, offer]);
   const toggleTrack = async q => {
-    if(readOnly)return;
     const on = !track.queries.includes(q);
     setTrack(t => ({ ...t, queries: on ? [...t.queries, q] : t.queries.filter(x => x !== q) }));
-    await saveSerpTracking(cabinet, { offerId: offer, query: q, on }).catch(() => {});
+    try { await saveSerpTracking(cabinet, { offerId: offer, query: q, on }); }
+    catch { setTrack(t => ({ ...t, queries: on ? t.queries.filter(x => x !== q) : [...t.queries, q] })); }
+
   };
   const toggleRegion = async rg => {
     if(readOnly)return;
@@ -413,20 +413,22 @@ function ArticleView({ cabinet, offer, art, options, onPick, onBack, dateFrom, d
   const curSum = useMemo(() => sumDay(sumSet.flatMap(x => x.list)), [sumSet]);
 
   const toggleTarget = async x => {
-    if(readOnly)return;
     const prev = groups;
     const g = x.t ? 'other' : 'target';
     // Если ручная отметка совпала бы с подсказкой — всё равно закрепляем: владелец так решил.
     const next = { ...groups, [x.q]: g };
     setGroups(next);
-    try { const r = await saveQueryGroup(cabinet, x.q, g); setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
+    try { const r = await saveQueryGroup(cabinet, x.q, g, offer); if (!readOnly) setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
   };
   const resetTarget = async x => {
-    if(readOnly)return;
     const prev = groups;
     const next = { ...groups }; delete next[x.q];
     setGroups(next);
-    try { const r = await saveQueryGroup(cabinet, x.q, null); setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
+    try { const r = await saveQueryGroup(cabinet, x.q, null, offer);
+      if (readOnly) {
+        const current = await getQueryArticle(cabinet, offer, { dateFrom, dateTo });
+        setGroups(current.data.data.groups || {});
+      } else setGroups(r.data.data || next); } catch (e) { setGroups(prev); }
   };
   const saveTh = async v => {
     if(readOnly)return;
@@ -705,14 +707,14 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
           <tbody>
             {list.map(x => (
               <tr key={x.q} className={`row ${focusQ === x.q ? 'sp-focus' : ''}`}>
-                <td><TargetBox x={x} onToggle={onToggle} />{!readOnly&&x.manual && <button type="button" className="sp-reset" title="Убрать ручную отметку — вернуть подсказку" onClick={() => onReset(x)}>↺</button>}</td>
+                <td><TargetBox x={x} onToggle={onToggle} />{x.manual && <button type="button" className="sp-reset" title="Убрать ручную отметку — вернуть подсказку" onClick={() => onReset(x)}>↺</button>}</td>
                 <td className="sp-qn"><button type="button" className={`sp-qbtn ${focusQ === x.q ? 'on' : ''}`} onClick={() => onFocus(x.q)} title="Показать всю статистику по этому запросу по дням (ещё раз — вернуться)">{x.q}</button></td>
                 <td className="n r"><FreqTag f={x.f} /> {fmtInt(x.per30)}</td>
                 <td className="n r">{fmtInt(x.tot.s)}</td><td className="n r">{fmtInt(x.tot.v)}</td><td className="n r">{fmtPct(x.tot.reach)}</td>
                 <td className="r">{pill(x.tot.p)}</td><td className="r"><PosDelta p1={x.p1} p2={x.p2} /></td>
                 <td className="n r">{fmtPct(x.tot.ctr)}</td><td className="n r">{fmtPct(x.tot.toOrder)}</td>
                 <td className="n r">{fmtInt(x.tot.o)}</td><td className="n r">{x.tot.r ? fmtInt(x.tot.r) : '—'}</td>
-                <td className="c"><button type="button" disabled={readOnly} className={`sp-trk ${track.queries.includes(x.q) ? 'on' : ''}`} onClick={() => onTrack(x.q)} title={track.queries.includes(x.q) ? 'Выдача отслеживается — нажмите, чтобы выключить' : 'Отслеживать выдачу по этому запросу'}>{track.queries.includes(x.q) ? '● следим' : '○'}</button></td>
+                <td className="c"><button type="button" className={`sp-trk ${track.queries.includes(x.q) ? 'on' : ''}`} onClick={() => onTrack(x.q)} title={track.queries.includes(x.q) ? 'Выдача отслеживается — нажмите, чтобы выключить' : 'Отслеживать выдачу по этому запросу'}>{track.queries.includes(x.q) ? '● следим' : '○'}</button></td>
               </tr>
             ))}
             {!list.length && <tr><td colSpan={QCOLS.length + 2} className="muted">Ничего не найдено</td></tr>}
@@ -720,7 +722,7 @@ function QueryList({ queries, th, setTh, onToggle, onReset, days, focusQ, onFocu
         </table>
       </div>
       <div className="a-hint" style={{ padding: '6px 12px 10px' }}>
-        {readOnly?'Галочка отмечает целевой запрос.':<>Галочка — целевой запрос. Бледная галочка — подсказка по названию товара (наш тип товара + наша модель); поставьте или снимите её — отметка закрепится (↺ вернёт подсказку). Отметки общие для всех товаров магазина. «Выдача» — включить отслеживание: расширение раз в 4 часа само снимает выдачу по запросу в выбранных регионах (место, ставки, стратегии, конкуренты); смотрите во вкладке «Сравнение с конкурентами».</>}
+        {readOnly?'Галочка закрепляет целевой запрос для этого артикула. «Выдача» включает отслеживание.':<>Галочка — целевой запрос. Бледная галочка — подсказка по названию товара (наш тип товара + наша модель); поставьте или снимите её — отметка закрепится (↺ вернёт подсказку). Отметки общие для всех товаров магазина. «Выдача» — включить отслеживание: расширение раз в 4 часа само снимает выдачу по запросу в выбранных регионах (место, ставки, стратегии, конкуренты); смотрите во вкладке «Сравнение с конкурентами».</>}
         Частота пересчитана на 30 дней из выбранного периода ({days} дн.). Сейчас Ozon отдаёт сервису до 15 самых частотных запросов товара в день — хвост может быть неполным.
       </div>
     </div>

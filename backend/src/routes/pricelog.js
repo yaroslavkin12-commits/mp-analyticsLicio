@@ -44,28 +44,58 @@ async function index(c, p) {
   return idx;
 }
 
+function scopedSnapshot(s, ctx) {
+  const result = { id:s.id, date:s.date, at:s.at, fmt:s.fmt };
+  for (const key of ['items','old','site','rule','ruleSrc']) {
+    if (s[key]) result[key] = Object.fromEntries(Object.entries(s[key]).filter(([offer]) => ctx.allowed.has(offer)));
+  }
+  if (s.zero) result.zero = s.zero.filter(offer => ctx.allowed.has(offer));
+  return result;
+}
+const scopedResult = result => ({ _categoryFiltered:true, result });
+const platformOf = req => req.categoryContext ? (req.categoryContext.cabinet === 'defly_wb' ? 'wb' : 'ozon') : (req.query.platform || 'ozon');
+
 router.get('/', async (req, res) => {
   try {
-    const c = req.query.cabinet || 'defly', p = req.query.platform || 'ozon';
+    const c = req.query.cabinet || 'defly', p = platformOf(req);
     const [snaps, marks] = await Promise.all([index(c, p), getJson(k(c, p, 'marks'), {})]);
-    res.json({ success: true, data: { snaps, marks } });
+    const ctx = req.categoryContext;
+    if (!ctx) return res.json({ success:true, data:{snaps,marks} });
+    const records = await query('SELECT value FROM app_settings WHERE key = ANY($1::text[])', [snaps.map(s => k(c,p,`snap:${s.id}`))]);
+    const byId = new Map(records.map(row => {
+      const snapshot = scopedSnapshot(JSON.parse(row.value), ctx);
+      return [snapshot.id, snapshot];
+    }));
+    const visible = [], visibleMarks = {};
+    for (const {id} of snaps) {
+      const snapshot = byId.get(id);
+      if (!Object.keys(snapshot?.items || {}).length) continue;
+      visible.push({...metaOf(snapshot),file:''});
+      visibleMarks[id] = Object.fromEntries(Object.entries(marks[id] || {}).filter(([o]) => Object.hasOwn(snapshot.items,o)));
+    }
+    res.json({success:true,data:scopedResult({snaps:visible,marks:visibleMarks})});
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // GET /snap?id=… — один снимок целиком.
 router.get('/snap', async (req, res) => {
   try {
-    const c = req.query.cabinet || 'defly', p = req.query.platform || 'ozon';
+    const c = req.query.cabinet || 'defly', p = platformOf(req);
     const s = await getJson(k(c, p, `snap:${req.query.id}`), null);
     if (!s) return res.status(404).json({ success: false, error: 'Снимок не найден' });
-    res.json({ success: true, data: s });
+    const ctx = req.categoryContext;
+    if (!ctx) return res.json({success:true,data:s});
+    const snapshot = scopedSnapshot(s,ctx);
+    if (!Object.keys(snapshot.items || {}).length) return res.status(404).json({success:false,error:'Снимок не найден'});
+    return res.json({success:true,data:scopedResult(snapshot)});
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // GET /history?offer=… — цена артикула во всех снимках.
 router.get('/history', async (req, res) => {
   try {
-    const c = req.query.cabinet || 'defly', p = req.query.platform || 'ozon', o = String(req.query.offer || '');
+    const c = req.query.cabinet || 'defly', p = platformOf(req), o = String(req.query.offer || '');
+    if (req.categoryContext && !req.categoryContext.allowed.has(o)) return res.status(403).json({success:false,error:'Нет доступа к этому товару'});
     const rows = await query(`SELECT value FROM app_settings WHERE key LIKE $1`, [k(c, p, 'snap:%')]);
     const out = [];
     for (const r of rows) {
@@ -74,7 +104,7 @@ router.get('/history', async (req, res) => {
       out.push({ id: s.id, date: s.date, p: s.items[o], a: s.old?.[o] ?? null, zero: (s.zero || []).includes(o) });
     }
     out.sort((a, b) => (a.date < b.date ? -1 : 1));
-    res.json({ success: true, data: out });
+    res.json({ success: true, data: req.categoryContext ? scopedResult(out) : out });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -179,6 +209,7 @@ async function addRules(c, p, names) {
   return out;
 }
 router.get('/rules', async (req, res) => {
+  if (req.categoryContext) return res.json({success:true,data:scopedResult([])});
   try { res.json({ success: true, data: await getJson(k(req.query.cabinet || 'defly', req.query.platform, 'rules'), []) }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 // POST /rules { cabinet, add: [...] , remove: [...] } — запомнить / забыть название группы.

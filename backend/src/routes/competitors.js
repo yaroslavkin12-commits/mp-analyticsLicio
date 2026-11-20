@@ -353,6 +353,9 @@ router.get('/tracking', async (req, res) => {
 router.post('/tracking', async (req, res) => {
   try {
     const { cabinet = 'defly', offerId, query: q, on, regions } = req.body || {};
+    if (req.categoryContext && (regions !== undefined || typeof q !== 'string' || !q.trim() || q.length > 200 || typeof on !== 'boolean')) {
+      return res.status(400).json({success:false,error:'Укажите запрос для отслеживания'});
+    }
     if (Array.isArray(regions)) {
       const ok = regions.map(String).filter(r => REGIONS.some(x => shortRegion(x.title) === r));
       await setSetting(`serp_regions:${cabinet}`, ok.length ? ok : ['Москва']);

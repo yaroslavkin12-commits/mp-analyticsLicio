@@ -1,3 +1,4 @@
+import { useReadOnly } from '../lib/AccessContext';
 import { accessStorageKey } from '../lib/accessClient';
 import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
@@ -508,21 +509,26 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     ? sig({ ...snap(), page: templates[activeTpl].page ? pageSnap() : null }) !== sig(templates[activeTpl])
     : true;
   // Загрузка с сервера; старые шаблоны из браузера переносятся туда.
+  const readOnly = useReadOnly();
+  const loadedTemplates = React.useRef(null);
   const [tplReady, setTplReady] = useState(false);
   useEffect(() => {
     let off = false;
     setTplReady(false);
+    loadedTemplates.current = null;
     getBuilderTemplates(cabinet).then(r => {
       if (off) return;
       const srv = r.data.data?.templates;
       const local = load(storeKey + ':tpl') || {};
-      setTemplates(srv ? { ...local, ...srv } : local);
+      const initial = srv ? (readOnly ? srv : { ...local, ...srv }) : local;
+      loadedTemplates.current = readOnly && (srv || !Object.keys(local).length) ? initial : null;
+      setTemplates(initial);
       setTplReady(true);
-    }).catch(() => { if (!off) setTplReady(true); });
+    }).catch(() => { if (!off && !readOnly) setTplReady(true); });
     return () => { off = true; };
-  }, [cabinet]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cabinet, readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!tplReady) return;
+    if (!tplReady || templates === loadedTemplates.current) return;
     saveBuilderTemplates(cabinet, templates).catch(() => {});
   }, [templates, tplReady]); // eslint-disable-line react-hooks/exhaustive-deps
 

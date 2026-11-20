@@ -181,10 +181,42 @@ test('Сотрудник может добавить только доступн
     const result = await dispatch(path, 'POST', cabinet, data, {}, { cabinet, offerId: OWN, groupId: 'g1' });
     assert.equal(result.called, true);
     assert.deepEqual(result.body.data, { groups: [data.groups[0]], members: { [OWN]: 'g1' } });
-    for (const fields of [{ offerId: OTHER, groupId: 'g1' }, { offerId: OWN, groupId: null }]) {
+    const removed = await dispatch(path, 'POST', cabinet, {...data,members:{[OTHER]:'g2'}}, {}, { cabinet, offerId: OWN, groupId: null });
+    assert.equal(removed.called, true);
+    assert.deepEqual(removed.body.data, {groups:[],members:{}});
+    for (const fields of [{ offerId: OTHER, groupId: 'g1' }, { offerId: OTHER, groupId: null }]) {
       const denied = await dispatch(path, 'POST', cabinet, data, {}, { cabinet, ...fields });
       assert.equal(denied.code, 403);
       assert.equal(denied.called, false);
     }
   }
+});
+
+test('Созданная сотрудником пустая группа доступна ему, а чужая группа скрыта', async () => {
+  for (const [path,cabinet] of [['/api/promo/groups','defly'],['/api/wb/views/promo/groups','defly_wb']]) {
+    const result = await dispatch(path,'POST',cabinet,{groups:[
+      {id:'mine',name:'Новая',createdBy:3},{id:'other',name:OTHER,createdBy:4},
+    ],members:{}},{},{cabinet,name:'Новая'});
+    assert.deepEqual(result.body.data,{groups:[{id:'mine',name:'Новая'}],members:{}});
+    assert.equal((await dispatch(path+'/rename','POST',cabinet,{},{},{cabinet,id:'mine',name:'Другая'})).code,403);
+  }
+});
+test('Расшифровка P&L содержит только операции разрешённых товаров, включая WB', async () => {
+  const rows = [[0,'Свой товар',OWN,10,1],[0,OTHER,OTHER,999999,1],[0,'Без артикула',null,999999,0]];
+  for (const [path,cabinet] of [['/api/finance/ops','defly'],['/api/wb/views/finance/ops','defly_wb']]) {
+    const result = await dispatch(path,'GET',cabinet,{rows});
+    assert.deepEqual(result.body.data.rows,[rows[0]]);
+    secret(result.body);
+  }
+});
+test('Редактирование запроса и остатка в пути ограничено артикулом, а журнал цен доступен только на чтение', async () => {
+  for (const path of ['/api/promo/transit','/api/queries/groups','/api/competitors/tracking']) {
+    const body = {cabinet:'defly',offerId:OWN,query:'дефлектор'};
+    assert.equal((await dispatch(path,'POST','defly',{}, {},body)).called,true);
+    assert.equal((await dispatch(path,'POST','defly',{}, {},{...body,offerId:OTHER})).code,403);
+  }
+  assert.equal((await dispatch('/api/pricelog/delete','POST','defly',{}, {},{cabinet:'defly',id:'1'})).code,403);
+  assert.equal((await dispatch('/api/pricelog','GET','defly',{snaps:[]})).code,403);
+  assert.deepEqual((await dispatch('/api/pricelog','GET','defly',{_categoryFiltered:true,result:{snaps:[]}})).body.data,{snaps:[]});
+  assert.equal((await dispatch('/api/sales/builder-templates','GET','defly',{templates:{global:{}}})).code,403);
 });

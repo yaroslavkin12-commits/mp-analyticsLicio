@@ -10,7 +10,34 @@ router.use(async (req, res) => {
   try {
     if ((req.query.cabinet || req.body?.cabinet || 'defly_wb') !== 'defly_wb') throw new Error('Неизвестный кабинет WB');
     const path = req.path.replace(/^\/ads(?=\/|$)/, '/promo'), body = req.body || {};
-    if (req.method !== 'GET') {
+    if (req.categoryContext && path === '/sales/builder-templates') {
+      const route = require('./sales').stack.find(l => l.route?.path === '/builder-templates' && l.route.methods[req.method === 'HEAD' ? 'get' : req.method.toLowerCase()]);
+      return route.route.stack[0].handle(req, res);
+    }
+    if (['POST', 'DELETE'].includes(req.method)) {
+      if (req.categoryContext && path === '/orders/self') {
+        const { items, on } = body;
+        if (!Array.isArray(items) || !items.length || items.length > 2000 || typeof on !== 'boolean') {
+          return res.status(400).json({success:false,error:'Выберите заказы'});
+        }
+        const allowed = req.categoryContext.allowed;
+        const rows = await bridge.read({ kinds: ['orders'], projection: 'metrics' });
+        const offers = new Map([...allowed].map(([offer, entry]) => [String(entry.sku), offer]));
+        const permitted = new Set((rows.find(x => x.kind === 'orders')?.rows || [])
+          .filter(r => allowed.has(r.offer || offers.get(String(r.nmId))))
+          .map(r => JSON.stringify([String(r.srid || r.id), String(r.nmId)])));
+        if (!items.every(item => item && typeof item.p === 'string' && permitted.has(JSON.stringify([item.p, String(item.sku)])))) {
+          return res.status(403).json({success:false,error:'Нет доступа к одному из заказов'});
+        }
+        await V.update(p => {
+          for (const item of items) {
+            const key = item.p + '|' + item.sku;
+            if (on) p.self[key] = true;
+            else delete p.self[key];
+          }
+        });
+        return res.json({success:true,data:{changed:items.length}});
+      }
       if (path === '/promo/collect') { await require('../collectors/wb/sheetSync').sync(true); return res.json({ success: true, data: { running: false } }); }
       if (path === '/sales/costs') {
         const route = require('./sales').stack.find(l => l.route?.path === '/costs' && l.route.methods.post);
@@ -21,12 +48,12 @@ router.use(async (req, res) => {
         if (path === '/promo/order') { if (!Array.isArray(body.order) || body.order.length > 5000) throw new Error('Некорректный порядок'); p.order = [...new Set(body.order.map(x => bounded(x, 128)))]; return p.order; }
         if (path === '/promo/transit') { if (!id) throw new Error('Укажите артикул'); const old = p.transit[id] || {}; p.transit[id] = { q: body.qty === undefined ? old.q || 0 : Math.max(0, Math.min(1000000, Math.round(Number(body.qty) || 0))), d: body.date === undefined ? old.d || '' : bounded(body.date, 10) }; return p.transit; }
         if (path === '/promo/manual') { if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(body.date || '') || !['views', 'pdpViews', 'cart', 'orders', 'revenue'].includes(body.metric)) throw new Error('Некорректная ручная метрика'); const key = id + '|' + body.date; p.manual[key] ||= {}; if (body.value == null || body.value === '') delete p.manual[key][body.metric]; else { if (!finite(body.value) || Number(body.value) < 0) throw new Error('Укажите неотрицательное число'); p.manual[key][body.metric] = Number(body.value); } return p.manual[key]; }
-        if (path === '/promo/groups' && req.method === 'POST') { const name = bounded(body.name, 100); if (!name) throw new Error('Введите название'); p.groups.push({ id: randomUUID(), name }); return groups(p); }
+        if (path === '/promo/groups' && req.method === 'POST') { const name = bounded(body.name, 100); if (!name) throw new Error('Введите название'); p.groups.push({ id: randomUUID(), name, ...(req.categoryContext && {createdBy:req.categoryContext.userId}) }); return groups(p); }
         if (path.startsWith('/promo/groups/') && req.method === 'DELETE') { p.groups = p.groups.filter(g => g.id !== groupId); for (const [o, g] of Object.entries(p.members)) if (g === groupId) delete p.members[o]; return groups(p); }
         if (path === '/promo/groups/assign') {
           if (!id || (body.groupId && !p.groups.some(g => g.id === body.groupId))) throw new Error('Неизвестный артикул или группа');
           const ctx = req.categoryContext;
-          if (ctx && !Object.entries(p.members).some(([offer, group]) => group === body.groupId && ctx.allowed.has(offer))) {
+          if (ctx && body.groupId && !p.groups.some(g => g.id === body.groupId && g.createdBy === ctx.userId) && !Object.entries(p.members).some(([offer, group]) => group === body.groupId && ctx.allowed.has(offer))) {
             throw new Error('Нет доступа к группе');
           }
           if (body.groupId) p.members[id] = body.groupId; else delete p.members[id];
@@ -71,7 +98,8 @@ router.use(async (req, res) => {
     const selection=compactPnl?['catalog','orders','sales']:coefficients?['catalog','orders','sales','prices']:financial?['catalog','orders','sales','prices','ads','campaigns']:summaryInput?['catalog','orders','ads','campaigns']:null;
     const readOptions=selection?{kinds:selection,...(compactPnl?{projection:'aliases'}:coefficients||summaryInput?{projection:'metrics'}:{}),...(summaryInput&&req.query.dateFrom&&req.query.dateTo?{from:req.query.dateFrom,to:req.query.dateTo}:{})}:{excludeFinance:true};
     let ds = await bridge.read(readOptions);
-    if(req.query.fresh==='1'||!ds.length){await source.sync(req.query.fresh==='1');ds=await bridge.read(readOptions);}
+    const forceRefresh = !req.categoryContext && req.query.fresh === '1';
+    if (forceRefresh || !ds.length) { await source.sync(forceRefresh); ds = await bridge.read(readOptions); }
     else source.sync().catch(()=>{});
     if (financial) { const options=['/finance/coefs','/finance/calc-base'].includes(path)?{latest:true}:req.query.dateFrom&&req.query.dateTo?{dateFrom:req.query.dateFrom,dateTo:req.query.dateTo}:{};const finance=await bridge.readFinance(options);if(finance)ds.push(finance); }
     const m = V.build(ds, prefs, req.query); let out;

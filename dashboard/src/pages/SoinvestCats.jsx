@@ -1,6 +1,5 @@
 import DateRangePicker from '../components/DateRangePicker';
 import QuickPeriods from '../components/QuickPeriods';
-import { useReadOnly } from '../lib/AccessContext';
 import { createPortal } from 'react-dom';
 import CategoryNav from '../components/CategoryNav';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
@@ -81,7 +80,6 @@ function SppChart({ hist, list, tip }) {
 }
 
 export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
-  const readOnly=useReadOnly();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -202,12 +200,21 @@ export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
       else sortArts(l).slice(0, 200).forEach(a => rows.push(artRow(a, (d - depth + 1) * 16 + 14)));
     });
   };
+  const changeGroup = async (offer, target) => {
+    try { const r = await assignAdsGroup(cabinet, offer, target); setGroupsData(r.data.data); }
+    catch (error) { window.alert(error.response?.data?.error || 'Не удалось сохранить состав группы'); }
+  };
   function artRow(a, indent, showCat) {
     return (
           <tr key={'a' + a.o} className="s-art">
             <td><div className="a-art" style={{ paddingLeft: indent }}><div style={{ minWidth: 0 }}><div className="id">{a.o}
               {groupsData.members[a.o] && <i className="s-dot" style={{ background: groupColors[groupsData.members[a.o]], marginLeft: 6 }} title={(groupsData.groups.find(g => g.id === groupsData.members[a.o]) || {}).name} />}</div>
-              <div className="model" title={a.n}>{showCat ? `${a.short} · ${a.cat}` : a.short}</div></div></div></td>
+              <div className="model" title={a.n}>{showCat ? `${a.short} · ${a.cat}` : a.short}</div></div>
+              {groupsData.groups.length > 0 && <select className="a-sel" aria-label={`Группа артикула ${a.o}`} value={groupsData.members[a.o] || ''} onChange={e => changeGroup(a.o, e.target.value || null)}>
+                <option value="">Без группы</option>
+                {groupsData.groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>}
+            </div></td>
             <td className="r"><b className="n">{pct(a.pct)}</b></td>
             <td className="r"><b className="n sv-card">{pct(a.pctCard)}</b></td>
             <td className="r"><Delta value={a.c1} unit="pp" goodWhen="up" /></td>
@@ -253,17 +260,17 @@ export default function SoinvestCats({ cabinet, active = true, headerTarget }) {
 
       </>} actions={<>
           {newGroup === null ? (
-            readOnly ? null : <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
+            <button type="button" className="a-tab add" onClick={() => setNewGroup('')}>+ Группа</button>
           ) : (
-            <form style={{ display: 'flex', gap: 6 }} onSubmit={e => { e.preventDefault(); const n = newGroup.trim(); if (!n) return; addAdsGroup(cabinet, n).then(r => { setGroupsData(r.data.data); setNewGroup(null); }).catch(err => window.alert(err.response?.data?.error || 'Не удалось создать группу')); }}>
+            <form style={{ display: 'flex', gap: 6 }} onSubmit={e => { e.preventDefault(); const n = newGroup.trim(); if (!n) return; addAdsGroup(cabinet, n).then(r => { const created = r.data.data.groups.filter(g => g.name === n.slice(0, 100) && !groupsData.groups.some(old => old.id === g.id)).at(-1); setGroupsData(r.data.data); if (created) setGroup(created.id); setNewGroup(null); }).catch(err => window.alert(err.response?.data?.error || 'Не удалось создать группу')); }}>
               <input className="a-input" autoFocus value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Название группы" onKeyDown={e => { if (e.key === 'Escape') setNewGroup(null); }} style={{ padding: '5px 10px' }} />
               <button type="submit" className="a-btn" disabled={!newGroup.trim()}>Создать</button>
             </form>
           )}
       </>} />
       {group && <div className="a-bar">
-        <AddToGroup catalog={items.map(a => ({ offerId: a.o, productName: a.n }))} exclude={Object.entries(groupsData.members).filter(([, g]) => g === group).map(([o]) => o)}
-          onPick={o => { setGroupsData(p => ({ ...p, members: { ...p.members, [o]: group } })); assignAdsGroup(cabinet, o, group).catch(() => {}); }} />
+        <AddToGroup allowScoped catalog={items.map(a => ({ offerId: a.o, productName: a.n }))} exclude={Object.entries(groupsData.members).filter(([, g]) => g === group).map(([o]) => o)}
+          onPick={o => changeGroup(o, group)} />
       </div>}
       <div className="a-hint" style={{ marginTop: -8 }}>Группы общие с вкладкой «Реклама»: созданная здесь группа появится и там.</div>
 

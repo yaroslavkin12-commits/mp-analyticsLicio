@@ -1,3 +1,4 @@
+import { readPersonalOrder, savePersonalOrder } from '../lib/accessClient';
 import dayjs from 'dayjs';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
@@ -148,6 +149,9 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
   const [metric, setMetric] = useState('rev');
   const [diffMode, setDiffMode] = useState(false);
   const fileRef = useRef(null);
+  const orderKey = 'competitor-order:' + cabinet + ':' + offer;
+  const [personalOrder, setPersonalOrder] = useState(null);
+  useEffect(() => { setPersonalOrder(readOnly ? readPersonalOrder(orderKey) : null); }, [readOnly, orderKey]);
 
   const load = useCallback(() => {
     const ok = latestOnly('sc:' + cabinet);
@@ -203,9 +207,9 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
     };
     const shop = SHOP[cabinet] || cabinet;
     const list = [...data.our.map(o => mk(o.sku, 'our', shop, o.name, shop, true)), ...data.competitors.map(c => mk(c.sku, 'comp', c.label || c.seller || 'Конкурент', c.name, c.seller, !!c.ours))];
-    const ord = new Map((data.view?.order || []).map((k, i) => [k, i]));
+    const ord = new Map((personalOrder || data.view?.order || []).map((k, i) => [k, i]));
     return list.map((x, i) => ({ x, i })).sort((a, b) => (ord.has(a.x.sku) ? ord.get(a.x.sku) : 1e3 + a.i) - (ord.has(b.x.sku) ? ord.get(b.x.sku) : 1e3 + b.i)).map(o => o.x);
-  }, [data, win, cabinet]);
+  }, [data, win, cabinet, personalOrder]);
   // Порядок строк — перетаскиванием (как в «Рекламе»).
   const [dragKey, setDragKey] = useState(null), [overKey, setOverKey] = useState(null);
   const reorder = async (from, to) => {
@@ -213,7 +217,8 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
     const order = items.map(x => x.sku);
     order.splice(order.indexOf(to), 0, order.splice(order.indexOf(from), 1)[0]);
     setData(d => ({ ...d, view: { ...(d.view || {}), order } }));
-    await saveCompetitorView(cabinet, offer, { order }).catch(() => load());
+    if (readOnly) { setPersonalOrder(order); savePersonalOrder(orderKey, order); }
+    else await saveCompetitorView(cabinet, offer, { order }).catch(() => load());
   };
   // Выдача для сравнения: запрос и регион, последний снимок — место, ставка, популярность, соответствие.
   const [serpSel, setSerpSel] = useState('');
@@ -269,7 +274,7 @@ export default function SearchCompetitors({ cabinet, offer, tip, readOnly = fals
   const best = useMemo(() => Object.fromEntries(cols.filter(c => c.best).map(c => [c.k, bestOf(items.map(c.get), c.best)])), [cols, items]);
   const ctl = useTableCtl('sc-cmp');
   const rows = useMemo(() => ctl.apply(items, (x, k) => (k === 'name' ? x.label : (cols.find(c => c.k === k)?.get(x) ?? null))), [ctl, items, cols]);
-  const dragOn = !readOnly && !ctl.changed;
+  const dragOn = !ctl.changed;
   const known = useMemo(() => new Set(items.map(x => x.sku)), [items]);
   const dates = useMemo(() => [...new Set(items.flatMap(x => x.list.map(m => m.date)))].sort(), [items]);
 
