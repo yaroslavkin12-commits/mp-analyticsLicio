@@ -146,6 +146,7 @@ test('Сотрудник читает и завершает гипотезы т�
     ['/api/ad-hypotheses', 'GET'],
     ['/api/ad-hypotheses', 'POST'],
     ['/api/ad-hypotheses/42/finish', 'POST'],
+    ['/api/ad-hypotheses/42', 'PATCH'],
     ['/api/ad-hypotheses/42', 'DELETE'],
     ['/api/ad-hypotheses/reorder', 'POST'],
   ];

@@ -133,6 +133,7 @@ export const removeTrackedGroup = (cabinet, id) =>
 
 export const getAdHypotheses = (cabinet, offerId) => api.get('/ad-hypotheses', { params: { cabinet, offerId } });
 export const addAdHypothesis = (cabinet, offerId, data) => api.post('/ad-hypotheses', data, { params: { cabinet, offerId } });
+export const updateAdHypothesis = (cabinet, offerId, id, data) => api.patch(`/ad-hypotheses/${id}`, data, { params: { cabinet, offerId } });
 export const finishAdHypothesis = (cabinet, offerId, id, data) => api.post(`/ad-hypotheses/${id}/finish`, data, { params: { cabinet, offerId } });
 export const removeAdHypothesis = (cabinet, offerId, id) => api.delete(`/ad-hypotheses/${id}`, { params: { cabinet, offerId } });
 export const reorderAdHypotheses = (cabinet, offerId, ids) => api.post('/ad-hypotheses/reorder', { ids }, { params: { cabinet, offerId } });

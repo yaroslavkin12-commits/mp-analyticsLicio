@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
-import { addAdHypothesis, finishAdHypothesis, getAdHypotheses, removeAdHypothesis, reorderAdHypotheses } from '../api';
+import { addAdHypothesis, finishAdHypothesis, getAdHypotheses, removeAdHypothesis, reorderAdHypotheses, updateAdHypothesis } from '../api';
 
 const GOALS = {
   ctr: 'Рост CTR', crToCart: 'Рост CR в корзину', crToOrder: 'Рост CR в заказ',
@@ -23,22 +23,29 @@ function Comparison({ goal, data }) {
   </div>;
 }
 
-function CreateHypothesis({ onSave, onCancel, busy, today }) {
-  const [goal, setGoal] = useState('ctr');
-  const [start, setStart] = useState(today);
+function HypothesisForm({ row, onSave, onCancel, busy, today }) {
+  const [goal, setGoal] = useState(row?.goal || 'ctr');
+  const [start, setStart] = useState(row?.start || today);
   return <form className="ah-form" onSubmit={event => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     onSave({ ...values, plannedEnd: values.plannedEnd || null });
   }}>
-    <label className="ah-wide">Гипотеза<input className="a-input" name="title" required maxLength={140} placeholder="Что хотим проверить" /></label>
+    <label className="ah-wide">Гипотеза<input className="a-input" name="title" defaultValue={row?.title} required maxLength={140} placeholder="Что хотим проверить" /></label>
     <label>Начало теста<input className="a-input" name="start" type="date" required value={start} onChange={event => setStart(event.target.value)} /></label>
-    <label>Плановый конец (необязательно)<input className="a-input" name="plannedEnd" type="date" min={start} /></label>
+    <label>Плановый конец (необязательно)<input className="a-input" name="plannedEnd" type="date" min={start} defaultValue={row?.plannedEnd || ''} /></label>
     <label className="ah-wide">Цель<select className="a-input" name="goal" value={goal} onChange={event => setGoal(event.target.value)}>
       {Object.entries(GOALS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
     </select></label>
-    {goal === 'custom' && <label className="ah-wide">Своя цель<input className="a-input" name="customGoal" required maxLength={100} /></label>}
-    <label className="ah-wide">Что меняем<textarea className="a-input" name="description" rows={3} maxLength={5000} placeholder="Опишите изменения и условия теста" /></label>
+    {goal === 'custom' && <label className="ah-wide">Своя цель<input className="a-input" name="customGoal" defaultValue={row?.customGoal} required maxLength={100} /></label>}
+    <label className="ah-wide">Что меняем<textarea className="a-input" name="description" defaultValue={row?.description} rows={3} maxLength={5000} placeholder="Опишите изменения и условия теста" /></label>
+    {row?.end && <>
+      <label>Дата завершения<input className="a-input" name="end" type="date" min={start} max={today} defaultValue={row.end} required /></label>
+      <label>Результат<select className="a-input" name="verdict" defaultValue={row.verdict} required>
+        {Object.entries(VERDICTS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+      </select></label>
+      <label className="ah-wide">Вывод<textarea className="a-input" name="note" rows={3} maxLength={5000} defaultValue={row.note} /></label>
+    </>}
     <div className="ah-actions ah-wide">
       <button type="submit" className="a-btn" disabled={busy}>Сохранить</button>
       <button type="button" className="a-btn ghost" onClick={onCancel} disabled={busy}>Отмена</button>
@@ -117,15 +124,27 @@ export default function AdHypotheses({ cabinet, offerId, mode, compare, marked, 
     setBusy(true);
     setError('');
     try {
-      const { data } = form === 'create'
-        ? await addAdHypothesis(cabinet, offerId, { ...values, mode })
-        : await finishAdHypothesis(cabinet, offerId, row.id, values);
-      const saved = data.data;
+      let response;
+      if (form === 'create') {
+        response = await addAdHypothesis(cabinet, offerId, { ...values, mode });
+      } else if (form === 'edit') {
+        const changed = values.goal !== row.goal || values.start !== row.start || values.end !== row.end;
+        const comparison = row.end && changed && values.goal !== 'custom' && values.end < today
+          ? await compare({ ...row, ...values }, values.end).catch(() => null) : null;
+        response = await updateAdHypothesis(cabinet, offerId, row.id, { ...values, comparison });
+      } else {
+        response = await finishAdHypothesis(cabinet, offerId, row.id, values);
+      }
+      const saved = response.data.data;
       setRows(items => form === 'create' ? [saved, ...items] : items.map(item => item.id === saved.id ? saved : item));
       setSelected(saved.id);
       setForm('');
     } catch (error) {
       setError(error.response?.data?.error || 'Не удалось сохранить гипотезу');
+      if (form === 'edit' && error.response?.status === 409) {
+        setForm('');
+        setAttempt(n => n + 1);
+      }
     } finally { setBusy(false); }
   }
 
@@ -165,8 +184,10 @@ export default function AdHypotheses({ cabinet, offerId, mode, compare, marked, 
     </h4>
     {error && <div role="alert" className="ah-error">{error}{!rows && <button type="button" className="a-btn" onClick={() => { setError(''); setAttempt(n => n + 1); }}>Повторить</button>}</div>}
     {!rows && !error && <span className="a-hint">Загрузка…</span>}
-    {form === 'create' && <CreateHypothesis onSave={save} onCancel={() => setForm('')} busy={busy} today={today} />}
-    {row && form !== 'create' && <div className={`ah-detail ah-result-${row.verdict || 'active'}`}>
+    {(form === 'create' || (form === 'edit' && row)) && <HypothesisForm
+      key={form === 'edit' ? row.id : 'new'} row={form === 'edit' ? row : null}
+      onSave={save} onCancel={() => setForm('')} busy={busy} today={today} />}
+    {row && form !== 'create' && form !== 'edit' && <div className={`ah-detail ah-result-${row.verdict || 'active'}`}>
       <div className="ah-heading"><b>{row.end ? 'Результат теста' : goalOf(row)}</b><span className="a-hint">{row.mode === 'ads' ? 'Заказы с рекламы' : 'Все заказы товара'}</span></div>
       {row.description && <p>{row.description}</p>}
       {row.end ? <>
@@ -175,7 +196,7 @@ export default function AdHypotheses({ cabinet, offerId, mode, compare, marked, 
         {row.note && <p>{row.note}</p>}
       </> : form === 'finish'
         ? <FinishHypothesis row={row} onSave={save} onCancel={() => setForm('')} busy={busy} compare={compare} today={today} />
-        : <button type="button" className="a-btn" disabled={row.start > today} onClick={() => { setError(''); setForm('finish'); }}>Завершить тест</button>}
+        : <button type="button" className="a-btn" disabled={busy || row.start > today} onClick={() => { setError(''); setForm('finish'); }}>Завершить тест</button>}
     </div>}
     {row && <label className="a-toggle ah-marks"><input type="checkbox" checked={marked} onChange={event => onMarked(event.target.checked)} />Отметки теста на графике и в таблице</label>}
     {rows?.length === 0 && !form && <span className="a-hint">Гипотез пока нет</span>}
@@ -202,6 +223,8 @@ export default function AdHypotheses({ cabinet, offerId, mode, compare, marked, 
               <button type="button" disabled={busy || index === 0} aria-label={`Поднять «${item.title}»`} title="Выше" onClick={() => move(index, index - 1)}>↑</button>
               <button type="button" disabled={busy || index === rows.length - 1} aria-label={`Опустить «${item.title}»`} title="Ниже" onClick={() => move(index, index + 1)}>↓</button>
             </>}
+            <button type="button" disabled={busy} aria-label={`Редактировать «${item.title}»`} title="Редактировать гипотезу"
+              onClick={() => { setSelected(item.id); setConfirmDelete(null); setError(''); setForm('edit'); }}>✎</button>
             <button type="button" disabled={busy} aria-label={`Удалить «${item.title}»`} title="Удалить гипотезу" onClick={() => setConfirmDelete(item.id)}>×</button>
             </>}
           </span>

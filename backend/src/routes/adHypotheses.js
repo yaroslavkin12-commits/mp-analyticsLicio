@@ -33,6 +33,20 @@ function isDate(value) {
   return Number.isFinite(+date) && date.toISOString().slice(0, 10) === value;
 }
 
+const todayMoscow = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+const validId = id => typeof id === 'string' && /^[1-9]\d{0,17}$/.test(id);
+const comparisonJson = comparison => comparison && Number.isFinite(comparison.before) && Number.isFinite(comparison.during)
+  ? JSON.stringify({ before: comparison.before, during: comparison.during }) : null;
+
+function hypothesisFields(body) {
+  const { start, plannedEnd = null, goal } = body;
+  const title = string(body.title, 140);
+  const customGoal = goal === 'custom' ? string(body.customGoal, 100) : '';
+  if (!title || !goals.has(goal) || (goal === 'custom' && !customGoal)
+    || !isDate(start) || (plannedEnd !== null && (!isDate(plannedEnd) || plannedEnd < start))) return null;
+  return [title, goal, customGoal, string(body.description, 5000), start, plannedEnd];
+}
+
 router.use((req, res, next) => {
   const { cabinet, offerId } = req.query;
   if (typeof cabinet !== 'string' || !Object.hasOwn(CABINETS, cabinet) || typeof offerId !== 'string' || !offerId.trim() || offerId.length > 128) {
@@ -53,18 +67,46 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
-    const { start, plannedEnd, goal, mode } = req.body || {};
-    const title = string(req.body?.title, 140), customGoal = goal === 'custom' ? string(req.body?.customGoal, 100) : '';
-    if (!title || !goals.has(goal) || (goal === 'custom' && !customGoal) || !['all', 'ads'].includes(mode)
-      || !isDate(start) || (plannedEnd != null && (!isDate(plannedEnd) || plannedEnd < start))) {
+    const values = hypothesisFields(req.body || {});
+    const mode = req.body?.mode;
+    if (!values || !['all', 'ads'].includes(mode)) {
       return res.status(400).json({ success: false, error: 'Проверьте название, цель и даты теста' });
     }
     await ensureTable();
     const [data] = await query(`INSERT INTO ad_hypotheses
       (cabinet, offer_id, title, goal, custom_goal, description, starts_on, plans_end_on, mode)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${fields}`,
-    [req.query.cabinet, req.query.offerId, title, goal, customGoal, string(req.body?.description, 5000), start, plannedEnd ?? null, mode]);
+    [req.query.cabinet, req.query.offerId, ...values, mode]);
     res.status(201).json({ success: true, data });
+  } catch (error) { next(error); }
+});
+
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const values = hypothesisFields(body);
+    if (!validId(id) || !values) {
+      return res.status(400).json({ success: false, error: 'Проверьте название, цель и даты теста' });
+    }
+    const { end = null, verdict, start } = body;
+    if (end !== null && (!isDate(end) || end < start || end > todayMoscow() || !verdicts.has(verdict))) {
+      return res.status(400).json({ success: false, error: 'Проверьте дату завершения и результат теста' });
+    }
+    await ensureTable();
+    const [data] = await query(`UPDATE ad_hypotheses SET title = $4, goal = $5, custom_goal = $6, description = $7,
+      starts_on = $8, plans_end_on = $9, ends_on = $10, verdict = $11, result_note = $12,
+      comparison = CASE
+        WHEN $10::date IS NULL OR $5 = 'custom' THEN NULL
+        WHEN goal = $5 AND starts_on = $8 AND ends_on = $10 THEN comparison
+        ELSE $13::jsonb END
+      WHERE cabinet = $1 AND offer_id = $2 AND id = $3 AND deleted_at IS NULL
+        AND (ends_on IS NULL) = ($10::date IS NULL)
+      RETURNING ${fields}`, [req.query.cabinet, req.query.offerId, id, ...values, end,
+      end === null ? null : verdict, end === null ? '' : string(body.note, 5000),
+      end !== null ? comparisonJson(body.comparison) : null]);
+    if (!data) return res.status(409).json({ success: false, error: 'Гипотеза удалена или её статус изменился. Обновите список.' });
+    res.json({ success: true, data });
   } catch (error) { next(error); }
 });
 
@@ -72,24 +114,19 @@ router.post('/:id/finish', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { end, verdict, comparison } = req.body || {};
-    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
-    if (!/^[1-9]\d{0,17}$/.test(id) || !isDate(end) || end > today || !verdicts.has(verdict)) {
+    if (!validId(id) || !isDate(end) || end > todayMoscow() || !verdicts.has(verdict)) {
       return res.status(400).json({ success: false, error: 'Укажите дату завершения и результат теста' });
     }
-    const snapshot = comparison && Number.isFinite(comparison.before) && Number.isFinite(comparison.during)
-      ? { before: comparison.before, during: comparison.during } : null;
     await ensureTable();
     const [data] = await query(`UPDATE ad_hypotheses SET ends_on = $4, verdict = $5, result_note = $6,
       comparison = CASE WHEN goal = 'custom' THEN NULL ELSE $7::jsonb END, finished_at = NOW()
       WHERE cabinet = $1 AND offer_id = $2 AND id = $3 AND deleted_at IS NULL AND ends_on IS NULL AND starts_on <= $4::date
       RETURNING ${fields}`, [req.query.cabinet, req.query.offerId, id, end, verdict, string(req.body?.note, 5000),
-      snapshot ? JSON.stringify(snapshot) : null]);
+      comparisonJson(comparison)]);
     if (!data) return res.status(409).json({ success: false, error: 'Тест уже завершён или дата завершения раньше начала' });
     res.json({ success: true, data });
   } catch (error) { next(error); }
 });
-
-const validId = id => typeof id === 'string' && /^[1-9]\d{0,17}$/.test(id);
 
 router.post('/reorder', async (req, res, next) => {
   try {

@@ -19,7 +19,7 @@ export function canWriteScoped(cfg) {
   const method = String(cfg.method || 'get').toLowerCase();
   if (/^\/auth\/(password|logout|activity)$/.test(cfg.url)) return true;
   if (method === 'post' && /^\/ad-hypotheses(?:\/reorder|\/[1-9]\d{0,17}\/finish)?$/.test(cfg.url)) return true;
-  if (method === 'delete' && /^\/ad-hypotheses\/[1-9]\d{0,17}$/.test(cfg.url)) return true;
+  if (['patch', 'delete'].includes(method) && /^\/ad-hypotheses\/[1-9]\d{0,17}$/.test(cfg.url)) return true;
   const cabinet = cfg.params?.cabinet || cfg.data?.cabinet;
   if (method === 'post' && cfg.url === '/promo/groups/assign') {
     return typeof cfg.data?.offerId === 'string' && (cfg.data.groupId === null || (typeof cfg.data.groupId === 'string' && Boolean(cfg.data.groupId)));
