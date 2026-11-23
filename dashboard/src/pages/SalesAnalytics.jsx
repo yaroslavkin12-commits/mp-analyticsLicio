@@ -11,7 +11,7 @@ import { isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesData, getSalesCardRatings, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
-import { unitCoefs, unitProfit, returnOnCost, ROI_HINT } from './unitModel';
+import { unitCoefs, unitProfit, returnOnCost } from './unitModel';
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import { useTax, useBuyerShare, useGroups } from './finShared';
 import TableBuilder from './TableBuilder';
@@ -704,12 +704,12 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   const cached = (k, fn) => { if (!cache.has(k)) cache.set(k, fn()); return cache.get(k); };
 
   // prevMode — прошлый период: финансы прошлого периода и заказы артикула за него (a.prev).
-  const finCalc = (finPer, prevMode) => {
+  const finCalc = (finPer, prevMode, arts = node.arts) => {
     if (!finPer && !unitK) return null;
-    let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fCost = 0, fMissingCost = false, fAny = false, taxBase = 0;
+    let selAd = 0, sRub = 0, sQty = 0, oz = 0, cost = 0, noCost = 0, fp = 0, fPay = 0, fQty = 0, fCost = 0, fAny = false, taxBase = 0;
     const selDay = finPer ? new Float64Array(finPer.nd) : null;
     const taxDay = finPer ? new Float64Array(finPer.nd) : null; // налог — по дням, как в «P&L» (день с отрицательной базой — 0)
-    for (const a of node.arts) {
+    for (const a of arts) {
       const x = finPer?.m.get(a.o), k = unitK?.get(a.o);
       if (x) { for (let d = 0; d < finPer.nd; d++) selDay[d] += x.sDay[d]; selAd += x.ad; }
       if (x) {
@@ -724,7 +724,6 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         if ((a.prev?.orders || 0) > 0 || (a.prev?.spend || 0) > 0) {
           const r = unitProfit(k, { ordRub: a.prev.revenue, ordQty: a.prev.orders, ads: a.prev.spend }, tax);
           fp += r.profit; fPay += r.payout; fQty += r.expQty; fCost += r.cost; fAny = true;
-          if (r.expQty > 0 && !(k.cost > 0)) fMissingCost = true;
         }
       } else if (k && (a.tOrders > 0 || a.tSpend > 0)) {
         for (let d = 0; d < N; d++) {
@@ -734,7 +733,6 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
           const fs = fbsDay.get(a.o + '|' + dates[d]);
           const r = unitProfit(k, { ordRub, ordQty, ads, fbs: fs }, tax);
           fp += r.profit; fPay += r.payout; fQty += r.expQty; fCost += r.cost; fAny = true;
-          if (r.expQty > 0 && !(k.cost > 0)) fMissingCost = true;
         }
       }
     }
@@ -753,13 +751,37 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     const pay = fin?.pnl?._operational ? null : sRub + oz;
     const profit = finPer && pay != null ? pay - cost - taxBase * tax / 100 : null;
     return {
-      roiForecast: returnOnCost(fAny ? fp : null, fCost, fMissingCost),
+      roiForecast: returnOnCost(fAny ? fp : null, fCost),
       roiActual: returnOnCost(profit, cost, noCost > 0),
       has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: pay != null && sQty > 0 ? pay / sQty : null,
       payOrder: !fin?.pnl?._operational && fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit, noCost,
     };
   };
-  const finK = useMemo(() => finCalc(finPer, false), [node, finPer, unitK, tax, fbsDay, bsF.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const finK = useMemo(() => {
+    const full = finCalc(finPer, false);
+    if (!full || !unitK) return full;
+    const withCost = [], withoutCost = [];
+    for (const a of node.arts) (unitK.get(a.o)?.cost > 0 ? withCost : withoutCost).push(a);
+    const forecastExcluded = withoutCost.filter(a => {
+      if (!(a.tOrders > 0 || a.tSpend > 0)) return false;
+      if (!data?._wb) return true;
+      return a.revenue.some((rub, d) => {
+        const orders = a.orders[d], ads = a.spendCpc[d] + a.spendCpo[d] + a.spendOther[d];
+        return [rub, orders, ads].every(Number.isFinite) && Boolean(rub || orders || ads);
+      });
+    }).length;
+    const actualExcluded = withoutCost.filter(a => {
+      const x = finPer?.m.get(a.o);
+      return x && (x.sQty || x.sRub || x.oz || x.ad);
+    }).length;
+    if (!forecastExcluded && !actualExcluded) return full;
+    // Для частичного ROI прибыль и себестоимость должны относиться к одним артикулам.
+    const covered = finCalc(finPer, false, withCost);
+    return {
+      ...full, forecastExcluded, actualExcluded,
+      roiForecast: covered.roiForecast, roiActual: covered.roiActual,
+    };
+  }, [node, finPer, unitK, tax, fbsDay, bsF.shareAt, data?._wb]); // eslint-disable-line react-hooks/exhaustive-deps
   const finKP = useMemo(() => (finPerPrev ? finCalc(finPerPrev, true) : null), [node, finPerPrev, unitK, tax, bsF.shareAt]); // eslint-disable-line react-hooks/exhaustive-deps
   // Δ к прошлому периоду (в %), только когда есть обе величины.
   const dP = (a, b) => (a !== null && a !== undefined && b !== null && b !== undefined && b !== 0 ? (a - b) / Math.abs(b) * 100 : null);
@@ -1182,11 +1204,15 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
             <span className="sub"><Delta value={mg !== null && mp !== null ? mg - mp : null} unit="pp" /> к прошлому периоду</span>
           </>); })()}
         </div>
-        <div className="a-kpi s-roi-kpi" title={ROI_HINT}>
-          {[['ROI прогноз', finK?.roiForecast], ['ROI факт', finK?.roiActual]].map(([label, value]) => (
+        <div className="a-kpi s-roi-kpi" title="Чистая прибыль / себестоимость × 100%. Учитываются артикулы с заполненной себестоимостью.">
+          {[
+            ['ROI прогноз', finK?.roiForecast, finK?.forecastExcluded],
+            ['ROI факт', finK?.roiActual, finK?.actualExcluded],
+          ].map(([label, value, excluded]) => (
             <div className="s-roi-half" key={label}>
               <span className="lbl">{label}</span>
               <span className="val n" style={{ color: value < 0 ? 'var(--a-bad)' : undefined }}>{fmtPct(value)}</span>
+              {excluded > 0 && <span className="sub">Без {excluded} арт.</span>}
             </div>
           ))}
         </div>
