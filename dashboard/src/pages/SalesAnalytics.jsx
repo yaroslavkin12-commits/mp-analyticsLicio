@@ -1168,12 +1168,12 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         <div className="a-kpi" title="С заказов периода: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог (как в «Юнит-экономике»)">
           <span className="lbl">Прогнозируемая прибыль (с заказов), ₽</span>
           <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
-          <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> <span title={ROI_HINT}>ROI прогноз {fmtPct(finK?.roiForecast)}</span> · налог {tax}%</span>
+          <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> налог {tax}%</span>
         </div>
         <div className="a-kpi" title="По выкупам периода, как в «P&L»: поступления на счёт минус себестоимость выкупленных товаров и налог (налог — от суммы, оплаченной покупателем, по отчётам «Начисления»)">
           <span className="lbl">Фактическая прибыль (с выкупов), ₽</span>
           <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
-          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {fin?.pnl?._operational ? 'финансы пока не подключены' : finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`} · <span title={ROI_HINT}>ROI факт {fmtPct(finK?.roiActual)}</span></span>
+          <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {fin?.pnl?._operational ? 'финансы пока не подключены' : finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
         </div>
         <div className="a-kpi" title="Фактическая прибыль / выручка с выкупов периода — как «Маржа» в P&L">
           <span className="lbl">Маржа факт, %</span>
@@ -1182,12 +1182,13 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
             <span className="sub"><Delta value={mg !== null && mp !== null ? mg - mp : null} unit="pp" /> к прошлому периоду</span>
           </>); })()}
         </div>
-        <div className="a-kpi">
-          <span className="lbl">Остаток сейчас, шт</span>
-          <span className="val n">{fmtInt(ag.stockNow)}</span>
-          <span className="sub">{sDays === null ? 'нет продаж за 7 дней' : `хватит ≈ на ${Math.round(sDays)} дн`}</span>
-          <span className="sub" title="Артикулы, по которым были заказы за период">с заказами {fmtInt(ag.active)} из {fmtInt(ag.count)} арт. · {ag.count ? fmtPct(ag.active / ag.count * 100) : '—'} <Delta value={ag.pActive ? dP(ag.active, ag.pActive) : null} /></span>
-          <AreaSpark values={series('stock')} color="var(--a-ink3)" />
+        <div className="a-kpi s-roi-kpi" title={ROI_HINT}>
+          {[['ROI прогноз', finK?.roiForecast], ['ROI факт', finK?.roiActual]].map(([label, value]) => (
+            <div className="s-roi-half" key={label}>
+              <span className="lbl">{label}</span>
+              <span className="val n" style={{ color: value < 0 ? 'var(--a-bad)' : undefined }}>{fmtPct(value)}</span>
+            </div>
+          ))}
         </div>
       </div>
 

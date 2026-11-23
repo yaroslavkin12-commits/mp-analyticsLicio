@@ -2,6 +2,10 @@
 
 .mpui .s-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
 @media (max-width:1100px){.mpui .s-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.mpui .s-kpis .s-roi-kpi{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;padding-inline:0;container-type:inline-size}
+.mpui .s-roi-half{display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center;padding-inline:6px}
+.mpui .s-roi-half+.s-roi-half{border-inline-start:1px solid var(--a-line)}
+.mpui .s-roi-kpi .s-roi-half .val{font-size:18px;font-size:clamp(13px,9cqi,24px);white-space:normal;overflow-wrap:anywhere}
 .mpui .s-of{font-size:13px;color:var(--a-ink3);font-weight:500}
 .mpui .s-card{padding:14px}
 .mpui .s-dot{width:8px;height:8px;border-radius:2px;display:inline-block}
