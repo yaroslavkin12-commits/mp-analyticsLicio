@@ -1,8 +1,8 @@
-import { pnlTotals } from './pnlCalc.js';
+import { buyoutPnlTotals } from './pnlCalc.js';
 
 // Цена берётся из продаж, а возвраты и реклама участвуют в финансовом итоге дня.
 export function buildBuyoutsFeed(data, tax, shareAt) {
-  const { byGroup } = pnlTotals(data, { tax, shareAt, groupOf: a => 'offer:' + a.o, withDays: true });
+  const { byGroup } = buyoutPnlTotals(data, { tax, shareAt, groupOf: a => 'offer:' + a.o, withDays: true });
   const selfByDay = new Map((data.self || []).map(([ai, di, qty]) => [ai + ':' + di, qty]));
   const trade = new Map();
   for (const [ai, di, bi, amount, qty] of data.rows) {
@@ -35,7 +35,8 @@ export function buildBuyoutsFeed(data, tax, shareAt) {
       rows.push({
         o: article.o, n: article.n, cat: article.cat, date: day.date, qty, revenue, sold, saleRub,
         price: sold > 0 && saleRub > 0 ? saleRub / sold : null,
-        payout, profit: financial && (qty === selfQty || data.cost?.[ai] > 0) ? day.profit : null,
+        payout, fees: day.ozonX, ads: day.ads, payoutPerBuyout: payout != null && qty > 0 ? payout / qty : null,
+        profit: financial && (qty === selfQty || data.cost?.[ai] > 0) ? day.profit : null,
         selfQty, st: sold > 0 ? (returned > 0 ? 'sold_returned' : 'sold') : returned > 0 ? 'returned' : 'charges',
       });
     }

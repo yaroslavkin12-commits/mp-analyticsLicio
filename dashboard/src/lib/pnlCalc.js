@@ -7,7 +7,7 @@ const B = ['sale', 'return', 'commission', 'acquiring', 'logistics', 'storage', 
 const COST_KEYS = ['commission', 'logistics', 'acquiring', 'storage', 'promo', 'other'];
 const SEP = ' / ';
 
-export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withDays = false } = {}) {
+export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withDays = false, dailyAds = false } = {}) {
   if (data._operational) {
     const blank=()=>({revenue:0,qty:0,payout:null,profit:null,ozonX:null,ads:null,cost:null,tax:null,...(withDays?{days:data.dates.map(date=>({date,revenue:0,qty:0,payout:null,profit:null,ozonX:null,ads:null,cost:null,tax:null}))}:{})});
     const total=blank(),byGroup={};
@@ -36,10 +36,18 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
   for (const [d, b, a] of data.noSku) if (b === iAds && a) lastFin = Math.max(lastFin, d);
   const netDayAll = new Float64Array(n);
   let adsAll = 0;
-  for (const x of per) if (x) for (let i = 0; i < n; i++) { netDayAll[i] += x.b[0][i] + x.b[1][i]; adsAll += x.ads[i]; }
+  const adDay = Float64Array.from(data.adNoSku || new Array(n).fill(0), Math.abs);
+  for (const x of per) if (x) for (let i = 0; i < n; i++) {
+    netDayAll[i] += x.b[0][i] + x.b[1][i];
+    adsAll += x.ads[i];
+    adDay[i] += Math.abs(x.ads[i]);
+  }
+  // Для поступления за выкуп используем расход дня, когда есть рекламная статистика.
+  // Финансовое списание остаётся запасным источником за дни без статистики.
+  const useAdStats = i => data.financeSource !== 'wb' && (i > lastFin || (dailyAds && adDay[i] > 0));
   const totalSale = netDayAll.reduce((s, v) => s + v, 0);
 
-  const calc = (items, share) => {
+  const calc = (items, share, wholeCabinet = false) => {
     const v = {};
     for (const k of B) v[k] = new Float64Array(n);
     v.qty = new Float64Array(n); v.adsRaw = new Float64Array(n); v.costRaw = new Float64Array(n); v.taxBase = new Float64Array(n);
@@ -55,20 +63,21 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
         if (cp) v.costRaw[i] += cp * (x.qty[i] - x.self[i]);
       }
     }
-    if (share > 0) {
-      const shD = Array.from({ length: n }, (_, d) => (share === 1 ? 1 : netDayAll[d] > 0 ? (v.sale[d] + v.return[d]) / netDayAll[d] : share));
+    if (dailyAds || share > 0) {
+      const allShares = wholeCabinet || (!dailyAds && share === 1);
+      const shD = Array.from({ length: n }, (_, d) => (allShares ? 1 : netDayAll[d] > 0 ? (v.sale[d] + v.return[d]) / netDayAll[d] : share));
       let selAds = 0; for (let i = 0; i < n; i++) selAds += v.adsRaw[i];
-      const adSh = share === 1 ? 1 : adsAll > 0 ? selAds / adsAll : null;
+      const adSh = allShares ? 1 : adsAll > 0 ? selAds / adsAll : null;
       for (const [d, bi, a] of data.noSku) { const k = data.buckets[bi]; v[B.includes(k) ? k : 'other'][d] += a * (k === 'ads' && adSh !== null ? adSh : shD[d]); }
       (data.adNoSku || []).forEach((a, d) => { v.adsRaw[d] += a * shD[d]; });
     }
     const T = { revenue: 0, ozonX: 0, ads: 0, cost: 0, tax: 0, profit: 0, qty: 0, payout: 0 };
     if (withDays) T.days = [];
     for (let i = 0; i < n; i++) {
-      if (data.financeSource === 'wb' && (data.dates[i] < data.available.mn || data.dates[i] > data.available.mx)) { if(withDays) T.days.push({date:data.dates[i],qty:null,payout:null,revenue:null,profit:null,ozonX:null,ads:null,cost:null,tax:null}); continue; }
+      if (data.financeSource === 'wb' && ((dailyAds && (!data.available?.mn || !data.available?.mx)) || data.dates[i] < data.available.mn || data.dates[i] > data.available.mx)) { if(withDays) T.days.push({date:data.dates[i],qty:null,payout:null,revenue:null,profit:null,ozonX:null,ads:null,cost:null,tax:null}); continue; }
       const rev = v.sale[i] + v.return[i];
       const ozX = COST_KEYS.reduce((s, k) => s + v[k][i], 0);
-      const ad = data.financeSource === 'wb' || i <= lastFin ? v.ads[i] : -v.adsRaw[i];
+      const ad = useAdStats(i) ? -v.adsRaw[i] : v.ads[i];
       const t = v.taxBase[i] > 0 ? -v.taxBase[i] * tax / 100 : 0;
       T.revenue += rev; T.ozonX += ozX; T.ads += ad; T.cost -= v.costRaw[i]; T.tax += t; T.qty += v.qty[i];
       T.payout += rev + ozX + ad; T.profit += rev + ozX + ad - v.costRaw[i] + t;
@@ -77,7 +86,7 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
     return T;
   };
   const all = per.map((x, i) => (x ? i : -1)).filter(i => i >= 0);
-  const out = { total: calc(all, 1), byGroup: {} };
+  const out = { total: calc(all, 1, true), byGroup: {} };
   if (groupOf) {
     const g = new Map();
     for (const ai of all) { const k = groupOf(data.articles[ai]); if (!g.has(k)) g.set(k, []); g.get(k).push(ai); }
@@ -87,4 +96,9 @@ export function pnlTotals(data, { tax = 6, shareAt = null, groupOf = null, withD
     }
   }
   return out;
+}
+
+// Одинаковая база для аналитики продаж и ленты выкупов.
+export function buyoutPnlTotals(data, options) {
+  return pnlTotals(data, { ...options, dailyAds: true });
 }

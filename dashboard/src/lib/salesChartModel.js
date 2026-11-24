@@ -9,9 +9,9 @@ export const FIN_CHART_METRICS = [
   {key:'adCpo',label:'Цена заказа с рекламы, ₽',fmt:'money2'}, {key:'drrB',label:'ДРР с учётом выкупа, %',fmt:'pct'},
   {key:'adOrders',label:'Заказы с рекламы, шт',fmt:'int'}, {key:'adRevenue',label:'Заказы с рекламы, ₽',fmt:'int'}, {key:'adViews',label:'Показы рекламы',fmt:'int'},
 ];
-export function enrichSalesChart(arts, dates, buckets, model, { pnl, forecast, tax = 6, shareAt, today = new Date().toLocaleDateString('en-CA', {timeZone:'Europe/Moscow'}) } = {}) {
+export function enrichSalesChart(arts, dates, buckets, model, { pnl, forecast, tax = 6, shareAt, dailyAds = false, today = new Date().toLocaleDateString('en-CA', {timeZone:'Europe/Moscow'}) } = {}) {
   const chosen = new Set(arts.map(a => a.o));
-  const fin = pnl ? pnlTotals(pnl, { tax, shareAt: shareAt ? (o, _, d) => shareAt(o,d) : null, groupOf: a => chosen.has(a.o) ? 'selected' : 'other', withDays: true }).byGroup.selected : null;
+  const fin = pnl ? pnlTotals(pnl, { tax, shareAt: shareAt ? (o, _, d) => shareAt(o,d) : null, groupOf: a => chosen.has(a.o) ? 'selected' : 'other', withDays: true, dailyAds }).byGroup.selected : null;
   const fd = new Map((fin?.days || []).map(d => [d.date, d]));
   const expected = dates.map((date, i) => {
     let qty = 0, revenue = 0, pay = 0, profit = 0, any = false;

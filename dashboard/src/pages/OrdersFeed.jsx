@@ -31,6 +31,8 @@ const PROFIT_LABEL = 'Прогнозируемая прибыль с выкуп�
 const PROFIT_HINT = 'Прибыль на одну ожидаемую выкупленную штуку по цене заказа. Учитывает себестоимость, комиссию, логистику, налог и долю расходов на рекламу из финансовой истории.';
 
 const PAYOUT_LABEL = 'Среднее поступление с выкупа (прогноз)';
+const ACTUAL_PAYOUT_LABEL = 'Ср. поступление с выкупа (факт)';
+const ACTUAL_PAYOUT_HINT = 'Выручка за вычетом возвратов, фактической комиссии, логистики, эквайринга, прочих удержаний и рекламы за день. Сумма делится на число выкупов за вычетом возвратов.';
 const PAYOUT_HINT = 'Ожидаемое поступление на счёт на одну выкупленную штуку после удержаний площадки и расходов на рекламу.';
 
 function ForecastCard({ label, hint, metric, eligible }) {
@@ -173,13 +175,16 @@ export default function OrdersFeed({ cabinet }) {
       total.sold += row.sold;
       total.saleRub += row.saleRub;
       total.revenue += row.revenue || 0;
-      total.payout += row.payout ?? 0;
+      if (Number.isFinite(row.payout)) {
+        total.payout += row.payout;
+        total.payoutQty += row.qty;
+      }
       total.profit += row.profit ?? 0;
       total.hasPayout ||= Number.isFinite(row.payout);
       total.hasProfit ||= Number.isFinite(row.profit);
       total.missingProfit ||= Number.isFinite(row.payout) && row.profit == null;
       return total;
-    }, { qty: 0, sold: 0, saleRub: 0, revenue: 0, payout: 0, profit: 0, hasPayout: false, hasProfit: false, missingProfit: false });
+    }, { qty: 0, sold: 0, saleRub: 0, revenue: 0, payout: 0, payoutQty: 0, profit: 0, hasPayout: false, hasProfit: false, missingProfit: false });
   }, [rows, isBuyouts]);
   const opts = useMemo(() => { const m = new Map(); for (const x of d?.rows || []) if (x.o && !m.has(x.o)) m.set(x.o, { o: x.o, n: x.n }); return [...m.values()]; }, [d]);
 
@@ -241,9 +246,9 @@ export default function OrdersFeed({ cabinet }) {
               ['Выкупы за вычетом возвратов, шт', actual.qty],
               ['Выкупы, ₽', actual.revenue],
               ['Средняя цена выкупа, ₽', actual.sold > 0 ? actual.saleRub / actual.sold : null],
-              ['Начислено после рекламы, ₽', actual.hasPayout ? actual.payout : null],
+              [`${ACTUAL_PAYOUT_LABEL}, ₽`, actual.hasPayout && actual.payoutQty > 0 ? actual.payout / actual.payoutQty : null],
               ['Фактическая прибыль, ₽', actual.hasProfit && !actual.missingProfit ? actual.profit : null],
-            ].map(([label, value]) => <div key={label} className="a-kpi">
+            ].map(([label, value]) => <div key={label} className="a-kpi" title={label.startsWith(ACTUAL_PAYOUT_LABEL) ? ACTUAL_PAYOUT_HINT : undefined}>
               <span className="lbl">{label}</span>
               <span className={`val ${value < 0 ? 's-down' : ''}`}>{fmtInt(value)}</span>
               {label === 'Фактическая прибыль, ₽' && actual.missingProfit && <span className="sub">Не заполнена себестоимость</span>}
@@ -267,7 +272,7 @@ export default function OrdersFeed({ cabinet }) {
             )}
             <span className="a-hint" style={{ margin: '0 0 0 auto' }}>
               {isBuyouts ? (
-                d.operational ? 'Финансовый отчёт пока недоступен' : `По дню и артикулу · реклама по дням, как в P&L${d.through ? ` · начисления по ${dayjs(d.through).format('DD.MM.YYYY')}` : ''}`
+                d.operational ? 'Финансовый отчёт пока недоступен' : `По дню и артикулу · реклама по дням${d.through ? ` · начисления по ${dayjs(d.through).format('DD.MM.YYYY')}` : ''}`
               ) : `обновляется раз в минуту${d.since ? ` · лента копится с ${msk(d.since).format('DD.MM.YYYY')}` : ''}`}
             </span>
           </div>
@@ -280,7 +285,7 @@ export default function OrdersFeed({ cabinet }) {
                   <th className="l">Артикул</th>
                   <th className="r" title={isBuyouts ? 'За вычетом возвратов' : undefined}>Кол-во</th>
                   <th className="r">{isBuyouts ? 'Цена выкупа за шт.' : 'Цена'}</th>
-                  <th className="r of-profit" title={isBuyouts ? 'Выручка за вычетом возвратов, удержаний и дневной рекламы' : PAYOUT_HINT}>{isBuyouts ? 'Начислено после рекламы' : PAYOUT_LABEL}, ₽</th>
+                  <th className="r of-profit" title={isBuyouts ? ACTUAL_PAYOUT_HINT : PAYOUT_HINT}>{isBuyouts ? ACTUAL_PAYOUT_LABEL : PAYOUT_LABEL}, ₽</th>
                   <th className="r of-profit" title={isBuyouts ? 'Начисления после рекламы минус себестоимость и налог' : PROFIT_HINT}>{isBuyouts ? 'Фактическая прибыль' : PROFIT_LABEL}, ₽</th>
                   <th className="l">Схема · склад</th>
                   <th className="l">Статус</th>
@@ -291,7 +296,11 @@ export default function OrdersFeed({ cabinet }) {
                   {shown.map(x => {
                     const t = x.at ? msk(x.at) : null;
                     const day = t ? t.format('YYYY-MM-DD') : x.date || ''; const dateLabel=t || (x.date ? dayjs(x.date):null);
-                    const { payout, profit } = isBuyouts ? x : (forecast.perRow.get(x) || {});
+                    const { payout: forecastPayout, profit } = isBuyouts ? x : (forecast.perRow.get(x) || {});
+                    const payout = isBuyouts ? x.payoutPerBuyout : forecastPayout;
+                    const payoutDetail = isBuyouts && payout != null
+                      ? `Выручка после возвратов ${fmtInt(x.revenue)} ₽ · удержания площадки ${fmtInt(x.fees)} ₽ · реклама ${fmtInt(x.ads)} ₽ · выкупов ${fmtInt(x.qty)} шт.`
+                      : undefined;
                     const sep = day !== lastDay ? (lastDay = day, true) : false;
                     return (
                       <React.Fragment key={key(x)}>
@@ -302,7 +311,7 @@ export default function OrdersFeed({ cabinet }) {
                           <td className="l"><div className="a-art"><div style={{ minWidth: 0 }}><div className="id">{x.o || x.sku}</div><div className="model" title={x.n}>{x.n}</div><div className="of-cat">{String(x.cat || '').split(' / ').slice(-1)[0]}</div></div></div></td>
                           <td className="n r">{x.qty}</td>
                           <td className="n r" title={x.est ? 'Ozon не передал цену в заказе — показана цена продавца на день заказа из истории цен' : undefined}>{x.est ? '≈' : ''}{fmtInt(x.price)}</td>
-                          <td className={`n r ${payout < 0 ? 's-down' : ''}`}><b>{fmtInt(payout)}</b></td>
+                          <td className={`n r ${payout < 0 ? 's-down' : ''}`} title={payoutDetail}><b>{fmtInt(payout)}</b></td>
                           <td className={`n r ${profit < 0 ? 's-down' : ''}`}><b>{fmtInt(profit)}</b></td>
                           <td className="l"><span className="of-sch">{x.sch ? String(x.sch).toUpperCase() : '—'}</span> <span className="muted">{x.wh}</span></td>
                           <td className="l">{ST[x.st] || x.st || '—'}</td>

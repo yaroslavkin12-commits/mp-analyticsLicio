@@ -5,6 +5,7 @@ import { resultTint } from '../lib/resultTint';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import { barSignals, isRateMetric } from '../lib/chartSignals';
+import { buyoutPnlTotals } from '../lib/pnlCalc';
 import { enrichSalesChart, FIN_CHART_METRICS } from '../lib/salesChartModel';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { isDeflyLike } from '../lib/cabinets';
@@ -584,9 +585,10 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     // Прошлый период той же длины — для сравнения выкупов, поступлений и прибыли.
     const len = dayjs(dateTo).diff(dayjs(dateFrom), 'day') + 1;
     const pTo = dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(dateFrom).subtract(len, 'day').format('YYYY-MM-DD');
-    Promise.all([getFinancePnl(cabinet, { dateFrom, dateTo }).catch(() => null), getFinanceCoefs(cabinet).catch(() => null)])
+    const adsBasis = cabinet === 'defly_wb' ? 'activity' : undefined;
+    Promise.all([getFinancePnl(cabinet, { dateFrom, dateTo, adsBasis }).catch(() => null), getFinanceCoefs(cabinet).catch(() => null)])
       .then(([p, c]) => { if (!off) setFin(f => ({ ...(f || {}), pnl: p?.data?.data || null, coefs: c?.data?.data || null })); });
-    getFinancePnl(cabinet, { dateFrom: pFrom, dateTo: pTo }).then(p => {
+    getFinancePnl(cabinet, { dateFrom: pFrom, dateTo: pTo, adsBasis }).then(p => {
       // Финансы за прошлый период есть не целиком (история короче) — не сравниваем,
       // иначе получаются «+354%».
       const d = p?.data?.data || null;
@@ -631,7 +633,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     // Самовыкупы — себестоимость за эти штуки не вычитается.
     for (const [pai, , q] of pnl.self || []) { const o = pnl.articles[pai]?.o; const x = o && m.get(o); if (x) x.selfQ = (x.selfQ || 0) + q; }
     for(const [ai,di,value] of pnl.taxBase||[]){const x=m.get(pnl.articles[ai]?.o);if(x)x.taxDay[di]+=value;}
-    return { exactTax:!!pnl.taxBase, complete:!pnl._operational || !!pnl.available?.mn && pnl.dates.every(d=>d>=pnl.available.mn&&d<=pnl.available.mx), m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
+    return { pnl, exactTax:!!pnl.taxBase, complete:!pnl._operational || !!pnl.available?.mn && pnl.dates.every(d=>d>=pnl.available.mn&&d<=pnl.available.mx), m, noSkuOz, noSkuAds, adsAll, saleAll, noSkuDay, noSkuSaleDay, saleDay, nd, dates: pnl.dates };
   };
   const finPer = useMemo(() => finPerOf(fin?.pnl), [fin?.pnl]); // eslint-disable-line react-hooks/exhaustive-deps
   const finPerPrev = useMemo(() => finPerOf(fin?.pnlPrev), [fin?.pnlPrev]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -696,7 +698,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   const agOf = useCallback(list => { const a = aggregate(list, N); if (data?._wb && !list.length) for (const k of K) { const source = ['orders','revenue'].includes(k) ? 'orders' : ['views','pdpViews','cart'].includes(k) ? null : 'ads'; if (!source || !data.availability?.[source]) a.s[k].fill(NaN); } return a; }, [N,data]);
   const ag = useMemo(() => agOf(node.arts), [node, agOf]);
   const model = useMemo(() => toModel(ag, buckets), [ag, buckets]);
-  const chartModel = useMemo(() => enrichSalesChart(node.arts,dates,buckets,model,{pnl:fin?.pnl,forecast:builderForecast,shareAt:builderShareAt,tax}), [node,dates,buckets,model,fin?.pnl,builderForecast,builderShareAt,tax]);
+  const chartModel = useMemo(() => enrichSalesChart(node.arts,dates,buckets,model,{pnl:fin?.pnl,forecast:builderForecast,shareAt:builderShareAt,tax,dailyAds:cabinet !== 'licio'}), [node,dates,buckets,model,fin?.pnl,builderForecast,builderShareAt,tax,cabinet]);
   const dayModel = useMemo(() => (gran === 'day' ? model : toModel(ag, bucketsOf(dates, 'day'))), [ag, model, gran, dates]);
   // Кэш тяжёлых сумм: всплывашки на графиках перерисовывают страницу на
   // каждое движение мыши — пересчитывать 1800 артикулов каждый раз нельзя.
@@ -748,12 +750,18 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     }
     if (taxDay) for (let d = 0; d < taxDay.length; d++) if (taxDay[d] > 0) taxBase += taxDay[d];
     if(fin?.pnl?._operational && finPer && !finPer.complete){sRub=NaN;sQty=NaN;}
-    const pay = fin?.pnl?._operational ? null : sRub + oz;
+    const useBuyoutPayout = cabinet !== 'licio';
+    const selected = useBuyoutPayout && finPer && !finPer.pnl._operational ? new Set(arts.map(a => a.o)) : null;
+    const buyoutFact = selected ? buyoutPnlTotals(finPer.pnl, {
+      groupOf: a => selected.has(a.o) ? 'selected' : 'other',
+    }).byGroup.selected : null;
+    const pay = finPer?.pnl._operational ? null : useBuyoutPayout ? buyoutFact?.payout ?? null : sRub + oz;
+    const payQty = useBuyoutPayout ? buyoutFact?.qty : sQty;
     const profit = finPer && pay != null ? pay - cost - taxBase * tax / 100 : null;
     return {
       roiForecast: returnOnCost(fAny ? fp : null, fCost),
       roiActual: returnOnCost(profit, cost, noCost > 0),
-      has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: pay != null && sQty > 0 ? pay / sQty : null,
+      has: !!finPer, sRub, sQty, pay, checkSale: sQty > 0 ? sRub / sQty : null, paySale: pay != null && payQty > 0 ? pay / payQty : null,
       payOrder: !fin?.pnl?._operational && fQty > 0 ? fPay / fQty : null, fProfit: fAny ? fp : null, profit, noCost,
     };
   };
@@ -1154,7 +1162,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
           <span className="val n">{finK ? fmtInt(finK.payOrder) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP ? dP(finK?.payOrder, finKP.payOrder) : null} /> на 1 ожидаемый выкуп</span>
         </div>
-        <div className="a-kpi" title="Фактически к перечислению по выкупам периода (выкупы минус все удержания Ozon) / выкупы, шт">
+        <div className="a-kpi" title="Фактически к перечислению по выкупам периода после комиссии, логистики, эквайринга, прочих удержаний и дневной рекламы, на одну штуку за вычетом возвратов">
           <span className="lbl">Ср. поступление с выкупа (факт), ₽</span>
           <span className="val n">{finK?.has ? fmtInt(finK.paySale) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.paySale, finKP.paySale) : null} /> {finK?.pay != null && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
