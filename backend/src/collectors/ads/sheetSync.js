@@ -679,53 +679,72 @@ async function syncFinanceFromSheet(cabinet, { coreOnly = false } = {}) {
   // длинным таймаутом: вкладки большие (Finance ~30 тыс. строк).
   await ensureFinTables();
   let total = 0;
-  // В облегчённом режиме нужны только выкупы, цены и начисления.
-  // Полный режим также обновляет географию, запросы и складские кластеры.
+  const warnings = [];
+  let financeError;
+  const importFinance = () => syncFinanceOnlyFromSheet(cabinet, { onWarning: message => warnings.push(message) });
+  const importReport = async (name, run) => {
+    try { total += await run(); }
+    catch (error) {
+      if (coreOnly) throw error;
+      warnings.push(`${name}: ${error.message}`);
+    }
+  };
+  // Финансовые начисления загружаются до сопутствующих отчётов.
+  // Облегчённый импорт сохраняет прежний порядок.
   if (!coreOnly) {
-    total += (await syncGeoFromSheet(cabinet)).rows || 0;
-    // Поисковые запросы по дням.
-    total += await syncQueriesIncremental(cabinet);
-    // Продажи по месяцам (сезонность).
-    const mon = await fetchSheetRows('AnalyticsMonthly', cabinet);
-    if (mon) {
-      const out = mon.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}/.test(String(r.month)))
-        .map(r => [cabinet, String(r.month).slice(0, 7), num(r.sku), num(r.revenue), Math.round(num(r.orders))]);
-      if (out.length) total += await bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku'], undefined, { diff: `monthly:${cabinet}` });
-    }
-    // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
-    const wh = await fetchSheetRows('StocksWh', cabinet);
-    if (wh) {
-      const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
-      const map = new Map();
-      for (const r of wh) {
-        if (r.cabinet !== cabinet || !r.offer_id) continue;
-        const w = String(r.warehouse || r.cluster || '—').slice(0, 160);
-        const key = r.offer_id + '|' + w;
-        const cur = map.get(key);
-        const row = [cabinet, today, r.offer_id, w, String(r.cluster || clusterOfWarehouse(r.warehouse)).slice(0, 160), r.sku ? num(r.sku) || null : null,
-          Math.round(num(r.available)), Math.round(num(r.transit)), Math.round(num(r.reserved)), r.ads === '' ? null : num(r.ads), r.idc === '' ? null : num(r.idc)];
-        if (cur) { cur[6] += row[6]; cur[7] += row[7]; cur[8] += row[8]; } else map.set(key, row);
+    try { total += await importFinance(); }
+    catch (error) { financeError = error; }
+    await importReport('География', async () => (await syncGeoFromSheet(cabinet)).rows || 0);
+    await importReport('Поисковые запросы', () => syncQueriesIncremental(cabinet));
+    await importReport('Продажи по месяцам', async () => {
+      const mon = await fetchSheetRows('AnalyticsMonthly', cabinet);
+      if (mon) {
+        const out = mon.filter(r => r.cabinet === cabinet && r.sku && /^\d{4}-\d{2}/.test(String(r.month)))
+          .map(r => [cabinet, String(r.month).slice(0, 7), num(r.sku), num(r.revenue), Math.round(num(r.orders))]);
+        if (out.length) return bulkUpsert('analytics_monthly', ['cabinet', 'month', 'sku', 'revenue', 'orders'], out, ['cabinet', 'month', 'sku'], undefined, { diff: `monthly:${cabinet}` });
       }
-      if (map.size) {
-        // Дневные снимки накапливаются в базе, даже когда их нет в источнике.
-        // Историю складских остатков сохраняем без ограничения срока.
-        total += await replaceRange('stock_cluster_daily', cabinet, [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
-          ['cabinet', 'date', 'offer_id', 'warehouse']);
+      return 0;
+    });
+    await importReport('Остатки по складам', async () => {
+      // Остатки FBO по складам/кластерам — снимок на сегодня (история копится по дням).
+      const wh = await fetchSheetRows('StocksWh', cabinet);
+      if (wh) {
+        const today = new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10);
+        const map = new Map();
+        for (const r of wh) {
+          if (r.cabinet !== cabinet || !r.offer_id) continue;
+          const w = String(r.warehouse || r.cluster || '—').slice(0, 160);
+          const key = r.offer_id + '|' + w;
+          const cur = map.get(key);
+          const row = [cabinet, today, r.offer_id, w, String(r.cluster || clusterOfWarehouse(r.warehouse)).slice(0, 160), r.sku ? num(r.sku) || null : null,
+            Math.round(num(r.available)), Math.round(num(r.transit)), Math.round(num(r.reserved)), r.ads === '' ? null : num(r.ads), r.idc === '' ? null : num(r.idc)];
+          if (cur) { cur[6] += row[6]; cur[7] += row[7]; cur[8] += row[8]; } else map.set(key, row);
+        }
+        if (map.size) {
+          // Дневные снимки накапливаются в базе, даже когда их нет в источнике.
+          // Историю складских остатков сохраняем без ограничения срока.
+          return replaceRange('stock_cluster_daily', cabinet, [...map.values()], ['cabinet', 'date', 'offer_id', 'warehouse', 'cluster', 'sku', 'available', 'transit', 'reserved', 'ads', 'idc'],
+            ['cabinet', 'date', 'offer_id', 'warehouse']);
+        }
       }
+      return 0;
+    });
+  }
+  await importReport('Выкупы по дате заказа', async () => {
+    const buy = await fetchSheetRows('Buyout', cabinet);
+    if (buy) {
+      // Повторы (день, артикул) — неполные копии на границе окна; берём первую строку.
+      const seenB = new Set();
+      const out = buy.filter(r => { if (r.cabinet !== cabinet || !r.offer_id || !r.date) return false; const k = String(r.date).slice(0, 10) + '|' + r.offer_id; if (seenB.has(k)) return false; seenB.add(k); return true; }).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,
+        r.sku ? num(r.sku) || null : null, Math.round(num(r.ordered)), Math.round(num(r.delivered)), Math.round(num(r.cancelled)), Math.round(num(r.in_progress)), Math.round(num(r.ordered_fbs))]);
+      return replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
     }
-  }
-  const buy = await fetchSheetRows('Buyout', cabinet);
-  if (buy) {
-    // Повторы (день, артикул) — неполные копии на границе окна; берём первую строку.
-    const seenB = new Set();
-    const out = buy.filter(r => { if (r.cabinet !== cabinet || !r.offer_id || !r.date) return false; const k = String(r.date).slice(0, 10) + '|' + r.offer_id; if (seenB.has(k)) return false; seenB.add(k); return true; }).map(r => [cabinet, String(r.date).slice(0, 10), r.offer_id,
-      r.sku ? num(r.sku) || null : null, Math.round(num(r.ordered)), Math.round(num(r.delivered)), Math.round(num(r.cancelled)), Math.round(num(r.in_progress)), Math.round(num(r.ordered_fbs))]);
-    total += await replaceRange('buyout_daily', cabinet, out, ['cabinet', 'date', 'offer_id', 'sku', 'ordered', 'delivered', 'cancelled', 'in_progress', 'ordered_fbs'], ['cabinet', 'date', 'offer_id']);
-  }
-  total += await importPrices(cabinet);
-  const warnings=[];
-  total += await syncFinanceOnlyFromSheet(cabinet,{onWarning:m=>warnings.push(m)});
-  return { rows: total,warning:warnings.length?warnings.join('; '):null };
+    return 0;
+  });
+  await importReport('Цены', () => importPrices(cabinet));
+  if (coreOnly) total += await importFinance();
+  if (financeError) throw financeError;
+  return { rows: total, warning: warnings.length ? warnings.join('; ') : null };
 }
 
 async function syncFinanceOnlyFromSheet(cabinet,{onWarning}={}) {
