@@ -1,7 +1,8 @@
 // Wildberries → Google-таблица → сервис (как ozon-sheet-sync.gs для Ozon).
 // Рабочий сбор и отдельная диагностика доступа. Финансы загружаются отдельно. Ключ — ТОЛЬКО в свойствах скрипта:
 //   Настройки проекта → Свойства скрипта → WB_TOKEN = <токен «только чтение»>
-//   CABINET_ID = defly_wb (для других магазинов — alex_wb, nab_wb …)
+//   CABINET_ID = defly_wb, nabauto_wb, alex_wb, accent_wb или adcars_wb
+//   WB_SHEET_ID = ID привязанной таблицы (обязательно для новых кабинетов).
 // Доступы: Статистика, Аналитика, Продвижение, Контент, Цены и скидки,
 // Маркетплейс, Финансы. Только чтение, не тестовый контур.
 // Никуда больше токен не вставляйте и никому не пересылайте.
@@ -130,7 +131,15 @@ function wbFetch_(method, url, body, statistics) {
 function wbLock_(name, fn) {
   var lock = LockService.getScriptLock(); if (!lock.tryLock(1000)) { Logger.log('Уже идёт сбор WB, следующий запуск по расписанию.'); return; }
   WB_JOB_STARTED = Date.now();
-  try { if (SpreadsheetApp.getActiveSpreadsheet().getId() !== '13_54MPKRjkSz49DmDhV5eA4Q0SJoPgAPwXnikKBqoHs') throw new Error('Скрипт должен быть привязан к таблице WB Defly'); if (wbCabinet_() !== 'defly_wb') throw new Error('Эта версия подключает только defly_wb'); fn(); }
+  try {
+    var cabinet = wbCabinet_();
+    if (['defly_wb', 'nabauto_wb', 'alex_wb', 'accent_wb', 'adcars_wb'].indexOf(cabinet) < 0) throw new Error('Неизвестное значение CABINET_ID для WB');
+    var expected = PropertiesService.getScriptProperties().getProperty('WB_SHEET_ID');
+    if (!expected && cabinet === 'defly_wb') expected = '13_54MPKRjkSz49DmDhV5eA4Q0SJoPgAPwXnikKBqoHs';
+    var sheet = SpreadsheetApp.getActiveSpreadsheet();
+    if (!expected || !sheet || sheet.getId() !== expected) throw new Error('Укажите ID привязанной таблицы в свойстве WB_SHEET_ID');
+    fn();
+  }
   finally { lock.releaseLock(); }
 }
 function wbSheet_(kind) { var book = SpreadsheetApp.getActiveSpreadsheet(), name = 'WB_' + kind; return book.getSheetByName(name) || book.insertSheet(name); }

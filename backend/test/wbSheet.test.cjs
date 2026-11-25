@@ -45,6 +45,13 @@ test('Apps Script публикует данные и WB_status с одной в�
   assert.equal(sheets.get('WB_status').cells[1][6], 1); assert.equal(sheets.get('WB_status').cells[1][0], 'defly_wb');
   const originalTime = sheets.get('WB_status').cells[1][3];
   ctx.resendWbData(); assert.equal(sheets.get('WB_status').cells.length, 2); assert.equal(sheets.get('WB_status').cells[1][3], originalTime);
+  props.set('CABINET_ID','nabauto_wb');
+  assert.throws(() => ctx.wbLock_('test', () => {}), /WB_SHEET_ID/);
+  props.set('WB_SHEET_ID','another_spreadsheet_id');
+  assert.throws(() => ctx.wbLock_('test', () => {}), /WB_SHEET_ID/);
+  props.set('WB_SHEET_ID',ID);
+  ctx.wbLock_('test', () => ctx.wbSave_('orders', [{ id: '2' }], '2026-10-01', '2026-10-29'));
+  assert.equal(sheets.get('WB_status').cells[2][0], 'nabauto_wb');
 });
 test('Google-импорт WB принимает отдельный финансовый набор без изменения заказов',async()=>{
  const bridge=require('../src/lib/wbBridge');bridge.KINDS.push('finance');
