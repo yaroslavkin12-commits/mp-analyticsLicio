@@ -48,6 +48,8 @@ const SHEET_SHOPS = [
 // Публичные номера компаний сверены с действовавшим сбором Render 14.11.2026.
 // Это не API-ключи; переменная окружения имеет приоритет.
 for (const [id, label, companyId] of SHEET_SHOPS) CABINETS[id] = { label, platform: 'ozon', family: 'defly', sheetOnly: true, ozonCompanyId: process.env[`${id.toUpperCase()}_OZON_COMPANY_ID`] || companyId };
+// Неполный архив нового кабинета не должен обнулять периоды общего производства.
+CABINETS.adcars.productionDemand = false;
 CABINETS.defly.platform = 'ozon'; CABINETS.defly.family = 'defly';
 
 CABINETS.defly_wb = { label: 'Defly WB', platform: 'wb', family: 'defly', wbBridge: true };

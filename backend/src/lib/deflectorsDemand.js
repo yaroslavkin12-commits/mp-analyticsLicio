@@ -1,12 +1,12 @@
 const dayjs = require('dayjs');
 const { createHash } = require('crypto');
 const { query } = require('../db');
-const { listCabinets } = require('../config/cabinets');
+const { CABINETS, listCabinets } = require('../config/cabinets');
 const { autoPath, OV_SQL, overrideArgs } = require('./categories');
 const groups = require('../../../dashboard/src/lib/deflectorGroups.json');
 const cached = new Map(), pending = new Map();
 const inGroup = (path, group) => path === groups[group].path || path.startsWith(groups[group].path + ' / ');
-const shops = () => listCabinets().filter(c => c.family === 'defly' && c.platform === 'ozon').map(c => ({ id: c.id, label: c.label, platform: 'ozon' }));
+const shops = () => listCabinets().filter(c => c.family === 'defly' && c.platform === 'ozon' && CABINETS[c.id]?.productionDemand !== false).map(c => ({ id: c.id, label: c.label, platform: 'ozon' }));
 async function catalogFor(group) {
   const cabinets = shops();
   const [catalog, overrides, wbData] = await Promise.all([
