@@ -4,9 +4,8 @@ const { CABINETS } = require('./cabinets');
 
 const metadata = 'http://169.254.169.254/computeMetadata/v1/instance/attributes';
 
-async function loadYandexSheetSources() {
-  if (!fs.existsSync('/var/lib/mp/status.json')) return;
-  await Promise.all(Object.entries(CABINETS).filter(([, cfg]) => cfg.sheetOnly || cfg.wbBridge).map(async ([id]) => {
+async function refreshYandexSheetSources(cabinets) {
+  await Promise.all(cabinets.map(async ([id]) => {
     const envKey = `ADS_SHEET_ID_${id.toUpperCase()}`;
     if (process.env[envKey]) return;
     const attribute = `ads-sheet-id-${id.replaceAll("_", "-")}`;
@@ -26,6 +25,17 @@ async function loadYandexSheetSources() {
       if (error.response?.status !== 404) console.warn(`[Кабинеты] Метаданные для ${id} недоступны`);
     }
   }));
+}
+
+async function loadYandexSheetSources() {
+  if (!fs.existsSync('/var/lib/mp/status.json')) return;
+  const cabinets = Object.entries(CABINETS);
+  await refreshYandexSheetSources(cabinets.filter(([, cfg]) => cfg.sheetOnly || cfg.wbBridge));
+  const wbCabinets = cabinets.filter(([, cfg]) => cfg.wbBridge);
+  // Новый источник WB можно привязать в метаданных работающего сервера.
+  setInterval(() => {
+    refreshYandexSheetSources(wbCabinets).catch(error => console.warn('[Кабинеты] WB:', error.message));
+  }, 60000).unref();
 }
 
 module.exports = { loadYandexSheetSources };
