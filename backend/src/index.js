@@ -181,6 +181,7 @@ async function start() {
     await new Promise(r => setTimeout(r, 4000));
   }
   await initSchema();
+  await require('./lib/adcarsAdsQuarantine').quarantineAdcarsAds();
   await require('./lib/auth').ensure().catch(e => console.warn('[Auth] ensure', e.message));
   await require('./lib/skuAlias').ensure().catch(e => console.warn('[SKU] ensure', e.message));
   app.listen(PORT, () => {

@@ -83,7 +83,10 @@ const HEAVY_TABS = ['Finance', 'Buyout', 'GeoOrders', 'Prices', 'StocksWh', 'Que
 // Короткий кэш вкладок (60 с): вкладка содержит оба кабинета, и при сборе
 // Licio сразу после Defly её не нужно скачивать и разбирать второй раз.
 const SHEET_CACHE = new Map();
+// Performance API ADCars пока отдаёт кампании Defly. Seller API остаётся активным.
+const ADS_TABS = new Set(['Campaigns', 'Stats', 'CampaignSkus', 'SkuStats', 'CpoOrders', 'CpoProducts', 'CpcBids']);
 async function fetchSheetRows(sheetName, cabinet) {
+  if (cabinet === 'adcars' && ADS_TABS.has(sheetName)) return [];
   const id = sheetId(cabinet);
   if (!id) return null; // ADS_SHEET_ID не настроен — считаем, что фоллбек не включён
   const ck = `${id}|${sheetName}`;
