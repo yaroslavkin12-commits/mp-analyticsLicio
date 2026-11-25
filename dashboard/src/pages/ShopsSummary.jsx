@@ -79,10 +79,13 @@ export default function ShopsSummary({ active, cabinet }) {
     setErr('');setUpperBusy(true);
     const len = dayjs(to).diff(dayjs(from), 'day') + 1;
     const pTo = dayjs(from).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(from).subtract(len, 'day').format('YYYY-MM-DD');
-    getSalesSummary(from, to, cabinet === 'licio' ? 'licio' : undefined).then(r => { if (!off) setOrders(r.data.data); }).catch(e => { if (!off) setErr(e.response?.data?.error || e.message); });
-    (async () => {
+    getSalesSummary(from, to, cabinet === 'licio' ? 'licio' : undefined).then(async r => {
+      if (off) return;
+      const summary = r.data.data;
+      setOrders(summary);
+      const connected = new Set(summary.shops.map(s => s.id));
       let forecasts=Promise.resolve();
-      for (const s of MARKETS) {
+      for (const s of MARKETS.filter(s => connected.has(s.id))) {
         try {
           const [cur, prev, bs, taxSettings] = await Promise.all([
             getFinancePnl(s.id, { dateFrom: from, dateTo: to, projection:'summary' }).then(r => r.data.data),
@@ -114,7 +117,12 @@ export default function ShopsSummary({ active, cabinet }) {
       }
       await forecasts;
       if(!off)setUpperBusy(false);
-    })();
+    }).catch(e => {
+      if (!off) {
+        setErr(e.response?.data?.error || e.message);
+        setUpperBusy(false);
+      }
+    });
     return () => { off = true; };
   }, [from, to, armed, cabinet, taxVersion]);
 
@@ -271,7 +279,7 @@ export default function ShopsSummary({ active, cabinet }) {
           </div>
         </div>
       )}
-      <ShopsWeekly shops={MARKETS} category={cat} active={active} ready={!!orders&&!upperBusy} taxVersion={taxVersion}/>
+      <ShopsWeekly shops={shops.map(s => s.shop)} category={cat} active={active} ready={!!orders&&!upperBusy} taxVersion={taxVersion}/>
     </div>
   );
 }

@@ -4,6 +4,7 @@ const { campLabel } = require('../../lib/adZone');
 const { query } = require('../../db');
 const { bulkUpsert } = require('./ozonHttp');
 const rowDiff = require('../../lib/rowDiff');
+const { CABINETS } = require('../../config/cabinets');
 
 // Запасной источник данных Ozon, когда прямые запросы с Render блокируются
 // сетью (см. /api/netcheck). Google Apps Script (другой скрипт, живёт в
@@ -21,7 +22,7 @@ const rowDiff = require('../../lib/rowDiff');
 // для малых магазинов), иначе общая ADS_SHEET_ID (Defly и Licio).
 function sheetId(cabinet) {
   const own = cabinet ? process.env[`ADS_SHEET_ID_${String(cabinet).toUpperCase()}`] : null;
-  return own || process.env.ADS_SHEET_ID || null;
+  return own || (CABINETS[cabinet]?.sheetOnly ? null : process.env.ADS_SHEET_ID || null);
 }
 
 function csvUrl(sheetName, cabinet) {

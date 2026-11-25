@@ -92,7 +92,7 @@ function buildRules(changedAll) {
 // Общий файл на все магазины: «Артикул | Defly | Alex | NABauto | Fullgas
 // [| Accent]» — по колонке новых цен на магазин (пусто или 0 = без изменений).
 // Колонки ищем по названиям; если заголовков нет — по порядку.
-const SHOP_COLS = [['defly', /дефлай|defly/i], ['alex', /алекс|alex/i], ['nabauto', /наб|nab/i], ['fullgas', /фулгаз|fullgas|full gas/i], ['accent', /акцент|accent/i]];
+const SHOP_COLS = [['defly', /дефлай|defly/i], ['alex', /алекс|alex/i], ['nabauto', /наб|nab/i], ['fullgas', /фулгаз|fullgas|full gas/i], ['accent', /акцент|accent/i], ['adcars', /\bad\s*cars\b/i]];
 const SHOP_ORDER = ['defly', 'alex', 'nabauto', 'fullgas', 'accent'];
 function parseMulti(aoa, num) {
   for (let r = 0; r < Math.min(aoa.length, 6); r++) {

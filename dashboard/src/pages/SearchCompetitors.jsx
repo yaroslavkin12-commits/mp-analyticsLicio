@@ -22,7 +22,7 @@ const money = v => (v == null ? '—' : `${fmtInt(v)} ₽`);
 const pct = v => (v == null ? '—' : fmtPct(v));
 const dd = d => (d ? `${d.slice(8)}.${d.slice(5, 7)}` : '—');
 const ozonUrl = sku => `https://www.ozon.ru/product/${sku}/`;
-const SHOP = { defly: 'Defly', nabauto: 'NABauto', alex: 'Alex', fullgas: 'Fullgas', accent: 'Accent Line', licio: 'Licio' };
+const SHOP = { defly: 'Defly', nabauto: 'NABauto', alex: 'Alex', fullgas: 'Fullgas', accent: 'Accent Line', adcars: 'ADCars', licio: 'Licio' };
 // Короткое название: до первой запятой, без «- ПРОДАВЕЦ -» в начале, не длиннее ~42 знаков.
 function shortName(n) {
   let t = String(n || '').replace(/^\s*-[^-]{2,40}-\s*/, '').split(/,|\s\/\s|\(/)[0].trim();
