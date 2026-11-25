@@ -172,6 +172,7 @@ app.use(express.static(distPath, {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(distPath, 'index.html')); });
 
 async function start() {
+  await require('./config/yandexSheetSources').loadYandexSheetSources();
   let retries = 15;
   while (retries--) {
     const ok = await testConnection();
