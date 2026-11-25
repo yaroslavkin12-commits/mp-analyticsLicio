@@ -4,6 +4,7 @@ test('Настоящий клиент сотрудника отправляет 
  const access=await import(accessUrl);access.configureAccess({id:7,role:'user',accessScope:{paths:['Дефлекторы']}});
  const axiosUrl=pathToFileURL(require.resolve('axios',{paths:[root]})).href;
  let code=fs.readFileSync(path.join(root,'api.js'),'utf8').replace("from 'axios'",`from '${axiosUrl}'`).replace("from './lib/accessClient'",`from '${accessUrl}'`);
+ code=code.replace("from './lib/cabinets.js'", `from '${pathToFileURL(path.join(root,'lib/cabinets.js')).href}'`);
  const api=await import('data:text/javascript;base64,'+Buffer.from(code+'\nexport const testClient=api;').toString('base64'));
  const sent=[];api.testClient.defaults.adapter=async cfg=>{sent.push({url:cfg.url,method:cfg.method,data:cfg.data});return {status:200,statusText:'OK',headers:{},config:cfg,data:{success:true,data:{id:'12'}}};};
  try{

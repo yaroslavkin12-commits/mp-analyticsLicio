@@ -1,3 +1,4 @@
+import { isWbCabinet } from '../lib/cabinets';
 import { returnOnCost, ROI_HINT } from './unitModel';
 import { accessStorage } from '../lib/accessClient';
 import { sumAvailable } from '../lib/availableSum';
@@ -75,7 +76,7 @@ function OpsDrill({ cabinet, drill, dates, dateFrom, dateTo, arts, filtered, sel
   const [open, setOpen] = useState(null);
   useEffect(() => {
     setRows(null); setErr('');
-    getFinanceOps(cabinet, drill.bucket, { dateFrom, dateTo, adsBasis:cabinet==='defly_wb'&&drill.bucket==='ads'?'activity':undefined }).then(r => setRows(r.data.data.rows)).catch(e => setErr(e.response?.data?.error || e.message));
+    getFinanceOps(cabinet, drill.bucket, { dateFrom, dateTo, adsBasis:isWbCabinet(cabinet)&&drill.bucket==='ads'?'activity':undefined }).then(r => setRows(r.data.data.rows)).catch(e => setErr(e.response?.data?.error || e.message));
   }, [cabinet, drill.bucket, dateFrom, dateTo]);
   useEffect(() => { const on = e => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', on); return () => window.removeEventListener('keydown', on); }, [onClose]);
   const mine = useMemo(() => new Set(arts.map(a => a.o)), [arts]);
@@ -98,14 +99,14 @@ function OpsDrill({ cabinet, drill, dates, dateFrom, dateTo, arts, filtered, sel
   return (
     <div className="f-drill-bg" onClick={onClose}>
       <div className="f-drill" onClick={e => e.stopPropagation()}>
-        <div className="f-drill-h"><b>{(LABEL[drill.bucket] || '').replaceAll('Ozon',cabinet==='defly_wb'?'WB':'Ozon') || (drill.bucket === 'ads' ? 'Реклама' : drill.bucket === 'return' ? 'Возвраты' : drill.bucket)}</b><span>{when} · {selName}</span><button type="button" className="a-btn ghost" onClick={onClose}>✕</button></div>
+        <div className="f-drill-h"><b>{(LABEL[drill.bucket] || '').replaceAll('Ozon',isWbCabinet(cabinet)?'WB':'Ozon') || (drill.bucket === 'ads' ? 'Реклама' : drill.bucket === 'return' ? 'Возвраты' : drill.bucket)}</b><span>{when} · {selName}</span><button type="button" className="a-btn ghost" onClick={onClose}>✕</button></div>
         {err && <div className="c-msg bad">{err}</div>}
-        {!view && !err && <div className="a-hint">Загрузка операций {cabinet==='defly_wb'?'WB':'Ozon'}…</div>}
+        {!view && !err && <div className="a-hint">Загрузка операций {isWbCabinet(cabinet)?'WB':'Ozon'}…</div>}
         {view && !view.list.length && <div className="a-hint">Операций нет.</div>}
         {view && view.list.length > 0 && (
           <>
             <table className="f-drill-t">
-              <thead><tr><th>Операция {cabinet==='defly_wb'?'WB':'Ozon'} (как в начислениях)</th><th className="r">По артикулам</th><th className="r">Без артикула</th><th className="r">Артикулов</th></tr></thead>
+              <thead><tr><th>Операция {isWbCabinet(cabinet)?'WB':'Ozon'} (как в начислениях)</th><th className="r">По артикулам</th><th className="r">Без артикула</th><th className="r">Артикулов</th></tr></thead>
               <tbody>
                 {view.list.map(x => (
                   <React.Fragment key={x.name}>
@@ -125,7 +126,7 @@ function OpsDrill({ cabinet, drill, dates, dateFrom, dateTo, arts, filtered, sel
             </table>
             {view.sumNo !== 0 && (
               <div className="a-hint" style={{ marginTop: 8 }}>
-                «Без артикула» — {cabinet==='defly_wb'?'WB':'Ozon'} списал на весь кабинет, без привязки к товару. В P&L такие суммы делятся по доле выручки дня{filtered ? `: на «${selName}» за период пришлось ≈${(shareOf * 100).toFixed(1).replace('.', ',')}% — поэтому в выбранной категории статья может вырасти, даже если по её товарам ничего не списывали` : ''}.
+                «Без артикула» — {isWbCabinet(cabinet)?'WB':'Ozon'} списал на весь кабинет, без привязки к товару. В P&L такие суммы делятся по доле выручки дня{filtered ? `: на «${selName}» за период пришлось ≈${(shareOf * 100).toFixed(1).replace('.', ',')}% — поэтому в выбранной категории статья может вырасти, даже если по её товарам ничего не списывали` : ''}.
               </div>
             )}
           </>
@@ -160,7 +161,7 @@ export default function PnL({ cabinet }) {
   const load = useCallback(() => {
     setLoading(true); setError(null);
     const ok = latestOnly('pnl:' + cabinet);
-    getFinancePnl(cabinet, { dateFrom, dateTo, adsBasis:cabinet==='defly_wb'?'activity':undefined })
+    getFinancePnl(cabinet, { dateFrom, dateTo, adsBasis:isWbCabinet(cabinet)?'activity':undefined })
       .then(ok(r => setData(r.data.data)))
       .catch(ok(e => setError(e.response?.data?.error || e.message)))
       .finally(ok(() => setLoading(false)));

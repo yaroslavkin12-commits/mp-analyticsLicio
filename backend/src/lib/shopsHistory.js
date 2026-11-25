@@ -14,11 +14,11 @@ async function build(params,ctx){
  const stages={};
  const timed=async(name,fn)=>{const start=performance.now();try{return await fn();}finally{stages[name]=Math.round(performance.now()-start);}};
  let sales,pnl,coefs,bs=null,coverage;
- if(cabinet==='defly_wb'){
-  const bridge=require('./wbBridge'),V=require('./wbViews');
+ if(require('../config/cabinets').isWb(cabinet)){
+  const bridge=require('./wbBridge').forCabinet(cabinet),V=require('./wbViews');
   const base=await bridge.read({kinds:['catalog','orders','sales','prices'],projection:'metrics'}),ads=await bridge.read({kinds:['ads','campaigns'],from:p.dateFrom,to:p.dateTo}),ds=[...base,...ads];
   const [fin,latest]=await Promise.all([bridge.readFinance({dateFrom:p.dateFrom,dateTo:p.dateTo}),bridge.readFinance({latest:true})]);
-  const prefs=await V.preferences(),m=V.build(fin?[...ds,fin]:ds,prefs,p),costs=await query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC");
+  const prefs=await V.preferences(cabinet),m=V.build(fin?[...ds,fin]:ds,prefs,p),costs=await query("SELECT article,cost_price FROM product_costs WHERE cabinet='defly' OR cabinet IS NULL ORDER BY updated_at DESC");
   sales=m.sales();pnl=m.pnl(costs);coefs=V.build(latest?[...ds,latest]:ds,prefs,p).coefs(costs);
   coverage={orders:sales.coverage?.orders,finance:range(pnl.available),ads:sales.coverage?.ads};
  }else{

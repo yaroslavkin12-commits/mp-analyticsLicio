@@ -1,3 +1,4 @@
+import { isWbCabinet } from '../lib/cabinets';
 import CategoryNav from '../components/CategoryNav';
 import QuickPeriods from '../components/QuickPeriods';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -72,8 +73,8 @@ export default function OrdersFeed({ cabinet }) {
     const latest = latestOnly('orders-feed');
     setErr('');
     const request = isBuyouts
-      ? getFinancePnl(cabinet, { dateFrom: from, dateTo: to, adsBasis: cabinet === 'defly_wb' ? 'activity' : undefined })
-      : getOrderFeed(cabinet, from, to, cabinet === 'defly_wb' ? kind : undefined);
+      ? getFinancePnl(cabinet, { dateFrom: from, dateTo: to, adsBasis: isWbCabinet(cabinet) ? 'activity' : undefined })
+      : getOrderFeed(cabinet, from, to, isWbCabinet(cabinet) ? kind : undefined);
     return request.then(latest(r => setPayload({ cabinet, kind, from, to, data: r.data.data })))
       .catch(latest(e => setErr(e.response?.data?.error || e.message)));
   }, [cabinet, from, to, kind, isBuyouts]);
@@ -201,7 +202,7 @@ export default function OrdersFeed({ cabinet }) {
   const pickedRows = rows.filter(x => picked.has(key(x)));
   const toggle = x => setPicked(s => { const n = new Set(s); if (n.has(key(x))) n.delete(key(x)); else n.add(key(x)); return n; });
   const modes = [['orders', 'Заказы'], ['sales', 'Выкупы']];
-  if (cabinet === 'defly_wb') modes.push(['returns', 'Возвраты']);
+  if (isWbCabinet(cabinet)) modes.push(['returns', 'Возвраты']);
   const changeKind = next => {
     setKind(next);
     setLimit(200);

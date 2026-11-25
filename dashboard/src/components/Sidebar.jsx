@@ -103,7 +103,10 @@ export default function Sidebar({ page, setPage, theme, setTheme, cabinet, setCa
               return item(x, off, off ? 'не подключён' : null);
             })}
             {head('WB')}
-            {SHOPS.filter(x => x.platform === 'wb' && shopAllowed(x.id)).map(x => item(x, false, conn && conn[x.id] === false ? 'настройка' : null))}
+            {SHOPS.filter(x => x.platform === 'wb' && shopAllowed(x.id)).map(x => {
+              const off = x.id !== 'defly_wb' && !conn?.[x.id];
+              return item(x, off, off || conn?.[x.id] === false ? 'не подключён' : null);
+            })}
             <div style={{ height:1, background:'var(--border)' }} />
             {shopAllowed('licio') && item(shopOf('licio'), false, 'WB + Ozon')}
           </div>

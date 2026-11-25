@@ -1,3 +1,4 @@
+import { isWbCabinet } from '../lib/cabinets';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
 import { getSalesData, getFinancePnl, getDailySalesPrices, latestOnly } from '../api';
@@ -50,7 +51,7 @@ export default function AvgCheck({ cabinet }) {
   const [sales, setSales] = useState(null);
   const [pnl, setPnl] = useState(null);
   const [prices, setPrices] = useState(null);
-  const showPrices = !['licio', 'defly_wb'].includes(cabinet);
+  const showPrices = cabinet !== 'licio' && !isWbCabinet(cabinet);
   const pricePeriod = `${cabinet}|${dateFrom}|${dateTo}`;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -68,7 +69,7 @@ export default function AvgCheck({ cabinet }) {
     setLoading(true); setError(null);
     const ok = latestOnly('check:' + cabinet);
     // Для среднего чека из аналитики нужны только количество и сумма заказов.
-    const salesPeriod = cabinet === 'defly_wb' ? { dateFrom, dateTo } : { dateFrom, dateTo, projection: 'summary' };
+    const salesPeriod = isWbCabinet(cabinet) ? { dateFrom, dateTo } : { dateFrom, dateTo, projection: 'summary' };
     Promise.all([getSalesData(cabinet, salesPeriod), getFinancePnl(cabinet, { dateFrom, dateTo })])
       .then(ok(([s, p]) => { setSales(s.data.data); setPnl(p.data.data); }))
       .catch(ok(e => setError(e.response?.data?.error || e.message)))

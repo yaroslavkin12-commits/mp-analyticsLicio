@@ -5,7 +5,7 @@ import { getPriceLog, getPriceSnap, getPriceHistory, uploadPriceLog, deletePrice
 import { useTableCtl, ThCtl, ResetCtl } from '../components/TableTools';
 import PriceDynamics from './PriceDynamics';
 import { fmtInt } from './AdsStats2';
-import { shopOf } from '../lib/cabinets';
+import { isWbCabinet, shopOf } from '../lib/cabinets';
 import './ads2.css';
 import './sales.css';
 import './production.css';
@@ -237,7 +237,7 @@ const MIS = 3; // расхождение с ценой на сайте, %, пр�
 const lastSeg = c => (c || '').split(SEP).slice(-1)[0] || 'без категории';
 
 export default function PriceLog({ cabinet }) {
-  const platform = cabinet === 'defly_wb' ? 'wb' : 'ozon';
+  const platform = isWbCabinet(cabinet) ? 'wb' : 'ozon';
   const readOnly = useReadOnly();
   const [log, setLog] = useState(null);
   const [err, setErr] = useState('');

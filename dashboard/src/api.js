@@ -1,3 +1,4 @@
+import { isWbCabinet } from './lib/cabinets.js';
 import axios from 'axios';
 import { accessMode, canWriteScoped } from './lib/accessClient';
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
@@ -12,7 +13,7 @@ api.interceptors.request.use(cfg => {
   if (access.readOnly && !['get','head','options'].includes(method) && !canWriteScoped(cfg)) throw new Error('Доступ только для просмотра и выгрузки');
   if (access.cacheTag && ['get','head'].includes(method)) cfg.params = { ...cfg.params, _access: access.cacheTag };
   const cabinet = cfg.params?.cabinet || (cfg.data && typeof cfg.data === 'object' ? cfg.data.cabinet : null);
-  if (cabinet === 'defly_wb') {
+  if (isWbCabinet(cabinet)) {
     if (/^\/(sales|promo|ads|stocks|orders|clusters|finance|queries)(\/|$)/.test(cfg.url)) { cfg.url = '/wb/views' + cfg.url; cfg.timeout = Math.max(cfg.timeout || 0, 120000); }
     if (/^\/pricelog/.test(cfg.url)) { cfg.params = { ...cfg.params, platform: 'wb' }; if (cfg.data && typeof cfg.data === 'object') cfg.data.platform = 'wb'; }
   }

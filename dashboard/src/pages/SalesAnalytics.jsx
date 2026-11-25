@@ -8,7 +8,7 @@ import { barSignals, isRateMetric } from '../lib/chartSignals';
 import { buyoutPnlTotals } from '../lib/pnlCalc';
 import { enrichSalesChart, FIN_CHART_METRICS } from '../lib/salesChartModel';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { isDeflyLike } from '../lib/cabinets';
+import { isWbCabinet, isDeflyLike } from '../lib/cabinets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesData, getSalesCardRatings, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
@@ -564,7 +564,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   useEffect(() => { load(); }, [load]);
   const [cardRatings, setCardRatings] = useState(null);
   useEffect(() => {
-    if (!active || cabinet === 'defly_wb') return;
+    if (!active || isWbCabinet(cabinet)) return;
     let current = true;
     const refresh = () => getSalesCardRatings(cabinet).then(({ data }) => {
       if (current) setCardRatings({ cabinet, entries: data.data });
@@ -585,7 +585,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     // Прошлый период той же длины — для сравнения выкупов, поступлений и прибыли.
     const len = dayjs(dateTo).diff(dayjs(dateFrom), 'day') + 1;
     const pTo = dayjs(dateFrom).subtract(1, 'day').format('YYYY-MM-DD'), pFrom = dayjs(dateFrom).subtract(len, 'day').format('YYYY-MM-DD');
-    const adsBasis = cabinet === 'defly_wb' ? 'activity' : undefined;
+    const adsBasis = isWbCabinet(cabinet) ? 'activity' : undefined;
     Promise.all([getFinancePnl(cabinet, { dateFrom, dateTo, adsBasis }).catch(() => null), getFinanceCoefs(cabinet).catch(() => null)])
       .then(([p, c]) => { if (!off) setFin(f => ({ ...(f || {}), pnl: p?.data?.data || null, coefs: c?.data?.data || null })); });
     getFinancePnl(cabinet, { dateFrom: pFrom, dateTo: pTo, adsBasis }).then(p => {
@@ -805,7 +805,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
   if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
   if (error && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить данные: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
 
-  if (!all.length && cabinet !== 'defly_wb') {
+  if (!all.length && !isWbCabinet(cabinet)) {
     return (
       <div className="mpui sa-page">
         <div className="a-top"><h1>Аналитика продаж</h1></div>
@@ -1137,12 +1137,12 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         </div>
         <div className="a-kpi" title="Сумма выкупленных товаров за вычетом возвратов — по дню выкупа (из отчёта продаж)">
           <span className="lbl">Выкупы, ₽</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.sRub) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.sRub) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sRub, finKP.sRub) : null} /> {finK?.has && T.revenue ? `${fmtPct(finK.sRub / T.revenue * 100)} от суммы заказов` : 'по дню выкупа'}</span>
         </div>
         <div className="a-kpi" title="Выкуплено штук за вычетом возвратов — по дню выкупа">
           <span className="lbl">Выкупы, шт</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.sQty) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.sQty) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.sQty, finKP.sQty) : null} /> {finK?.has && financeDays ? `≈ ${perDayTxt(finK.sQty / financeDays)} в день` : ''}</span>
         </div>
 
@@ -1154,17 +1154,17 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         </div>
         <div className="a-kpi" title="Выкупы, ₽ / выкупы, шт">
           <span className="lbl">Ср. чек выкупа, ₽</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.checkSale) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.checkSale) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.checkSale, finKP.checkSale) : null} /> по выкупленным товарам</span>
         </div>
         <div className="a-kpi" title="Прогноз по заказам периода: ожидаемая выручка (заказы × % выкупа) минус комиссия, логистика, эквайринг, хранение и реклама, делённая на ожидаемое число выкупов. Сравнима с фактическим поступлением с выкупа справа.">
           <span className="lbl">Ср. поступление с выкупа (прогноз), ₽</span>
-          <span className="val n">{finK ? fmtInt(finK.payOrder) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="val n">{finK ? fmtInt(finK.payOrder) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP ? dP(finK?.payOrder, finKP.payOrder) : null} /> на 1 ожидаемый выкуп</span>
         </div>
         <div className="a-kpi" title="Фактически к перечислению по выкупам периода после комиссии, логистики, эквайринга, прочих удержаний и дневной рекламы, на одну штуку за вычетом возвратов">
           <span className="lbl">Ср. поступление с выкупа (факт), ₽</span>
-          <span className="val n">{finK?.has ? fmtInt(finK.paySale) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="val n">{finK?.has ? fmtInt(finK.paySale) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.paySale, finKP.paySale) : null} /> {finK?.pay != null && finK.sRub > 0 ? `${fmtPct(finK.pay / finK.sRub * 100)} от выручки` : 'факт'}</span>
         </div>
 
@@ -1197,18 +1197,18 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         {/* 4. Прибыль и ассортимент */}
         <div className="a-kpi" title="С заказов периода: ожидаемая выручка с учётом % выкупа минус комиссия, логистика, эквайринг, хранение, реклама, себестоимость и налог (как в «Юнит-экономике»)">
           <span className="lbl">Прогнозируемая прибыль (с заказов), ₽</span>
-          <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="val n" style={{ color: finK?.fProfit < 0 ? 'var(--a-bad)' : undefined }}>{finK ? fmtInt(finK.fProfit) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP ? dP(finK?.fProfit, finKP.fProfit) : null} /> налог {tax}%</span>
         </div>
         <div className="a-kpi" title="По выкупам периода, как в «P&L»: поступления на счёт минус себестоимость выкупленных товаров и налог (налог — от суммы, оплаченной покупателем, по отчётам «Начисления»)">
           <span className="lbl">Фактическая прибыль (с выкупов), ₽</span>
-          <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+          <span className="val n" style={{ color: finK?.profit < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? fmtInt(finK.profit) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
           <span className="sub"><Delta value={finKP?.has && finK?.has ? dP(finK.profit, finKP.profit) : null} /> {fin?.pnl?._operational ? 'финансы пока не подключены' : finK?.noCost ? `без себестоимости: ${finK.noCost} арт.` : `налог ${tax}%`}</span>
         </div>
         <div className="a-kpi" title="Фактическая прибыль / выручка с выкупов периода — как «Маржа» в P&L">
           <span className="lbl">Маржа факт, %</span>
           {(() => { const mg = finK?.pay != null && finK.sRub > 0 ? finK.profit / finK.sRub * 100 : null, mp = finKP?.profit != null && finKP.sRub > 0 ? finKP.profit / finKP.sRub * 100 : null; return (<>
-            <span className="val n" style={{ color: mg !== null && mg < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? (mg === null ? '—' : fmtPct(mg)) : (cabinet === 'defly_wb' ? '—' : '…')}</span>
+            <span className="val n" style={{ color: mg !== null && mg < 0 ? 'var(--a-bad)' : undefined }}>{finK?.has ? (mg === null ? '—' : fmtPct(mg)) : (isWbCabinet(cabinet) ? '—' : '…')}</span>
             <span className="sub"><Delta value={mg !== null && mp !== null ? mg - mp : null} unit="pp" /> к прошлому периоду</span>
           </>); })()}
         </div>

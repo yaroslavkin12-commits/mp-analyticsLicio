@@ -55,7 +55,7 @@ test('WB: группы, порядок, ручные значения и сам�
  const previous=[dbPath,bridgePath,sheetPath].map(p=>require.cache[p]);const store=new Map();
  const q=async(sql,args=[])=>{if(sql.includes('SELECT value'))return store.has(args[0])?[{value:store.get(args[0])}]:[];if(sql.includes('INSERT INTO app_settings')){assert.equal(args[0],'wb-ui:defly_wb:v1');store.set(args[0],args[1]);}return [];};
  require.cache[dbPath]={exports:{query:q,getPool:()=>({connect:async()=>({query:async(s,a)=>({rows:await q(s,a)}),release(){}})})}};
- require.cache[bridgePath]={exports:{read:async()=>fixture()}};require.cache[sheetPath]={exports:{sync:async()=>{},status:()=>({})}};
+ require.cache[bridgePath]={exports:{CABINET:'defly_wb',read:async()=>fixture(),forCabinet:id=>({read:async()=>fixture()})}};require.cache[sheetPath]={exports:{sync:async()=>{},status:()=>({}),forCabinet:()=>({sync:async()=>{},status:()=>({})})}};
  try{
  const route=require('../src/routes/wbViews').stack[0].handle;
  const call=async(path,method='GET',body={},cabinet='defly_wb')=>{let code=200,out;await route({path,method,body,query:{cabinet,dateFrom:from,dateTo:to}},{set(){},status(n){code=n;return this;},json(x){out=x;return this;}});return {code,...out};};
@@ -66,6 +66,10 @@ test('WB: группы, порядок, ручные значения и сам�
  assert.equal((await call('/sales/category','POST',{offerIds:['A'],path:'Дефлекторы / Капот'})).data.path,'Дефлекторы / Капот');
  await call('/orders/self','POST',{items:[{p:'o1',sku:'1'}],on:true});assert.equal((await call('/promo/stats')).data.articles[0].totals.orders,1);
  assert.equal((await call('/sales/data','GET',{},'defly')).code,400);assert.equal(store.size,1);
+ process.env.ADS_SHEET_ID_NABAUTO_WB = 'test-fixture';
+ try {
+   assert.deepEqual((await call('/promo/groups','GET',{},'nabauto_wb')).data.groups,[]);
+ } finally { delete process.env.ADS_SHEET_ID_NABAUTO_WB; }
  }finally{[dbPath,bridgePath,sheetPath].forEach((p,i)=>{if(previous[i])require.cache[p]=previous[i];else delete require.cache[p];});}
 });
 

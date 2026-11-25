@@ -9,7 +9,7 @@ const stamp = new Date().toISOString();
 let manifest = quote([header, ['defly_wb', 'orders', 'run-sheet-1', stamp, '2026-10-01', '2026-10-29', 1, '']]);
 let table = quote([['id', 'payload', 'run_id'], ['A', JSON.stringify({ id: 'A', price: 100, note: 'Кавычки "тест", перенос\nстроки' }), 'run-sheet-1']]);
 require.cache[require.resolve('../node_modules/axios')] = { exports: { get: async url => { requests.push(url); return { data: url.includes('sheet=WB_status') ? manifest : table }; } } };
-require.cache[require.resolve('../src/lib/wbBridge')] = { exports: { CABINET: 'defly_wb', KINDS: ['orders', 'sales'], read: async () => [...old.values()], ingest: async p => { saved.push(p); old.set(p.kind, { kind: p.kind, meta: { runId: p.runId } }); return { complete: true }; } } };
+require.cache[require.resolve('../src/lib/wbBridge')] = { exports: { CABINET: 'defly_wb', KINDS: ['orders', 'sales'], forCabinet: cabinet => ({readMeta: async () => [...old.values()].filter(row => row.cabinet === cabinet)}), ingest: async p => { saved.push(p); old.set(p.cabinet + ':' + p.kind, { cabinet: p.cabinet, kind: p.kind, meta: { runId: p.runId } }); return { complete: true }; } } };
 const source = require('../src/collectors/wb/sheetSync');
 test('WB читает именно ID своего кабинета, CSV с кавычками; секрет не требуется; повтор не качает набор', async () => {
   delete process.env.WB_SYNC_SECRET;
@@ -51,5 +51,27 @@ test('Google-импорт WB принимает отдельный финанс�
  const r={id:'142382026102312345|9007199254740993',reportId:'142382026102312345',rrdId:'9007199254740993',forPay:'100.01'};
  manifest=quote([header,['defly_wb','finance','run-finance-1',stamp,'2026-08-01','2026-10-29',1,'']]);
  table=quote([['id','payload','run_id'],[r.id,JSON.stringify(r),'run-finance-1']]);
- await source.sync(true);await source.waitForFinance();assert.equal(source.status().error,null);assert.equal(saved.at(-1).kind,'finance');assert.equal(saved.at(-1).rows[0].reportId,r.reportId);assert.equal(saved.at(-1).rows[0].forPay,'100.01');assert.ok(old.has('orders'));
+ await source.sync(true);await source.waitForFinance();assert.equal(source.status().error,null);assert.equal(saved.at(-1).kind,'finance');assert.equal(saved.at(-1).rows[0].reportId,r.reportId);assert.equal(saved.at(-1).rows[0].forPay,'100.01');assert.ok(old.has('defly_wb:orders'));
+});
+
+test('NABauto WB использует свою таблицу и отклоняет данные Defly', async () => {
+  const id = 'nabauto_fixture_sheet_id_0001';
+  process.env.ADS_SHEET_ID_NABAUTO_WB = id;
+  const nab = source.forCabinet('nabauto_wb');
+  try {
+    assert.notEqual(nab, source.forCabinet('defly_wb'));
+    const original = saved.length;
+    manifest = quote([header, ['defly_wb', 'orders', 'run-sheet-2', stamp, '2026-10-01', '2026-10-29', 1, '']]);
+    assert.match((await nab.sync(true)).error, /этого кабинета/);
+    assert.equal(saved.length, original);
+    manifest = manifest.replace('defly_wb', 'nabauto_wb');
+    table = quote([['id', 'payload', 'run_id'], ['A', JSON.stringify({ id: 'A', price: 99 }), 'run-sheet-2']]);
+    assert.equal((await nab.sync(true)).error, null);
+    assert.equal(saved.length, original + 1);
+    assert.equal(saved.at(-1).cabinet, 'nabauto_wb');
+    assert.ok(requests.at(-1).includes('/d/' + id + '/'));
+    assert.ok(old.has('defly_wb:orders') && old.has('nabauto_wb:orders'));
+  } finally {
+    delete process.env.ADS_SHEET_ID_NABAUTO_WB;
+  }
 });

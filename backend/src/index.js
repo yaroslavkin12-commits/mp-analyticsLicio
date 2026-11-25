@@ -21,7 +21,7 @@ app.use(require('./lib/categoryAccess').middleware());
 app.use('/api/auth', require('./routes/auth'));
 app.get('/api/ops/status', (req, res) => res.json(require('./lib/opsStatus')()));
 
-app.use((req, res, next) => { if ((req.query.cabinet || req.body?.cabinet) === 'defly_wb' && /^\/api\/(finance|sales|ads|promo|discounts|stocks|queries|orders)(\/|$)/.test(req.path)) return res.status(409).json({ success: false, error: 'Этот раздел Ozon не используется для WB. Финансы Defly WB пока не подключены.' }); next(); });
+app.use((req, res, next) => { if (require('./config/cabinets').isWb(req.query.cabinet || req.body?.cabinet) && /^\/api\/(finance|sales|ads|promo|discounts|stocks|queries|orders)(\/|$)/.test(req.path)) return res.status(409).json({ success: false, error: 'Этот раздел Ozon не используется для WB.' }); next(); });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 // Короткий кэш тяжёлых отчётов (вкладки «Реклама» и «Аналитика продаж»):

@@ -1,3 +1,4 @@
+import { isWbCabinet } from '../lib/cabinets';
 import AdHypotheses from './AdHypotheses';
 import FloatingInfo from '../components/FloatingInfo';
 import { accessStorage, readPersonalOrder, savePersonalOrder } from '../lib/accessClient';
@@ -1113,7 +1114,7 @@ function Detail({ cabinet, unitCoefficients, taxPct, articles, dates, mode, even
             </button>
           )}
         </h4>
-        <DaysTable showPrices showAdPosition={cabinet === 'defly_wb'} testPeriod={testPeriod} dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
+        <DaysTable showPrices showAdPosition={isWbCabinet(cabinet)} testPeriod={testPeriod} dates={dates} model={model} mode={mode} editable={editMode && !isAggregate && mode === 'all'}
           onManualSave={!readOnly && offerId ? (d, k, v) => onManualSave(offerId, d, k, v) : null} />
       </div>
       <div className="a-box wide">
@@ -1170,7 +1171,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
   const ref = useRef(null);
   useEffect(() => { if (ref.current) ref.current.scrollLeft = ref.current.scrollWidth; }, [dates.length, rows.length]);
   const cfg = MATRIX_METRICS.find(m => m.key === metric);
-  const metricLabel = item => cabinet === 'defly_wb' && mode === 'ads' && item.key === 'pdpViews' ? 'Клики' : item.label;
+  const metricLabel = item => isWbCabinet(cabinet) && mode === 'ads' && item.key === 'pdpViews' ? 'Клики' : item.label;
   const models = useMemo(() => rows.map(a => ({ a, m: buildModel([a], dates, mode) })), [rows, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const all = useMemo(() => buildModel(rows, dates, mode), [rows, dates, mode, UNIT_CTX.k, UNIT_CTX.tax]); // eslint-disable-line react-hooks/exhaustive-deps
   const vals = [];
@@ -1222,7 +1223,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
         <span className="a-hint"><span className={scopeActive?'a-scope':''}>{scopeLabel}</span> · {rows.length} арт.</span>
         {controls}
         {view==='articles'&&<span className="a-seg">
-          {MATRIX_METRICS.filter(m => !(mode === 'ads' && m.key === 'cart' && cabinet !== 'defly_wb')).map(m => (
+          {MATRIX_METRICS.filter(m => !(mode === 'ads' && m.key === 'cart' && !isWbCabinet(cabinet))).map(m => (
             <button key={m.key} type="button" className={metric === m.key ? 'on' : ''} onClick={() => setMetric(m.key)}>{metricLabel(m)}</button>
           ))}
         </span>}
@@ -1234,7 +1235,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
         )}
         {view === 'articles' && exportError && <span role="alert" className="a-hint">{exportError}</span>}
       </div>
-      {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable showPrices showAdPosition={cabinet === 'defly_wb'} dates={dates} model={all} mode={mode} />:<React.Fragment>
+      {!rows.length?<div className="a-empty">Под текущие фильтры ничего не подошло.</div>:view==='rnp'?<DaysTable showPrices showAdPosition={isWbCabinet(cabinet)} dates={dates} model={all} mode={mode} />:<React.Fragment>
       {metric === 'position' && <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11, color: 'var(--a-ink3)', marginBottom: 8 }} title="Цветовая шкала постоянная и не зависит от периода, фильтров и крайних значений. Между ориентирами цвет меняется плавно.">
         <span>Цвет позиции:</span>
         {[[10, '1–10'], [30, '30'], [60, '60 и выше']].map(([v, label]) => <span key={v}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: positionHeatColor(v) }} />{label}</span>)}
@@ -1374,7 +1375,7 @@ export default function AdsStats2({ cabinet }) {
   const [collecting, setCollecting] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
   const [status, setStatus] = useState(null);
-  const isWb = cabinet === 'defly_wb';
+  const isWb = isWbCabinet(cabinet);
   const [mode, setMode] = useState(() => isWb ? 'ads' : 'all');
   const [search, setSearch] = useState('');
   const [artOpts, setArtOpts] = useState([]);
@@ -1842,7 +1843,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
           <td>
             <div className="a-stock">
               <span className="n">{fmtInt(st)}</span>
-              <span className={`d ${daysCls}`}>{st === null ? 'нет данных' : st === 0 ? 'нет в наличии' : a.stockDays === null ? (cabinet === 'defly_wb' && !Number.isFinite(a.totals.orders) ? 'нет данных о темпе' : 'нет продаж') : `≈ ${Math.round(a.stockDays)} дн`}</span>
+              <span className={`d ${daysCls}`}>{st === null ? 'нет данных' : st === 0 ? 'нет в наличии' : a.stockDays === null ? (isWbCabinet(cabinet) && !Number.isFinite(a.totals.orders) ? 'нет данных о темпе' : 'нет продаж') : `≈ ${Math.round(a.stockDays)} дн`}</span>
             </div>
           </td>
           <td className="n" onClick={e => e.stopPropagation()}><TransitCell value={transit[key]} onSave={p => saveTransit(key, p)} /></td>
@@ -1952,7 +1953,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
         <div className="a-kpi">
           <span className="lbl">Остаток сейчас, шт</span>
           <span className="val n">{fmtInt(total.stockNow)}</span>
-          <span className="sub" style={{ color: lowStock ? 'var(--a-bad)' : undefined }}>{lowStock ? `${lowStock} арт. заканчиваются (< 7 дн)` : cabinet === 'defly_wb' && !Number.isFinite(T.orders) ? 'Нет данных о темпе продаж' : 'Запаса хватает'}</span>
+          <span className="sub" style={{ color: lowStock ? 'var(--a-bad)' : undefined }}>{lowStock ? `${lowStock} арт. заканчиваются (< 7 дн)` : isWbCabinet(cabinet) && !Number.isFinite(T.orders) ? 'Нет данных о темпе продаж' : 'Запаса хватает'}</span>
           <AreaSpark values={series('stock')} color="var(--a-ink3)" />
         </div>
         <div className="a-kpi">
@@ -1960,7 +1961,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
           <span className="val n">{fmtInt(T.spend)}</span>
           <div className="split">
             <span>За клик <b className="n">{fmtInt(T.spendCpc)}</b></span>
-            {cabinet === 'defly_wb' && <span>За показы / прочее <b className="n">{fmtInt(T.spendOther)}</b></span>}
+            {isWbCabinet(cabinet) && <span>За показы / прочее <b className="n">{fmtInt(T.spendOther)}</b></span>}
             <span title="Оплата за заказ — в дне заказа. Ozon списывает её позже, в день выкупа: в P&L и финансах эти суммы в других днях">За заказ (по дню заказа) <b className="n">{T.spendCpo ? fmtInt(T.spendCpo) : '—'}</b></span>
           </div>
           <span className="sub"><Delta value={P && changePct(T.spend, P.spend)} goodWhen="neutral" /> к прошлому периоду</span>
@@ -2034,7 +2035,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
         </div>
       </div>
 
-      <div className="a-hint" style={{ margin: '6px 2px 0' }}>{cabinet === 'defly_wb' ? 'WB: недоступные данные показаны «—». CPM учтён отдельно от оплаты за клик. ДРР — расход / сумма заказов.' : <>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</>}</div>
+      <div className="a-hint" style={{ margin: '6px 2px 0' }}>{isWbCabinet(cabinet) ? 'WB: недоступные данные показаны «—». CPM учтён отдельно от оплаты за клик. ДРР — расход / сумма заказов.' : <>Оплата за заказ в этом разделе стоит в дне заказа — так видно эффективность каждого дня. Ozon списывает её позже, в день выкупа, поэтому в P&L и финансах эти суммы попадают в другие дни. ДРР здесь — от суммы заказов; «с выкупом» — от заказов × % выкупа, как в «Цены и маржа» и калькуляторе.</>}</div>
 
       <React.Suspense fallback={null}><AdSpendCats data={data} cabinet={cabinet} tip={tip} /></React.Suspense>
 

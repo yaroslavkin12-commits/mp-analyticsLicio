@@ -2,12 +2,14 @@ const dayjs = require('dayjs');
 const { autoPath, carBrand, ORDER } = require('./categories');
 const { districtOf, DISTRICT_ORDER } = require('./regions');
 const {coverageRanges}=require('./wbHistory');
-const KEY = 'wb-ui:defly_wb:v1';
+const { CABINET } = require('./wbBridge');
+const preferenceKey = cabinet => `wb-ui:${cabinet}:v1`;
 const initial = () => ({ groups: [], members: {}, order: [], transit: {}, events: [], categories: {}, manual: {}, self: {}, clusterDecisions: {}, templates: null, sewing: {} });
-async function preferences() { const r = await require('../db').query('SELECT value FROM app_settings WHERE key=$1', [KEY]); return { ...initial(), ...(r[0] ? JSON.parse(r[0].value) : {}) }; }
-async function update(fn) {
+async function preferences(cabinet = CABINET) { const r = await require('../db').query('SELECT value FROM app_settings WHERE key=$1', [preferenceKey(cabinet)]); return { ...initial(), ...(r[0] ? JSON.parse(r[0].value) : {}) }; }
+async function update(fn, cabinet = CABINET) {
+  const key = preferenceKey(cabinet);
   const c = await require('../db').getPool().connect();
-  try { await c.query('BEGIN'); await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [KEY]); const r = await c.query('SELECT value FROM app_settings WHERE key=$1 FOR UPDATE', [KEY]); const p = { ...initial(), ...(r.rows[0] ? JSON.parse(r.rows[0].value) : {}) }; const result = fn(p); await c.query('INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2,NOW()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()', [KEY, JSON.stringify(p)]); await c.query('COMMIT'); require('./dataVersion').bump(); return result; } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
+  try { await c.query('BEGIN'); await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]); const r = await c.query('SELECT value FROM app_settings WHERE key=$1 FOR UPDATE', [key]); const p = { ...initial(), ...(r.rows[0] ? JSON.parse(r.rows[0].value) : {}) }; const result = fn(p); await c.query('INSERT INTO app_settings(key,value,updated_at) VALUES($1,$2,NOW()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()', [key, JSON.stringify(p)]); await c.query('COMMIT'); require('./dataVersion').bump(); return result; } catch (e) { await c.query('ROLLBACK'); throw e; } finally { c.release(); }
 }
 const number = v => v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
 function add(a, b) { return a == null || b == null ? null : a + b; }

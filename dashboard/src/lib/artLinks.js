@@ -1,3 +1,4 @@
+import { isWbCabinet } from './cabinets';
 // ─────────────────────────────────────────────────────────────────────────
 // Артикулы по всему сервису: рядом с каждым — едва заметная кнопка «копировать»,
 // клик по самому артикулу открывает карточку товара на Ozon.
@@ -70,7 +71,7 @@ export function initArtLinks(cabinet) {
   if (cabinet === cab) return;
   cab = cabinet;
   skus = new Map();
-  if (cabinet === 'defly_wb') return;
+  if (isWbCabinet(cabinet)) return;
   getSkus(cabinet).then(r => {
     if (cab !== cabinet) return;
     skus = new Map(Object.entries(r.data.data || {}));

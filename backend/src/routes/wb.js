@@ -1,38 +1,44 @@
 const express = require('express');
 const dayjs = require('dayjs');
 const bridge = require('../lib/wbBridge');
+const { isWb, isConnected } = require('../config/cabinets');
+const sheets = require('../collectors/wb/sheetSync');
 const router = express.Router();
 router.use('/views', require('./wbViews'));
 router.post('/import', async (req, res) => {
-  try { bridge.verify(req.wbRawBody, req.get('X-WB-Timestamp'), req.get('X-WB-Signature')); res.json({ success: true, data: await bridge.ingest(req.body) }); }
+  try { bridge.verify(req.wbRawBody, req.get('X-WB-Timestamp'), req.get('X-WB-Signature')); if (req.body?.cabinet !== bridge.CABINET) throw new Error('Неизвестный кабинет WB'); res.json({ success: true, data: await bridge.ingest(req.body) }); }
   catch (e) { res.status(e.status || 400).json({ success: false, error: e.message }); }
 });
 router.get('/data', async (req, res) => {
   try {
-    if ((req.query.cabinet || bridge.CABINET) !== bridge.CABINET) return res.status(400).json({ success: false, error: 'Неизвестный кабинет WB' });
+    const cabinet = req.query.cabinet || bridge.CABINET;
+    if (!isWb(cabinet)) return res.status(400).json({ success: false, error: 'Неизвестный кабинет WB' });
     const to = req.query.dateTo || new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date());
     const from = req.query.dateFrom || dayjs(to).subtract(29, 'day').format('YYYY-MM-DD');
     if (![from, to].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d) || from > to || dayjs(to).diff(from, 'day') > 365) throw new Error('Выберите период не более года');
-    const sync = await require('../collectors/wb/sheetSync').sync(req.query.fresh === '1');
-    const datasets = await bridge.read({excludeFinance:true});
-    const finance = (await bridge.readMeta()).find(x=>x.kind==='finance'); if(finance)datasets.push({...finance,rows:[]});
+    const reader = cabinet === bridge.CABINET ? bridge : bridge.forCabinet(cabinet);
+    const source = cabinet === bridge.CABINET ? sheets : sheets.forCabinet(cabinet);
+    const sync = await source.sync(req.query.fresh === '1');
+    const datasets = await reader.read({excludeFinance:true});
+    const finance = (await reader.readMeta()).find(x=>x.kind==='finance'); if(finance)datasets.push({...finance,rows:[]});
     res.set('Cache-Control', 'no-store');
-    res.json({ success: true, data: { ...buildReport(datasets, from, to, !!process.env.ADS_SHEET_ID_DEFLY_WB), sync } });
+    res.json({ success: true, data: { ...buildReport(datasets, from, to, isConnected(cabinet), cabinet), sync } });
   } catch (e) { res.status(400).json({ success: false, error: e.message }); }
 });
 // Статус исходного отчёта: не подменяет подтверждение финансовых формул.
 router.get('/finance-status', async (req,res) => {
   try {
-    if((req.query.cabinet || bridge.CABINET)!==bridge.CABINET)return res.status(400).json({success:false,error:'Неизвестный кабинет WB'});
-    const source=require('../collectors/wb/sheetSync'); source.sync(req.query.fresh==='1').catch(()=>{}); const sync=source.status();
-    const d=await bridge.readFinance();
+    const cabinet = req.query.cabinet || bridge.CABINET;
+    if(!isWb(cabinet))return res.status(400).json({success:false,error:'Неизвестный кабинет WB'});
+    const source=cabinet === bridge.CABINET ? sheets : sheets.forCabinet(cabinet); source.sync(req.query.fresh==='1').catch(()=>{}); const sync=source.status();
+    const d=await (cabinet === bridge.CABINET ? bridge : bridge.forCabinet(cabinet)).readFinance();
     let calculationError=null,totals=null;if(d)try{const rows=require('../lib/wbFinance').entries(d.rows);totals={payout:rows.reduce((s,r)=>s+r.amount,0),quantity:rows.reduce((s,r)=>s+r.qty,0)};}catch(e){calculationError=e.message;}
     res.set('Cache-Control','no-store');res.json({success:true,data:{imported:!!d,rows:d?.meta.total??null,from:d?.meta.from??null,to:d?.meta.to??null,collectedAt:d?.meta.collectedAt??null,receivedAt:d?.updated_at??null,calculationsReady:!!d&&!calculationError,calculationError,totals,sync}});
   } catch(e){res.status(400).json({success:false,error:e.message});}
 });
 const n = v => v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
 const total = (rows, key) => rows.some(r => n(r[key]) === null) ? null : rows.reduce((s, r) => s + n(r[key]), 0);
-function buildReport(datasets, from, to, configured) {
+function buildReport(datasets, from, to, configured, cabinet = bridge.CABINET) {
   const data = new Map(datasets.map(d => [d.kind, d]));
   const get = k => data.get(k)?.rows || [];
   const period = r => r.date >= from && r.date <= to;
@@ -60,7 +66,7 @@ function buildReport(datasets, from, to, configured) {
   for (const d of daily.values()) { if (!available('orders')) d.orders = d.orderRub = null; if (!available('sales')) d.sold = d.returned = null; if (!available('ads')) d.spend = null; }
   if (!available('orders')) for (const k of ['orders', 'cancelled', 'orderRub']) sums[k] = null;
   if (!available('sales')) for (const k of ['sold', 'returned', 'salesRub']) sums[k] = null;
-  return { cabinet: bridge.CABINET, from, to, configured, status: bridge.KINDS.map(kind => ({ kind, ...(data.get(kind)?.meta || {}), receivedAt: data.get(kind)?.updated_at || null, available: available(kind) })), summary: sums, daily: [...daily.values()], articles: list, orders, sales, stocks: stock, campaigns: [...campaigns.values()].map(c => ({ ...c, ...(!available('ads') ? { spend: null, views: null, clicks: null, orders: null, orderRub: null, atbs: null } : {}) })), adProducts: ads.filter(r => r.scope === 'sku') };
+  return { cabinet, from, to, configured, status: bridge.KINDS.map(kind => ({ kind, ...(data.get(kind)?.meta || {}), receivedAt: data.get(kind)?.updated_at || null, available: available(kind) })), summary: sums, daily: [...daily.values()], articles: list, orders, sales, stocks: stock, campaigns: [...campaigns.values()].map(c => ({ ...c, ...(!available('ads') ? { spend: null, views: null, clicks: null, orders: null, orderRub: null, atbs: null } : {}) })), adProducts: ads.filter(r => r.scope === 'sku') };
 }
 module.exports = router;
 module.exports.buildReport = buildReport;

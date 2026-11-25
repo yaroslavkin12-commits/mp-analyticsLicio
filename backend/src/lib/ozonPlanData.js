@@ -28,8 +28,8 @@ async function marketPeriod(month, ids = Object.keys(CABINETS).filter(id => CABI
     const ranges = await query(`SELECT cabinet, MIN(date)::text mn, MAX(date)::text mx FROM finance_daily WHERE cabinet = ANY($1::text[]) GROUP BY cabinet`, [ozon]);
     for (const r of ranges) if (validDate(r.mx) && r.mx < limit) limit = r.mx;
   }
-  if (ids.some(id => CABINETS[id].platform === 'wb')) {
-    const wb = (await require('./wbBridge').readMeta()).find(d => d.kind === 'finance');
+  for (const id of ids.filter(id => CABINETS[id].platform === 'wb')) {
+    const wb = (await require('./wbBridge').forCabinet(id).readMeta()).find(d => d.kind === 'finance');
     if (validDate(wb?.meta.to) && wb.meta.to < limit) limit = wb.meta.to;
   }
   let end = dayjs(limit);
@@ -40,15 +40,15 @@ function checkPeriod(from, to) {
   if (!validDate(from) || !validDate(to) || from > to || dayjs(to).diff(from, 'day') > 91) throw new Error('Период базы: от 1 до 92 дней');
   if (to > cutoff()) throw new Error(`Для базы доступны полные дни по ${cutoff()}; текущий день используется в выполнении предварительно`);
 }
-async function wbModel(from,to,finance=false){
-  const bridge=require('./wbBridge'),views=require('./wbViews');const ds=await bridge.read({excludeFinance:true});
+async function wbModel(cabinet,from,to,finance=false){
+  const bridge=require('./wbBridge').forCabinet(cabinet),views=require('./wbViews');const ds=await bridge.read({excludeFinance:true});
   if(finance){const f=await bridge.readFinance();if(f)ds.push(f);}
-  return {model:views.build(ds,await views.preferences(),{dateFrom:from,dateTo:to}),datasets:ds};
+  return {model:views.build(ds,await views.preferences(cabinet),{dateFrom:from,dateTo:to}),datasets:ds};
 }
 async function catalogs(ids = SHOPS,contexts=null) {
   const out = {}, errors = {};
   for (const shop of ids) {
-    try { out[shop] = shop==='defly_wb'?(await wbModel()).model.articles:(await meta(shop)).articles; }
+    try { out[shop] = CABINETS[shop].platform==='wb'?(await wbModel(shop)).model.articles:(await meta(shop)).articles; }
     catch (e) { out[shop] = []; errors[shop] = e.message; }
   }
   if(contexts)for(const id of ids)out[id]=out[id].filter(a=>contexts[id]?.allowed.has(a.o)).map(a=>({...a,cat:contexts[id].allowed.get(a.o).path}));
@@ -59,7 +59,7 @@ async function report(shop, from, to, tax, source, frozen, openDay = false,ctx=n
   if (!isConnected(shop)) return { label, error: 'магазин не подключён', byPath: {} };
   try {
     const [{ pnlTotals }, { unitCoefs, unitProfit }] = await models;
-    const wb=platform==='wb'?await wbModel(from,to,true):null;
+    const wb=platform==='wb'?await wbModel(shop,from,to,true):null;
     let data = wb?wb.model.pnl():await loadPnl({ cabinet: shop, dateFrom: from, dateTo: to });
     if(ctx)data=require('./categoryAccess').projection('/finance/pnl',data,ctx);
     if(wb&&data._operational)return {label,platform,error:'Финансовый отчёт WB ещё не загружен',byPath:{}};

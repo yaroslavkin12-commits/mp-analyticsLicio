@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { CABINETS, familyOf } = require('../config/cabinets');
+const { CABINETS, familyOf, isWb } = require('../config/cabinets');
 const { autoPath, OV_SQL, overrideArgs } = require('./categories');
 const SEP = ' / ';
 const PAGES = ['summary','plan','geo','search','costs','sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator','pricelog'];
@@ -32,10 +32,10 @@ function category(cabinet, path) {
 }
 async function catalogue(cabinet) {
   const map = new Map();
-  if (cabinet === 'defly_wb') {
+  if (isWb(cabinet)) {
     const [rows, prefs] = await Promise.all([
       query("SELECT rows FROM wb_bridge_data WHERE cabinet=$1 AND kind='catalog'", [cabinet]),
-      require('./wbViews').preferences(),
+      require('./wbViews').preferences(cabinet),
     ]);
     for (const r of rows[0]?.rows || []) if (r.offer) map.set(String(r.offer), { path: prefs.categories[r.offer] || autoPath('defly', r.name || '', r.offer).join(SEP), sku: r.nmId, name: r.name });
   } else {
@@ -228,8 +228,8 @@ function middleware() {
       }catch{return res.status(503).json({success:false,error:'Не удалось проверить доступ к категориям'});}
     }
     const cabinet = (journalWrite || competitorWrite || scopedWrite) && req.method === 'POST' ? req.body?.cabinet : (req.query.cabinet === undefined ? 'defly' : req.query.cabinet);
-    if (typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || (/^\/api\/wb\/views/i.test(req.path) && cabinet !== 'defly_wb')) return res.status(403).json({ success:false, error:'Нет доступа к этому кабинету' });
-    if (queryWrite && cabinet === 'defly_wb') return res.status(403).json({success:false,error:'Поисковые запросы WB недоступны'});
+    if (typeof cabinet !== 'string' || !scope.cabinets.includes(cabinet) || (/^\/api\/wb\/views/i.test(req.path) && !isWb(cabinet))) return res.status(403).json({ success:false, error:'Нет доступа к этому кабинету' });
+    if (queryWrite && isWb(cabinet)) return res.status(403).json({success:false,error:'Поисковые запросы WB недоступны'});
     try {
       const ctx = await context(cabinet,scope);
       ctx.userId = req.user.id;
@@ -241,7 +241,7 @@ function middleware() {
       }
       if (competitorWrite) {
         const offerId = req.method === 'POST' ? req.body?.offerId : req.query.offerId;
-        if (cabinet === 'defly_wb' || typeof offerId !== 'string' || !ctx.allowed.has(offerId)) {
+        if (isWb(cabinet) || typeof offerId !== 'string' || !ctx.allowed.has(offerId)) {
           return res.status(403).json({ success:false, error:'Нет доступа к этому товару' });
         }
         req.categoryContext = ctx;

@@ -1,4 +1,4 @@
-import { isDeflyLike } from './cabinets';
+import { isWbCabinet, isDeflyLike } from './cabinets';
 const DEFLY_NAV = [
     ['__h','Продажи'],['summary','🏬','Сводка по магазинам'],['sales','📈','Аналитика продаж'],['rnp','🩺','РНП'],['orders','🛒','Лента заказов'],['plan','🎯','План / факт'],['check','🧾','Средний чек'],['abc','🔤','ABC-анализ'],['season','🍂','Сезонность'],['geo','🗺️','География продаж'],
     ['__h','Реклама и поиск'],['ads','📣','Реклама'],['search','🔍','Позиции в поиске'],['discounts','💸','Соинвест'],
@@ -9,8 +9,8 @@ const DEFLY_NAV = [
 const LICIO_NAV = [...DEFLY_NAV.filter(([id]) => id !== 'production'), ['settings', '⚙️', 'Настройки']];
 // Меню одинаковое; недоступные источники остаются на своих местах с подсказкой.
 const WB_NAV = DEFLY_NAV;
-export const unavailablePage = (cabinet, page) => cabinet === 'defly_wb' && ['search','discounts','recon','notifications'].includes(page)
+export const unavailablePage = (cabinet, page) => isWbCabinet(cabinet) && ['search','discounts','recon','notifications'].includes(page)
   ? (['unit','margin','pnl','recon','plan','calculator'].includes(page) ? 'Финансы WB пока не подключены' : 'Источник WB для этого раздела пока не подключён') : '';
-export const navOf = cabinet => cabinet === 'defly_wb' ? WB_NAV : cabinet === 'licio' ? LICIO_NAV : isDeflyLike(cabinet) ? DEFLY_NAV : LICIO_NAV;
+export const navOf = cabinet => isWbCabinet(cabinet) ? WB_NAV : cabinet === 'licio' ? LICIO_NAV : isDeflyLike(cabinet) ? DEFLY_NAV : LICIO_NAV;
 export const pagesOf = cabinet => ['sales', ...navOf(cabinet).map(([id]) => id).filter(id => id !== '__h' && id !== 'sales' && !unavailablePage(cabinet, id))];
 export const navLabel = (cabinet, page) => (navOf(cabinet).find(([id]) => id === page) || [])[2] || '';

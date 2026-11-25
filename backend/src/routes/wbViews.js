@@ -1,14 +1,20 @@
 const express = require('express');
 const { randomUUID } = require('crypto');
 const V = require('../lib/wbViews');
-const bridge = require('../lib/wbBridge');
+const wbBridge = require('../lib/wbBridge');
+const { isWb, isConnected } = require('../config/cabinets');
 const router = express.Router();
 const groups = p => ({ groups: p.groups, members: p.members });
 const bounded = (v, max = 500) => String(v || '').trim().slice(0, max);
 const finite = v => v !== '' && v != null && Number.isFinite(Number(v));
 router.use(async (req, res) => {
   try {
-    if ((req.query.cabinet || req.body?.cabinet || 'defly_wb') !== 'defly_wb') throw new Error('Неизвестный кабинет WB');
+    const cabinet = req.query.cabinet || req.body?.cabinet || wbBridge.CABINET;
+    if (!isWb(cabinet) || (cabinet !== wbBridge.CABINET && !isConnected(cabinet))) throw new Error('Кабинет WB не подключён');
+    if (req.categoryContext && req.categoryContext.cabinet !== cabinet) return res.status(403).json({ success: false, error: 'Нет доступа к этому кабинету' });
+    const sheets = require('../collectors/wb/sheetSync');
+    const bridge = cabinet === wbBridge.CABINET ? wbBridge : wbBridge.forCabinet(cabinet);
+    const source = cabinet === wbBridge.CABINET ? sheets : sheets.forCabinet(cabinet);
     const path = req.path.replace(/^\/ads(?=\/|$)/, '/promo'), body = req.body || {};
     if (req.categoryContext && path === '/sales/builder-templates') {
       const route = require('./sales').stack.find(l => l.route?.path === '/builder-templates' && l.route.methods[req.method === 'HEAD' ? 'get' : req.method.toLowerCase()]);
@@ -35,10 +41,10 @@ router.use(async (req, res) => {
             if (on) p.self[key] = true;
             else delete p.self[key];
           }
-        });
+        }, cabinet);
         return res.json({success:true,data:{changed:items.length}});
       }
-      if (path === '/promo/collect') { await require('../collectors/wb/sheetSync').sync(true); return res.json({ success: true, data: { running: false } }); }
+      if (path === '/promo/collect') { await source.sync(true); return res.json({ success: true, data: { running: false } }); }
       if (path === '/sales/costs') {
         const route = require('./sales').stack.find(l => l.route?.path === '/costs' && l.route.methods.post);
         return route.route.stack[0].handle(req, res);
@@ -70,12 +76,12 @@ router.use(async (req, res) => {
         if (path === '/orders/self') { if (!Array.isArray(body.items) || body.items.length > 2000) throw new Error('Выберите заказы'); for (const item of body.items) { const key = bounded(item.p, 150) + '|' + bounded(item.sku, 30); if (body.on) p.self[key] = true; else delete p.self[key]; } return { changed: body.items.length }; }
         if (path === '/clusters/decide') { if (!Array.isArray(body.offers) || !['add', 'ignore', 'reset'].includes(body.action)) throw new Error('Некорректное действие'); for (const o of body.offers) { if (body.action === 'reset') delete p.clusterDecisions[o]; else p.clusterDecisions[o] = body.action === 'add' ? bounded(body.id, 128) : null; } return {}; }
         throw new Error('Эта операция WB пока недоступна');
-      });
-      if (path === '/clusters/decide') { const m = V.build(await bridge.read({excludeFinance:true}), await V.preferences()); return res.json({ success: true, data: m.clusters() }); }
+      }, cabinet);
+      if (path === '/clusters/decide') { const m = V.build(await bridge.read({excludeFinance:true}), await V.preferences(cabinet)); return res.json({ success: true, data: m.clusters() }); }
       return res.json({ success: true, data: result });
     }
     if(path==='/sales/history')return res.json({success:true,data:await require('../lib/shopsHistory').load(req.query,req.categoryContext)});
-    const prefs = await V.preferences();
+    const prefs = await V.preferences(cabinet);
     if (path === '/promo/groups') return res.json({ success: true, data: groups(prefs) });
     if (path === '/promo/order') return res.json({ success: true, data: prefs.order });
     if (path === '/promo/transit') return res.json({ success: true, data: prefs.transit });
@@ -84,12 +90,11 @@ router.use(async (req, res) => {
     if (path === '/sales/builder-templates') return res.json({ success: true, data: { templates: prefs.templates } });
     if (path === '/finance/buyer-share') return res.json({ success: true, data: { periods: [] } });
     if (path === '/promo/data-status') {
-      const ds = await bridge.read({excludeFinance:true}), status = require('../collectors/wb/sheetSync').status();
+      const ds = await bridge.read({excludeFinance:true}), status = source.status();
       return res.json({ success: true, data: { running: status.busy, jobs: [['catalog', 'catalog'], ['analytics', 'orders'], ['perf', 'ads'], ['stocks', 'stocks']].map(([job, kind]) => ({ job, everyMin: 60, lastSuccessAt: ds.find(x => x.kind === kind)?.meta.collectedAt || null, lastError: status.error })) } });
     }
     const supported = ['/orders/feed', '/sales/data', '/sales/geo', '/sales/costs', '/sales/skus', '/promo/stats', '/promo/catalog', '/promo/sibling-clusters', '/stocks/data', '/finance/coefs', '/finance/pnl', '/finance/ops', '/finance/buyout', '/finance/calc-base', '/clusters', '/queries/season'];
     if (!supported.includes(path)) return res.status(503).json({ success: false, error: 'Данные WB для этого раздела пока не подключены' });
-    const source=require('../collectors/wb/sheetSync');
     const financial=['/finance/pnl','/finance/ops','/finance/coefs','/finance/calc-base'].includes(path);
     const summaryInput=path==='/sales/data'&&req.query.projection==='summary';
     const summaryFinance=financial&&req.query.projection==='summary';

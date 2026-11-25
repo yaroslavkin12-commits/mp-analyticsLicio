@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { query, getPool } = require('../db');
 const CABINET = 'defly_wb';
+const { isWb } = require('../config/cabinets');
 const KINDS = ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices', 'finance'];
 let ready;
 function ensure() {
@@ -19,7 +20,7 @@ function verify(raw, timestamp, signature, now = Date.now(), secret = process.en
 }
 function validate(input) {
   const { cabinet, kind, runId, collectedAt, from, to, part, parts, total, rows } = input || {};
-  if (cabinet !== CABINET || !KINDS.includes(kind)) throw new Error('Неизвестный кабинет или набор WB');
+  if (!isWb(cabinet) || !KINDS.includes(kind)) throw new Error('Неизвестный кабинет или набор WB');
   if (!/^[\w-]{8,80}$/.test(runId || '') || !Number.isFinite(Date.parse(collectedAt)) || Date.parse(collectedAt) > Date.now() + 300000) throw new Error('Некорректная версия WB');
   if (![part, parts, total].every(Number.isSafeInteger) || parts < 1 || parts > 200 || part < 0 || part >= parts || total < 0 || total > 150000 || !Array.isArray(rows) || rows.length > 1000) throw new Error('Некорректный пакет WB');
   if (['orders', 'sales', 'ads', 'finance'].includes(kind) && (![from, to].every(d => /^\d{4}-\d{2}-\d{2}$/.test(d || '') && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d) || from > to)) throw new Error('Некорректный период WB');
@@ -71,78 +72,88 @@ async function ingest(input, { deferCommit = false } = {}) {
     }
     await client.query("DELETE FROM wb_bridge_parts WHERE created_at < NOW() - INTERVAL '1 day'");
     await client.query('COMMIT');
-    if (complete) { operationsEpoch++; operationsCache=null; require('./dataVersion').bump(); }
+    if (complete) {
+      const cache = caches.get(meta.cabinet);
+      if (cache) cache.invalidate();
+      require('./dataVersion').bump();
+    }
     return { complete, received, parts: meta.parts };
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
-let operationsCache, operationsLoading, operationsEpoch=0;
-const selectedKinds=new Map();
-async function read({ excludeFinance = false, kinds = null, from = null, to = null, projection = null } = {}) {
-  if(kinds)return readSelected(kinds,from,to,projection);
-  await ensure();
-  if(!excludeFinance)return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1',[CABINET]);
-  if(operationsCache && Date.now()-operationsCache.at<300000)return [...operationsCache.rows];
-  if(!operationsLoading){const epoch=operationsEpoch;operationsLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind <> 'finance'",[CABINET]).then(rows=>{if(epoch===operationsEpoch)operationsCache={at:Date.now(),rows};return rows;}).finally(()=>{operationsLoading=null;});}
-  const epoch=operationsEpoch,rows=await operationsLoading;
-  if(epoch!==operationsEpoch)return read({excludeFinance:true});
-  return [...rows];
+const fields=['id','rrDate','vendorCode','nmId','title','currency','docTypeName','sellerOperName','quantity','retailPriceWithDisc','retailAmount','forPay','acquiringFee','deliveryService','paidStorage','deduction','bonusTypeName','penalty','paidAcceptance','additionalPayment','cashbackAmount','cashbackCommissionChange','paymentSchedule','cashbackDiscount','srid'];
+const caches = new Map();
+function forCabinet(cabinet = CABINET) {
+  if (!isWb(cabinet)) throw new Error('Неизвестный кабинет WB');
+  if (!caches.has(cabinet)) caches.set(cabinet, createReader(cabinet));
+  return caches.get(cabinet);
 }
-// Сводка не должна скачивать всю рекламную статистику и складские строки WB.
-async function readSelected(kinds,from=null,to=null,projection=null){
- await ensure();
- if(!Array.isArray(kinds)||!kinds.length||kinds.some(k=>!KINDS.includes(k)||k==='finance'))throw Error('Неизвестный набор WB');
- if((from||to)&&![from,to].every(d=>/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d||'')))throw Error('Некорректный период WB');
- if(projection&&!['aliases','metrics'].includes(projection))throw Error('Неизвестный срез WB');
- const wanted=[...new Set(kinds)].sort(),epoch=operationsEpoch;
- const aliases=d=>d&&projection&&['orders','sales'].includes(d.kind)?{...d,rows:d.rows.map(r=>projection==='aliases'?{id:r.id,offer:r.offer,nmId:r.nmId,name:r.name}:Object.fromEntries(['id','offer','nmId','name','date','price','srid','cancelled','warehouseType','type'].map(k=>[k,r[k]])))}:d;
- if(operationsCache&&Date.now()-operationsCache.at<300000)return operationsCache.rows.filter(r=>wanted.includes(r.kind)).map(r=>aliases(r.kind==='ads'&&from?{...r,rows:r.rows.filter(v=>v.date>=from&&v.date<=to)}:r));
- const key=k=>JSON.stringify([k,k==='ads'?from:null,k==='ads'?to:null,['orders','sales'].includes(k)?projection:null]);
- const missing=wanted.filter(k=>{const h=selectedKinds.get(key(k));return !h||h.epoch!==epoch||Date.now()-h.at>=300000;});
- if(missing.length){
-  const batch=query(`SELECT kind,meta,updated_at,CASE
-    WHEN $5::text='aliases' AND kind IN ('orders','sales') THEN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.value->'id','offer',a.value->'offer','nmId',a.value->'nmId','name',a.value->'name') ORDER BY a.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS a(value,ordinality)),'[]'::jsonb)
-    WHEN $5::text='metrics' AND kind IN ('orders','sales') THEN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.value->'id','offer',a.value->'offer','nmId',a.value->'nmId','name',a.value->'name','date',a.value->'date','price',a.value->'price','srid',a.value->'srid','cancelled',a.value->'cancelled','warehouseType',a.value->'warehouseType','type',a.value->'type') ORDER BY a.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS a(value,ordinality)),'[]'::jsonb)
-    WHEN kind='ads' AND $3::text IS NOT NULL THEN COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality) WHERE item.value->>'date' BETWEEN $3 AND $4),'[]'::jsonb)
-    ELSE rows END AS rows FROM wb_bridge_data d WHERE cabinet=$1 AND kind=ANY($2::text[])`,[CABINET,missing,from,to,projection]);
-  for(const k of missing){const id=key(k),entry={at:Date.now(),epoch,promise:batch.then(rows=>rows.find(r=>r.kind===k)||null)};selectedKinds.set(id,entry);entry.promise.catch(()=>{if(selectedKinds.get(id)===entry)selectedKinds.delete(id);});}
- }
- const entries=wanted.map(k=>selectedKinds.get(key(k)));
- while(selectedKinds.size>32)selectedKinds.delete(selectedKinds.keys().next().value);
- const rows=(await Promise.all(entries.map(e=>e.promise))).filter(Boolean);
- if(epoch!==operationsEpoch)return readSelected(wanted,from,to,projection);
- return [...rows];
-}
-async function readMeta() { await ensure(); return query('SELECT kind, meta, updated_at FROM wb_bridge_data WHERE cabinet=$1', [CABINET]); }
-module.exports = { CABINET, KINDS, verify, validate, ingest, read, readMeta };
-
-let financeCache, financeLoading;
-const FINANCE_WIRE_FIELDS=['id','rrDate','vendorCode','nmId','title','currency','docTypeName','sellerOperName','quantity','retailPriceWithDisc','retailAmount','forPay','acquiringFee','deliveryService','paidStorage','deduction','bonusTypeName','penalty','paidAcceptance','additionalPayment','cashbackAmount','cashbackCommissionChange','paymentSchedule','cashbackDiscount','srid'];
-const financeWindows=new Map();
-async function readFinance(options={}) {
-  const meta=(await readMeta()).find(r=>r.kind==='finance');
-  if(!meta)return null;
-  if(options.dateFrom||options.latest){
-    const to=options.latest?meta.meta.to:options.dateTo,from=options.latest?new Date(Date.parse(to)-29*86400000).toISOString().slice(0,10):options.dateFrom;
-    if(![from,to].every(d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d)))||from>to)throw Error('Некорректный период финансов WB');
-    const key=JSON.stringify([meta.meta.runId,from,to]),hit=financeWindows.get(key);if(hit)return hit;
-    // Возвращаем строки потоком протокола PostgreSQL, без построения одного
-    // огромного JSON-массива на стороне базы и повторного разбора этого массива.
-    const promise=query(`SELECT jsonb_build_array(${FINANCE_WIRE_FIELDS.map(k=>"item.value->'"+k+"'").join(',')},jsonb_exists(item.value,'bonusTypeName')) AS payload
-      FROM wb_bridge_data d CROSS JOIN LATERAL jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality)
-      WHERE cabinet=$1 AND kind='finance' AND run_id=$4 AND
-        (left(item.value->>'rrDate',10) BETWEEN $2 AND $3
-          OR NOT COALESCE(left(item.value->>'rrDate',10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',false))
-      ORDER BY item.ordinality`,[CABINET,from,to,meta.meta.runId]).then(async rows=>{
-        if(!rows.length){const current=(await readMeta()).find(r=>r.kind==='finance');if(!current)return null;if(current.meta.runId!==meta.meta.runId){financeWindows.delete(key);return readFinance(options);}}
-        return {...meta,rows:rows.map(r=>{const item=Object.fromEntries(FINANCE_WIRE_FIELDS.map((k,i)=>[k,r.payload[i]]));if(!r.payload[FINANCE_WIRE_FIELDS.length])delete item.bonusTypeName;return item;})};
-      });
-    financeWindows.set(key,promise);while(financeWindows.size>12)financeWindows.delete(financeWindows.keys().next().value);
-    promise.catch(()=>{if(financeWindows.get(key)===promise)financeWindows.delete(key);});return promise;
+function createReader(cabinet) {
+  let operationsCache, operationsLoading, operationsEpoch=0;
+  const selectedKinds=new Map();
+  async function read({ excludeFinance = false, kinds = null, from = null, to = null, projection = null } = {}) {
+    if(kinds)return readSelected(kinds,from,to,projection);
+    await ensure();
+    if(!excludeFinance)return query('SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1',[cabinet]);
+    if(operationsCache && Date.now()-operationsCache.at<300000)return [...operationsCache.rows];
+    if(!operationsLoading){const epoch=operationsEpoch;operationsLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind <> 'finance'",[cabinet]).then(rows=>{if(epoch===operationsEpoch)operationsCache={at:Date.now(),rows};return rows;}).finally(()=>{operationsLoading=null;});}
+    const epoch=operationsEpoch,rows=await operationsLoading;
+    if(epoch!==operationsEpoch)return read({excludeFinance:true});
+    return [...rows];
   }
-  if(financeCache?.meta.runId===meta.meta.runId)return financeCache;
-  if(!financeLoading)financeLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind='finance'",[CABINET]).then(rows=>financeCache=rows[0]||null).finally(()=>financeLoading=null);
-  return financeLoading;
-}
-module.exports.readFinance=readFinance;
+  // Сводка не должна скачивать всю рекламную статистику и складские строки WB.
+  async function readSelected(kinds,from=null,to=null,projection=null){
+   await ensure();
+   if(!Array.isArray(kinds)||!kinds.length||kinds.some(k=>!KINDS.includes(k)||k==='finance'))throw Error('Неизвестный набор WB');
+   if((from||to)&&![from,to].every(d=>/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d||'')))throw Error('Некорректный период WB');
+   if(projection&&!['aliases','metrics'].includes(projection))throw Error('Неизвестный срез WB');
+   const wanted=[...new Set(kinds)].sort(),epoch=operationsEpoch;
+   const aliases=d=>d&&projection&&['orders','sales'].includes(d.kind)?{...d,rows:d.rows.map(r=>projection==='aliases'?{id:r.id,offer:r.offer,nmId:r.nmId,name:r.name}:Object.fromEntries(['id','offer','nmId','name','date','price','srid','cancelled','warehouseType','type'].map(k=>[k,r[k]])))}:d;
+   if(operationsCache&&Date.now()-operationsCache.at<300000)return operationsCache.rows.filter(r=>wanted.includes(r.kind)).map(r=>aliases(r.kind==='ads'&&from?{...r,rows:r.rows.filter(v=>v.date>=from&&v.date<=to)}:r));
+   const key=k=>JSON.stringify([k,k==='ads'?from:null,k==='ads'?to:null,['orders','sales'].includes(k)?projection:null]);
+   const missing=wanted.filter(k=>{const h=selectedKinds.get(key(k));return !h||h.epoch!==epoch||Date.now()-h.at>=300000;});
+   if(missing.length){
+    const batch=query(`SELECT kind,meta,updated_at,CASE
+      WHEN $5::text='aliases' AND kind IN ('orders','sales') THEN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.value->'id','offer',a.value->'offer','nmId',a.value->'nmId','name',a.value->'name') ORDER BY a.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS a(value,ordinality)),'[]'::jsonb)
+      WHEN $5::text='metrics' AND kind IN ('orders','sales') THEN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.value->'id','offer',a.value->'offer','nmId',a.value->'nmId','name',a.value->'name','date',a.value->'date','price',a.value->'price','srid',a.value->'srid','cancelled',a.value->'cancelled','warehouseType',a.value->'warehouseType','type',a.value->'type') ORDER BY a.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS a(value,ordinality)),'[]'::jsonb)
+      WHEN kind='ads' AND $3::text IS NOT NULL THEN COALESCE((SELECT jsonb_agg(item.value ORDER BY item.ordinality) FROM jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality) WHERE item.value->>'date' BETWEEN $3 AND $4),'[]'::jsonb)
+      ELSE rows END AS rows FROM wb_bridge_data d WHERE cabinet=$1 AND kind=ANY($2::text[])`,[cabinet,missing,from,to,projection]);
+    for(const k of missing){const id=key(k),entry={at:Date.now(),epoch,promise:batch.then(rows=>rows.find(r=>r.kind===k)||null)};selectedKinds.set(id,entry);entry.promise.catch(()=>{if(selectedKinds.get(id)===entry)selectedKinds.delete(id);});}
+   }
+   const entries=wanted.map(k=>selectedKinds.get(key(k)));
+   while(selectedKinds.size>32)selectedKinds.delete(selectedKinds.keys().next().value);
+   const rows=(await Promise.all(entries.map(e=>e.promise))).filter(Boolean);
+   if(epoch!==operationsEpoch)return readSelected(wanted,from,to,projection);
+   return [...rows];
+  }
+  async function readMeta() { await ensure(); return query('SELECT kind, meta, updated_at FROM wb_bridge_data WHERE cabinet=$1', [cabinet]); }
 
-module.exports.FINANCE_WIRE_FIELDS=FINANCE_WIRE_FIELDS;
+  let financeCache, financeLoading;
+  const financeWindows=new Map();
+  async function readFinance(options={}) {
+    const meta=(await readMeta()).find(r=>r.kind==='finance');
+    if(!meta)return null;
+    if(options.dateFrom||options.latest){
+      const to=options.latest?meta.meta.to:options.dateTo,from=options.latest?new Date(Date.parse(to)-29*86400000).toISOString().slice(0,10):options.dateFrom;
+      if(![from,to].every(d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d)))||from>to)throw Error('Некорректный период финансов WB');
+      const key=JSON.stringify([meta.meta.runId,from,to]),hit=financeWindows.get(key);if(hit)return hit;
+      // Возвращаем строки потоком протокола PostgreSQL, без построения одного
+      // огромного JSON-массива на стороне базы и повторного разбора этого массива.
+      const promise=query(`SELECT jsonb_build_array(${fields.map(k=>"item.value->'"+k+"'").join(',')},jsonb_exists(item.value,'bonusTypeName')) AS payload
+        FROM wb_bridge_data d CROSS JOIN LATERAL jsonb_array_elements(d.rows) WITH ORDINALITY AS item(value,ordinality)
+        WHERE cabinet=$1 AND kind='finance' AND run_id=$4 AND
+          (left(item.value->>'rrDate',10) BETWEEN $2 AND $3
+            OR NOT COALESCE(left(item.value->>'rrDate',10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',false))
+        ORDER BY item.ordinality`,[cabinet,from,to,meta.meta.runId]).then(async rows=>{
+          if(!rows.length){const current=(await readMeta()).find(r=>r.kind==='finance');if(!current)return null;if(current.meta.runId!==meta.meta.runId){financeWindows.delete(key);return readFinance(options);}}
+          return {...meta,rows:rows.map(r=>{const item=Object.fromEntries(fields.map((k,i)=>[k,r.payload[i]]));if(!r.payload[fields.length])delete item.bonusTypeName;return item;})};
+        });
+      financeWindows.set(key,promise);while(financeWindows.size>12)financeWindows.delete(financeWindows.keys().next().value);
+      promise.catch(()=>{if(financeWindows.get(key)===promise)financeWindows.delete(key);});return promise;
+    }
+    if(financeCache?.meta.runId===meta.meta.runId)return financeCache;
+    if(!financeLoading)financeLoading=query("SELECT kind, meta, rows, updated_at FROM wb_bridge_data WHERE cabinet=$1 AND kind='finance'",[cabinet]).then(rows=>financeCache=rows[0]||null).finally(()=>financeLoading=null);
+    return financeLoading;
+  }
+  return { read, readMeta, readFinance, invalidate() { operationsEpoch++; operationsCache = null; } };
+}
+module.exports = { CABINET, KINDS, verify, validate, ingest, forCabinet, ...forCabinet(), FINANCE_WIRE_FIELDS: fields };

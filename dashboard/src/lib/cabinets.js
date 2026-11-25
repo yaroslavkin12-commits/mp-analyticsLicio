@@ -8,10 +8,15 @@ export const SHOPS = [
   { id: 'accent', label: 'Accent Line', platform: 'ozon', family: 'defly', color: '#a855f7' },
   { id: 'adcars', label: 'ADCars', platform: 'ozon', family: 'defly', color: '#0891b2' },
   { id: 'defly_wb', label: 'Defly WB', platform: 'wb', family: 'defly', color: '#b735db' },
+  { id: 'nabauto_wb', label: 'NABauto WB', platform: 'wb', family: 'defly', color: '#10b981' },
+  { id: 'alex_wb', label: 'Alex WB', platform: 'wb', family: 'defly', color: '#f59e0b' },
+  { id: 'accent_wb', label: 'Accent Line WB', platform: 'wb', family: 'defly', color: '#a855f7' },
+  { id: 'adcars_wb', label: 'ADCars WB', platform: 'wb', family: 'defly', color: '#0891b2' },
   { id: 'licio', label: 'Licio', platform: 'mix', family: 'licio', color: '#94a3b8' },
 ];
 export const shopOf = id => SHOPS.find(s => s.id === id) || null;
 export const familyOf = id => shopOf(id)?.family || id;
+export const isWbCabinet = id => shopOf(id)?.platform === 'wb';
 export const isDeflyLike = id => familyOf(id) === 'defly';
 // Раздел «Производство» общий для всех магазинов (считается по 1С и данным Defly).
 export const SHARED_PAGES = { production: 'defly' };

@@ -1,3 +1,4 @@
+import { isWbCabinet } from '../lib/cabinets';
 import { accessStorage } from '../lib/accessClient';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dayjs from 'dayjs';
@@ -272,14 +273,14 @@ export default function UnitEconomics({ cabinet }) {
           </label>
           <span className="a-hint">средние коэффициенты за 30 дней{coefs.since ? ` (с ${dayjs(coefs.since).format('DD.MM')})` : ''}, реклама — факт дня</span>
         </div>
-        <RowsTable dates={dates} rows={cabinet==='defly_wb'?ROWS.map(r=>({...r,label:r.label?.replaceAll('Ozon','WB'),hint:r.hint?.replaceAll('Ozon','WB')})):ROWS} vals={shownVals} totals={shownT} />
+        <RowsTable dates={dates} rows={isWbCabinet(cabinet)?ROWS.map(r=>({...r,label:r.label?.replaceAll('Ozon','WB'),hint:r.hint?.replaceAll('Ozon','WB')})):ROWS} vals={shownVals} totals={shownT} />
       </div>
 
       {w && (
         <div className="a-card s-card">
           <div className="a-bar" style={{ marginBottom: 8 }}>
             <b style={{ fontSize: 14 }}>Средние коэффициенты выбранного</b>
-            <span className="a-hint">взвешены по заказам; комиссия — {cabinet==='defly_wb'?'по фактическому отчёту WB':'из карточки каждого товара по схеме FBO/FBS'} ({pct1(w.card)} заказов с известной комиссией); выкуп по истории самого артикула — {pct1(w.own)} заказов, остальное — по категории</span>
+            <span className="a-hint">взвешены по заказам; комиссия — {isWbCabinet(cabinet)?'по фактическому отчёту WB':'из карточки каждого товара по схеме FBO/FBS'} ({pct1(w.card)} заказов с известной комиссией); выкуп по истории самого артикула — {pct1(w.own)} заказов, остальное — по категории</span>
           </div>
           <div className="s-abc">
             {[['Выкуп', pct1(w.buyout)], ['Комиссия по карточке', pct1(w.comm)], ['Доля FBS', pct1(w.fbs)], ['Логистика на 1 заказ', w.logi !== null ? `${fmtMoney2(w.logi)} ₽` : '—'],
@@ -287,10 +288,10 @@ export default function UnitEconomics({ cabinet }) {
               <div key={l} className="s-abc-i"><span className="muted">{l}</span><b className="n">{v}</b></div>
             ))}
           </div>
-          <button type="button" className="a-btn" onClick={() => setShowNames(s => !s)}>{showNames ? 'Скрыть' : 'Показать'} статьи {cabinet==='defly_wb'?'WB':'Ozon'} за 30 дней ({coefs.names.length})</button>
+          <button type="button" className="a-btn" onClick={() => setShowNames(s => !s)}>{showNames ? 'Скрыть' : 'Показать'} статьи {isWbCabinet(cabinet)?'WB':'Ozon'} за 30 дней ({coefs.names.length})</button>
           {showNames && (
             <table className="a-t s-slice" style={{ marginTop: 10 }}>
-              <thead><tr><th>Статья в отчёте {cabinet==='defly_wb'?'WB':'Ozon'}</th><th>Куда относим</th><th className="r">Сумма за 30 дней</th></tr></thead>
+              <thead><tr><th>Статья в отчёте {isWbCabinet(cabinet)?'WB':'Ozon'}</th><th>Куда относим</th><th className="r">Сумма за 30 дней</th></tr></thead>
               <tbody>{coefs.names.map(([nm, b, a]) => <tr key={nm}><td>{nm}</td><td className="muted">{({ sale: 'Выкупы', return: 'Возвраты', commission: 'Комиссия', acquiring: 'Эквайринг', logistics: 'Логистика', storage: 'Хранение', promo: 'Баллы/продвижение', other: 'Прочее' })[b] || b}</td><td className="n r">{fmtInt(a)}</td></tr>)}</tbody>
             </table>
           )}

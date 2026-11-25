@@ -53,7 +53,7 @@ function scopedSnapshot(s, ctx) {
   return result;
 }
 const scopedResult = result => ({ _categoryFiltered:true, result });
-const platformOf = req => req.categoryContext ? (req.categoryContext.cabinet === 'defly_wb' ? 'wb' : 'ozon') : (req.query.platform || 'ozon');
+const platformOf = req => req.categoryContext ? (require('../config/cabinets').isWb(req.categoryContext.cabinet) ? 'wb' : 'ozon') : (req.query.platform || 'ozon');
 
 router.get('/', async (req, res) => {
   try {

@@ -1,7 +1,5 @@
 // Те же заказы WB, что в аналитике: отмены и самовыкупы уже исключены адаптером.
-function wbShopSummary(datasets, prefs, { from, to, allowed }) {
-  const model = require('./wbViews').build(datasets, prefs, { dateFrom: from, dateTo: to });
-  const sales = model.sales();
+function wbShopSummary(datasets, prefs, { from, to, allowed, id = 'defly_wb', label = 'Defly WB' }) {
   const dayjs = require('dayjs');
   const days = dayjs(to).diff(from, 'day') + 1;
   const pFrom = dayjs(from).subtract(days, 'day').format('YYYY-MM-DD');
@@ -21,6 +19,6 @@ function wbShopSummary(datasets, prefs, { from, to, allowed }) {
     }
     return result;
   };
-  return {id:'defly_wb',label:'Defly WB',platform:'wb',cur:aggregate(from,to),prev:aggregate(pFrom,pTo)};
+  return {id,label,platform:'wb',cur:aggregate(from,to),prev:aggregate(pFrom,pTo)};
 }
 module.exports={wbShopSummary};

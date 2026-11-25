@@ -52,7 +52,11 @@ for (const [id, label, companyId] of SHEET_SHOPS) CABINETS[id] = { label, platfo
 CABINETS.adcars.productionDemand = false;
 CABINETS.defly.platform = 'ozon'; CABINETS.defly.family = 'defly';
 
-CABINETS.defly_wb = { label: 'Defly WB', platform: 'wb', family: 'defly', wbBridge: true };
+const WB_SHOPS = ['defly', 'nabauto', 'alex', 'accent', 'adcars'];
+for (const id of WB_SHOPS) {
+  CABINETS[id + '_wb'] = { label: CABINETS[id].label + ' WB', platform: 'wb', family: 'defly', wbBridge: true };
+}
+const isWb = id => typeof id === 'string' && Object.hasOwn(CABINETS, id) && CABINETS[id].wbBridge === true;
 
 const sheetEnv = id => process.env[`ADS_SHEET_ID_${id.toUpperCase()}`] || null;
 // Кабинет подключён: для магазинов из отдельной таблицы — задан её ID.
@@ -84,4 +88,4 @@ function getCabinet(id) {
   return cfg;
 }
 
-module.exports = { CABINETS, listCabinets, getCabinet, isConnected, familyOf };
+module.exports = { CABINETS, listCabinets, getCabinet, isConnected, familyOf, isWb };

@@ -382,13 +382,16 @@ router.get('/summary', async (req, res) => {
       }
       out.push({ id: cab, label: c.label, platform: 'ozon', cur, prev });
     }
-    if ((!req.categoryContexts||req.categoryContexts.defly_wb) && req.query.includeWb === '1' && req.query.cabinet !== 'licio' && listCabinets().some(c => c.id === 'defly_wb' && c.connected)) {
+    const wbShops = req.query.includeWb === '1' && req.query.cabinet !== 'licio'
+      ? listCabinets().filter(c => c.platform === 'wb' && c.connected && (!req.categoryContexts || req.categoryContexts[c.id]))
+      : [];
+    for (const { id, label } of wbShops) {
       try {
-        const datasets = await require('../lib/wbBridge').read({kinds:['catalog','orders']});
-        const prefs = await require('../lib/wbViews').preferences();
-        out.push(require('../lib/shopsSummary').wbShopSummary(datasets, prefs, {from,to,allowed:req.categoryContexts?.defly_wb?.allowed}));
+        const datasets = await require('../lib/wbBridge').forCabinet(id).read({kinds:['catalog','orders']});
+        const prefs = await require('../lib/wbViews').preferences(id);
+        out.push(require('../lib/shopsSummary').wbShopSummary(datasets, prefs, {from,to,id,label,allowed:req.categoryContexts?.[id]?.allowed}));
       } catch (e) {
-        out.push({id:'defly_wb',label:'Defly WB',platform:'wb',error:'Не удалось получить заказы WB',cur:{q:null,r:null,byCat:{},byPath:{}},prev:{q:null,r:null,byCat:{},byPath:{}}});
+        out.push({id,label,platform:'wb',error:'Не удалось получить заказы WB',cur:{q:null,r:null,byCat:{},byPath:{}},prev:{q:null,r:null,byCat:{},byPath:{}}});
       }
     }
     res.json({ success: true, data: { from, to, pFrom, pTo, shops: out, _categoryFiltered:!!req.categoryContexts } });
