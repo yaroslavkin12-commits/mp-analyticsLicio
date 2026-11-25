@@ -9,8 +9,9 @@ async function loadYandexSheetSources() {
   await Promise.all(Object.entries(CABINETS).filter(([, cfg]) => cfg.sheetOnly).map(async ([id]) => {
     const envKey = `ADS_SHEET_ID_${id.toUpperCase()}`;
     if (process.env[envKey]) return;
+    const attribute = `ads-sheet-id-${id.replaceAll("_", "-")}`;
     try {
-      const { data } = await axios.get(`${metadata}/${envKey}`, {
+      const { data } = await axios.get(`${metadata}/${attribute}`, {
         headers: { 'Metadata-Flavor': 'Google' },
         timeout: 1200,
         proxy: false,
