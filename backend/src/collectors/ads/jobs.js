@@ -173,12 +173,12 @@ function ordersCabinets() {
   return Object.keys(CABINETS).filter(c => CABINETS[c].platform !== 'wb' && isConnected(c));
 }
 const ordersBusy = new Set();
-async function tickOrders(cabinet) {
+async function tickOrders(cabinet, force = false) {
   if (ordersBusy.has(cabinet)) return;
   ordersBusy.add(cabinet);
   try {
     const st = await getStatus(cabinet);
-    if (isDue(ORDERS_JOB, st.get(ORDERS_JOB.id), Date.now())) await runJobGuarded(cabinet, ORDERS_JOB);
+    if (force || isDue(ORDERS_JOB, st.get(ORDERS_JOB.id), Date.now())) await runJobGuarded(cabinet, ORDERS_JOB);
   } finally {
     ordersBusy.delete(cabinet);
   }
@@ -446,6 +446,7 @@ async function tick() {
 }
 
 function requestRefresh(cabinet, days) {
+  if (ordersCabinets().includes(cabinet)) tickOrders(cabinet, true).catch(e => console.error(`[Orders:${cabinet}]`, e.message));
   forced.set(cabinet, { days });
   tickCabinet(cabinet).catch(e => console.error(`[Jobs:${cabinet}]`, e.message));
   return busy.has(cabinet);

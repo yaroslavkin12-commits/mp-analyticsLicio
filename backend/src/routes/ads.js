@@ -172,7 +172,12 @@ router.get('/data-status', async (req, res) => {
   try {
     const cabinet = req.query.cabinet || 'defly';
     const st = await getStatus(cabinet);
+    const orders = st.get('tracked_orders');
     res.json({ success: true, data: {
+      orders: orders ? {
+        lastSuccessAt: orders.last_success_at || null, lastRows: orders.last_rows ?? null,
+        lastErrorAt: orders.last_error_at || null, lastError: orders.last_error || null, lastWarning: orders.last_warning || null,
+      } : null,
       running: currentJob(cabinet),
       automatic: adsCabinets().includes(cabinet),
       jobs: jobsForCabinet(cabinet).map(j => {

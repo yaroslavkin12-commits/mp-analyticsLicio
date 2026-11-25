@@ -40,7 +40,7 @@ async function ingest(cabinet, rows) {
   await ensure();
   let mem = SEEN.get(cabinet);
   if (!mem) { mem = new Map(); SEEN.set(cabinet, mem); }
-  const out = [];
+  const out = new Map();
   for (const r of rows) {
     if (r.cabinet !== cabinet || !r.posting_number) continue;
     const sku = Math.round(num(r.sku)) || 0;
@@ -50,20 +50,21 @@ async function ingest(cabinet, rows) {
       r.created_at ? new Date(r.created_at).toISOString() : null, String(r.scheme || '').slice(0, 8)];
     const h = row.slice(3).join('|');
     if (mem.get(key) === h) continue;
-    mem.set(key, h);
-    out.push(row);
+    out.set(key, { row, hash: h });
   }
-  for (let i = 0; i < out.length; i += 500) {
-    const part = out.slice(i, i + 500), params = [];
-    const values = part.map(row => `(${row.map(v => { params.push(v); return `$${params.length}`; }).join(',')}, NOW())`);
+  const updates = [...out];
+  for (let i = 0; i < updates.length; i += 500) {
+    const part = updates.slice(i, i + 500), params = [];
+    const values = part.map(([, { row }]) => `(${row.map(v => { params.push(v); return `$${params.length}`; }).join(',')}, NOW())`);
     await query(`INSERT INTO order_feed (cabinet, posting_number, sku, offer_id, name, price, qty, status, warehouse, created_at, scheme, updated_at)
       VALUES ${values.join(',')}
       ON CONFLICT (cabinet, posting_number, sku) DO UPDATE SET offer_id = EXCLUDED.offer_id, name = EXCLUDED.name, price = EXCLUDED.price,
         qty = EXCLUDED.qty, status = EXCLUDED.status, warehouse = EXCLUDED.warehouse, created_at = COALESCE(EXCLUDED.created_at, order_feed.created_at),
         scheme = EXCLUDED.scheme, updated_at = NOW()`, params);
+    for (const [key, { hash }] of part) mem.set(key, hash);
   }
   if (mem.size > 30000) mem.clear();
-  return out.length;
+  return updates.length;
 }
 
 // Цена самовыкупа — актуальная из ленты: отметить заказ могли, когда Ozon ещё не передал

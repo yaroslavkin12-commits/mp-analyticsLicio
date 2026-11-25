@@ -138,11 +138,11 @@ async function trackedOf(cabinet) {
 async function pollOrdersFromSheet(cabinet) {
   const { fetchSheetRows } = require('./ads/sheetSync');
   const rows = await fetchSheetRows('Orders', cabinet);
-  if (!rows) return 0;
+  if (!rows) return { rows: 0, warning: 'Вкладка Orders пока недоступна' };
   // Лента заказов (страница «Лента заказов») — копим все отправления.
-  await require('../lib/orderFeed').ingest(cabinet, rows).catch(e => console.warn(`[OrderFeed:${cabinet}]`, e.message));
+  const result = { rows: await require('../lib/orderFeed').ingest(cabinet, rows) };
   const tracked = await trackedOf(cabinet);
-  if (!tracked.length) return 0;
+  if (!tracked.length) return result;
   const cutoff = Date.now() - NOTIFY_MAX_AGE_HOURS * 3600 * 1000;
   let seen = SEEN.get(cabinet);
   if (!seen) { seen = new Set(); SEEN.set(cabinet, seen); }
@@ -155,7 +155,7 @@ async function pollOrdersFromSheet(cabinet) {
     if (seen.has(k) || fresh.has(k)) continue;
     fresh.set(k, { r, sku });
   }
-  if (!fresh.size) return 0;
+  if (!fresh.size) return result;
   const list = [...fresh.values()];
   const seeded = await isSeeded(cabinet);
   let inserted;
@@ -165,9 +165,9 @@ async function pollOrdersFromSheet(cabinet) {
        SELECT $1, p, s FROM unnest($2::text[], $3::bigint[]) AS t(p, s)
        ON CONFLICT (cabinet, posting_number, sku) DO NOTHING RETURNING posting_number, sku`,
       [cabinet, list.map(x => String(x.r.posting_number)), list.map(x => x.sku)]);
-  } catch (e) { console.warn(`[Orders:${cabinet}]`, e.message); return 0; }
+  } catch (e) { console.warn(`[Orders:${cabinet}]`, e.message); return result; }
   for (const k of fresh.keys()) seen.add(k);
-  if (!seeded) { SEEDED.add(cabinet); return 0; } // первый прогон — только запомнили
+  if (!seeded) { SEEDED.add(cabinet); return result; } // первый прогон — только запомнили
   if (seen.size > 20000) { const keep = [...seen].slice(-10000); seen.clear(); keep.forEach(k => seen.add(k)); }
   const isNew = new Set(inserted.map(x => `${x.posting_number}|${Number(x.sku) || 0}`));
   const newOrders = [];
@@ -181,7 +181,7 @@ async function pollOrdersFromSheet(cabinet) {
     });
   }
   if (newOrders.length) await checkAndNotify(cabinet, 'ozon', newOrders);
-  return newOrders.length;
+  return result;
 }
 
 module.exports = { pollOzonForCabinet, pollOrdersFromSheet, dropTrackedCache };
