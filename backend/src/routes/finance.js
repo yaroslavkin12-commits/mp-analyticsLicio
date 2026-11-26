@@ -156,19 +156,19 @@ router.get('/coefs', async (req, res) => {
 // GET /api/finance/pnl?cabinet=&dateFrom=&dateTo= — фактические начисления по
 // дням: [ai, di, bucketIdx, amount, qty]; без SKU — отдельно по дням; реклама
 // — по дню списания (оплата за клик — день расхода, за заказ — день выкупа).
-async function loadPnl(params = {}) {
+async function loadPnl(params = {}, { buyoutsOnly = false } = {}) {
     await ensureFinTables();
     const cabinet = params.cabinet || 'defly';
     const { from, to, dates } = period(params);
     const m = await meta(cabinet);
     const [fin, adRows, skuRows, cpoRows, campaigns, campSkus, costs, range] = await Promise.all([
       query(`SELECT date::text d, sku, name, SUM(amount) a, SUM(qty) q FROM finance_daily WHERE cabinet = $1 AND date BETWEEN $2 AND $3 GROUP BY date, sku, name`, [cabinet, from, to]),
-      query(`SELECT date::text AS date, campaign_id, spend FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]),
-      query(`SELECT date::text AS date, campaign_id, sku, expense FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => []),
-      query(`SELECT date::text AS date, sku, promoted_sku, expense FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => []),
-      query(`SELECT campaign_id, matched_offer_id, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
-      query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, [cabinet]).catch(() => []),
-      query(`SELECT article, cost_price, cabinet FROM product_costs`),
+      buyoutsOnly ? Promise.resolve([]) : query(`SELECT date::text AS date, campaign_id, spend FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]),
+      buyoutsOnly ? Promise.resolve([]) : query(`SELECT date::text AS date, campaign_id, sku, expense FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => []),
+      buyoutsOnly ? Promise.resolve([]) : query(`SELECT date::text AS date, sku, promoted_sku, expense FROM ad_cpo_orders WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, from, to]).catch(() => []),
+      buyoutsOnly ? Promise.resolve([]) : query(`SELECT campaign_id, matched_offer_id, payment_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, [cabinet]),
+      buyoutsOnly ? Promise.resolve([]) : query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, [cabinet]).catch(() => []),
+      buyoutsOnly ? Promise.resolve([]) : query(`SELECT article, cost_price, cabinet FROM product_costs`),
       query(`SELECT MIN(date)::text mn, MAX(date)::text mx FROM finance_daily WHERE cabinet = $1`, [cabinet]),
     ]);
     const di = new Map(dates.map((d, i) => [d, i]));
@@ -180,6 +180,7 @@ async function loadPnl(params = {}) {
       if (o) rows.push([m.art(o), d, b, r2(num(r.a)), num(r.q)]);
       else noSku.push([d, b, r2(num(r.a))]);
     }
+    if (buyoutsOnly) return { dates, articles: m.articles, buckets: BUCKET_KEYS, rows: rows.filter(r => ['sale','return'].includes(BUCKET_KEYS[r[2]])), available: range[0] || null };
     // Реклама по дню списания.
     const ads = new Map(); // ai|d -> spend
     const addAd = (o, d, v) => { if (!o || !v) return false; const k = m.art(o) + '|' + d; ads.set(k, (ads.get(k) || 0) + v); return true; };

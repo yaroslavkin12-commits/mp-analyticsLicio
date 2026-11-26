@@ -1,0 +1,17 @@
+.mpui .sales-market-scopes { flex-wrap:wrap; }
+.mpui .sales-market-scopes button.on { background:var(--a-accent-soft); color:var(--a-accent); font-weight:650; }
+.mpui .sales-market-kpis { grid-template-columns: repeat(auto-fit,minmax(185px,1fr)); }
+.sales-market-mini { display: flex; flex-wrap: wrap; gap: 5px 14px; color: var(--a-ink2); font-size: 12px; }
+.sales-market-mini span, .sales-market-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.sales-market-mini i, .sales-market-tip i, .sales-market-toggle i { width: 8px; height: 8px; border-radius: 2px; flex: none; display:inline-block; }
+.sales-market-gran { margin-left:auto; }
+.sales-market-chart { overflow-x: auto; overflow-y: hidden; }
+.sales-market-legend { justify-content:center; margin: 8px 0 0; }
+.sales-market-tip { min-width:120px; padding:9px 12px; border:1px solid var(--a-line); border-radius:8px; background:var(--a-panel); box-shadow:0 8px 22px #0003; color:var(--a-ink); font-size:12px; }
+.sales-market-tip div { display:flex; align-items:center; gap:7px; margin-top:5px; }
+.sales-market-tip b { margin-left:auto; }
+.sales-market-table-head, .sales-market-note { padding: 12px 14px; }
+.mpui table.a-t.sales-market-table { min-width: 650px; }
+.sales-market-table th:not(:first-child), .sales-market-table td:not(:first-child) { text-align:center; }
+.sales-market-table .sales-market-total { background:var(--a-panel2); font-weight:600; }
+.sales-market-table .sales-market-shop { padding-left:32px; }

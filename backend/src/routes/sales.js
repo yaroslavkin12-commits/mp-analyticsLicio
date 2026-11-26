@@ -132,6 +132,7 @@ function allocateAds({ from, to, campaigns, campaignSkuRows, offerBySku, adRows,
 // GET /api/sales/data?cabinet=defly&dateFrom=&dateTo=&compare=1
 async function loadSales(params = {}, onTiming, options = {}) {
     const ordersOnly=options.ordersOnly===true;
+    const skipAdvertising = options.skipAdvertising === true;
     await ensureSchema();
     const cabinet = params.cabinet || 'defly';
     const { from, to } = period(params);
@@ -160,13 +161,13 @@ async function loadSales(params = {}, onTiming, options = {}) {
               WHERE cabinet = $1 AND platform = 'ozon'
                 AND snapshot_date = (SELECT MAX(snapshot_date) FROM ad_product_stocks WHERE cabinet = $1 AND platform = 'ozon')
               GROUP BY offer_id`, P),
-      query(`SELECT campaign_id, matched_offer_id, payment_type, adv_object_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, P),
-      query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, P).catch(() => []),
-      query(`SELECT date::text AS date, campaign_id, spend, clicks, views, orders, orders_money
+      skipAdvertising ? Promise.resolve([]) : query(`SELECT campaign_id, matched_offer_id, payment_type, adv_object_type FROM ad_campaigns WHERE cabinet = $1 AND platform = 'ozon'`, P),
+      skipAdvertising ? Promise.resolve([]) : query(`SELECT campaign_id, sku FROM ad_campaign_skus WHERE cabinet = $1 AND platform = 'ozon' AND sku != 0`, P).catch(() => []),
+      skipAdvertising ? Promise.resolve([]) : query(`SELECT date::text AS date, campaign_id, spend, clicks, views, orders, orders_money
                FROM ad_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, adFrom, to]),
-      query(`SELECT date::text AS date, campaign_id, sku, clicks, views, orders, sales, expense
+      skipAdvertising ? Promise.resolve([]) : query(`SELECT date::text AS date, campaign_id, sku, clicks, views, orders, sales, expense
                FROM ad_sku_stats_daily WHERE cabinet = $1 AND platform = 'ozon' AND date BETWEEN $2 AND $3`, [cabinet, adFrom, to]).catch(() => []),
-      query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense, COALESCE(to_jsonb(t)->>'kind', '') AS kind
+      skipAdvertising ? Promise.resolve([]) : query(`SELECT date::text AS date, order_date::text AS order_date, sku, promoted_sku, quantity, cost, expense, COALESCE(to_jsonb(t)->>'kind', '') AS kind
                FROM ad_cpo_orders t WHERE cabinet = $1 AND platform = 'ozon'
                 AND (date BETWEEN $2 AND $3 OR order_date BETWEEN $2 AND $3)`, [cabinet, adFrom, to]).catch(() => []),
       compare
@@ -340,6 +341,15 @@ router.get('/history', async (req,res)=>{try{res.set('Cache-Control','no-store')
 router.get('/data', async (req, res) => {
   try { res.json({ success: true, data: await loadSales(req.query, timing => res.set('Server-Timing', timing),{ordersOnly:req.query.projection==='summary'}) }); }
   catch (e) { console.error(e); res.status(500).json({ success: false, error: e.message }); }
+});
+
+router.get('/markets', async (req, res) => {
+  try {
+    const data = await require('../lib/salesMarkets').load(req.query, req.categoryContexts);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(error.status || 500).json({ success: false, error: error.status ? error.message : 'Не удалось загрузить сравнение площадок' });
+  }
 });
 
 // GET /api/sales/summary?dateFrom=&dateTo= — заказы по магазинам Ozon (без самовыкупов):

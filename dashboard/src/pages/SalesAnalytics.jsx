@@ -8,7 +8,8 @@ import { barSignals, isRateMetric } from '../lib/chartSignals';
 import { buyoutPnlTotals } from '../lib/pnlCalc';
 import { enrichSalesChart, FIN_CHART_METRICS } from '../lib/salesChartModel';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { isWbCabinet, isDeflyLike } from '../lib/cabinets';
+import { isWbCabinet, isDeflyLike, shopOf } from '../lib/cabinets';
+import SalesMarkets, { SalesScope } from './SalesMarkets';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
 import dayjs from 'dayjs';
 import { getSalesData, getSalesCardRatings, setSalesCategory, getFinancePnl, getFinanceCoefs, latestOnly } from '../api';
@@ -515,17 +516,28 @@ const FINDER_HINT = {
 
 // ═════════════════════════════════════════════════════════════════════════
 export default function SalesAnalytics({ cabinet, view, active = true }) {
+  const [scope, setScope] = useState('cabinet');
+  const [dateFrom, setDateFrom] = useState(() => dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
+  const [dateTo, setDateTo] = useState(() => dayjs().format('YYYY-MM-DD'));
+  const [search, setSearch] = useState('');
+  const [gran, setGran] = useState('day');
+  const setDateRange = (from,to) => {setDateFrom(from);setDateTo(to);};
+  const control = view !== 'rnp' && isDeflyLike(cabinet)
+    ? <SalesScope scope={scope} setScope={setScope} cabinetLabel={shopOf(cabinet)?.label || cabinet} />
+    : null;
+  if (control && scope !== 'cabinet') return <SalesMarkets
+    {...{scope,search,setSearch,dateFrom,dateTo,setDateRange,gran,setGran,control,active}} />;
+  return <CabinetSales {...{cabinet,view,active,control,dateFrom,dateTo,setDateFrom,setDateTo,search,setSearch,gran,setGran}} />;
+}
+
+function CabinetSales({ cabinet, view, active, control, dateFrom, dateTo, setDateFrom, setDateTo, search, setSearch, gran, setGran }) {
   const today = dayjs().format('YYYY-MM-DD');
   const grp=useGroups(cabinet);
-  const [dateFrom, setDateFrom] = useState(dayjs().subtract(29, 'day').format('YYYY-MM-DD'));
-  const [dateTo, setDateTo] = useState(today);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sel, setSel] = useState('');
   const [brand, setBrand] = useState('');
-  const [search, setSearch] = useState('');
-  const [gran, setGran] = useState('day');
   const [chartMode, setChartMode] = useState('cats');
   // Тумблер: столбцы целиком (итог) или с разбивкой по категориям.
   const [split, setSplit] = useState(false);
@@ -802,13 +814,13 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
     } catch (e) { window.alert('Не удалось сохранить категорию.'); }
   }
 
-  if (loading && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
-  if (error && !data) return <div className="mpui"><div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить данные: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
+  if (loading && !data) return <div className="mpui sa-page">{control}<div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Загрузка…</div></div>;
+  if (error && !data) return <div className="mpui sa-page">{control}<div className="a-empty" style={{ textAlign: 'center', padding: 60 }}>Не удалось загрузить данные: {error} <button className="a-btn" onClick={load}>Повторить</button></div></div>;
 
   if (!all.length && !isWbCabinet(cabinet)) {
     return (
       <div className="mpui sa-page">
-        <div className="a-top"><h1>Аналитика продаж</h1></div>
+        <div className="a-top"><h1>Аналитика продаж</h1>{control}</div>
         <div className="a-card" style={{ padding: 24, lineHeight: 1.6 }}>
           <b>По этому кабинету в базе пока нет данных о товарах.</b><br />
           Каталог, заказы по товарам и остатки собирает Google-скрипт в таблицу. Чтобы он начал собирать их и по этому кабинету,
@@ -1106,6 +1118,7 @@ export default function SalesAnalytics({ cabinet, view, active = true }) {
         <ArtSearch value={search} onChange={setSearch} options={all} style={{ minWidth: 200 }} />
         <QuickPeriods from={dateFrom} to={dateTo} onChange={(f,t)=>{setDateFrom(f);setDateTo(t);}} periods={[7, 14, 30, 90]} />
         <DateRangePicker from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
+        {control}
         {brands.length > 0 && (
           <select className="a-sel" value={brand} onChange={e => setBrand(e.target.value)} title="Марка автомобиля">
             <option value="">Все марки авто</option>

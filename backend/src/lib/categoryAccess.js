@@ -123,6 +123,10 @@ function ads(data, ctx) {
 function projection(path, data, ctx) {
   if (INDEXED[path]) return indexed(path,data,ctx);
   if(path==='/sales/history'){if(!data._categoryFiltered)throw Error('Нужна фильтрация истории');return pick(data,['cabinet','mode','available','coverage','periods','olderThan']);}
+  if (path === '/sales/markets') {
+    if (!data._categoryFiltered) throw Error('Нужна фильтрация до агрегации');
+    return pick(data, ['dates','shops','options','categories','matched']);
+  }
   if(path==='/sales/summary'&&!data._categoryFiltered)throw Error('Нужна фильтрация до агрегации');
   if(path==='/sales/geo'&&!data._categoryFiltered)throw Error('Нужна фильтрация дневных сумм');
   if(path==='/sales/summary')return { ...pick(data,['from','to','pFrom','pTo']),shops:data.shops.filter(s=>ctx.contexts[s.id])};
@@ -176,7 +180,7 @@ function routeOf(path) {
   const normalized = path.toLowerCase().replace(/\/+$/, '').replace(/^\/api\/wb\/views/, '/api').replace(/^\/api\/ads(?=\/)/, '/api/promo');
   return normalized.replace(/^\/api/, '');
 }
-const EXTRA = ['/finance/ops','/pricelog','/pricelog/snap','/pricelog/history','/pricelog/rules','/sales/daily-prices','/sales/history','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/catalog','/competitors/product-ratings','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
+const EXTRA = ['/finance/ops','/pricelog','/pricelog/snap','/pricelog/history','/pricelog/rules','/sales/daily-prices','/sales/history','/sales/markets','/sales/summary', '/sales/geo','/sales/costs','/queries/data','/queries/series','/queries/article','/competitors','/competitors/serp','/competitors/tracking','/plan/ozon','/plan/ozon/execution','/promo/stats','/promo/groups','/promo/catalog','/competitors/product-ratings','/promo/transit','/promo/order','/promo/events','/promo/data-status','/orders/feed','/discounts/overview','/discounts/history','/discounts/settings','/sales/sewing','/sales/skus','/sales/builder-templates','/pricelog/dynamics','/finance/buyer-share','/settings/tax'];
 function middleware() {
   return async (req,res,next) => {
     if (req.user?.accessScope == null || !/^\/api(?:\/|$)/i.test(req.path)) return next();
@@ -217,11 +221,13 @@ function middleware() {
       return res.json({ success:true, data:list.map(c => pick(c,['id','label','platform','family','connected'])) });
     }
     if (!journalWrite && !scopedWrite && !INDEXED[path] && !EXTRA.includes(path)) return res.status(403).json({ success:false, error:'Этот раздел недоступен в вашем профиле' });
-    if(['/sales/summary','/plan/ozon','/plan/ozon/execution'].includes(path)){
+    if(['/sales/summary','/sales/markets','/plan/ozon','/plan/ozon/execution'].includes(path)){
       try{
-        const requested=path==='/sales/summary'?(req.query.cabinet==='licio'?'licio':'marketplaces'):(req.query.scope||'ozon');
+        if (path === '/sales/markets' && !scope.pages.includes('sales')) return res.status(403).json({success:false,error:'Нет доступа к аналитике продаж'});
+        const requested=path==='/sales/markets'?'marketplaces':path==='/sales/summary'?(req.query.cabinet==='licio'?'licio':'marketplaces'):(req.query.scope||'ozon');
         if(!['licio','ozon','marketplaces'].includes(requested))return res.status(403).json({success:false,error:'Нет доступа к этой области'});
-        const ids=scope.cabinets.filter(id=>requested==='licio'?id==='licio':id!=='licio');
+        const ids=scope.cabinets.filter(id=>requested==='licio'?id==='licio':id!=='licio')
+          .filter(id=>path!=='/sales/markets'||require('../config/cabinets').isConnected(id));
         if(!ids.length)return res.status(403).json({success:false,error:'Нет доступа к этой области'});
         req.categoryContexts=Object.fromEntries(await Promise.all(ids.map(async id=>[id,await context(id,scope)])));
         return filtered({contexts:req.categoryContexts});
