@@ -16,10 +16,10 @@ const context={cabinet:'defly',scope,allowed:new Map([[OWN,{path:PATH}]])};
 const articles=[{o:OWN,n:'Дефлектор',cat:PATH},{o:OTHER,n:'PRIVATE-COVER',cat:'Чехлы'},{o:THIRD,n:'3D',cat:'Дефлекторы / Окна / 3D'}];
 const arrayRows=[[0,0,7,700],[1,0,999999,999999],[2,0,9,900]];
 const secret=out=>assert.ok(!JSON.stringify(out).includes('PRIVATE-COVER')&&!JSON.stringify(out).includes('999999'));
-async function dispatch(path, method='GET', cabinet='defly', data={articles,rows:arrayRows,stock:[],prev:[],self:[],dates:['2026-11-14']},extra={}, requestBody) {
+async function dispatch(path, method='GET', cabinet='defly', data={articles,rows:arrayRows,stock:[],prev:[],self:[],dates:['2026-11-14']},extra={}, requestBody, assignedScope=scope) {
  let code=200,body,called=false;const headers={};
  const res={statusCode:200,status(n){code=n;this.statusCode=n;return this;},set(k,v){headers[k]=v;return this;},type(){return this;},send(v){body=JSON.parse(v);return this;},json(v){body=v;return this;}};
- await access.middleware()({path,method,body:requestBody,query:{cabinet,...extra},user:{id:3,role:'user',accessScope:scope}},res,()=>{called=true;res.set('Cache-Control','private,max-age=300');res.json({success:true,data});});
+ await access.middleware()({path,method,body:requestBody,query:{cabinet,...extra},user:{id:3,role:'user',accessScope:assignedScope}},res,()=>{called=true;res.set('Cache-Control','private,max-age=300');res.json({success:true,data});});
  return {code,body,called,headers};
 }
 test('Права нормализуются по границам веток, а одежда отделена от автомобильных категорий',()=>{
@@ -220,4 +220,28 @@ test('Редактирование запроса и остатка в пути 
   assert.equal((await dispatch('/api/pricelog','GET','defly',{snaps:[]})).code,403);
   assert.deepEqual((await dispatch('/api/pricelog','GET','defly',{_categoryFiltered:true,result:{snaps:[]}})).body.data,{snaps:[]});
   assert.equal((await dispatch('/api/sales/builder-templates','GET','defly',{templates:{global:{}}})).code,403);
+});
+
+test('Выбор кабинетов ограничивает прямые и сводные запросы, старые настройки совместимы',async()=>{
+ const modern=await access.validate({paths:[PATH],cabinetIds:['alex','alex']});
+ const stored=access.forStorage(modern);
+ assert.equal(Object.hasOwn(stored,'paths'),false);
+ assert.deepEqual(access.publicScope(stored).cabinets,['alex']);
+ assert.deepEqual(access.forStorage(scope),scope);
+ assert.equal((await dispatch('/api/sales/data','GET','defly',undefined,{},undefined,stored)).code,403);
+ const granted=await dispatch('/api/sales/data','GET','alex',undefined,{},undefined,stored);
+ assert.equal(granted.body.data.articles.length,1);
+ const summary={_categoryFiltered:true,shops:[{id:'defly'},{id:'alex'}]};
+ assert.deepEqual((await dispatch('/api/sales/summary','GET','defly',summary,{},undefined,stored)).body.data.shops,[{id:'alex'}]);
+ const visible=await dispatch('/api/promo/cabinets','GET','defly',undefined,{},undefined,stored);
+ assert.deepEqual(visible.body.data.map(c=>c.id),['alex']);
+});
+test('Все категории только в выбранном кабинете и защита от пустых или несовместимых наборов',async()=>{
+ const all=await access.validate({paths:[],allCategories:true,cabinetIds:['defly']});
+ assert.deepEqual(access.publicScope(access.forStorage(all)).cabinets,['defly']);
+ const allData=await dispatch('/api/sales/data','GET','defly',undefined,{},undefined,access.forStorage(all));
+ assert.equal(allData.body.data.articles.length,3);
+ await assert.rejects(access.validate({paths:[PATH],cabinetIds:[]}),{status:400});
+ await assert.rejects(access.validate({paths:[PATH],cabinetIds:['no-such-shop']}),{status:400});
+ await assert.rejects(access.validate({paths:['Одежда'],cabinetIds:['defly']}),{status:400});
 });

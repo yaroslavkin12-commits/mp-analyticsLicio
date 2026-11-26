@@ -4,23 +4,48 @@ const { autoPath, OV_SQL, overrideArgs } = require('./categories');
 const SEP = ' / ';
 const PAGES = ['summary','plan','geo','search','costs','sales','rnp','orders','check','abc','season','ads','discounts','inventory','buyout','unit','margin','pnl','calculator','pricelog'];
 const ROOTS = ['Чехлы','Дефлекторы','Утеплители','Аксессуары','Одежда'];
+const bad = message => Object.assign(Error(message), { status: 400 });
+const inPath = (path, parent) => path === parent || path.startsWith(parent + SEP);
+
 function normalize(value) {
   if (value == null) return null;
-  if (!value || typeof value !== 'object' || !Array.isArray(value.paths) || value.paths.length < 1 || value.paths.length > 100) throw Object.assign(Error('Выберите хотя бы одну категорию'), { status: 400 });
-  const paths = [...new Set(value.paths.map(p => {
-    if (typeof p !== 'string' || p.length > 256 || /[\x00-\x1f]/.test(p)) throw Object.assign(Error('Неверная категория'), { status: 400 });
+  if (typeof value !== 'object' || Array.isArray(value)) throw bad('Неверные настройки доступа');
+  const explicit = Object.hasOwn(value, 'cabinetIds');
+  const ids = value.cabinetIds;
+  if (explicit && ids !== null && (!Array.isArray(ids) || !ids.length || ids.length > Object.keys(CABINETS).length
+    || ids.some(id => typeof id !== 'string' || !Object.hasOwn(CABINETS, id)))) throw bad('Выберите хотя бы один доступный кабинет');
+  const allCategories = explicit && value.allCategories === true;
+  const input = explicit && Object.hasOwn(value, 'categoryPaths') ? value.categoryPaths : value.paths;
+  if (!allCategories && (!Array.isArray(input) || !input.length || input.length > 100)) throw bad('Выберите хотя бы одну категорию');
+  const paths = allCategories ? [] : [...new Set(input.map(p => {
+    if (typeof p !== 'string' || p.length > 256 || /[\x00-\x1f]/.test(p)) throw bad('Неверная категория');
     const parts = p.split('/').map(s => s.trim());
-    if (!parts.length || parts.some(s => !s) || parts.length > 8) throw Object.assign(Error('Неверная категория'), { status: 400 });
+    if (!parts.length || parts.some(s => !s) || parts.length > 8) throw bad('Неверная категория');
     return parts.join(SEP);
   }))];
-  return { paths: paths.filter(p => !paths.some(other => other !== p && p.startsWith(other + SEP))), readOnly: true };
+  return {
+    paths: paths.filter(p => !paths.some(other => other !== p && p.startsWith(other + SEP))),
+    readOnly: true,
+    ...(explicit && { cabinetIds: ids === null ? null : [...new Set(ids)] }),
+    ...(allCategories && { allCategories: true }),
+  };
 }
-const inPath = (path, parent) => path === parent || path.startsWith(parent + SEP);
+
 function cabinets(scope) {
-  const clothes = scope.paths.some(p => inPath(p, 'Одежда'));
-  const cars = scope.paths.some(p => !inPath(p, 'Одежда'));
-  return Object.keys(CABINETS).filter(id => (id === 'licio' && clothes) || (familyOf(id) === 'defly' && cars));
+  const clothes = scope.allCategories || scope.paths.some(p => inPath(p, 'Одежда'));
+  const cars = scope.allCategories || scope.paths.some(p => !inPath(p, 'Одежда'));
+  return Object.keys(CABINETS).filter(id => (!scope.cabinetIds || scope.cabinetIds.includes(id))
+    && ((id === 'licio' && clothes) || (familyOf(id) === 'defly' && cars)));
 }
+
+// Старый сервер не должен проигнорировать ограничение по кабинетам.
+// В новой записи список категорий хранится в поле, которое он не читает.
+function forStorage(scope) {
+  if (!scope || !Object.hasOwn(scope, 'cabinetIds')) return scope;
+  const { paths, ...rest } = scope;
+  return {...rest, categoryPaths: paths};
+}
+
 function publicScope(value) {
   if (value == null) return null;
   try { const scope = normalize(value); return { ...scope, cabinets: cabinets(scope), pages: PAGES }; }
@@ -65,16 +90,19 @@ async function availablePaths() {
 }
 async function validate(value) {
   const scope = normalize(value);
-  if (scope) {
+  if (scope?.cabinetIds && cabinets(scope).length !== scope.cabinetIds.length) {
+    throw bad('Выбранные категории и кабинеты не совпадают. Одежда доступна в Licio, автотовары — в остальных кабинетах');
+  }
+  if (scope && !scope.allCategories) {
     const known = new Set(await availablePaths());
-    if (scope.paths.some(path => !known.has(path))) throw Object.assign(Error('Категория отсутствует в справочнике. Обновите список категорий'), { status: 400 });
+    if (scope.paths.some(path => !known.has(path))) throw bad('Категория отсутствует в справочнике. Обновите список категорий');
   }
   return scope;
 }
 async function context(cabinet, scope) {
   if (!cabinets(scope).includes(cabinet)) throw Object.assign(Error('Нет доступа к этому кабинету'), { status: 403 });
   const all = await catalogue(cabinet), allowed = new Map();
-  for (const [offer, meta] of all) if (scope.paths.some(p => inPath(category(cabinet, meta.path), p))) allowed.set(offer, { ...meta, path: category(cabinet, meta.path) });
+  for (const [offer, meta] of all) if (scope.allCategories || scope.paths.some(p => inPath(category(cabinet, meta.path), p))) allowed.set(offer, { ...meta, path: category(cabinet, meta.path) });
   return { cabinet, scope, allowed };
 }
 const pick = (value, keys) => Object.fromEntries(keys.filter(k => value?.[k] !== undefined).map(k => [k, value[k]]));
@@ -282,4 +310,4 @@ function middleware() {
     }
   };
 }
-module.exports = { normalize, publicScope, category, cabinets, availablePaths, validate, context, projection, middleware, inPath, PAGES, routeOf };
+module.exports = { normalize, publicScope, forStorage, category, cabinets, availablePaths, validate, context, projection, middleware, inPath, PAGES, routeOf };

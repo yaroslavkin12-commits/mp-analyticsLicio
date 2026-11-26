@@ -3,9 +3,9 @@ const inside=(p,parent)=>p===parent||p.startsWith(parent+' / ');
 function snapshot(value,contexts){
  if(!value)return null;
  const canonical=path=>contexts.licio&&!inside(path,'Одежда')?'Одежда / '+path:path;
- const allowed=path=>Object.values(contexts).some(c=>c.scope.paths.some(p=>inside(path,p)));
- const rows=(value.rows||[]).filter(r=>allowed(canonical(r.path))).map(r=>{
-  const shops=(r.shops||[]).filter(s=>contexts[s.id]).map(s=>pick(s,['id','label','platform','qty','amount','mean']));
+ const allowed=(path,ctx)=>ctx.scope.allCategories||ctx.scope.paths.some(p=>inside(path,p));
+ const rows=(value.rows||[]).filter(r=>Object.values(contexts).some(c=>allowed(canonical(r.path),c))).map(r=>{
+  const shops=(r.shops||[]).filter(s=>contexts[s.id]&&allowed(canonical(r.path),contexts[s.id])).map(s=>pick(s,['id','label','platform','qty','amount','mean']));
   const qty=shops.reduce((n,s)=>n+s.qty,0),amount=shops.reduce((n,s)=>n+s.amount,0);
   return {path:canonical(r.path),shops,qty,amount,mean:qty>0?amount/qty:null};
  });

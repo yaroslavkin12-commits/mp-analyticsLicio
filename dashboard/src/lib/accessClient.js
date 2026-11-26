@@ -5,7 +5,10 @@ export function configureAccess(user) {
   if (next === signature) return;
   signature = next;
   const scoped = !!user?.accessScope;
-  state = { readOnly: scoped, cacheTag: scoped ? `${user.id || user.login}-${Date.now()}` : '', storagePrefix: scoped ? `access-${user.id || user.login}-${encodeURIComponent(JSON.stringify(user.accessScope.paths.slice().sort()))}:` : '' };
+  const scope = user?.accessScope;
+  const paths = scope?.paths.slice().sort();
+  const filter = scope && Object.hasOwn(scope, 'cabinetIds') ? [paths, scope.cabinetIds?.slice().sort() ?? null, !!scope.allCategories] : paths;
+  state = { readOnly: scoped, cacheTag: scoped ? `${user.id || user.login}-${Date.now()}` : '', storagePrefix: scoped ? `access-${user.id || user.login}-${encodeURIComponent(JSON.stringify(filter))}:` : '' };
 }
 export const accessMode = () => state;
 export const accessStorageKey = key => state.storagePrefix + key;

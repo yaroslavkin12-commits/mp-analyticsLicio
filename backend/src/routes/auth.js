@@ -33,7 +33,8 @@ router.get('/users', wrap(async (req, res) => {
   if (!admin(req, res)) return;
   res.set('Cache-Control', 'no-store');
   const where = A.isOwner(req) ? '' : " WHERE role='user' AND login<>'evgeniy'";
-  res.json({ success: true, data: await query(`SELECT ${policy.userFields(req)} FROM app_users${where} ORDER BY id`), passwordVaultConfigured: vault.configured() });
+  const users = await query(`SELECT ${policy.userFields(req)} FROM app_users${where} ORDER BY id`);
+  res.json({ success: true, data: users.map(u => ({...u, access_scope: categories.publicScope(u.access_scope)})), passwordVaultConfigured: vault.configured() });
 }));
 router.get('/users/:id/password', wrap(async(req,res)=>{
   if(!owner(req,res))return;
@@ -61,8 +62,8 @@ router.post('/users', wrap(async (req, res) => {
       if (policy.isProtected(target) && (disabled || (role && role !== 'owner'))) throw Object.assign(Error('Нельзя отключить главного администратора или изменить его роль'), { status: 400 });
       if (!policy.isProtected(target) && role && !['admin', 'user'].includes(role)) throw Object.assign(Error('Неизвестная роль'), { status: 400 });
       const nextRole = policy.isProtected(target) ? 'owner' : (role || target.role);
-      if (nextScope && nextRole !== 'user') throw Object.assign(Error('Ограничение категорий задаётся только обычному пользователю'), { status: 400 });
-      const scope = nextRole === 'user' ? (nextScope === undefined ? target.access_scope : nextScope) : null;
+      if (nextScope && nextRole !== 'user') throw Object.assign(Error('Ограничения доступа задаются только обычному пользователю'), { status: 400 });
+      const scope = nextRole === 'user' ? (nextScope === undefined ? target.access_scope : categories.forStorage(nextScope)) : null;
       await client.query('UPDATE app_users SET name=COALESCE($2,name), role=$3, disabled=$4, access_scope=$5::jsonb WHERE id=$1', [id, typeof name === 'string' ? name.slice(0, 128) : null, nextRole, disabled === undefined ? target.disabled : !!disabled, scope ? JSON.stringify(scope) : null]);
       if (password) await client.query('UPDATE app_users SET pass_hash=$2,pass_cipher=$3 WHERE id=$1', [id,A.hashPassword(password),vault.seal(password,target.login)]);
       if (password || disabled) await client.query('DELETE FROM app_sessions WHERE user_id=$1', [id]);
@@ -79,9 +80,9 @@ router.post('/users', wrap(async (req, res) => {
   if (String(password || '').length < 8) return res.status(400).json({ success: false, error: 'Пароль — не короче 8 символов' });
   if ((await query('SELECT 1 FROM app_users WHERE login=$1', [l])).length) return res.status(400).json({ success: false, error: 'Такой логин уже есть' });
   const scope = await categories.validate(accessScope);
-  if (scope && role === 'admin') return res.status(400).json({ success:false,error:'Ограничение категорий задаётся только обычному пользователю' });
+  if (scope && role === 'admin') return res.status(400).json({ success:false,error:'Ограничения доступа задаются только обычному пользователю' });
   if (scope) await readiness.ensureReady();
-  await query('INSERT INTO app_users (login,name,pass_hash,role,access_scope,pass_cipher) VALUES ($1,$2,$3,$4,$5::jsonb,$6)', [l, String(name || l).slice(0, 128), A.hashPassword(password), A.isOwner(req) && role === 'admin' ? 'admin' : 'user', scope ? JSON.stringify(scope) : null,vault.seal(password,l)]);
+  await query('INSERT INTO app_users (login,name,pass_hash,role,access_scope,pass_cipher) VALUES ($1,$2,$3,$4,$5::jsonb,$6)', [l, String(name || l).slice(0, 128), A.hashPassword(password), A.isOwner(req) && role === 'admin' ? 'admin' : 'user', scope ? JSON.stringify(categories.forStorage(scope)) : null,vault.seal(password,l)]);
   res.json({ success: true });
 }));
 router.delete('/users/:id', wrap(async (req, res) => {
@@ -106,7 +107,8 @@ router.get('/categories', wrap(async (req,res) => {
   if (!admin(req,res)) return;
   res.set('Cache-Control','no-store');
   const [paths, accessStatus] = await Promise.all([categories.availablePaths(),readiness.status()]);
-  res.json({success:true,data:{paths,accessStatus}});
+  const cabinets = require('../config/cabinets').listCabinets().map(({id,label,platform,connected})=>({id,label,platform,connected}));
+  res.json({success:true,data:{paths,cabinets,accessStatus}});
 }));
 router.get('/keys', wrap(async (req, res) => {
   if (!owner(req, res)) return;
