@@ -2,6 +2,8 @@ import { createPortal } from 'react-dom';
 import { barSignals } from '../lib/chartSignals';
 import React, { useState, useEffect, useCallback } from 'react';
 import ArtSearch, { artMatch, isExactArt } from '../components/ArtSearch';
+import WbDiscounts from './WbDiscounts';
+import { isWbCabinet } from '../lib/cabinets';
 import SoinvestCats from './SoinvestCats';
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Cell,
@@ -609,7 +611,11 @@ function SettingsTab({ cabinet }) {
   );
 }
 
-export default function Discounts({ cabinet, active = true }) {
+export default function Discounts(props) {
+  return isWbCabinet(props.cabinet) ? <WbDiscounts key={props.cabinet} {...props} /> : <OzonDiscounts {...props} />;
+}
+
+function OzonDiscounts({ cabinet, active = true }) {
   const [tab, setTab] = useState('cats');
   const [days, setDays] = useState('30');
   const [headerTarget, setHeaderTarget] = useState(null);

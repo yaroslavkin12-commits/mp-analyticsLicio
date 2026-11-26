@@ -1421,8 +1421,8 @@ export default function AdsStats2({ cabinet }) {
           <DateRangePicker from={dateFrom} to={dateTo} onChange={changePeriod} />
         </div>
         <span className="a-seg" title={isWb ? "Все заказы WB или показатели рекламных кампаний" : "Показы, переходы и заказы по всему товару или только от рекламы. Расход на рекламу одинаковый."}>
-          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Все заказы товара</button>
-          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>{isWb ? 'Рекламная статистика' : 'Заказы с рекламы'}</button>
+          <button type="button" className={mode === 'all' ? 'on' : ''} onClick={() => setMode('all')}>Общая воронка</button>
+          <button type="button" className={mode === 'ads' ? 'on' : ''} onClick={() => setMode('ads')}>Рекламная воронка</button>
         </span>
         <div className="a-top-actions">
           <Freshness status={status} />

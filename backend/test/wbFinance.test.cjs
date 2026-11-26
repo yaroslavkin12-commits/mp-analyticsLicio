@@ -32,7 +32,8 @@ test('Финансы WB: пустой JSON и зацикленный курсо�
  const h=harness([{code:200,text:row()},{code:200,text:row()}]);assert.throws(()=>h.ctx.syncWbFinance(),/не продвинулся/);assert.equal(h.rows('finance').length,0);
 });
 test('Финансы WB: повтор установки триггеров не дублирует сбор',()=>{
- const h=harness([]);h.ctx.setupWbTriggers();h.ctx.setupWbTriggers();assert.equal(h.triggers.length,4);assert.equal(h.triggers.filter(t=>t.getHandlerFunction()==='syncWbFinance').length,1);
+ const h=harness([]);h.ctx.setupWbTriggers();h.ctx.setupWbTriggers();assert.equal(h.triggers.length,5);
+ for (const name of ['syncWbFinance', 'syncWbFunnel']) assert.equal(h.triggers.filter(t=>t.getHandlerFunction()===name).length,1);
 });
 test('Статус финансов различает отсутствие и полный пустой отчёт; расчёты не включаются преждевременно',async()=>{
  const bridge=require('../src/lib/wbBridge'),sheetSync=require('../src/collectors/wb/sheetSync'),readMeta=bridge.readMeta,readFinance=bridge.readFinance,sync=sheetSync.sync;
@@ -48,4 +49,22 @@ test('Диагностика WB различает запрошенное и о�
  h.ctx.probeWbFinanceFields(); const logs=h.logs.join('\n');
  assert.match(logs,/bonusTypeName запрошен: true/); assert.match(logs,/с полем bonusTypeName: 0; удержаний: 1/);
  assert.ok(!logs.includes('secret-only-in-properties'));assert.ok(!logs.includes('private-counterparty'));assert.ok(!logs.includes('123456.78'));assert.equal(h.sheets.size,0);
+});
+
+test('Воронка WB сохраняет закрытые дни и отличает нулевые корзины от отсутствующих показов', () => {
+ const response = {code:200,text:JSON.stringify({data:{products:[{
+   product:{nmId:42,vendorCode:'A',title:'Товар'},statistic:{selected:{openCount:14,cartCount:0}}
+ }]}})};
+ const h = harness([response, {code:429}, response]);
+ h.ctx.syncWbFunnel();
+ assert.match(h.calls[0].url, /sales-funnel\/products$/);
+ assert.deepEqual(JSON.parse(h.calls[0].opt.payload).selectedPeriod, {start:'2026-10-29',end:'2026-10-29'});
+ assert.equal(h.rows('funnel')[0].views,null);
+ assert.equal(h.rows('funnel')[0].opens,14);
+ assert.equal(h.rows('funnel')[0].carts,0);
+ assert.throws(()=>h.ctx.syncWbFunnel(),/HTTP 429/);
+ assert.equal(h.rows('funnel').length,1);
+ h.ctx.syncWbFunnel();
+ assert.equal(h.rows('funnel').length,2);
+ assert.equal(h.ctx.wbMeta_('funnel').from,'2026-10-28');
 });

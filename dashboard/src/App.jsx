@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initArtLinks } from './lib/artLinks';
 import { initSearchClear } from './lib/searchClear';
-import { isDeflyLike, shopOf, SHARED_PAGES } from './lib/cabinets';
+import { isDeflyLike, isWbCabinet, shopOf, SHARED_PAGES } from './lib/cabinets';
 import {canManageAccess} from './lib/accessClient';
 import { pagesOf } from './lib/navigation';
 import Sidebar, { navLabel } from './components/Sidebar';
@@ -191,7 +191,7 @@ function Workspace() {
 
         <div style={{ flex:1, position:'relative', minHeight:0 }}>
           {allowed.filter(id => (id === page || (id !== 'access' && visited.has(id))) && PAGES[id] && (!isMobile || id === page)).map(id => {
-            const P = scope && id === 'discounts' ? SoinvestCats : PAGES[id];
+            const P = scope && id === 'discounts' && !isWbCabinet(cabinet) ? SoinvestCats : PAGES[id];
             const on = id === page;
             return (
               <div key={cabinet + ':' + id + ':' + (pageGen[id] || 0)} aria-hidden={!on} className="app-page" style={{

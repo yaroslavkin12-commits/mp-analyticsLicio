@@ -55,6 +55,15 @@ function build(datasets, prefs = initial(), params = {}) {
     for (const [k, source] of [['clicks', 'clicks'], ['adViews', 'views'], ['adOrders', 'orders'], ['adRevenue', 'orderRub'], ['adToCart', 'atbs']]) d[k] = add(d[k], number(r[source]));
     if (number(r.position) !== null) {d.positionCount=(d.positionCount||0)+1; d.position=d.positionCount===1?number(r.position):null;}
   }
+  for (const r of get('funnel')) {
+    if (r.date < prevFrom || r.date > to) continue;
+    const d = make(index(r), r.date);
+    for (const [key, source] of [['views', 'views'], ['pdpViews', 'opens'], ['cart', 'carts']]) {
+      const value = number(r[source]);
+      d[key] = d.funnelKnown ? add(d[key], value) : value;
+    }
+    d.funnelKnown = true;
+  }
   // Если у РК один подтверждённый товар, её дневной итог точно относится к нему. Остальное не делим наугад.
   const allocations = new Map();
   for (const r of get('ads').filter(r => r.scope === 'sku')) { const key = r.campaign + '|' + r.date; allocations.set(key, add(allocations.get(key) ?? 0, number(r.spend))); }

@@ -91,16 +91,16 @@ router.use(async (req, res) => {
     if (path === '/finance/buyer-share') return res.json({ success: true, data: { periods: [] } });
     if (path === '/promo/data-status') {
       const ds = await bridge.read({excludeFinance:true}), status = source.status();
-      return res.json({ success: true, data: { running: status.busy, jobs: [['catalog', 'catalog'], ['analytics', 'orders'], ['perf', 'ads'], ['stocks', 'stocks']].map(([job, kind]) => ({ job, everyMin: 60, lastSuccessAt: ds.find(x => x.kind === kind)?.meta.collectedAt || null, lastError: status.error })) } });
+      return res.json({ success: true, data: { running: status.busy, jobs: [['catalog', 'catalog'], ['analytics', ds.some(x => x.kind === 'funnel') ? 'funnel' : 'orders'], ['perf', 'ads'], ['stocks', 'stocks']].map(([job, kind]) => ({ job, everyMin: 60, lastSuccessAt: ds.find(x => x.kind === kind)?.meta.collectedAt || null, lastError: status.error })) } });
     }
-    const supported = ['/orders/feed', '/sales/data', '/sales/geo', '/sales/costs', '/sales/skus', '/promo/stats', '/promo/catalog', '/promo/sibling-clusters', '/stocks/data', '/finance/coefs', '/finance/pnl', '/finance/ops', '/finance/buyout', '/finance/calc-base', '/clusters', '/queries/season'];
+    const supported = ['/orders/feed', '/sales/data', '/sales/geo', '/sales/costs', '/sales/skus', '/promo/stats', '/promo/catalog', '/promo/sibling-clusters', '/stocks/data', '/finance/coefs', '/finance/pnl', '/finance/ops', '/finance/buyout', '/finance/calc-base', '/clusters', '/queries/season', '/discounts/wb-prices'];
     if (!supported.includes(path)) return res.status(503).json({ success: false, error: 'Данные WB для этого раздела пока не подключены' });
     const financial=['/finance/pnl','/finance/ops','/finance/coefs','/finance/calc-base'].includes(path);
     const summaryInput=path==='/sales/data'&&req.query.projection==='summary';
     const summaryFinance=financial&&req.query.projection==='summary';
     const compactPnl=summaryFinance&&path==='/finance/pnl';
     const coefficients=path==='/finance/coefs';
-    const selection=compactPnl?['catalog','orders','sales']:coefficients?['catalog','orders','sales','prices']:financial?['catalog','orders','sales','prices','ads','campaigns']:summaryInput?['catalog','orders','ads','campaigns']:null;
+    const selection=path==='/discounts/wb-prices'?['catalog','prices','orders']:compactPnl?['catalog','orders','sales']:coefficients?['catalog','orders','sales','prices']:financial?['catalog','orders','sales','prices','ads','campaigns']:summaryInput?['catalog','orders','ads','campaigns']:null;
     const readOptions=selection?{kinds:selection,...(compactPnl?{projection:'aliases'}:coefficients||summaryInput?{projection:'metrics'}:{}),...(summaryInput&&req.query.dateFrom&&req.query.dateTo?{from:req.query.dateFrom,to:req.query.dateTo}:{})}:{excludeFinance:true};
     let ds = await bridge.read(readOptions);
     const forceRefresh = !req.categoryContext && req.query.fresh === '1';
@@ -108,6 +108,7 @@ router.use(async (req, res) => {
     else source.sync().catch(()=>{});
     if (financial) { const options=['/finance/coefs','/finance/calc-base'].includes(path)?{latest:true}:req.query.dateFrom&&req.query.dateTo?{dateFrom:req.query.dateFrom,dateTo:req.query.dateTo}:{};const finance=await bridge.readFinance(options);if(finance)ds.push(finance); }
     const m = V.build(ds, prefs, req.query); let out;
+    if (path === '/discounts/wb-prices') return res.json({success:true,data:require('../lib/wbDiscounts')(ds, m.articles, m.dates, prefs)});
     if (path === '/sales/data') out = m.sales();
     if (path === '/promo/stats') out = m.ads();
     if (path === '/orders/feed') out = m.feed();

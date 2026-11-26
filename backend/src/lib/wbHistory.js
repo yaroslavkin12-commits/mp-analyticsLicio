@@ -1,6 +1,6 @@
 // Сохраняем историю независимо от скользящего окна очередной выгрузки WB.
 // Эти функции выполняются на том же клиенте и внутри транзакции импорта.
-const DATED=new Set(['orders','sales','ads','finance']);
+const DATED=new Set(['orders','sales','ads','funnel','finance']);
 function coverageRanges(meta){return Array.isArray(meta?.ranges)?meta.ranges:meta?.from&&meta?.to?[[meta.from,meta.to]]:[];}
 function mergeCoverage(previous,next){
  const ranges=[...coverageRanges(previous),...coverageRanges(next)].filter(r=>Array.isArray(r)&&r.length===2&&r.every(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d)))&&r[0]<=r[1]).map(r=>[...r]).sort((a,b)=>a[0].localeCompare(b[0]));

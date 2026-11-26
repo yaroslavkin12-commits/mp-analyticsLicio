@@ -14,7 +14,7 @@ api.interceptors.request.use(cfg => {
   if (access.cacheTag && ['get','head'].includes(method)) cfg.params = { ...cfg.params, _access: access.cacheTag };
   const cabinet = cfg.params?.cabinet || (cfg.data && typeof cfg.data === 'object' ? cfg.data.cabinet : null);
   if (isWbCabinet(cabinet)) {
-    if (/^\/(sales|promo|ads|stocks|orders|clusters|finance|queries)(\/|$)/.test(cfg.url)) { cfg.url = '/wb/views' + cfg.url; cfg.timeout = Math.max(cfg.timeout || 0, 120000); }
+    if (/^\/(sales|promo|ads|stocks|orders|clusters|finance|queries|discounts)(\/|$)/.test(cfg.url)) { cfg.url = '/wb/views' + cfg.url; cfg.timeout = Math.max(cfg.timeout || 0, 120000); }
     if (/^\/pricelog/.test(cfg.url)) { cfg.params = { ...cfg.params, platform: 'wb' }; if (cfg.data && typeof cfg.data === 'object') cfg.data.platform = 'wb'; }
   }
   return cfg;
@@ -156,6 +156,7 @@ export const setSalesCategory = (cabinet, offerIds, path) => api.post('/sales/ca
 export const getCostList = cabinet => api.get('/sales/costs', { params: { cabinet }, timeout: 60000 });
 export const saveCostList = (cabinet, items) => api.post('/sales/costs', { cabinet, items }, { timeout: 120000 });
 export const getSalesGeo = (cabinet, p) => api.get('/sales/geo', { params: { cabinet, ...p }, timeout: 90000 });
+export const getWbDiscounts = (cabinet, dateFrom, dateTo) => api.get('/discounts/wb-prices', { params: { cabinet, dateFrom, dateTo } });
 export const getDiscountOverview = cabinet => api.get('/discounts/overview', { params: { cabinet } });
 export const getDiscountHistory = (cabinet, range) => api.get('/discounts/history', { params: { cabinet, ...(typeof range === 'object' ? range : {days:range}) } });
 // Юнит-экономика, P&L, % выкупа

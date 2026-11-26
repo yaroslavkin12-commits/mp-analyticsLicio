@@ -1,6 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import dayjs from 'dayjs';
-import { getFinancePnl, saveBuyerShare, deleteBuyerShare } from '../api';
+import { getAdsCabinets, getFinancePnl, saveBuyerShare, deleteBuyerShare } from '../api';
+import { parseWbReport } from '../lib/wbRecon';
+import { useAccess } from '../lib/AccessContext';
+import { isWbCabinet, shopOf } from '../lib/cabinets';
 import { useBuyerShare } from './buyerShare';
 import { fmtInt } from './AdsStats2';
 import { Kpi, Empty, pct1 } from './finShared';
@@ -116,7 +119,33 @@ function TaxPeriods({ cabinet }) {
   );
 }
 
-export default function Recon({ cabinet }) {
+export default function Recon({ cabinet, active }) {
+  const scope = useAccess()?.accessScope;
+  const [platform, setPlatform] = useState(isWbCabinet(cabinet) ? 'wb' : 'ozon');
+  const [selected, setSelected] = useState(cabinet);
+  const [connected, setConnected] = useState([]);
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    getAdsCabinets().then(r => {
+      if (!cancelled) setConnected((r.data.data || []).filter(c => c.connected !== false).map(c => c.id));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [active]);
+  const shops = [...new Set([cabinet, ...connected])].filter(id => (!scope || scope.cabinets.includes(id)) && isWbCabinet(id) === (platform === 'wb'));
+  const preferred = platform === 'wb' ? cabinet + '_wb' : cabinet.replace(/_wb$/, '');
+  const chosen = shops.includes(selected) ? selected : shops.includes(preferred) ? preferred : shops[0];
+  const controls = <><span className="a-seg">{[['ozon', 'Ozon'], ['wb', 'WB']].map(([id, title]) =>
+    <button type="button" key={id} className={platform === id ? 'on' : ''} aria-pressed={platform === id} onClick={() => setPlatform(id)}>{title}</button>
+  )}</span>{chosen && <select className="a-input" aria-label="Кабинет для сверки" value={chosen} onChange={e => setSelected(e.target.value)}>
+    {shops.map(id => <option key={id} value={id}>{shopOf(id)?.label || id}</option>)}
+  </select>}</>;
+  if (!chosen) return <div className="mpui sa-page"><div className="a-top"><h1>Сверка отчётов</h1>{controls}</div><Empty>Нет подключённых кабинетов на этой площадке.</Empty></div>;
+  return <ReconReport key={chosen} cabinet={chosen} controls={controls} />;
+}
+
+function ReconReport({ cabinet, controls }) {
+  const wb = isWbCabinet(cabinet), market = wb ? 'WB' : 'Ozon';
   const [shareMsg, setShareMsg] = useState('');
   const [rep, setRep] = useState(null);
   const [ours, setOurs] = useState(null);
@@ -126,10 +155,24 @@ export default function Recon({ cabinet }) {
 
   async function onFile(file) {
     if (!file) return;
-    setError(null); setBusy('Читаю отчёт…'); setOurs(null);
+    setError(null); setBusy('Читаю отчёт…'); setOurs(null); setRep(null); setShareMsg('');
     try {
       const XLSX = await import('xlsx');
-      const aoa = readSheet(XLSX, await file.arrayBuffer());
+      const buffer = await file.arrayBuffer();
+      if (wb) {
+        const book = XLSX.read(buffer, { type: 'array', cellDates: true });
+        const report = parseWbReport(book.SheetNames.map(name => XLSX.utils.sheet_to_json(book.Sheets[name], { header: 1, raw: true })), day);
+        setRep({ ...report, name: file.name });
+        setBusy('Загружаю данные сервиса за тот же период…');
+        const response = await getFinancePnl(cabinet, { dateFrom: report.from, dateTo: report.to });
+        const data = response.data.data;
+        if (data.financeSource !== 'wb' || !data.available?.mn || !data.available?.mx || data.available.mn > report.from || data.available.mx < report.to) {
+          throw new Error('В сервисе нет финансового отчёта WB за весь период файла');
+        }
+        setOurs(data);
+        return;
+      }
+      const aoa = readSheet(XLSX, buffer);
       const hi = aoa.findIndex(r => r && r.some(c => String(c).trim() === 'Тип начисления'));
       if (hi < 0) throw new Error('Не нашёл колонку «Тип начисления» — это точно отчёт «Начисления»?');
       const H = aoa[hi].map(c => String(c || '').trim());
@@ -173,7 +216,7 @@ export default function Recon({ cabinet }) {
       const p = await getFinancePnl(cabinet, { dateFrom: from, dateTo: to, fresh: 1 });
       setOurs(p.data.data);
     } catch (e) { setError(e.response?.data?.error || e.message); }
-    setBusy('');
+    finally { setBusy(''); }
   }
 
   const cmp = useMemo(() => {
@@ -200,10 +243,10 @@ export default function Recon({ cabinet }) {
   return (
     <div className="mpui sa-page">
       <div className="page-sticky"><div className="a-top">
-        <h1>Сверка с отчётом Ozon</h1>
+        <h1>Сверка отчётов</h1>{controls}
         <label className="a-btn primary" style={{ cursor: 'pointer' }}>
-          {rep ? 'Загрузить другой отчёт' : 'Загрузить отчёт «Начисления» (xlsx)'}
-          <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => onFile(e.target.files[0])} />
+          {rep ? 'Загрузить другой отчёт' : wb ? 'Загрузить детализацию WB' : 'Загрузить отчёт «Начисления» (xlsx)'}
+          <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} disabled={!!busy} onChange={e => { const file = e.target.files[0]; e.target.value = ''; onFile(file); }} />
         </label>
         {shareMsg && <span className="a-hint" style={{ color: 'var(--a-good)' }}>{shareMsg}</span>}
         {rep && <span className="a-hint">{rep.name} · {dayjs(rep.from).format('DD.MM')}–{dayjs(rep.to).format('DD.MM.YYYY')} · {fmtInt(rep.rows.length)} строк</span>}
@@ -211,8 +254,8 @@ export default function Recon({ cabinet }) {
       </div></div>
 
       {error && <div className="c-msg bad">{error}</div>}
-      <TaxPeriods cabinet={cabinet} />
-      {!rep && (
+      {!wb && <TaxPeriods cabinet={cabinet} />}
+      {!rep && (wb ? <Empty>В WB Partners откройте «Финансы → Финансовые отчёты → Отчёты реализации» и загрузите сюда XLSX с детализацией. Сверка использует финансовые даты и начисления. Файл обрабатывается в браузере.</Empty> :
         <Empty>
           <b>Как сверить:</b> в кабинете Ozon откройте <i>Финансы → Начисления</i>, выберите период (до месяца), нажмите «Скачать» и загрузите файл сюда.
           Сервис разложит отчёт по статьям P&L и сравнит с тем, что собрал Google-скрипт: итоги по статьям, по дням и по артикулам.
@@ -223,7 +266,7 @@ export default function Recon({ cabinet }) {
       {cmp && (
         <>
           <div className="a-kpis s-kpis">
-            <Kpi label="Итого по отчёту Ozon" value={`${fmtInt(cmp.totR)} ₽`} sub="сумма всех начислений" />
+            <Kpi label={`Итого по отчёту ${market}`} value={`${fmtInt(cmp.totR)} ₽`} sub="сумма всех начислений" />
             <Kpi label="Итого в сервисе" value={`${fmtInt(cmp.totO)} ₽`} sub={<Diff a={cmp.totR} b={cmp.totO} />} />
             <Kpi label="Совпадение" value={pct1(cmp.totR ? Math.max(0, 100 - Math.abs(cmp.totO - cmp.totR) / Math.abs(cmp.totR) * 100) : null)} sub="100% − расхождение к сумме отчёта" />
             <Kpi label="Дней с расхождением" value={`${cmp.days.filter(d => !ok(cmp.R.d.get(d) || 0, cmp.O.d.get(d) || 0)).length} из ${cmp.days.length}`} sub="больше 1% или 100 ₽" />
@@ -233,7 +276,7 @@ export default function Recon({ cabinet }) {
             <div className="a-card">
               <div className="a-bar" style={{ padding: '12px 14px 4px' }}><b style={{ fontSize: 14 }}>По статьям</b></div>
               <table className="a-t s-slice">
-                <thead><tr><th>Статья</th><th className="r">Отчёт Ozon</th><th className="r">Сервис</th><th className="r">Разница</th></tr></thead>
+                <thead><tr><th>Статья</th><th className="r">Отчёт {market}</th><th className="r">Сервис</th><th className="r">Разница</th></tr></thead>
                 <tbody>
                   {BUCKETS.filter(([k]) => cmp.R.b[k] || cmp.O.b[k]).map(([k, l]) => (
                     <tr key={k}><td>{l}</td><td className="n r">{fmtInt(cmp.R.b[k] || 0)}</td><td className="n r">{fmtInt(cmp.O.b[k] || 0)}</td><td className="r"><Diff a={cmp.R.b[k] || 0} b={cmp.O.b[k] || 0} /></td></tr>
@@ -245,7 +288,7 @@ export default function Recon({ cabinet }) {
             <div className="a-card">
               <div className="a-bar" style={{ padding: '12px 14px 4px' }}><b style={{ fontSize: 14 }}>По дням</b><span className="a-hint">по дате начисления</span></div>
               <table className="a-t s-slice">
-                <thead><tr><th>День</th><th className="r">Отчёт Ozon</th><th className="r">Сервис</th><th className="r">Разница</th></tr></thead>
+                <thead><tr><th>День</th><th className="r">Отчёт {market}</th><th className="r">Сервис</th><th className="r">Разница</th></tr></thead>
                 <tbody>{cmp.days.map(d => (
                   <tr key={d}><td>{dayjs(d).format('DD.MM, dd')}</td><td className="n r">{fmtInt(cmp.R.d.get(d) || 0)}</td><td className="n r">{fmtInt(cmp.O.d.get(d) || 0)}</td><td className="r"><Diff a={cmp.R.d.get(d) || 0} b={cmp.O.d.get(d) || 0} /></td></tr>
                 ))}</tbody>
@@ -256,7 +299,7 @@ export default function Recon({ cabinet }) {
           <div className="a-card">
             <div className="a-bar" style={{ padding: '12px 14px 4px' }}><b style={{ fontSize: 14 }}>Артикулы с наибольшим расхождением</b><span className="a-hint">клик — по статьям; «—» — начисления без артикула</span></div>
             <table className="a-t s-slice">
-              <thead><tr><th>Артикул</th><th className="r">Отчёт Ozon</th><th className="r">Сервис</th><th className="r">Разница</th></tr></thead>
+              <thead><tr><th>Артикул</th><th className="r">Отчёт {market}</th><th className="r">Сервис</th><th className="r">Разница</th></tr></thead>
               <tbody>
                 {cmp.arts.filter(x => !ok(x.r.all || 0, x.o.all || 0)).slice(0, 40).map(x => (
                   <React.Fragment key={x.k}>

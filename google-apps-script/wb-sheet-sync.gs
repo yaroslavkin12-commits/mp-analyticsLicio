@@ -172,7 +172,7 @@ function wbStatus_(meta) {
   SpreadsheetApp.flush();
 }
 // Повторная публикация уже собранных вкладок: API WB повторно не вызывается.
-function resendWbData() { wbLock_('resend', function () { ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices', 'finance'].forEach(function (kind) { var meta = PropertiesService.getScriptProperties().getProperty('WB_META_' + kind); if (meta) { var m = JSON.parse(meta); wbSave_(kind, wbRead_(kind), m.from, m.to, m.warning, m.collectedAt); } }); }); }
+function resendWbData() { wbLock_('resend', function () { ['catalog', 'orders', 'sales', 'stocks', 'campaigns', 'ads', 'prices', 'funnel', 'finance'].forEach(function (kind) { var meta = PropertiesService.getScriptProperties().getProperty('WB_META_' + kind); if (meta) { var m = JSON.parse(meta); wbSave_(kind, wbRead_(kind), m.from, m.to, m.warning, m.collectedAt); } }); }); }
 function wbMeta_(kind) { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('WB_META_' + kind) || 'null'); } catch (e) { return null; } }
 function wbNumber_(v) { return v === undefined || v === null || v === '' || !isFinite(Number(v)) ? null : Number(v); }
 function wbStats_(kind) {
@@ -351,12 +351,59 @@ function syncWbFinance() { wbLock_('finance',function(){
 
 function setupWbTriggers() {
   wbLock_('setup', function () {
-    var names = ['syncWbRecent', 'syncWbDaily', 'syncWbAds', 'syncWbFinance'];
+    var names = ['syncWbRecent', 'syncWbDaily', 'syncWbAds', 'syncWbFinance', 'syncWbFunnel'];
     ScriptApp.getProjectTriggers().forEach(function (t) { if (names.indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t); });
     ScriptApp.newTrigger('syncWbRecent').timeBased().everyMinutes(30).create();
     ScriptApp.newTrigger('syncWbDaily').timeBased().everyHours(1).create();
     ScriptApp.newTrigger('syncWbAds').timeBased().everyHours(1).create();
+    ScriptApp.newTrigger('syncWbFunnel').timeBased().everyHours(1).create();
     ScriptApp.newTrigger('syncWbFinance').timeBased().everyHours(1).create();
     Logger.log('Триггеры WB установлены. Запустите syncWbRecent, затем syncWbDaily и syncWbAds по отдельности. Финансы собираются функцией syncWbFinance. Запустите её отдельно.');
+  });
+}
+
+// Один календарный день на запрос. Публикуем день только после получения всех страниц.
+function wbFunnelDay_(date) {
+  var rows = [], seen = new Set(), limit = 500;
+  for (var offset = 0; ; offset += limit) {
+    var data = wbFetch_('post', 'https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products', {
+      selectedPeriod: { start: date, end: date }, limit: limit, offset: offset
+    });
+    var products = data.data && data.data.products;
+    if (!Array.isArray(products)) throw new Error('В ответе WB нет товаров воронки');
+    products.forEach(function (item) {
+      var p = item.product, s = item.statistic && item.statistic.selected;
+      if (!p || !(Number(p.nmId) > 0) || !s || wbNumber_(s.openCount) === null || wbNumber_(s.cartCount) === null) {
+        throw new Error('Не распознаны поля общей воронки WB');
+      }
+      var id = date + '|' + p.nmId;
+      if (seen.has(id)) throw new Error('Повтор карточки при загрузке воронки WB');
+      seen.add(id);
+      rows.push({ id: id, date: date, nmId: p.nmId, offer: p.vendorCode || '', name: p.title || '',
+        views: wbNumber_(s.impressionCount), opens: wbNumber_(s.openCount), carts: wbNumber_(s.cartCount) });
+    });
+    if (products.length < limit) return rows;
+    Utilities.sleep(21000);
+  }
+}
+
+function syncWbFunnel() {
+  wbLock_('funnel', function () {
+    var props = PropertiesService.getScriptProperties();
+    var yesterday = ymd_(1), oldest = ymd_(30), meta = wbMeta_('funnel');
+    var cursor = props.getProperty('WB_FUNNEL_BACKFILL');
+    var offsetDay = function (date, count) {
+      return Utilities.formatDate(new Date(Date.parse(date + 'T12:00:00Z') + count * 86400000), 'Europe/Moscow', 'yyyy-MM-dd');
+    };
+    var continuesHistory = meta && meta.to < yesterday && meta.to >= oldest;
+    var start = !meta || meta.to < oldest ? yesterday : continuesHistory ? offsetDay(meta.to, 1) : cursor;
+    if (!start || start < oldest) return;
+    var rows = wbFunnelDay_(start);
+    // На листе оставляем последнее окно, накопленная история хранится в Defly.
+    var merged = wbRead_('funnel').filter(function (r) { return r.date !== start && r.date >= oldest; }).concat(rows);
+    var currentWindow = meta && meta.to >= oldest;
+    var from = currentWindow && meta.from < start ? (meta.from < oldest ? oldest : meta.from) : start;
+    wbSave_('funnel', merged, from, currentWindow && meta.to > start ? meta.to : start);
+    if (!cursor || start === cursor || !currentWindow) props.setProperty('WB_FUNNEL_BACKFILL', offsetDay(start, -1));
   });
 }
