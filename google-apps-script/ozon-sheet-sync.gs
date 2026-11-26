@@ -1490,7 +1490,12 @@ function collectFinance_(cab, dates, agg, started, done) {
         }, 'Финансы');
       } catch (e) { Logger.log('Финансы ' + cab.id + ' ' + d + ': ' + e.message); ok = false; break; }
       const res = data.result || data;
-      const list = res.accruals || res.items || res.operations || [];
+      const list = res.accruals || res.items || res.operations;
+      if (!Array.isArray(list)) {
+        Logger.log('Финансы ' + cab.id + ' ' + d + ': нет списка начислений, прежние данные сохранены');
+        ok = false;
+        break;
+      }
       if (!sampled && list.length) { sampled = true; Logger.log('Финансы ' + cab.id + ': пример записи ' + JSON.stringify(list[0]).slice(0, 2500)); }
       list.forEach(function (rec) {
         n++;
@@ -1543,8 +1548,14 @@ function collectFinance_(cab, dates, agg, started, done) {
           sk.forEach(function (x) { add(d, x, nm, rest / sk.length, /^Продажа/.test(nm) ? (qty || 1) / sk.length : /^Возврат выручки/.test(nm) ? -(qty || 1) / sk.length : 0); });
         }
       });
-      lastId = res.last_id || '';
-      if (!lastId || !list.length) break;
+      const nextId = res.last_id || '';
+      if (!nextId || !list.length) break;
+      if (nextId === lastId || page === 99 || Date.now() - started > 280000) {
+        Logger.log('Финансы ' + cab.id + ' ' + d + ': получены не все страницы, прежние данные сохранены');
+        ok = false;
+        break;
+      }
+      lastId = nextId;
       Utilities.sleep(150);
     }
     if (ok) done[d] = true;
@@ -1553,7 +1564,7 @@ function collectFinance_(cab, dates, agg, started, done) {
   return n;
 }
 // Даты, собранные полностью, заменяются целиком; остальные не трогаем.
-function replaceDates_(sheetName, headers, rows, done, dateCol) {
+function replaceDates_(sheetName, headers, rows, done, dateCol, cabinets) {
   const sh = getSheet_(sheetName);
   const last = sh.getLastRow();
   const cutoff = mskDate_(sheetName === SHEET_NAMES.finance ? 124 : RETENTION_DAYS);
@@ -1561,7 +1572,7 @@ function replaceDates_(sheetName, headers, rows, done, dateCol) {
   if (last > 1) {
     old = sh.getRange(2, 1, last - 1, headers.length).getValues().filter(function (r) {
       const d = r[dateCol] instanceof Date ? Utilities.formatDate(r[dateCol], 'GMT+3', 'yyyy-MM-dd') : String(r[dateCol]).slice(0, 10);
-      return d && d >= cutoff && !done[d];
+      return d && d >= cutoff && (!done[d] || cabinets && !cabinets.has(String(r[0])));
     });
   }
   const fresh = rows.filter(function (r) { return done[r[dateCol]]; });
@@ -1576,11 +1587,27 @@ function syncFinance(days) {
   for (let i = window - 1; i >= 0; i--) dates.push(mskDate_(i));
   runFinance_(dates);
 }
-function runFinance_(dates) {
+// Разные триггеры пишут в один лист Finance. Снимок за день не должен
+// перезаписывать данные, пока параллельно собирается другой снимок.
+function withFinanceLock_(fn) {
+  const lock = LockService.getDocumentLock() || LockService.getScriptLock();
+  if (!lock.tryLock(1500)) {
+    Logger.log('Финансы уже собираются, повторю позже');
+    return false;
+  }
+  try { fn(); } finally { lock.releaseLock(); }
+  return true;
+}
+function runFinance_(dates, todayOnly) {
+  return withFinanceLock_(function () { collectFinanceDates_(dates, todayOnly); });
+}
+function collectFinanceDates_(dates, todayOnly) {
   const started = Date.now();
   const agg = {};
   const doneBy = {};
-  getCabinets_().forEach(function (cab) {
+  const cabinets = getCabinets_().filter(sellerHeaders_);
+  if (!cabinets.length) return;
+  cabinets.forEach(function (cab) {
     doneBy[cab.id] = {};
     try { collectFinance_(cab, dates, agg, started, doneBy[cab.id]); } catch (e) { Logger.log('Финансы ' + cab.id + ': ' + e.message); }
   });
@@ -1589,6 +1616,14 @@ function runFinance_(dates) {
   const done = {};
   dates.forEach(function (d) { if (cabs.every(function (c) { return doneBy[c][d]; })) done[d] = true; });
   const rows = Object.keys(agg).map(function (k) { const r = agg[k]; r[4] = Math.round(r[4] * 100) / 100; r[5] = Math.round(r[5] * 100) / 100; return r; });
+  if (todayOnly) {
+    const date = dates[0];
+    const fresh = rows.filter(function (row) { return doneBy[row[0]][date]; });
+    const updated = new Set(fresh.map(function (row) { return row[0]; }));
+    if (updated.size) replaceDates_(SHEET_NAMES.finance, FINANCE_HEADERS, fresh, { [date]: true }, 1, updated);
+    Logger.log('Сегодняшние начисления: обновлено кабинетов ' + updated.size + ' из ' + cabinets.length);
+    return;
+  }
   const total = replaceDates_(SHEET_NAMES.finance, FINANCE_HEADERS, rows, done, 1);
   const left = dates.filter(function (d) { return !done[d]; });
   Logger.log('syncFinance: дней собрано ' + Object.keys(done).length + ' из ' + dates.length + ', строк ' + rows.length + ' (всего во вкладке ' + total + ')');
@@ -1600,9 +1635,12 @@ function runFinance_(dates) {
   } else props.deleteProperty('FIN_PENDING');
 }
 function syncFinanceContinue() {
-  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncFinanceContinue') ScriptApp.deleteTrigger(t); });
-  const left = JSON.parse(PropertiesService.getScriptProperties().getProperty('FIN_PENDING') || '[]');
-  if (left.length) runFinance_(left);
+  const locked = withFinanceLock_(function () {
+    ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'syncFinanceContinue') ScriptApp.deleteTrigger(t); });
+    const left = JSON.parse(PropertiesService.getScriptProperties().getProperty('FIN_PENDING') || '[]');
+    if (left.length) collectFinanceDates_(left, false);
+  });
+  if (!locked) ScriptApp.newTrigger('syncFinanceContinue').timeBased().after(60 * 1000).create();
 }
 // Быстрая полная загрузка — 45 дней; расширенная история для плана загружается отдельно.
 function syncFinanceFull() { syncFinance(45); }
@@ -1787,6 +1825,16 @@ function T_syncDaily() { return timed_('syncDaily', syncDaily); }
 function T_syncSkuHistory() { return timed_('syncSkuHistory', syncSkuHistory); }
 function T_syncGeo() { return timed_('syncGeo', syncGeo); }
 function T_syncFinance() { return timed_('syncFinance', syncFinance); }
+function syncFinanceToday() { return runFinance_([mskDate_(0)], true); }
+function T_syncFinanceToday() { return timed_('syncFinanceToday', syncFinanceToday); }
+
+// Можно запустить отдельно после вставки новой версии скрипта.
+function setupFinanceTodayTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'T_syncFinanceToday') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('T_syncFinanceToday').timeBased().everyHours(2).create();
+}
 function T_syncStocksWh() { return timed_('syncStocksWh', syncStocksWh); }
 function T_compactQueries() { return timed_('compactQueries', compactQueries); }
 function T_syncQueries() { return timed_('syncQueries', syncQueriesDaily); }
@@ -1862,11 +1910,12 @@ function setupTriggers() {
   ScriptApp.newTrigger('T_syncSkuHistory').timeBased().atHour(5).everyDays(1).create();
   ScriptApp.newTrigger('T_syncGeo').timeBased().everyHours(light ? 6 : 3).create();
   ScriptApp.newTrigger('T_syncFinance').timeBased().everyHours(light ? 12 : 6).create();
+  setupFinanceTodayTrigger();
   ScriptApp.newTrigger('T_syncStocksWh').timeBased().everyHours(light ? 6 : 2).create();
   if (!light) ScriptApp.newTrigger('T_compactQueries').timeBased().atHour(5).nearMinute(30).everyDays(1).create();
   if (!light) ScriptApp.newTrigger('T_syncQueries').timeBased().atHour(6).everyDays(1).create(); // поисковые запросы — только с Premium
   ScriptApp.newTrigger('T_syncMonthly').timeBased().atHour(7).everyDays(1).create();
-  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, syncFinance каждые 6 часов.');
+  Logger.log('Триггеры поставлены: syncOrders каждые 10 мин, syncRecent каждые 30 мин, syncCpoOrders каждые 3 часа, syncDaily в 4:00, syncSkuHistory в 5:00, syncGeo каждые 3 часа, сегодняшние начисления каждые 2 часа, сверка пяти дней каждые ' + (light ? 12 : 6) + ' ч.');
 }
 
 // ── История расхода «оплаты за клик» по каждому товару и дню ─────────────

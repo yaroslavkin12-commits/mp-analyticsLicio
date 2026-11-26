@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import ArtSearch from '../components/ArtSearch';
@@ -54,19 +54,26 @@ export default function SalesMarkets({ scope, search, setSearch, dateFrom, dateT
   const [open,setOpen] = useState({});
   const [status,setStatus] = useState({loading:true,error:null});
   const [retry,setRetry] = useState(0);
+  const marketScope = useRef(scope);
+  marketScope.current = scope;
   useEffect(() => {
     if (!active) return undefined;
     const controller = new AbortController();
     setStatus({loading:true,error:null});
-    const timer = setTimeout(async () => {
+    async function refresh(background) {
       try {
         const response = await getSalesMarkets({dateFrom,dateTo,search,category},controller.signal);
         if (!controller.signal.aborted) { setData(response.data.data); setStatus({loading:false,error:null}); }
       } catch (error) {
-        if (!controller.signal.aborted) setStatus({loading:false,error:error.response?.data?.error || error.message});
+        if (!background && !controller.signal.aborted) setStatus({loading:false,error:error.response?.data?.error || error.message});
       }
-    }, search ? 240 : 0);
-    return () => {clearTimeout(timer);controller.abort();};
+    }
+    const timer = setTimeout(() => refresh(false), search ? 240 : 0);
+    const update = setInterval(() => {
+      const moscowDay = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });
+      if (marketScope.current !== 'wb' && !document.hidden && dateFrom <= moscowDay && dateTo >= moscowDay) refresh(true);
+    }, 15 * 60 * 1000);
+    return () => {clearTimeout(timer);clearInterval(update);controller.abort();};
   },[search,dateFrom,dateTo,category,retry,active]);
 
   const markets = MARKETS.filter(m=>scope==='all'||m.id===scope);

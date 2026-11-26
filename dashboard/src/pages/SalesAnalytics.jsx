@@ -591,6 +591,8 @@ function CabinetSales({ cabinet, view, active, control, dateFrom, dateTo, setDat
   // Выкупы, поступления на счёт и прибыль — из финансовых данных Ozon (как во
   // вкладках «Средний чек» и «P&L») и коэффициентов «Юнит-экономики».
   const [fin, setFin] = useState(null);
+  const financeActive = useRef(active);
+  financeActive.current = active;
   const [tax] = useTax(cabinet);
   useEffect(() => {
     let off = false; setFin(null);
@@ -607,7 +609,16 @@ function CabinetSales({ cabinet, view, active, control, dateFrom, dateTo, setDat
       const full = d && d.available?.mn && d.available.mn <= pFrom;
       if (!off) setFin(f => ({ ...(f || {}), pnlPrev: full ? d : null }));
     }).catch(() => {});
-    return () => { off = true; };
+    const timer = !isWbCabinet(cabinet) && setInterval(async () => {
+      const moscowDay = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Moscow' });
+      if (!financeActive.current || document.hidden || dateFrom > moscowDay || dateTo < moscowDay) return;
+      try {
+        const response = await getFinancePnl(cabinet, { dateFrom, dateTo });
+        const pnl = response.data?.data;
+        if (!off && pnl) setFin(previous => ({ ...previous, pnl }));
+      } catch { /* При временной ошибке остаётся последний полученный отчёт. */ }
+    }, 15 * 60 * 1000);
+    return () => { off = true; if (timer) clearInterval(timer); };
   }, [cabinet, dateFrom, dateTo]);
   const finPerOf = pnl => {
     if (!pnl) return null;
