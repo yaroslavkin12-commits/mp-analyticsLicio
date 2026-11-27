@@ -69,6 +69,12 @@ const METRICS = [
 // Суммируемые метрики — для них есть «в среднем за день / неделю / месяц / год».
 const ADDITIVE = new Set(['orders', 'revenue', 'views', 'pdp', 'cart', 'spend', 'adOrders', 'buyQty', 'buyRub', 'payout', 'cost', 'profit', 'profitF']);
 const AVG = [['', 'всего за период'], ['d', 'в среднем за день'], ['w', 'в среднем за неделю'], ['m', 'в среднем за месяц'], ['y', 'в среднем за год']];
+const ORDER_METRICS = new Set(['orders', 'revenue', 'perDay', 'avgCheck', 'cover', 'crOrder', 'drr']);
+const MATCHED_FIELDS = {
+  avgCheck: { orders: 'checkOrders', revenue: 'checkRevenue' },
+  crOrder: { orders: 'crOrders', pdp: 'crPdp' },
+  drr: { spend: 'drrSpend', revenue: 'drrRevenue' },
+};
 const AVG_DAYS = { d: 1, w: 7, m: 30.4, y: 365 };
 const AVG_T = { d: 'в день', w: 'в неделю', m: 'в месяц', y: 'в год' };
 const MET = Object.fromEntries(METRICS.map(m => [m.k, m]));
@@ -252,6 +258,13 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   }, [cabinet, needPrice]);
   const arts = useMemo(() => (data ? prepare(data) : []), [data, prepare]);
   const L = data?.dates.length || 0;
+  const wb = !!data?._wb;
+  const orderCoverage = useMemo(() => {
+    if (!wb) return null;
+    const coverage = data.coverage?.orders;
+    const ranges = coverage?.ranges ?? (coverage?.from && coverage?.to ? [[coverage.from, coverage.to]] : []);
+    return data.dates.map(date => ranges.some(([from, to]) => from <= date && date <= to));
+  }, [wb, data]);
 
   // Финансы по артикулу и дню (в датах данных продаж).
   const finArt = useMemo(() => {
@@ -284,17 +297,39 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
   }, [fin, data, L]);
 
   // Суммы окна по артикулу: window = [lo, hi] индексов.
-  const sumsOf = useCallback((a, lo, hi, D) => {
+  const sumsOf = useCallback((a, lo, hi) => {
     const S = Object.fromEntries(BASE_KEYS.map(k => [k, 0]));
+    S.revenueDays = 0;
+    S.checkOrders = 0;
+    S.checkRevenue = 0;
+    S.crOrders = 0;
+    S.crPdp = 0;
+    S.drrSpend = 0;
+    S.drrRevenue = 0;
     if (hi < 0) return S;
     const l = Math.max(0, lo);
     for (let d = l; d <= hi; d++) {
-      S.orders += a.orders[d]; S.revenue += a.revenue[d]; S.views += a.views[d]; S.pdp += a.pdpViews[d]; S.cart += a.cart[d];
-      S.spend += a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0); S.adOrders += a.adOrders[d];
+      const orders = a.orders[d], revenue = a.revenue[d], pdp = a.pdpViews[d];
+      const spend = a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0);
+      if (wb) {
+        if (Number.isFinite(orders)) S.orders += orders;
+        if (Number.isFinite(revenue)) {
+          S.revenue += revenue;
+          S.revenueDays++;
+          if (Number.isFinite(orders)) { S.checkOrders += orders; S.checkRevenue += revenue; }
+          if (Number.isFinite(spend)) { S.drrSpend += spend; S.drrRevenue += revenue; }
+        }
+        if (Number.isFinite(orders) && Number.isFinite(pdp)) { S.crOrders += orders; S.crPdp += pdp; }
+      } else {
+        S.orders += orders;
+        S.revenue += revenue;
+      }
+      S.views += a.views[d]; S.pdp += pdp; S.cart += a.cart[d];
+      S.spend += spend; S.adOrders += a.adOrders[d];
       if (a.pos[d] !== null) { S.posSum += a.pos[d]; S.posCnt++; }
       // Прогноз с заказов дня — как «Прогнозируемая прибыль» страницы (юнит-экономика артикула).
-      if (forecast && (a.orders[d] > 0 || a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0) > 0)) {
-        const r = forecast(a.o, data.dates[d], a.revenue[d], a.orders[d], a.spendCpc[d] + a.spendCpo[d] + (a.spendOther?.[d] ?? 0));
+      if (forecast && (orders > 0 || spend > 0)) {
+        const r = forecast(a.o, data.dates[d], revenue, orders, spend);
         if (r) { S.fProfit += r.profit; S.fRev += r.expRev; S.fAny = 1; }
       }
     }
@@ -331,7 +366,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
       if(fin?._operational){S.payout=NaN;S.cost=NaN;S.profit=NaN;}
     }
     return S;
-  }, [finArt, shareOf, shareAt, forecast, data, tax, sewLc, prices, yInfo, yAllLc]);
+  }, [finArt, shareOf, shareAt, forecast, data, tax, sewLc, prices, yInfo, yAllLc, wb]);
 
   const inPath = a => !catPath || a.cat === catPath || a.cat.startsWith(catPath + SEP);
   const inScope = useMemo(() => arts.filter(a => (!scope || scope.has(a.o)) && inPath(a)), [arts, scope, catPath]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -355,24 +390,37 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
         : cfg.rows === 'sub' ? a.cat : (a.brand || 'Не определена'));
     const groups = new Map();
     for (const a of inScope) { const g = groupOf(a); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(a); }
+    const orderDaysIn = (lo, hi) => lo <= hi ? orderCoverage?.slice(Math.max(0, lo), Math.max(0, hi + 1)).filter(Boolean).length : 0;
     const specOf = cols => cols.map(c => {
       const m = MET[c.m]; const D = m?.noDays ? 1 : c.days;
       const hi = L - 1 - (c.off || 0), lo = hi - D + 1;
-      return { c, m, D, lo, hi, plo: lo - D, phi: lo - 1, partial: lo < 0 || (m?.fin && finArt?.mn && data.dates[Math.max(0, lo)] < finArt.mn) };
+      const plo = lo - D, phi = lo - 1;
+      const orderMetric = wb && ORDER_METRICS.has(c.m);
+      const days = orderMetric ? orderDaysIn(lo, hi) : D;
+      const prevDays = orderMetric ? orderDaysIn(plo, phi) : D;
+      const orderPartial = orderMetric && days < D;
+      return { c, m, lo, hi, plo, phi, days, prevDays, orderPartial, partial: orderPartial || lo < 0 || (m?.fin && finArt?.mn && data.dates[Math.max(0, lo)] < finArt.mn) };
     });
     const colsSpec = specOf(cfg.cols), setSpec = specOf(setColsEff);
-    const calc = (list, spec = colsSpec) => spec.map(({ c, m, D, lo, hi, plo, phi }) => {
+    const calc = (list, spec = colsSpec) => spec.map(({ c, m, lo, hi, plo, phi, days, prevDays }) => {
       if (!m) return { v: null };
-      const add = (lo2, hi2) => {
+      const matched = wb ? MATCHED_FIELDS[c.m] : null;
+      const add = (lo2, hi2, loadedDays) => {
+        if (!loadedDays) return null;
         const T = Object.fromEntries(BASE_KEYS.map(k => [k, 0]));
-        for (const a of list) { const S = sumsOf(a, lo2, hi2, D); for (const k of BASE_KEYS) T[k] += S[k]; }
-        return derive(c.m, T, D);
+        let hasRevenue = false;
+        for (const a of list) {
+          const S = sumsOf(a, lo2, hi2);
+          for (const k of BASE_KEYS) T[k] += S[matched?.[k] ?? k];
+          hasRevenue ||= S.revenueDays > 0;
+        }
+        if (wb && c.m === 'revenue' && list.length && !hasRevenue) return null;
+        // Среднее за день / неделю / месяц / год использует дни с данными.
+        const value = derive(c.m, T, loadedDays);
+        return value != null && c.avg && ADDITIVE.has(c.m) ? value * (AVG_DAYS[c.avg] / loadedDays) : value;
       };
-      // «В среднем за …» — сумма окна / дней окна × дней в выбранной единице.
-      const k = c.avg && ADDITIVE.has(c.m) ? AVG_DAYS[c.avg] / D : 1;
-      const sc = x => (x === null || x === undefined ? x : x * k);
-      const v = sc(add(lo, hi));
-      const p = c.cmp && !m.noDays ? (plo >= 0 ? sc(add(plo, phi)) : null) : undefined;
+      const v = add(lo, hi, days);
+      const p = c.cmp && !m.noDays ? (plo >= 0 ? add(plo, phi, prevDays) : null) : undefined;
       return { v, p };
     });
     const rows = [...groups.entries()].map(([key, list]) => {
@@ -384,7 +432,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
     const byO = new Map(arts.map(a => [a.o, a]));
     const setRows = setList.map(o => byO.get(o)).filter(Boolean).map(a => ({ key: a.o, a, vals: calc([a], setSpec) }));
     return { rows, total: { key: '__t', name: 'Итого', sub: `${inScope.length} арт.`, vals: calc(inScope) }, colsSpec, setRows };
-  }, [L, cfg, inScope, sumsOf, finArt, data, depth, catPath, arts, setList, setColsEff]);
+  }, [L, cfg, inScope, sumsOf, finArt, data, depth, catPath, arts, setList, setColsEff, wb, orderCoverage]);
 
   const ctl = useTableCtl(`builder-${cabinet}`);
   // «Пустые» строки — все значения нулевые или пустые (обычно артикулы без движения).
@@ -724,6 +772,7 @@ export default function TableBuilder({ cabinet, anchor, scope, prepare, tax, sha
           <div className="a-scroll" style={{ opacity: loading ? 0.6 : 1 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span className="a-hint" style={{ margin: 0 }}>
+                {table.colsSpec?.some(s => s.orderPartial) && <span>* Заказы WB за загруженные дни. Если данных за период нет, показано «—». </span>}
                 {needFin && !fin ? 'Загружаю финансы…' : needFin && finArt?.mn && table.colsSpec?.some(s => s.partial && s.m?.fin) ? `* начисления Ozon есть с ${dayjs(finArt.mn).format('DD.MM.YYYY')} — период столбца захватывает дни без данных` : ''}
               </span>
               <ResetCtl ctl={ctl} />
