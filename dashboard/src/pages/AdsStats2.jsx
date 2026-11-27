@@ -872,6 +872,17 @@ function Journal({ events, offerId, onAdd, onDelete }) {
   );
 }
 
+function AdLive({ article }) {
+  const { campaigns, cpo } = article;
+  const cpcOn = campaigns.some(c => !isCpoCampaign(c) && isRunningCampaign(c));
+  const cpoOn = isCpoActive(cpo, campaigns);
+  const adsOn = cpcOn || cpoOn;
+  const label = adsOn
+    ? `Реклама работает: ${[cpcOn ? 'оплата за клик' : '', cpoOn ? 'оплата за заказ' : ''].filter(Boolean).join(' + ')}`
+    : 'Реклама выключена: нет запущенных РК с оплатой за клик и выключена оплата за заказ';
+  return <span className={`a-live ${adsOn ? 'on' : 'off'}`} role="img" aria-label={label} title={label} />;
+}
+
 // «Работает»: какие виды рекламы запущены у товара — по стратегиям и зонам, плюс ОЗЗ.
 const KIND_ORDER = ['поиск', 'п+р', 'ср. клик', 'ЦР', 'АС', 'ТОП'];
 function AdKinds({ cpcAll, cpo, cpoOn }) {
@@ -1245,11 +1256,12 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
         {[[0, 'ниже'], [5, ''], [10, 'выше']].map(([d, label], i) => <span key={i}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, marginRight: 4, background: sppHeatColor(d, 0, 10) }} />{label}</span>)}
       </div>}
       <div className="a-days" ref={ref}>
-        <table className={`a-dt a-matrix${cabinet === 'licio' ? '' : ' a-matrix-row-hover'}`}>
-          <thead><tr><th className="lbl">Артикул</th><th className="tot">Итого</th><th className="stk">Остаток</th>{dates.map(d => <th key={d}>{d.slice(8)}.{d.slice(5, 7)}</th>)}</tr></thead>
+        <table className={`a-dt a-matrix a-matrix-with-status${cabinet === 'licio' ? '' : ' a-matrix-row-hover'}`}>
+          <thead><tr><th className="a-ad-status" scope="col" aria-label="Статус рекламы" title="Статус рекламы" /><th className="lbl">Артикул</th><th className="tot">Итого</th><th className="stk">Остаток</th>{dates.map(d => <th key={d}>{d.slice(8)}.{d.slice(5, 7)}</th>)}</tr></thead>
           <tbody>
             {models.map(({ a, m }) => (
               <tr key={a.offerId}>
+                <td className="a-ad-status"><AdLive article={a} /></td>
                 <td className="lbl" title={a.productName || ''}>{a.offerId} <span style={{ color: 'var(--a-ink3)', fontSize: 11 }}>{shortModel(a.productName)}</span></td>
                 <td className="tot">{fmtBy(totalOf(m), cfg.fmt)}</td>
                 <td className="stk">{fmtInt(m.stockNow)}</td>
@@ -1260,6 +1272,7 @@ function Matrix({ rows, dates, mode, cabinet, scopeLabel, scopeActive, controls 
               </tr>
             ))}
             <tr className="a-total-row">
+              <td className="a-ad-status" />
               <td className="lbl" style={{ fontWeight: 600, color: 'var(--a-ink)' }}>Итого</td>
               <td className="tot">{fmtBy(totalOf(all), cfg.fmt)}</td>
               <td className="stk" style={{ fontWeight: 600 }}>{fmtInt(all.stockNow)}</td>
@@ -1809,9 +1822,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
     const st = a.stock ? a.stock.fboPresent + a.stock.fbsPresent : null;
     const daysCls = st === null ? '' : (st < 5 || (a.stockDays !== null && a.stockDays < 7)) ? 'b' : (a.stockDays !== null && a.stockDays < 14) ? 'w' : '';
     const cpcAll = a.campaigns.filter(c => !isCpoCampaign(c));
-    const cpcOn = cpcAll.filter(isRunningCampaign);
     const cpoOn = isCpoActive(a.cpo, a.campaigns);
-    const adsOn = cpcOn.length > 0 || cpoOn;
     const split = a.campaigns.some(c => c.splitAcross > 1 && c.totalSpend > 0);
     return (
       <React.Fragment key={key}>
@@ -1824,7 +1835,7 @@ function AdsReport({ cabinet, dateFrom, dateTo, mode, search, refresh, setArtOpt
           onDragEnd={dragEnabled ? () => { setDragKey(null); setOverKey(null); } : undefined}>
           <td>
             <div className="a-art">
-              <span className={`a-live ${adsOn ? 'on' : 'off'}`} title={adsOn ? `Реклама работает: ${[cpcOn.length ? 'оплата за клик' : '', cpoOn ? 'оплата за заказ' : ''].filter(Boolean).join(' + ')}` : 'Реклама выключена: нет запущенных РК с оплатой за клик и выключена оплата за заказ'} />
+              <AdLive article={a} />
               {dragEnabled && <span className="a-handle" title="Перетащите, чтобы поменять порядок">⠿</span>}
               <span className="a-chev">▶</span>
               <div style={{ minWidth: 0 }}>
